@@ -29,11 +29,12 @@ import (
 )
 
 var (
-	openDatabase                    = sql.Open
-	commandOutput         io.Writer = os.Stdout
-	commandDiagnostics    io.Writer = os.Stdout
-	liveInspectionTimeout           = 30 * time.Second
-	commandMu             sync.Mutex
+	openDatabase                       = sql.Open
+	commandOutput            io.Writer = os.Stdout
+	commandDiagnostics       io.Writer = os.Stdout
+	liveInspectionTimeout              = 30 * time.Second
+	inspectSQLiteLiveCatalog           = sqlite.InspectLiveCatalog
+	commandMu                sync.Mutex
 )
 
 // Run executes the migration subcommands under the unified rasql command.
@@ -131,6 +132,9 @@ func runDiff(args []string) error {
 	fromDirectory := flags.String("from", "", "baseline desired-schema directory")
 	toDirectory := flags.String("to", "", "target desired-schema directory")
 	outputDirectory := flags.String("output", "", "new migration directory; omit to preview")
+	var resolutions resolutionFlags
+	flags.Var(resolutions.forKind("backfill"), "backfill", "resolve a backfill decision as decision-id=sql-file")
+	flags.Var(resolutions.forKind("rename"), "rename", "resolve a rename decision as decision-id=baseline-column")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -164,6 +168,16 @@ func runDiff(args []string) error {
 	if err != nil {
 		return err
 	}
+	if len(resolutions.values) > 0 {
+		parsed, parseErr := parseResolutions(resolutions.values)
+		if parseErr != nil {
+			return parseErr
+		}
+		plan, err = resolveCLIPlan(plan, parsed)
+		if err != nil {
+			return err
+		}
+	}
 	if plan.Empty() {
 		_, _ = fmt.Fprintln(commandOutput, "no schema changes")
 		return nil
@@ -186,6 +200,9 @@ func runDiffLive(args []string) error {
 	tableName := flags.String("table", "", "one live table to inspect")
 	targetDirectory := flags.String("to", "", "desired-schema directory for the inspected table")
 	outputDirectory := flags.String("output", "", "new migration directory; omit to preview")
+	var resolutions resolutionFlags
+	flags.Var(resolutions.forKind("backfill"), "backfill", "resolve a backfill decision as decision-id=sql-file")
+	flags.Var(resolutions.forKind("rename"), "rename", "resolve a rename decision as decision-id=baseline-column")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -244,6 +261,10 @@ func runDiffLive(args []string) error {
 	if err != nil {
 		return fmt.Errorf("parse inspected table %q: %w", *tableName, err)
 	}
+	baseline, err = attachSQLiteLiveCatalog(ctx, transaction, analyzer, baseline, *tableName)
+	if err != nil {
+		return err
+	}
 	targetSources, err := diff.LoadSources(*targetDirectory)
 	if err != nil {
 		return err
@@ -259,6 +280,16 @@ func runDiffLive(args []string) error {
 	if err := liveAnalyzer.ValidateLivePlan(plan, *tableName); err != nil {
 		return err
 	}
+	if len(resolutions.values) > 0 {
+		parsed, parseErr := parseResolutions(resolutions.values)
+		if parseErr != nil {
+			return parseErr
+		}
+		plan, err = resolveCLIPlan(plan, parsed)
+		if err != nil {
+			return err
+		}
+	}
 	if plan.Empty() {
 		_, _ = fmt.Fprintln(commandOutput, "no schema changes")
 		return nil
@@ -272,6 +303,30 @@ func runDiffLive(args []string) error {
 	}
 	_, _ = fmt.Fprintf(commandOutput, "created %s\n", *outputDirectory)
 	return nil
+}
+
+func resolveCLIPlan(plan diff.Plan, resolutions []diff.Resolution) (diff.Plan, error) {
+	resolved, err := plan.Resolve(resolutions...)
+	if err != nil && strings.HasPrefix(err.Error(), "migrate diff: backfill resolution ") {
+		return diff.Plan{}, fmt.Errorf("resolve -backfill: %w", err)
+	}
+	return resolved, err
+}
+
+type sqliteLiveCatalogQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func attachSQLiteLiveCatalog(ctx context.Context, queryer sqliteLiveCatalogQueryer, analyzer diff.Analyzer, baseline diff.Snapshot, tableName string) (diff.Snapshot, error) {
+	sqliteAnalyzer, ok := analyzer.(sqlite.Analyzer)
+	if !ok {
+		return baseline, nil
+	}
+	facts, err := inspectSQLiteLiveCatalog(ctx, queryer, tableName)
+	if err != nil {
+		return nil, fmt.Errorf("inspect SQLite catalog: %w", err)
+	}
+	return sqliteAnalyzer.AttachLiveCatalog(baseline, facts)
 }
 
 func liveSchemaAnalyzer(ctx context.Context, transaction *sql.Tx, dialectName string) (diff.Analyzer, error) {
@@ -629,6 +684,52 @@ func newFlagSet(name string) *flag.FlagSet {
 	return flags
 }
 
+type resolutionFlagValue struct {
+	kind   string
+	values *[]resolutionFlag
+}
+
+type resolutionFlag struct {
+	kind, value string
+}
+
+type resolutionFlags struct{ values []resolutionFlag }
+
+func (f *resolutionFlags) forKind(kind string) *resolutionFlagValue {
+	return &resolutionFlagValue{kind: kind, values: &f.values}
+}
+
+func (f *resolutionFlagValue) String() string { return "" }
+func (f *resolutionFlagValue) Set(value string) error {
+	*f.values = append(*f.values, resolutionFlag{kind: f.kind, value: value})
+	return nil
+}
+
+func parseResolutions(flags []resolutionFlag) ([]diff.Resolution, error) {
+	resolutions := make([]diff.Resolution, 0, len(flags))
+	for _, flag := range flags {
+		parts := strings.SplitN(flag.value, "=", 2)
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return nil, fmt.Errorf("diff -%s requires decision-id=value", flag.kind)
+		}
+		resolution := diff.Resolution{DecisionID: parts[0]}
+		switch flag.kind {
+		case "backfill":
+			source, err := os.ReadFile(parts[1])
+			if err != nil {
+				return nil, fmt.Errorf("read -backfill %q for decision %q: %w", parts[1], parts[0], err)
+			}
+			resolution.BackfillSQL = string(source)
+		case "rename":
+			resolution.RenameFrom = parts[1]
+		default:
+			return nil, fmt.Errorf("unsupported resolution flag %q", flag.kind)
+		}
+		resolutions = append(resolutions, resolution)
+	}
+	return resolutions, nil
+}
+
 func openRunner(ctx context.Context, directory string, dialectName string, dsn string, historyTable string) (migrate.Runner, []migrate.Migration, func(), error) {
 	if directory == "" || dialectName == "" || dsn == "" {
 		return migrate.Runner{}, nil, func() {}, errors.New("database commands require -dir, -dialect, and -dsn")
@@ -751,6 +852,15 @@ func writePlan(output io.Writer, migrations []migrate.Migration) {
 }
 
 func writeDiffPlan(output io.Writer, plan diff.Plan) {
+	for _, operation := range plan.Operations {
+		_, _ = fmt.Fprintf(output, "-- operation %s (%s): %s\n", operation.ID, operation.Kind, operation.Summary)
+	}
+	for _, decision := range plan.Decisions {
+		_, _ = fmt.Fprintf(output, "-- decision %s (%s): %s\n", decision.ID, decision.Kind, decision.Reason)
+	}
+	if len(plan.Decisions) > 0 {
+		return
+	}
 	if plan.Mode == migrate.ExecutionModeNonTransactional {
 		_, _ = fmt.Fprintln(output, "-- mode: nontransactional")
 	}

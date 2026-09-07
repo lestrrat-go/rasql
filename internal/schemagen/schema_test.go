@@ -275,7 +275,7 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	// A nullable column is a pointer field, and the generated scan methods
 	// assign through it.
 	require.Contains(t, string(source), "\tEmail     *string\n")
-	require.NotContains(t, string(source), "\"github.com/lestrrat-go/rasql/query\"")
+	require.Contains(t, string(source), "\"github.com/lestrrat-go/rasql/query\"")
 	require.NotContains(t, string(source), "github.com/lestrrat-go/rasql/row")
 	// PackageSource returns a whole package, descriptors included, so it
 	// names the schema package its descriptor literals are written in.
@@ -444,6 +444,10 @@ func TestGeneratedRelationships(t *testing.T) {
 	_, err := belongsTo.Load(t.Context(), belongsToDB, []generated.OrdersRow{{UserID: 7}})
 	require.ErrorContains(t, err, "query recorded")
 	require.Equal(t, "SELECT \"tenant\".\"users\".\"id\" FROM \"tenant\".\"users\" WHERE (\"tenant\".\"users\".\"id\" IN ($1))", belongsToHandle.query)
+	belongsToDB, belongsToHandle = recordingDB(t)
+	_, err = belongsTo.LoadWith(t.Context(), belongsToDB, []generated.OrdersRow{{UserID: 7}}, rasql.RelationshipLoadOptions{Where: query.Equal(belongsTo.ParentKey, 7), OrderBy: []query.Order{query.Desc(belongsTo.ParentKey)}, BindLimit: 2})
+	require.ErrorContains(t, err, "query recorded")
+	require.Contains(t, belongsToHandle.query, "ORDER BY")
 
 	hasMany := users.Orders()
 	require.Equal(t, "id", hasMany.ParentKey.Name())
@@ -455,6 +459,10 @@ func TestGeneratedRelationships(t *testing.T) {
 	_, err = hasMany.Load(t.Context(), hasManyDB, []generated.UsersRow{{ID: 7}})
 	require.ErrorContains(t, err, "query recorded")
 	require.Equal(t, "SELECT \"tenant\".\"orders\".\"id\", \"tenant\".\"orders\".\"user_id\" FROM \"tenant\".\"orders\" WHERE (\"tenant\".\"orders\".\"user_id\" IN ($1))", hasManyHandle.query)
+	hasManyDB, hasManyHandle = recordingDB(t)
+	_, err = hasMany.LoadWith(t.Context(), hasManyDB, []generated.UsersRow{{ID: 7}}, rasql.RelationshipLoadOptions{Where: query.Equal(hasMany.ChildKey, 7), OrderBy: []query.Order{query.Asc(hasMany.ChildKey)}, PerParentLimit: 1, BindLimit: 2})
+	require.ErrorContains(t, err, "query recorded")
+	require.Contains(t, hasManyHandle.query, "ORDER BY")
 
 	aliasedUsers, err := users.As("u")
 	require.NoError(t, err)
@@ -581,10 +589,10 @@ func TestSchemaGeneratesDistinctInverseRelationships(t *testing.T) {
 	source, err := schemagen.PackageSource("generated", users, memberships)
 	require.NoError(t, err)
 	text := string(source)
-	require.Contains(t, text, "func (t UsersTable) Memberships() UsersTableMembershipsRelation")
+	require.Contains(t, text, "func (t UsersTable) BillingUserMemberships() UsersTableBillingUserMembershipsRelation")
 	require.Contains(t, text, "func (t UsersTable) ShippingUserMemberships() UsersTableShippingUserMembershipsRelation")
-	require.Contains(t, text, "func (r UsersTableMembershipsRelation) Join() rasql.Join")
-	require.Contains(t, text, "func (r UsersTableMembershipsRelation) Load(ctx context.Context, db rasql.DB, parents []UsersRow)")
+	require.Contains(t, text, "func (r UsersTableBillingUserMembershipsRelation) Join() rasql.Join")
+	require.Contains(t, text, "func (r UsersTableBillingUserMembershipsRelation) Load(ctx context.Context, db rasql.DB, parents []UsersRow)")
 	require.Contains(t, text, "func (r UsersTableShippingUserMembershipsRelation) Join() rasql.Join")
 	require.Contains(t, text, "func (r UsersTableShippingUserMembershipsRelation) Load(ctx context.Context, db rasql.DB, parents []UsersRow)")
 }
@@ -619,8 +627,8 @@ func TestSchemaKeepsInverseMethodsStableWhenForeignKeysReorder(t *testing.T) {
 		generateSource(foreignKeys),
 		generateSource([]schema.ForeignKeyDef{foreignKeys[1], foreignKeys[0]}),
 	} {
-		memberships := generatedMethodBlock(t, source, "func (t UsersTable) Memberships() UsersTableMembershipsRelation")
-		require.Contains(t, memberships, "ChildKey: child.BillingUserID")
+		billing := generatedMethodBlock(t, source, "func (t UsersTable) BillingUserMemberships() UsersTableBillingUserMembershipsRelation")
+		require.Contains(t, billing, "ChildKey: child.BillingUserID")
 		shipping := generatedMethodBlock(t, source, "func (t UsersTable) ShippingUserMemberships() UsersTableShippingUserMembershipsRelation")
 		require.Contains(t, shipping, "ChildKey: child.ShippingUserID")
 	}
@@ -707,11 +715,8 @@ func TestSchemaRenamesReservedInverseRelationship(t *testing.T) {
 		}},
 	}
 
-	source, err := schemagen.PackageSource("generated", users, aliases)
-	require.NoError(t, err)
-	text := string(source)
-	require.Contains(t, text, "func (t UsersTable) UserAs() UsersTableUserAsRelation")
-	require.Contains(t, text, "func (r UsersTableUserAsRelation) Load(ctx context.Context, db rasql.DB, parents []UsersRow)")
+	_, err := schemagen.PackageSource("generated", users, aliases)
+	require.ErrorContains(t, err, "reserved generated method")
 }
 
 func generatedMethodBlock(t *testing.T, source, signature string) string {
@@ -759,13 +764,51 @@ func TestSchemaMergesExplicitAndDerivedRelationships(t *testing.T) {
 	for _, expected := range []string{
 		"func (t MembershipsTable) BillingUser() MembershipsTableBillingUserRelation",
 		"func (t MembershipsTable) ShippingUser() MembershipsTableShippingUserRelation",
-		"func (t UsersTable) Memberships() UsersTableMembershipsRelation",
+		"func (t UsersTable) BillingUserMemberships() UsersTableBillingUserMembershipsRelation",
 		"func (t UsersTable) ShippingUserMemberships() UsersTableShippingUserMembershipsRelation",
 		"func (r MembershipsTableBillingUserRelation) Load(ctx context.Context, db rasql.DB, children []MembershipsRow)",
 		"func (r MembershipsTableShippingUserRelation) Load(ctx context.Context, db rasql.DB, children []MembershipsRow)",
 	} {
 		require.Contains(t, text, expected)
 	}
+}
+
+func TestSchemaCountsExplicitInversePeersWhenDerivingNames(t *testing.T) {
+	users := schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}}
+	memberships := schema.TableDef{
+		Name:       "memberships",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "billing_user_id", Type: schema.IntegerType{}}, {Name: "shipping_user_id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{
+			{Columns: []string{"billing_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+			{Columns: []string{"shipping_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+		},
+		Relationships: []schema.RelationshipDef{{Name: "ShippingUser", InverseName: "Memberships", Kind: schema.RelationshipBelongsTo, Columns: []string{"shipping_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}}},
+	}
+	source, err := schemagen.PackageSource("generated", users, memberships)
+	require.NoError(t, err)
+	text := string(source)
+	require.Contains(t, text, "func (t UsersTable) Memberships() UsersTableMembershipsRelation")
+	require.Contains(t, text, "func (t UsersTable) BillingUserMemberships() UsersTableBillingUserMembershipsRelation")
+}
+
+func TestSchemaRejectsDuplicateExplicitInverseNames(t *testing.T) {
+	users := schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}}
+	memberships := schema.TableDef{
+		Name:       "memberships",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "billing_user_id", Type: schema.IntegerType{}}, {Name: "shipping_user_id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{
+			{Columns: []string{"billing_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+			{Columns: []string{"shipping_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+		},
+		Relationships: []schema.RelationshipDef{
+			{Name: "BillingUser", InverseName: "Memberships", Kind: schema.RelationshipBelongsTo, Columns: []string{"billing_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+			{Name: "ShippingUser", InverseName: "Memberships", Kind: schema.RelationshipBelongsTo, Columns: []string{"shipping_user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}},
+		},
+	}
+	_, err := schemagen.PackageSource("generated", users, memberships)
+	require.ErrorContains(t, err, "collide on generated method")
 }
 
 // TestColumnGoType is the direct test of schemagen.ColumnGoType, the one
@@ -2199,4 +2242,13 @@ func stringIndex(t *testing.T, source []byte, value string) int {
 	}
 	require.NotEqual(t, len(source), index)
 	return index
+}
+
+func TestDescriptorSourceEmitsColumnCollation(t *testing.T) {
+	source, err := schemagen.DescriptorSource("generated", schema.TableDef{
+		Name:    "members",
+		Columns: []schema.ColumnDef{{Name: "name", Type: schema.TextType{}, Collation: "NOCASE"}},
+	})
+	require.NoError(t, err)
+	require.Contains(t, string(source), `{Name: "name", Type: schema.TextType{}, Collation: "NOCASE"}`)
 }

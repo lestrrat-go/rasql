@@ -11,7 +11,9 @@ package generate
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/dialect"
@@ -184,6 +186,109 @@ func TestPlanCommitWritesNothingWhenADestinationIsRefused(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(dir, "users_gen.go"))
 	require.NoError(t, err)
 	require.Equal(t, handWritten, got)
+}
+
+func TestHeldStorePlanRefusesNewGeneratedOutput(t *testing.T) {
+	moduleDir := t.TempDir()
+	repoGoMod, err := os.ReadFile(filepath.Join("..", "go.mod"))
+	require.NoError(t, err)
+	repository, err := filepath.Abs("..")
+	require.NoError(t, err)
+	module := strings.Replace(string(repoGoMod), "module github.com/lestrrat-go/rasql\n", "module example.com/consumer\n", 1)
+	module += "\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => " + filepath.ToSlash(repository) + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(moduleDir, "go.mod"), []byte(module), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(moduleDir, "go.sum"), mustReadFile(t, filepath.Join("..", "go.sum")), 0o600))
+
+	dir := filepath.Join(moduleDir, "internal", "store")
+	users, orders := commitTestUsersDef(), commitTestOrdersDef()
+	held, err := (Store{Package: "store", Dir: dir, Tables: []schema.TableDef{users}}).Plan()
+	require.NoError(t, err)
+	require.Empty(t, held.Orphans())
+	require.NoError(t, (Store{Package: "store", Dir: dir, Tables: []schema.TableDef{users, orders}}).Write())
+	runGeneratedPackageTest(t, moduleDir)
+	fresh, err := (Store{Package: "store", Dir: dir, Tables: []schema.TableDef{users}}).Plan()
+	require.NoError(t, err)
+	require.Equal(t, []string{filepath.Join(dir, "orders_gen.go")}, fresh.Orphans())
+
+	before := snapshotDirFiles(t, dir)
+	err = held.Commit()
+	require.Error(t, err)
+	require.ErrorContains(t, err, "gained 1 file(s) rasqlgen wrote that this plan does not write")
+	require.ErrorContains(t, err, "orders_gen.go")
+	require.ErrorContains(t, err, "rerun Store.Plan")
+	require.NotErrorIs(t, err, ErrStale)
+	require.Equal(t, before, snapshotDirFiles(t, dir))
+	runGeneratedPackageTest(t, moduleDir)
+
+	err = held.Check()
+	require.Error(t, err)
+	require.ErrorContains(t, err, "gained 1 file(s) rasqlgen wrote that this plan does not write")
+	require.ErrorContains(t, err, "orders_gen.go")
+	require.ErrorContains(t, err, "rerun Store.Plan")
+	require.NotErrorIs(t, err, ErrStale)
+	require.Equal(t, before, snapshotDirFiles(t, dir))
+}
+
+func TestHeldStorePlanAllowsHandwrittenSamePackageFile(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "store")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "helper.go"), []byte("package store\n"), 0o600))
+	plan, err := (Store{Package: "store", Dir: dir, Tables: []schema.TableDef{commitTestUsersDef()}}).Plan()
+	require.NoError(t, err)
+	require.NoError(t, plan.Commit())
+	require.NoError(t, plan.Check())
+}
+
+func TestHeldStorePlanRefusesNewForeignPackageFile(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "store")
+	store := Store{Package: "store", Dir: dir, Tables: []schema.TableDef{commitTestUsersDef()}}
+	require.NoError(t, store.Write())
+	plan, err := store.Plan()
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "foreign.go"), []byte("package other\n"), 0o600))
+	before := snapshotDirFiles(t, dir)
+
+	err = plan.Check()
+	require.Error(t, err)
+	require.ErrorContains(t, err, `already holds package "other"`)
+	require.Equal(t, before, snapshotDirFiles(t, dir))
+	err = plan.Commit()
+	require.Error(t, err)
+	require.ErrorContains(t, err, `already holds package "other"`)
+	require.Equal(t, before, snapshotDirFiles(t, dir))
+}
+
+func TestHeldStorePlanWithPruneRefusesNewGeneratedOutput(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "store")
+	users, orders := commitTestUsersDef(), commitTestOrdersDef()
+	held, err := (Store{Package: "store", Dir: dir, Tables: []schema.TableDef{users}, Prune: true}).Plan()
+	require.NoError(t, err)
+	require.NoError(t, (Store{Package: "store", Dir: dir, Tables: []schema.TableDef{users, orders}}).Write())
+	before := snapshotDirFiles(t, dir)
+
+	err = held.Commit()
+	require.ErrorContains(t, err, "gained 1 file(s) rasqlgen wrote")
+	require.Equal(t, before, snapshotDirFiles(t, dir))
+	err = held.Check()
+	require.ErrorContains(t, err, "gained 1 file(s) rasqlgen wrote")
+	require.Equal(t, before, snapshotDirFiles(t, dir))
+}
+
+func mustReadFile(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	return data
+}
+
+func runGeneratedPackageTest(t *testing.T, moduleDir string) {
+	t.Helper()
+	command := exec.CommandContext(t.Context(), "go", "test", "./...")
+	command.Dir = moduleDir
+	command.Env = append(os.Environ(), "GOPROXY=off")
+	output, err := command.CombinedOutput()
+	require.NoErrorf(t, err, "go test output:\n%s", output)
+	require.NotContainsf(t, string(output), "go: downloading", "go test output:\n%s", output)
 }
 
 // TestPlanCommitRefusesLeftoversWithoutPrune confirms a marker-carrying

@@ -8,6 +8,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type identifierComparerDialect struct {
+	dialect.Dialect
+}
+
+func (identifierComparerDialect) IdentifiersEqual(left, right string) bool {
+	return len(left) == len(right) && left != right
+}
+
+func TestIdentifierEqualityIsDialectOptional(t *testing.T) {
+	require.True(t, dialect.IdentifiersEqual(dialect.SQLite(), "users", "USERS"))
+	require.False(t, dialect.IdentifiersEqual(dialect.SQLite(), "Å", "å"))
+	require.False(t, dialect.IdentifiersEqual(dialect.PostgreSQL(), "users", "USERS"))
+	require.False(t, dialect.IdentifiersEqual(dialect.MySQL(), "users", "USERS"))
+	require.True(t, dialect.IdentifiersEqual(identifierComparerDialect{Dialect: dialect.PostgreSQL()}, "aa", "bb"))
+	require.False(t, dialect.IdentifiersEqual(identifierComparerDialect{Dialect: dialect.PostgreSQL()}, "aa", "a"))
+}
+
 func TestBuiltinsRenderIdentifiersAndPlaceholders(t *testing.T) {
 	tests := map[string]struct {
 		dialect     dialect.Dialect
@@ -49,6 +66,12 @@ func TestBuiltinsRenderIdentifiersAndPlaceholders(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, test.typeName, typeName)
 		})
+	}
+}
+
+func TestBuiltinsSupportSavepoints(t *testing.T) {
+	for _, d := range []dialect.Dialect{dialect.PostgreSQL(), dialect.MySQL(), dialect.SQLite()} {
+		require.True(t, d.Supports(dialect.CapabilitySavepoint), d.Name())
 	}
 }
 

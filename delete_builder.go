@@ -9,6 +9,7 @@ import (
 	"github.com/lestrrat-go/rasql/internal/nilcheck"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
+	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/stmt"
 )
 
@@ -197,6 +198,9 @@ func (b DeleteReturningBuilder) clone() DeleteReturningBuilder {
 func (b DeleteBuilder) statement() (query.Delete, error) {
 	if b.err != nil {
 		return query.Delete{}, b.err
+	}
+	if !b.from.Definition().Supports(schema.OperationDelete) {
+		return query.Delete{}, fmt.Errorf("rasql: object %q does not support DELETE", b.from.Definition().QualifiedName())
 	}
 	// The guard reads the accumulated predicates, not a separate flag, so that
 	// adding or dropping a Where cannot leave the check looking at stale state.

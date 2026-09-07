@@ -14,7 +14,8 @@ A `rasql.DB` pairs a database handle with the dialect used to render SQL. Both b
 | `db.ExecRendered(ctx, statement)` | A rendered statement that returns no rows. |
 | `rasql.QueryRenderedAll[T](ctx, db, statement)` | The same, decoded into `T`. |
 | `rasql.Exec(ctx, db, statement)` | A `query.WriteStatement`, rendering it on the way. It rejects a write carrying a `RETURNING` clause, which `dynamic.QueryWrite` or `rasql.QueryWriteAll[T]` reads instead. |
-| `dynamic.Query(ctx, db, statement)` | A `query.Select`, rendering it on the way. |
+| `dynamic.Query(ctx, db, statement)` | A `query.Select`, rendering it on the way and returning dynamic rows. |
+| `dynamic.QueryResult(ctx, db, statement)` | A `query.Select`, rendering lazily and exposing ordered metadata with dynamic rows. |
 
 `rasql.Exec` and `dynamic.Query` take the statement rather than the rendered text, because a `rasql.DB` already holds the dialect to render with. `rasql.Exec` rejects a write carrying a `RETURNING` clause, and `dynamic.QueryWrite` reads the rows of one instead. [Writing rows](03-write-statements.md) covers the write side of that path, and [Dynamic rows](05-dynamic.md) covers the `dynamic` calls named here.
 
@@ -55,7 +56,7 @@ A transaction is not a separate type. `DB.Begin` takes `*sql.TxOptions` and opti
 
 The caller owns the transaction. `defer tx.Rollback()` immediately after `Begin` is the intended shape, because `Rollback` reports nothing once the transaction is finished, whether by a successful `Commit`, an earlier `Rollback`, or a context cancellation. Calling `Commit` or `Rollback` on a `DB` that is not a transaction returns an error rather than being a compile-time mistake, since one concrete type now covers both cases.
 
-A transaction still cannot be nested: calling `Begin` on a `DB` that is already a transaction returns an error instead of opening a savepoint. An application that already holds a native `*sql.Tx` can hand it straight to `rasql.New` instead of calling `Begin`. The resulting `DB` is a transaction the same way one returned by `Begin` is.
+A transaction still cannot be nested with `Begin`: calling it on a `DB` that is already a transaction returns an error. Use `DB.Atomic` for composable work. It owns a transaction on a pool DB and creates a private savepoint when called with a transaction DB, so a nested callback can fail without rolling back unrelated outer writes. Savepoint cleanup errors remain available through the returned error; a callback panic is re-thrown after cleanup, or as `rasql.AtomicPanic` when cleanup also fails. The built-in dialects declare savepoint syntax support, while live engine recovery should be verified against the target deployment. An application that already holds a native `*sql.Tx` can hand it straight to `rasql.New` and use `Atomic` on the resulting transaction DB.
 
 <!-- INCLUDE(examples/rasql_transaction_example_test.go) -->
 ```go

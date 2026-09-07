@@ -3,6 +3,9 @@ package diff_test
 import (
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/internal/migrationdir"
@@ -10,6 +13,46 @@ import (
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/stretchr/testify/require"
 )
+
+func TestNumberSourcesUsesPlanWidth(t *testing.T) {
+	for _, test := range []struct {
+		count int
+		first string
+		last  string
+	}{
+		{count: 0},
+		{count: 1, first: "001_step.sql", last: "001_step.sql"},
+		{count: 999, first: "001_step.sql", last: "999_step.sql"},
+		{count: 1000, first: "0001_step.sql", last: "1000_step.sql"},
+		{count: 10000, first: "00001_step.sql", last: "10000_step.sql"},
+	} {
+		t.Run(strconv.Itoa(test.count), func(t *testing.T) {
+			statements := make([]diff.PlannedStatement, test.count)
+			for index := range statements {
+				statements[index] = diff.PlannedStatement{Source: "step.sql"}
+			}
+			diff.NumberSources(statements)
+			if test.count == 0 {
+				require.Empty(t, statements)
+				return
+			}
+			require.Equal(t, test.first, statements[0].Source)
+			require.Equal(t, test.last, statements[len(statements)-1].Source)
+			ordered := append([]diff.PlannedStatement(nil), statements...)
+			sort.Slice(ordered, func(left, right int) bool { return ordered[left].Source < ordered[right].Source })
+			require.Equal(t, statements, ordered)
+			reverse := make([]string, len(statements))
+			for index, statement := range statements {
+				reverse[index] = strings.TrimSuffix(statement.Source, ".sql") + ".down.sql"
+			}
+			sort.Sort(sort.Reverse(sort.StringSlice(reverse)))
+			for index, name := range reverse {
+				want := strings.TrimSuffix(statements[len(statements)-1-index].Source, ".sql") + ".down.sql"
+				require.Equal(t, want, name)
+			}
+		})
+	}
+}
 
 func TestLoadSourcesOrdersNestedSQLFiles(t *testing.T) {
 	directory := t.TempDir()
@@ -48,6 +91,14 @@ func TestWriteMigrationCreatesNewDirectory(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "CREATE TABLE users (id bigint);\n", string(contents))
 	require.Error(t, diff.WriteMigration(directory, plan))
+}
+
+func TestWriteMigrationRejectsPreviewPlanBeforeCreatingParent(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "missing", "001_preview")
+	plan := diff.Plan{Dialect: "postgresql", Operations: []diff.ProposedOperation{{ID: "add_column_postgresql_users_email", Kind: diff.OperationAddColumn, Table: "users", Column: "email"}}}
+	require.ErrorContains(t, diff.WriteMigration(directory, plan), "plan is not executable")
+	_, err := os.Stat(filepath.Dir(directory))
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestPlanValidateReportsBothConflictingObjects(t *testing.T) {
