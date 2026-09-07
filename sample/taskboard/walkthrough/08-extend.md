@@ -11,13 +11,52 @@ result metadata. The generator creates its typed constructor and decoder.
 package store
 
 import (
-	time2 "time"
-
-	"github.com/lestrrat-go/rasql/stmt"
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/schema"
+	"time"
 )
 
-func OverdueCount(on time2.Time) stmt.Statement {
-	return stmt.New("SELECT COUNT(*) AS overdue\nFROM tasks\nWHERE is_open AND due_on IS NOT NULL AND due_on < CAST($1 AS date)\n", on)
+type overdue_countResult struct {
+	Overdue int64
+}
+
+type OverdueCountBindings struct{}
+type OverdueCountExpressions struct {
+	Overdue rasql.Column[overdue_countResult, int64]
+}
+
+func (OverdueCountBindings) Bind(source rasql.TypedSource[overdue_countResult]) (OverdueCountExpressions, error) {
+	valueOverdue, err := rasql.BindResultColumn[overdue_countResult, int64](source, "overdue")
+	if err != nil {
+		return OverdueCountExpressions{}, err
+	}
+	return OverdueCountExpressions{Overdue: valueOverdue}, nil
+}
+
+type overdue_countDecoder struct{}
+
+func (overdue_countDecoder) ResultSchema() rasql.ResultSchema { return overdue_countDecoderSchema() }
+func (overdue_countDecoder) Presence() []rasql.Presence       { return nil }
+func (overdue_countDecoder) DecodeRow(s rasql.ScanSource, r *overdue_countResult) error {
+	if err := s.Scan(&r.Overdue); err != nil {
+		return err
+	}
+	return nil
+}
+
+func overdue_countDecoderSchema() rasql.ResultSchema {
+	s, _ := rasql.NewResultSchema(
+		rasql.ResultColumn{Name: "overdue", Type: schema.IntegerType{Unsigned: false, ZeroFill: false}, Nullable: false, Codec: ""},
+	)
+	return s
+}
+
+func OverdueCount(on time.Time) (rasql.Query[overdue_countResult], error) {
+	projection, err := rasql.NativeProjection[overdue_countResult](overdue_countDecoder{})
+	if err != nil {
+		return rasql.Query[overdue_countResult]{}, err
+	}
+	return rasql.Native[overdue_countResult](rasql.NativeStatement{Engine: "postgresql", SQL: "SELECT COUNT(*) AS overdue\nFROM tasks\nWHERE is_open AND due_on IS NOT NULL AND due_on < CAST($1 AS date)\n", Args: []rasql.NativeArgument{{Value: on, Codec: ""}}}, projection, rasql.ExactlyOne)
 }
 ```
 source: [sample/taskboard/internal/store/overdue_count_gen.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/overdue_count_gen.go)
@@ -33,7 +72,7 @@ day; PostgreSQL receives the explicit date cast.
 <!-- INCLUDE(sample/taskboard/internal/store/repository.go#countoverdue) -->
 ```go
 // CountOverdue returns how many open tasks fell due before the calendar day
-// on names. A task due on that day is not counted, because a task is past its
+// on date. A task due on that day is not counted, because a task is past its
 // due date only once the day is over. The query casts the bound value to a
 // date, and the driver reads that date off on in on's own location, so the
 // caller decides which day it is and the database session's time zone does
