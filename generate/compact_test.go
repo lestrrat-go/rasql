@@ -47,7 +47,7 @@ func TestRenderCompactPlansCanonicalTableSurface(t *testing.T) {
 	require.NoError(t, legacyPlan.Commit())
 	module := filepath.Join(root, "go.mod")
 	require.NoError(t, os.WriteFile(module, []byte("module example.com/compact\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire modernc.org/sqlite v1.55.0\nreplace github.com/lestrrat-go/rasql => "+repoRoot(t)+"\n"), 0o600))
-	consumer := `package store_test
+	compactConsumer := `package store_test
 
 import (
 	"context"
@@ -57,16 +57,9 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/schema"
 	generated "example.com/compact/generated"
-	legacy "example.com/compact/legacy"
 	_ "modernc.org/sqlite"
 )
-
-type legacyUsersDecoder struct{ schema rasql.ResultSchema }
-func (d legacyUsersDecoder) ResultSchema() rasql.ResultSchema { return d.schema }
-func (legacyUsersDecoder) Presence() []rasql.Presence { return nil }
-func (legacyUsersDecoder) DecodeRow(src rasql.ScanSource, row *legacy.UsersRow) error { return row.ScanRow(src) }
 
 func collect[R any](ctx context.Context, executor rasql.Executor, query rasql.Query[R]) error {
 	rows, err := rasql.Rows(ctx, executor, query)
@@ -119,9 +112,41 @@ func BenchmarkCompactScan(b *testing.B) {
 	if err != nil { b.Fatal(err) }
 	query := rasql.Select(source.Source(), projection)
 	b.ResetTimer()
- for i := 0; i < b.N; i++ {
+	for i := 0; i < b.N; i++ {
 		if err := collect(b.Context(), executor, query); err != nil { b.Fatal(err) }
 	}
+}
+`
+	legacyConsumer := `package store_test
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"testing"
+
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/schema"
+	legacy "example.com/compact/legacy"
+	_ "modernc.org/sqlite"
+)
+
+type legacyUsersDecoder struct{ schema rasql.ResultSchema }
+func (d legacyUsersDecoder) ResultSchema() rasql.ResultSchema { return d.schema }
+func (legacyUsersDecoder) Presence() []rasql.Presence { return nil }
+func (legacyUsersDecoder) DecodeRow(src rasql.ScanSource, row *legacy.UsersRow) error { return row.ScanRow(src) }
+
+func collect[R any](ctx context.Context, executor rasql.Executor, query rasql.Query[R]) error {
+	rows, err := rasql.Rows(ctx, executor, query)
+	if err != nil { return err }
+	count := 0
+	for _, err := range rows {
+		if err != nil { return err }
+		count++
+	}
+	if count != 1 { return fmt.Errorf("rows = %d", count) }
+	return nil
 }
 
 func BenchmarkLegacyScan(b *testing.B) {
@@ -142,9 +167,7 @@ func BenchmarkLegacyScan(b *testing.B) {
 	if err != nil { b.Fatal(err) }
 	legacySchema, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}})
 	if err != nil { b.Fatal(err) }
-	legacyProjection, err := rasql.NewProjection([]rasql.ProjectionItem{
-		rasql.Item("id", id.Expr(), schema.IntegerType{}, ""),
-	}, legacyUsersDecoder{schema: legacySchema})
+	legacyProjection, err := rasql.NewProjection([]rasql.ProjectionItem{rasql.Item("id", id.Expr(), schema.IntegerType{}, "")}, legacyUsersDecoder{schema: legacySchema})
 	if err != nil { b.Fatal(err) }
 	query := rasql.Select(source.Source(), legacyProjection)
 	b.ResetTimer()
@@ -153,8 +176,9 @@ func BenchmarkLegacyScan(b *testing.B) {
 	}
 }
 `
-	require.NoError(t, os.WriteFile(filepath.Join(root, "generated", "consumer_test.go"), []byte(consumer), 0o600))
-	command := exec.Command("go", "test", "-mod=mod", "./generated")
+	require.NoError(t, os.WriteFile(filepath.Join(root, "generated", "consumer_test.go"), []byte(compactConsumer), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "legacy", "consumer_test.go"), []byte(legacyConsumer), 0o600))
+	command := exec.Command("go", "test", "-mod=mod", "./generated", "./legacy")
 	command.Dir = root
 	command.Env = append(os.Environ(), "GOCACHE="+filepath.Join(root, "cache"))
 	output, err := command.CombinedOutput()
@@ -163,16 +187,21 @@ func BenchmarkLegacyScan(b *testing.B) {
 	t.Logf("compact build samples=%s median=%s", formatDurations(compactBuilds), medianDuration(compactBuilds))
 	t.Logf("legacy build samples=%s median=%s", formatDurations(legacyBuilds), medianDuration(legacyBuilds))
 	t.Logf("build median metrics compact=%s legacy=%s", formatBuildMetric(medianBuildSample(compactBuilds)), formatBuildMetric(medianBuildSample(legacyBuilds)))
-	t.Logf("build median ratios compact/legacy wall=%.2fx cpu=%.2fx rss=%.2fx binary=%.2fx", buildRatio(compactBuilds, legacyBuilds, func(sample buildSample) float64 { return sample.wall.Seconds() }), buildRatio(compactBuilds, legacyBuilds, func(sample buildSample) float64 { return sample.cpu.Seconds() }), buildRatio(compactBuilds, legacyBuilds, func(sample buildSample) float64 { return float64(sample.rssKB) }), buildRatio(compactBuilds, legacyBuilds, func(sample buildSample) float64 { return float64(sample.binary) }))
-	benchmark := exec.Command("go", "test", "-mod=mod", "-run", "^$", "-bench", "^Benchmark(Compact|Legacy)Scan$", "-benchmem", "./generated")
-	benchmark.Dir = root
-	benchmark.Env = command.Env
-	benchmarkOutput, err := benchmark.CombinedOutput()
-	require.NoError(t, err, "%s", benchmarkOutput)
-	t.Logf("compact scan measurement: %s", benchmarkOutput)
-	compactAllocs, ok := benchmarkAllocs(string(benchmarkOutput), "BenchmarkCompactScan")
+	wallRatio := buildRatio(compactBuilds, legacyBuilds, func(sample buildSample) float64 { return sample.wall.Seconds() })
+	cpuRatio := buildRatio(compactBuilds, legacyBuilds, func(sample buildSample) float64 { return sample.cpu.Seconds() })
+	rssRatio := buildRatio(compactBuilds, legacyBuilds, func(sample buildSample) float64 { return float64(sample.rssKB) })
+	binaryRatio := buildRatio(compactBuilds, legacyBuilds, func(sample buildSample) float64 { return float64(sample.binary) })
+	t.Logf("build median ratios compact/legacy wall=%.2fx cpu=%.2fx rss=%.2fx binary=%.2fx", wallRatio, cpuRatio, rssRatio, binaryRatio)
+	for name, ratio := range map[string]float64{"wall": wallRatio, "cpu": cpuRatio, "rss": rssRatio, "binary": binaryRatio} {
+		require.LessOrEqual(t, ratio, 1.10, "%s median compact/legacy ratio", name)
+	}
+	compactOutput := benchmarkPackage(t, root, command.Env, "./generated", "BenchmarkCompactScan")
+	legacyOutput := benchmarkPackage(t, root, command.Env, "./legacy", "BenchmarkLegacyScan")
+	t.Logf("compact scan measurement: %s", compactOutput)
+	t.Logf("legacy scan measurement: %s", legacyOutput)
+	compactAllocs, ok := benchmarkAllocs(string(compactOutput), "BenchmarkCompactScan")
 	require.True(t, ok)
-	legacyAllocs, ok := benchmarkAllocs(string(benchmarkOutput), "BenchmarkLegacyScan")
+	legacyAllocs, ok := benchmarkAllocs(string(legacyOutput), "BenchmarkLegacyScan")
 	require.True(t, ok)
 	t.Logf("scan allocations compact=%d legacy=%d", compactAllocs, legacyAllocs)
 	require.LessOrEqual(t, compactAllocs, legacyAllocs)
@@ -206,6 +235,16 @@ func benchmarkAllocs(output, name string) (int, bool) {
 	return 0, false
 }
 
+func benchmarkPackage(t *testing.T, root string, env []string, packagePath, benchmarkName string) []byte {
+	t.Helper()
+	command := exec.Command("go", "test", "-mod=mod", "-run", "^$", "-bench", "^"+benchmarkName+"$", "-benchmem", packagePath)
+	command.Dir = root
+	command.Env = env
+	output, err := command.CombinedOutput()
+	require.NoError(t, err, "%s", output)
+	return output
+}
+
 type buildSample struct {
 	wall   time.Duration
 	cpu    time.Duration
@@ -215,7 +254,7 @@ type buildSample struct {
 
 func pairedBuildSamples(t *testing.T, root string, env []string) ([]buildSample, []buildSample) {
 	t.Helper()
-	const samples = 5
+	const samples = 7
 	compact := make([]buildSample, 0, samples)
 	legacy := make([]buildSample, 0, samples)
 	for index := 0; index < samples; index++ {
