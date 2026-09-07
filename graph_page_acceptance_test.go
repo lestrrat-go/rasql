@@ -243,8 +243,8 @@ func pageFixture(t *testing.T) (Executor, Query[pageParentRow], GraphKey[pagePar
 	junctionParent, _ := NewGraphKey(KeyPart(jtask, func(v pageJunctionRow) int64 { return v.Task }))
 	junctionChild, _ := NewGraphKey(KeyPart(jlabel, func(v pageJunctionRow) int64 { return v.Label }))
 	tasksPlan, _ := NewGraphPlan(taskQuery, func(v pageTaskRow) pageTaskGraph { return pageTaskGraph{ID: v.ID} })
-	assigneesPlan, _ := NewGraphPlan(assigneeQuery, func(v pageAssigneeRow) pageAssigneeGraph { return pageAssigneeGraph{ID: v.ID, Name: v.Name} })
-	labelsPlan, _ := NewGraphPlan(labelQuery, func(v pageLabelRow) pageLabelGraph { return pageLabelGraph{ID: v.ID, Name: v.Name} })
+	assigneesPlan, _ := NewGraphPlan(assigneeQuery, func(v pageAssigneeRow) pageAssigneeGraph { return pageAssigneeGraph(v) })
+	labelsPlan, _ := NewGraphPlan(labelQuery, func(v pageLabelRow) pageLabelGraph { return pageLabelGraph(v) })
 	return executor, parentQuery, parentKey, taskParentKey, taskIDKey, taskAssigneeKey, assigneeIDKey, labelIDKey, junctionParent, junctionChild, junctionSource.source, tasksPlan, assigneesPlan, labelsPlan
 }
 
