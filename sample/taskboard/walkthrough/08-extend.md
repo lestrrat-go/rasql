@@ -77,7 +77,7 @@ Name the query in `rasql.json`:
   "output": "internal/store",
   "dialect": "postgresql",
   "queries": [
-    {"input": "queries/overdue_count.sql", "function": "OverdueCount"}
+    {"input": "queries/overdue_count.sql", "function": "OverdueCount", "bindings": {"on": {"Go": {"Type": "time.Time", "Imports": [{"Path": "time"}]}}}}
   ]
 }
 ```
@@ -104,12 +104,12 @@ wrote internal/store from 3 tables
 package store
 
 import (
-	"time"
+	time2 "time"
 
 	"github.com/lestrrat-go/rasql/stmt"
 )
 
-func OverdueCount(on time.Time) stmt.Statement {
+func OverdueCount(on time2.Time) stmt.Statement {
 	return stmt.New("SELECT COUNT(*) AS overdue\nFROM tasks\nWHERE is_open AND due_on IS NOT NULL AND due_on < CAST($1 AS date)\n", on)
 }
 ```

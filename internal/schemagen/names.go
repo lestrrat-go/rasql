@@ -167,7 +167,7 @@ func (n *ResolvedNames) validateCollisions(tables []schema.TableDef) error {
 			}
 			accessors[resolved.Accessor] = column.Name
 		}
-		for _, relationship := range relationshipSpecs(table, tables, n) {
+		for _, relationship := range relationshipSpecs(table, tables, n, nil) {
 			if err := claim(relationship.typeName, identity+" relationship "+relationship.method); err != nil {
 				return err
 			}

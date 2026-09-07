@@ -79,6 +79,8 @@ type Options struct {
 	Namespaces     []string
 	IncludeObjects []schema.ObjectName
 	ExcludeObjects []schema.ObjectName
+	// IncludeViews includes views in a sweep or explicit selection.
+	IncludeViews bool
 }
 
 // ErrNoTables reports that the selection matched no table at all. A caller
@@ -240,6 +242,8 @@ func selectTables(ctx context.Context, queryer inspect.Queryer, options Options)
 		tables, err = describeIncludedObjects(ctx, inspector, options)
 	} else if len(options.Include) > 0 && len(options.Namespaces) > 0 {
 		tables, err = describeIncludedScopedLegacy(ctx, inspector, options)
+	} else if len(options.Include) > 0 && options.IncludeViews {
+		tables, err = describeIncludedViews(ctx, inspector, options.Include)
 	} else if len(options.Include) > 0 {
 		tables, err = describeIncluded(ctx, inspector, options.Include)
 	} else if len(options.Namespaces) > 0 {
@@ -250,6 +254,7 @@ func selectTables(ctx context.Context, queryer inspect.Queryer, options Options)
 	if err != nil {
 		return nil, err
 	}
+	normalizeRelationships(tables, options.Dialect)
 
 	sort.Slice(tables, func(i, j int) bool {
 		if tables[i].Schema != tables[j].Schema {
@@ -274,7 +279,13 @@ func describeIncludedObjects(ctx context.Context, inspector inspect.Inspector, o
 		}
 		var table schema.TableDef
 		var err error
-		if object.Schema == "" {
+		if options.IncludeViews {
+			if object.Schema == "" {
+				table, err = inspector.Object(ctx, object.Name)
+			} else {
+				table, err = inspector.ObjectIn(ctx, object.Schema, object.Name)
+			}
+		} else if object.Schema == "" {
 			table, err = inspector.Table(ctx, object.Name)
 		} else {
 			table, err = inspector.TableIn(ctx, object.Schema, object.Name)
@@ -294,7 +305,19 @@ func describeIncludedScopedLegacy(ctx context.Context, inspector inspect.Inspect
 	}
 	candidates := make(map[string][]inspect.TableName, len(wanted))
 	for _, namespace := range options.Namespaces {
-		names, err := inspector.TableNamesIn(ctx, namespace)
+		var names []inspect.TableName
+		var err error
+		if options.IncludeViews {
+			objects, objectErr := inspector.ObjectNamesIn(ctx, namespace)
+			if objectErr != nil {
+				return nil, fmt.Errorf("catalog: %w", objectErr)
+			}
+			for _, object := range objects {
+				names = append(names, inspect.TableName{Schema: object.Schema, Name: object.Name})
+			}
+		} else {
+			names, err = inspector.TableNamesIn(ctx, namespace)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("catalog: %w", err)
 		}
@@ -317,7 +340,7 @@ func describeIncludedScopedLegacy(ctx context.Context, inspector inspect.Inspect
 			}
 			return nil, fmt.Errorf("catalog: included table %q is ambiguous; use IncludeObjects with one of %s", name, choices)
 		}
-		table, err := inspector.TableIn(ctx, matches[0].Schema, matches[0].Name)
+		table, err := describeSweptTable(ctx, inspector, matches[0], options.IncludeViews)
 		if err != nil {
 			return nil, fmt.Errorf("catalog: %w", err)
 		}
@@ -337,7 +360,19 @@ func sweepNamespaces(ctx context.Context, inspector inspect.Inspector, options O
 	var tables []schema.TableDef
 	allNames := make([]inspect.TableName, 0)
 	for _, namespace := range options.Namespaces {
-		names, err := inspector.TableNamesIn(ctx, namespace)
+		var names []inspect.TableName
+		var err error
+		if options.IncludeViews {
+			objects, objectErr := inspector.ObjectNamesIn(ctx, namespace)
+			if objectErr != nil {
+				return nil, fmt.Errorf("catalog: %w", objectErr)
+			}
+			for _, object := range objects {
+				names = append(names, inspect.TableName{Schema: object.Schema, Name: object.Name})
+			}
+		} else {
+			names, err = inspector.TableNamesIn(ctx, namespace)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("catalog: %w", err)
 		}
@@ -354,7 +389,7 @@ func sweepNamespaces(ctx context.Context, inspector inspect.Inspector, options O
 		if isDefaultHistoryIdentity(name, historyTable, options.Dialect.Name()) || containsName(options.Exclude, name.Name) {
 			continue
 		}
-		table, err := inspector.TableIn(ctx, name.Schema, name.Name)
+		table, err := describeSweptTable(ctx, inspector, name, options.IncludeViews)
 		if err != nil {
 			return nil, fmt.Errorf("catalog: %w", err)
 		}
@@ -418,6 +453,64 @@ func applyObjectExcludes(tables []schema.TableDef, excludes []schema.ObjectName)
 	return result
 }
 
+func normalizeRelationships(tables []schema.TableDef, selectedDialect dialect.Dialect) {
+	if selectedDialect.Name() != dialect.SQLite().Name() {
+		return
+	}
+	for index := range tables {
+		table := &tables[index]
+		derived := schema.RelationshipsFromForeignKeys(*table)
+		matched := make([]bool, len(table.ForeignKeys))
+		relationships := append([]schema.RelationshipDef(nil), table.Relationships...)
+		for _, relationship := range relationships {
+			for keyIndex, key := range table.ForeignKeys {
+				if matched[keyIndex] || key.ReferencedSchema != relationship.ReferencedSchema || key.ReferencedTable != relationship.ReferencedTable ||
+					!slicesEqual(key.Columns, relationship.Columns) || !slicesEqual(key.ReferencedColumns, relationship.ReferencedColumns) {
+					continue
+				}
+				matched[keyIndex] = true
+				break
+			}
+		}
+		for keyIndex, relationship := range derived {
+			if matched[keyIndex] {
+				continue
+			}
+			relationships = append(relationships, relationship)
+		}
+		for relIndex := range relationships {
+			if relationships[relIndex].ReferencedSchema == "" && table.Schema != "" {
+				relationships[relIndex].ResolvedReferencedSchema = table.Schema
+			}
+		}
+		table.Relationships = relationships
+	}
+}
+
+func slicesEqual(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func describeIncludedViews(ctx context.Context, inspector inspect.Inspector, names []string) ([]schema.TableDef, error) {
+	tables := make([]schema.TableDef, len(names))
+	for index, name := range names {
+		table, err := inspector.Object(ctx, name)
+		if err != nil {
+			return nil, fmt.Errorf("catalog: %w", err)
+		}
+		tables[index] = table
+	}
+	return tables, nil
+}
+
 // describeIncluded reads exactly the named tables, in the order given,
 // through Inspector.Table -- never TableIn, even for a SQLite table whose
 // TableNames scope would carry a schema, because a name in Include is a
@@ -438,7 +531,21 @@ func describeIncluded(ctx context.Context, inspector inspect.Inspector, names []
 // sweepTables resolves every base table the connection can see, minus the
 // migration history table and minus Exclude, and refuses an empty result.
 func sweepTables(ctx context.Context, inspector inspect.Inspector, options Options) ([]schema.TableDef, error) {
-	names, err := inspector.TableNames(ctx)
+	var names []inspect.TableName
+	var err error
+	if options.IncludeViews {
+		objects, objectErr := inspector.ObjectNames(ctx)
+		if objectErr != nil {
+			return nil, fmt.Errorf("catalog: %w", objectErr)
+		}
+		for _, object := range objects {
+			if object.Kind == schema.ObjectView || object.Kind == schema.ObjectTable {
+				names = append(names, inspect.TableName{Schema: object.Schema, Name: object.Name})
+			}
+		}
+	} else {
+		names, err = inspector.TableNames(ctx)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("catalog: %w", err)
 	}
@@ -456,7 +563,7 @@ func sweepTables(ctx context.Context, inspector inspect.Inspector, options Optio
 		if isDefaultHistoryIdentity(name, historyTable, options.Dialect.Name()) || containsName(options.Exclude, name.Name) {
 			continue
 		}
-		table, err := describeSweptTable(ctx, inspector, name)
+		table, err := describeSweptTable(ctx, inspector, name, options.IncludeViews)
 		if err != nil {
 			return nil, fmt.Errorf("catalog: %w", err)
 		}
@@ -473,7 +580,13 @@ func sweepTables(ctx context.Context, inspector inspect.Inspector, options Optio
 // TableIn when name carries a Schema (main, temp, or an attached database)
 // and the ordinary Table lookup otherwise, which is every case on
 // PostgreSQL and MySQL, and an unscoped SQLite table.
-func describeSweptTable(ctx context.Context, inspector inspect.Inspector, name inspect.TableName) (schema.TableDef, error) {
+func describeSweptTable(ctx context.Context, inspector inspect.Inspector, name inspect.TableName, includeViews bool) (schema.TableDef, error) {
+	if includeViews {
+		if name.Schema != "" {
+			return inspector.ObjectIn(ctx, name.Schema, name.Name)
+		}
+		return inspector.Object(ctx, name.Name)
+	}
 	if name.Schema != "" {
 		return inspector.TableIn(ctx, name.Schema, name.Name)
 	}

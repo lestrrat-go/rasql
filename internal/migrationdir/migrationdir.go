@@ -3,7 +3,7 @@
 //
 // It is the one place the on-disk layout is defined: a migration directory
 // holds one subdirectory per migration; each subdirectory holds one or more
-// .up.sql sources and at least one .down.sql source beside them; forward
+// .up.sql sources and either .down.sql sources or an irreversibility marker beside them; forward
 // sources run in ascending name order and reverse sources in descending
 // name order, so a migration is undone in the reverse of the order it was
 // done; and a dot-prefixed entry is ignored at either level.
@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/lestrrat-go/rasql/migrate"
 	"github.com/lestrrat-go/rasql/sqltext"
@@ -79,8 +80,23 @@ func loadMigration(directory string, id string) (migrate.Migration, error) {
 	}
 	upFiles := make([]string, 0)
 	downFiles := make([]string, 0)
+	marker := false
 	stems := make(map[string]struct{})
 	for _, entry := range entries {
+		if entry.Name() == ".rasql-irreversible" {
+			if entry.IsDir() {
+				return migrate.Migration{}, fmt.Errorf("migration %q irreversibility marker is a directory", id)
+			}
+			data, err := os.ReadFile(filepath.Join(directory, entry.Name()))
+			if err != nil {
+				return migrate.Migration{}, fmt.Errorf("read migration %q irreversibility marker: %w", id, err)
+			}
+			if len(data) > 4096 || !utf8.Valid(data) || strings.TrimSpace(string(data)) == "" {
+				return migrate.Migration{}, fmt.Errorf("migration %q has an invalid irreversibility marker", id)
+			}
+			marker = true
+			continue
+		}
 		name := entry.Name()
 		if strings.HasPrefix(name, ".") {
 			continue
@@ -106,7 +122,21 @@ func loadMigration(directory string, id string) (migrate.Migration, error) {
 		return migrate.Migration{}, fmt.Errorf("migration %q has no %s source", id, upSuffix)
 	}
 	if len(downFiles) == 0 {
-		return migrate.Migration{}, fmt.Errorf("migration %q has no %s source; every migration must be reversible", id, downSuffix)
+		if marker {
+			statements, err := readStatements(directory, id, upFiles)
+			if err != nil {
+				return migrate.Migration{}, err
+			}
+			migration := migrate.Migration{ID: id, Statements: statements}
+			if err := migration.Validate(); err != nil {
+				return migrate.Migration{}, err
+			}
+			return migration, nil
+		}
+		return migrate.Migration{}, fmt.Errorf("migration %q has no %s source and no irreversibility marker", id, downSuffix)
+	}
+	if marker {
+		return migrate.Migration{}, fmt.Errorf("migration %q has an irreversibility marker and reverse sources", id)
 	}
 	// A reverse source names the forward source it undoes. Requiring the
 	// stem to match one is the check that catches a misspelled forward

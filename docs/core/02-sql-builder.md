@@ -55,7 +55,175 @@ func Example_query_render_select() {
 source: [examples/query_render_select_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_render_select_example_test.go)
 <!-- END INCLUDE -->
 
+## Extend rendering with a compiler
+
+An optional `dialect.CompilerProvider` extends rendering for a custom dialect. Its compiler can emit a complete pagination
+clause or handle an external `query.Expression` through the renderer's identifier, argument, and child-expression emitter.
+The built-in dialects keep their existing SQL when no compiler is installed.
+
+<!-- INCLUDE(examples/query_custom_compiler_example_test.go) -->
+```go
+package examples_test
+
+import (
+	"fmt"
+
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
+	"github.com/lestrrat-go/rasql/query"
+)
+
+type compilerExampleDialect struct {
+	dialect.Dialect
+}
+
+func (compilerExampleDialect) Compiler() dialect.Compiler { return compilerExample{} }
+
+type compilerExample struct{}
+
+type containsExample struct {
+	column query.Expression
+	value  any
+}
+
+func (containsExample) ExpressionNode()              {}
+func (containsExample) CustomExpressionName() string { return "contains" }
+
+func (compilerExample) CompileExpression(emitter dialect.Emitter, expression query.Expression) (bool, error) {
+	contains, ok := expression.(containsExample)
+	if !ok {
+		return false, nil
+	}
+	emitter.WriteSQL("CONTAINS(")
+	if err := emitter.Expression(contains.column); err != nil {
+		return true, err
+	}
+	emitter.WriteSQL(", ")
+	if err := emitter.Argument(contains.value); err != nil {
+		return true, err
+	}
+	emitter.WriteSQL(")")
+	return true, nil
+}
+
+func (compilerExample) CompilePagination(emitter dialect.Emitter, pagination dialect.Pagination) error {
+	if pagination.HasOffset {
+		return fmt.Errorf("offset is unsupported")
+	}
+	if pagination.HasLimit {
+		emitter.WriteSQL(" FETCH FIRST ")
+		if err := emitter.Argument(pagination.Limit); err != nil {
+			return err
+		}
+		emitter.WriteSQL(" ROWS ONLY")
+	}
+	return nil
+}
+
+func Example_customCompiler() {
+	users := store.Users()
+	builder := rasql.DecodeFromRef[struct{}](users.Ref()).
+		Project(query.Project(containsExample{column: users.Email(), value: "@example.com"})).
+		Limit(3)
+	statement, err := builder.Build(compilerExampleDialect{Dialect: dialect.SQLite()})
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(statement.SQL())
+	fmt.Println(statement.Args())
+	// Output:
+	// SELECT CONTAINS("users"."email", ?) FROM "users" FETCH FIRST ? ROWS ONLY
+	// [@example.com 3]
+}
+```
+source: [examples/query_custom_compiler_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_custom_compiler_example_test.go)
+<!-- END INCLUDE -->
+
 `query.MustTableRef` takes the same `schema.TableDef` that [Schemas](01-schema.md) describes, so a table read out of a live database works here as well as one written by hand. `accounts.Column("id")` builds the reference, and `query.NewSelect` reports a name the table does not hold.
+
+<!-- INCLUDE(examples/query_lock_upsert_example_test.go#row_lock) -->
+```go
+func Example_query_rowLock() {
+	queue := query.MustTableRef(schema.MustTableDef("queue", schema.Integer("id"), schema.Integer("claimed")))
+	statement, err := query.NewSelect(queue, queue.Column("id"))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	statement, err = statement.WithWhere(query.Equal(queue.Column("claimed"), 0))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	statement, err = statement.WithOrder(query.Asc(queue.Column("id")))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	statement, err = statement.WithLimit(1)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	statement, err = statement.WithLock(query.RowLock(query.LockUpdate).Wait(query.LockWaitSkipLocked))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	rendered, err := render.Select(dialect.PostgreSQL(), statement)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(rendered.SQL())
+	fmt.Println(rendered.Args()...)
+	// Output:
+	// SELECT "queue"."id" FROM "queue" WHERE ("queue"."claimed" = $1) ORDER BY "queue"."id" LIMIT $2 FOR UPDATE SKIP LOCKED
+	// 0 1
+}
+```
+source: [examples/query_lock_upsert_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_lock_upsert_example_test.go)
+<!-- END INCLUDE -->
+
+`query.RowLock` appends a measured row-locking clause after ordering and paging. Use `LockWaitSkipLocked` when each worker should claim a different queued row.
+
+<!-- INCLUDE(examples/query_expression_example_test.go#expressions) -->
+```go
+func Example_query_expressions() {
+	accounts := query.MustTableRef(schema.MustTableDef("accounts",
+		schema.Integer("id"), schema.Integer("balance"), schema.Text("email")))
+	id, balance := accounts.Column("id"), accounts.Column("balance")
+	label := query.SearchedCase(
+		query.When(query.GreaterThan(balance, 100), "large"),
+	).Else("small")
+	statement, err := query.NewSelect(accounts, query.Project(query.CastAs(query.Add(balance, 1), schema.IntegerType{})).As("next"), query.Project(label).As("size"))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	statement, err = statement.WithWhere(query.Equal(id, 1))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	rendered, err := render.Select(dialect.PostgreSQL(), statement)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(rendered.SQL())
+	fmt.Println(rendered.Args()...)
+	// Output:
+	// SELECT CAST(("accounts"."balance" + $1) AS BIGINT) AS "next", (CASE WHEN ("accounts"."balance" > $2) THEN $3 ELSE $4 END) AS "size" FROM "accounts" WHERE ("accounts"."id" = $5)
+	// 1 100 large small 1
+}
+```
+source: [examples/query_expression_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_expression_example_test.go)
+<!-- END INCLUDE -->
+
+`query.Add`, `query.SearchedCase`, and `query.CastAs` compose computed projections while keeping values as bound arguments.
 
 ## Run a rendered statement
 
@@ -67,7 +235,7 @@ The tables below enumerate what the `query` package offers. The typed builder ta
 
 ### Statement constructors
 
-The builders cover the common statements. These constructors build the same statements directly. `dynamic.Query(ctx, db, statement)` runs a `Select`, and `rasql.Exec(ctx, db, statement)` runs a write that carries no `RETURNING` clause. Both are free functions over a `rasql.DB`, so the same statement runs against a plain `DB` or a transaction, which is a `DB` too. A write refined with `WithReturning` reads its rows back through `dynamic.QueryWrite`, `rasql.QueryWriteAll[T]`, or `rasql.QueryWriteOne[T]`, because `rasql.Exec` rejects it.
+The builders cover the common statements. These constructors build the same statements directly. `dynamic.Query(ctx, db, statement)` runs a `Select`, and `dynamic.QueryResult(ctx, db, statement)` adds ordered metadata for generic consumers. `rasql.Exec(ctx, db, statement)` runs a write that carries no `RETURNING` clause. Both are free functions over a `rasql.DB`, so the same statement runs against a plain `DB` or a transaction, which is a `DB` too. A write refined with `WithReturning` reads its rows back through `dynamic.QueryWrite`, `dynamic.QueryWriteResult`, `rasql.QueryWriteAll[T]`, or `rasql.QueryWriteOne[T]`, because `rasql.Exec` rejects it.
 
 | Constructor | Statement |
 | --- | --- |
@@ -76,9 +244,71 @@ The builders cover the common statements. These constructors build the same stat
 | `query.NewJoinedSelect(from, joins, groupBy, projections…)` | `SELECT` that carries its joins from the start; needed when a projection or a grouping expression reads a joined table, which the other two refuse because they validate before `WithJoin` can run. Pass a nil `groupBy` when the statement does not group. |
 | `query.NewInsert(into, values…)` | `INSERT` of one row. Pass `query.Set(column, value)` per column, or `query.Defaults()` on its own to write the database default for every column. |
 | `query.NewInsertRows(into, columns, rows)` | `INSERT` of several rows against one column list, which the rows fill in order. |
+| `query.NewInsertSelect(into, columns, source)` | `INSERT ... SELECT` from a validated `query.ResultQuery`. |
 | `query.NewUpdate(table, assignments…)` | `UPDATE`, with `query.Set(column, expression)` per assignment. A statement without `WithWhere` requires `AllowAll` before rendering or execution. |
 | `query.NewDelete(from)` | `DELETE`. A statement without `WithWhere` requires `AllowAll` before rendering or execution. |
 | `query.NewUpsert(insert, conflictColumns, assignments)` | Insert on conflict update. A non-empty `conflictColumns` requires `dialect.CapabilityConflictTarget`; MySQL lacks it and rejects the statement. |
+
+`query.ResultOf(select, columns...)` gives a validated `Select` or `Compound` a reusable result shape. `query.Derived`
+turns it into an aliased `FROM` or `JOIN` source, and `query.CommonTable` plus `Select.WithCTEs` renders a local CTE.
+`query.CompoundQuery` supports `UNION`, `UNION ALL`, `INTERSECT`, and `EXCEPT`; result arguments keep their left-to-right
+order. Relation columns carry the declared result metadata, so an outer statement can validate names before rendering.
+
+`render.SelectBuilder.Query` finishes a builder without choosing a dialect. `ReplaceProject` keeps its joins, predicates,
+grouping, ordering, and paging while replacing only the projection list; `Project` remains append-only.
+
+<!-- INCLUDE(examples/query_reusable_relation_example_test.go) -->
+```go
+package examples_test
+
+import (
+	"fmt"
+
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/render"
+	"github.com/lestrrat-go/rasql/schema"
+)
+
+func Example_queryReusableRelation() {
+	users := query.MustTableRef(schema.TableDef{
+		Name: "users",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "active", Type: schema.BooleanType{}},
+		},
+	})
+	filtered, err := query.NewSelect(users, users.Column("id"))
+	if err != nil {
+		return
+	}
+	filtered, err = filtered.WithWhere(query.Equal(users.Column("active"), true))
+	if err != nil {
+		return
+	}
+	result, err := query.ResultOf(filtered, query.ResultColumn{Name: "id", Type: schema.IntegerType{}})
+	if err != nil {
+		return
+	}
+	relation, err := query.Derived(result, "active_users")
+	if err != nil {
+		return
+	}
+	statement, err := query.NewSelect(relation, relation.Column("id"))
+	if err != nil {
+		return
+	}
+	rendered, err := render.Select(dialect.PostgreSQL(), statement)
+	if err != nil {
+		return
+	}
+	fmt.Println(rendered.SQL())
+	// Output:
+	// SELECT "active_users"."id" FROM (SELECT "users"."id" FROM "users" WHERE ("users"."active" = $1)) AS "active_users"
+}
+```
+source: [examples/query_reusable_relation_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_reusable_relation_example_test.go)
+<!-- END INCLUDE -->
 
 Each statement is refined by `With…` methods: `WithJoin`, `WithWhere`, `WithGroupBy`, `WithHaving`, `WithOrder`, `WithLimit`, `WithOffset`, and `WithDistinct` on `Select`, `WithWhere` on `Update` and `Delete`, and `WithReturning` on every write, which [Reading a `RETURNING` clause](03-write-statements.md#reading-a-returning-clause) covers. `Update.AllowAll` and `Delete.AllowAll` return a new statement when a full-table mutation is intentional. Each method returns a new validated statement rather than changing the one it was called on.
 
@@ -171,7 +401,7 @@ A `HAVING` clause needs a statement that groups, so a statement that groups neit
 
 An aggregate has no result name of its own — PostgreSQL, MySQL, and SQLite each report a different one for an unaliased call — so a projection that will be decoded needs `.As(alias)` from [Projections, joins, and ordering](#projections-joins-and-ordering). `rasql.DecodeFrom[R]` maps an aliased aggregate onto a field of `R` the same way it maps any other projected column.
 
-`query.Function.WithDistinct()` returns a copy of a call that evaluates its argument only once per distinct value, rendering `query.Count(users.ID()).WithDistinct()` as `COUNT(DISTINCT users.id)`. It is a modifier on the argument, not a separate function name, so it applies to any of the aggregate constructors above. Validation refuses it combined with `query.CountAll()`'s `*`, since `COUNT(DISTINCT *)` is not legal SQL. `DISTINCT` inside a call asks the function to combine one row per distinct argument value, which only an aggregate does, so validation refuses it on a curated scalar call. [Scalar functions](#scalar-functions) states that rule, and it states what `query.Func` does with the modifier instead. `query.Count(column).WithDistinct()` counts the distinct non-NULL values of that one expression, which is not a count of the rows a `SELECT DISTINCT` returns: `COUNT` ignores NULL where `SELECT DISTINCT` keeps it as a value, and the call takes exactly one argument, so a distinct count over several projected columns has no form here. The derived table or CTE that would express one portably is unsupported. The builder's own `Count` in [Count rows](../orm/03-typed-queries.md#count-rows) rejects a distinct builder for a reason of its own, because it would render `SELECT DISTINCT COUNT(*)`, which is always one row and never the number of distinct rows.
+`query.Function.WithDistinct()` returns a copy of a call that evaluates its argument only once per distinct value, rendering `query.Count(users.ID()).WithDistinct()` as `COUNT(DISTINCT users.id)`. It is a modifier on the argument, not a separate function name, so it applies to any of the aggregate constructors above. Validation refuses it combined with `query.CountAll()`'s `*`, since `COUNT(DISTINCT *)` is not legal SQL. `DISTINCT` inside a call asks the function to combine one row per distinct argument value, which only an aggregate does, so validation refuses it on a curated scalar call. [Scalar functions](#scalar-functions) states that rule, and it states what `query.Func` does with the modifier instead. `query.Count(column).WithDistinct()` counts the distinct non-NULL values of that one expression, which is not a count of the rows a `SELECT DISTINCT` returns: `COUNT` ignores NULL where `SELECT DISTINCT` keeps it as a value, and the call takes exactly one argument, so a distinct count over several projected columns has no form here. The call takes exactly one argument, so a distinct count over several projected columns uses a reusable `ResultQuery` through `query.ResultOf` and `query.Derived` or `query.CommonTable`. The typed builder's `Count` in [Count rows](../orm/03-typed-queries.md#count-rows) counts a DISTINCT builder through that reusable result relation.
 
 ### Scalar functions
 
@@ -340,10 +570,54 @@ it once per enclosing row rather than once for the whole statement, and the row 
 `EXISTS` reading only its own tables asks nothing about the row being tested and merely reports whether a table is non-empty — and it reaches every other form too, so a
 scalar subquery counting one user's orders beside that user is the same mechanism.
 
-Call `query.Select.WithCorrelation(tables…)` to name the enclosing tables the statement reads, before the clause that reads them. Every builder method validates the copy
-it returns, and a statement under construction has no enclosing statement to ask, so `WithWhere` refuses a predicate naming a table this statement has not been told
-about. That is the same ordering `query.NewJoinedSelect` documents for a join a projection reads. A statement between the reader and the table declares it too, since
-validating that middle statement on its own has nothing else saying a third statement is coming.
+Call `query.NewCorrelatedSelect` or `query.NewCorrelatedJoinedSelect` when a projection, join, or grouping expression
+reads an enclosing table. These constructors install the declarations before the first validation. Use
+`query.Select.WithCorrelation(tables…)` to add declarations to a statement whose existing clauses do not read them.
+Every builder method validates the copy it returns. A statement between the reader and the table declares it too,
+since validating that middle statement on its own has nothing else saying a third statement is coming.
+
+<!-- INCLUDE(examples/query_correlated_projection_example_test.go#correlated_projection) -->
+```go
+func Example_query_correlated_projection() {
+	users := query.MustTableRef(schema.MustTableDef("users", schema.Integer("id")))
+	orders := query.MustTableRef(schema.MustTableDef(
+		"orders",
+		schema.Integer("id"), schema.Integer("user_id"), schema.Integer("amount"),
+	))
+
+	// The constructor declares users before it validates the projection, so the
+	// projection can read both the order and the enclosing user's columns.
+	ordersForUser, err := query.NewCorrelatedSelect(
+		orders, []query.RelationSource{users},
+		query.Project(query.Coalesce(orders.Column("amount"), users.Column("id"))).As("value"),
+	)
+	if err != nil {
+		fmt.Printf("failed to build correlated select: %s\n", err)
+		return
+	}
+	ordersForUser, err = ordersForUser.WithWhere(query.Equal(orders.Column("user_id"), users.Column("id")))
+	if err != nil {
+		fmt.Printf("failed to add correlation predicate: %s\n", err)
+		return
+	}
+	statement, err := query.NewSelect(users, users.Column("id"), query.Project(query.Scalar(ordersForUser)).As("value"))
+	if err != nil {
+		fmt.Printf("failed to build outer select: %s\n", err)
+		return
+	}
+	rendered, err := render.Select(dialect.SQLite(), statement)
+	if err != nil {
+		fmt.Printf("failed to render select: %s\n", err)
+		return
+	}
+	fmt.Println(rendered.SQL())
+
+	// Output:
+	// SELECT "users"."id", (SELECT COALESCE("orders"."amount", "users"."id") AS "value" FROM "orders" WHERE ("orders"."user_id" = "users"."id")) AS "value" FROM "users"
+}
+```
+source: [examples/query_correlated_projection_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_correlated_projection_example_test.go)
+<!-- END INCLUDE -->
 
 The enclosing statement may be a `SELECT`, a `DELETE`, or an `UPDATE`. Each one has the row a correlated subquery reads: a result row for a `SELECT`, and the row being
 written for the other two. `DELETE FROM users WHERE EXISTS (SELECT orders.id FROM orders WHERE orders.user_id = users.id)` is the shape that enables, and PostgreSQL 17,

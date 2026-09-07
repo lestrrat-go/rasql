@@ -74,6 +74,7 @@ func (c command) runGenerate(args []string) error {
 	includeObjects := flags.String("include-objects", "", "comma-separated exact objects as namespace.table")
 	excludeObjects := flags.String("exclude-objects", "", "comma-separated exact objects as namespace.table")
 	historyTable := flags.String("history-table", "", "migration history table to skip (default: rasql_schema_migrations)")
+	includeViews := flags.Bool("include-views", false, "include views in generated output")
 	prune := flags.Bool("prune", true, "delete a generated file this run no longer writes, instead of refusing the run")
 	check := flags.Bool("check", false, "report whether the generated package is current instead of writing it")
 	timeout := flags.Duration("timeout", defaultInspectionTimeout, "limit on the whole run")
@@ -159,6 +160,9 @@ func (c command) runGenerate(args []string) error {
 	if !typed.has("exclude-objects") && len(settings.Tables.ExcludeObjects) > 0 {
 		excludeObjectList = settings.Tables.ExcludeObjects
 	}
+	if !typed.has("include-views") {
+		*includeViews = settings.Tables.IncludeViews
+	}
 	hints, err := settings.hints()
 	if err != nil {
 		return err
@@ -182,11 +186,14 @@ func (c command) runGenerate(args []string) error {
 	defer func() { _ = database.Close() }()
 
 	tables, err := catalog.FromDatabase(ctx, database, catalog.Options{
-		Dialect:      spec.dialect,
-		Include:      includeTables,
-		Exclude:      excludeTables,
-		HistoryTable: *historyTable,
-		Namespaces:   namespaceList, IncludeObjects: includeObjectList, ExcludeObjects: excludeObjectList,
+		Dialect:        spec.dialect,
+		Include:        includeTables,
+		Exclude:        excludeTables,
+		HistoryTable:   *historyTable,
+		Namespaces:     namespaceList,
+		IncludeObjects: includeObjectList,
+		ExcludeObjects: excludeObjectList,
+		IncludeViews:   *includeViews,
 	})
 	if err != nil {
 		return fmt.Errorf("generate: %w", dsnredact.Error(err, *dsn))

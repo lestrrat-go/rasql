@@ -400,7 +400,7 @@ queries := generate.QueryPackage{
 	Dialect: dialect.PostgreSQL(),
 	Queries: []generate.Query{
 		{Input: template, Function: "UserByEmail", Output: "user_by_email_gen.go"},
-		{SQL: "SELECT count(*) FROM users", Function: "CountUsers", Output: "count_users_gen.go"},
+		{SQL: `SELECT count(*) FROM users LIMIT {{bind "limit"}}`, Function: "CountUsers", Output: "count_users_gen.go", Bindings: map[string]namedsql.ParameterBinding{"limit": {Go: schema.GoBinding{Type: "int"}}}},
 	},
 }
 
@@ -453,5 +453,17 @@ source is stale.
 
 ## Next
 
+Each column may carry a `schema.GoBinding`. Its `Type` is used for non-null
+values, and `NullableType` is used when the column is nullable. An omitted
+nullable type uses a pointer to `Type`. Imports are validated and emitted
+deterministically, so named IDs and application wrappers remain consistent
+across row fields, scanners, writes, relationships, and descriptors.
+
 [Typed queries](03-typed-queries.md) reads rows through the generated table, and
 [Writing rows](04-writing.md) inserts, updates, and deletes them.
+# Generated view reads
+
+Store generation can include inspected views with
+`catalog.Options{IncludeViews: true}`. Generated view types provide row fields,
+column accessors, typed selects, aliases, and relationship reads. They do not
+implement mutation or table DDL capabilities.

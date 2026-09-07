@@ -2,17 +2,125 @@ package generate_test
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/generate"
+	"github.com/lestrrat-go/rasql/internal/genfile"
+	"github.com/lestrrat-go/rasql/namedsql"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
 
 const maxQueryInputBytes = 64 << 20
+
+func TestStorePlanCheckAndCommitRejectChangedQueryInput(t *testing.T) {
+	root := t.TempDir()
+	input := filepath.Join(root, "first.sql")
+	writeQueryFile(t, root, "first.sql", `SELECT id FROM users WHERE id = 1`)
+	store := generate.Store{
+		Package: "store",
+		Root:    root,
+		Dir:     "store",
+		Tables:  []schema.TableDef{usersTableDef()},
+		Dialect: dialect.SQLite(),
+		Queries: []generate.Query{{Input: "first.sql", Function: "First", Output: "first_gen.go"}},
+	}
+	require.NoError(t, store.Write())
+	plan, err := store.Plan()
+	require.NoError(t, err)
+	unpublished := []byte(genfile.Marker + "\n\npackage store\n\nfunc Unpublished() {}\n")
+	require.NoError(t, os.WriteFile(filepath.Join(root, "store", "first_gen.go"), unpublished, 0o600))
+	require.NoError(t, os.WriteFile(input, []byte(`SELECT id FROM users WHERE id = 2`), 0o600))
+	before := snapshotTree(t, root)
+
+	err = plan.Check()
+	require.ErrorContains(t, err, "query input first.sql changed after Store.Plan")
+	require.ErrorContains(t, err, "rerun Store.Plan")
+	require.False(t, errors.Is(err, generate.ErrStale))
+	require.Equal(t, before, snapshotTree(t, root))
+
+	err = plan.Commit()
+	require.ErrorContains(t, err, "query input first.sql changed after Store.Plan")
+	require.ErrorContains(t, err, "rerun Store.Plan")
+	require.False(t, errors.Is(err, generate.ErrStale))
+	require.Equal(t, before, snapshotTree(t, root))
+
+	err = store.Check()
+	require.Error(t, err)
+	require.True(t, errors.Is(err, generate.ErrStale))
+}
+
+func TestStorePlanRejectsMissingOrOversizedChangedQueryInput(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		content []byte
+		remove  bool
+		want    string
+	}{
+		{name: "missing", remove: true, want: "changed after Store.Plan"},
+		{name: "oversized", content: bytes.Repeat([]byte("x"), maxQueryInputBytes+1), want: "exceeds maximum size of 67108864 bytes"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeQueryFile(t, root, "first.sql", `SELECT id FROM users WHERE id = 1`)
+			store := generate.Store{
+				Package: "store", Root: root, Dir: "store", Tables: []schema.TableDef{usersTableDef()},
+				Dialect: dialect.SQLite(), Queries: []generate.Query{{Input: "first.sql", Function: "First", Output: "first_gen.go"}},
+			}
+			require.NoError(t, store.Write())
+			plan, err := store.Plan()
+			require.NoError(t, err)
+			input := filepath.Join(root, "first.sql")
+			if testCase.remove {
+				require.NoError(t, os.Remove(input))
+			} else {
+				require.NoError(t, os.WriteFile(input, testCase.content, 0o600))
+			}
+			before := snapshotTree(t, root)
+
+			err = plan.Check()
+			require.ErrorContains(t, err, testCase.want)
+			require.False(t, errors.Is(err, generate.ErrStale))
+			require.Equal(t, before, snapshotTree(t, root))
+			err = plan.Commit()
+			require.ErrorContains(t, err, testCase.want)
+			require.Equal(t, before, snapshotTree(t, root))
+		})
+	}
+}
+
+func TestStorePlanAcceptsRestoredAndInlineInputs(t *testing.T) {
+	t.Run("restored bytes", func(t *testing.T) {
+		root := t.TempDir()
+		original := []byte(`SELECT id FROM users WHERE id = 1`)
+		writeQueryFile(t, root, "first.sql", string(original))
+		store := generate.Store{Package: "store", Root: root, Dir: "store", Tables: []schema.TableDef{usersTableDef()}, Dialect: dialect.SQLite(), Queries: []generate.Query{{Input: "first.sql", Function: "First", Output: "first_gen.go"}}}
+		require.NoError(t, store.Write())
+		plan, err := store.Plan()
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(root, "first.sql"), []byte(`SELECT id FROM users WHERE id = 2`), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(root, "first.sql"), original, 0o600))
+		require.NoError(t, plan.Check())
+		require.NoError(t, plan.Commit())
+	})
+
+	t.Run("inline SQL", func(t *testing.T) {
+		root := t.TempDir()
+		store := generate.Store{Package: "store", Root: root, Dir: "store", Tables: []schema.TableDef{usersTableDef()}, Dialect: dialect.SQLite(), Queries: []generate.Query{{SQL: `SELECT id FROM users WHERE id = 1`, Function: "First", Output: "first_gen.go"}}}
+		require.NoError(t, store.Write())
+		plan, err := store.Plan()
+		require.NoError(t, err)
+		unrelated := filepath.Join(root, "unrelated.sql")
+		require.NoError(t, os.WriteFile(unrelated, []byte("SELECT 1"), 0o600))
+		require.NoError(t, os.Remove(unrelated))
+		require.NoError(t, plan.Check())
+	})
+}
 
 // TestStorePlanRejectsOversizedQueryInput keeps Store.Queries bounded by the
 // same 64 MiB input limit as generated query functions. The plan must reject the source
@@ -89,6 +197,58 @@ func TestStoreCompilesTypedQuery(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(generated), "func UserByEmail(email string)")
 	require.NoError(t, store.Check())
+}
+
+func TestStoreCompilesExplicitStaticParameter(t *testing.T) {
+	root := t.TempDir()
+	store := generate.Store{
+		Package: "store",
+		Root:    root,
+		Dir:     "store",
+		Tables:  []schema.TableDef{usersTableDef()},
+		Dialect: dialect.PostgreSQL(),
+		Queries: []generate.Query{{
+			SQL:      `SELECT id FROM users LIMIT {{bind "limit"}}`,
+			Function: "LimitedUsers",
+			Output:   "limited_users_gen.go",
+			Bindings: map[string]namedsql.ParameterBinding{"limit": {Go: schema.GoBinding{Type: "int"}}},
+		}},
+	}
+	require.NoError(t, store.Write())
+	generated, err := os.ReadFile(filepath.Join(root, "store", "limited_users_gen.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(generated), "func LimitedUsers(limit int)")
+}
+
+func TestStorePlanCopiesBindingMapAndImports(t *testing.T) {
+	root := t.TempDir()
+	bindings := map[string]namedsql.ParameterBinding{"limit": {Go: schema.GoBinding{Type: "url.URL", Imports: []schema.GoImport{{Path: "net/url", Name: "url"}}}}}
+	store := generate.Store{Package: "store", Root: root, Dir: "store", Tables: []schema.TableDef{usersTableDef()}, Dialect: dialect.PostgreSQL(), Queries: []generate.Query{{
+		SQL: `SELECT id FROM users LIMIT {{bind "limit"}}`, Function: "Limited", Output: "limited_gen.go", Bindings: bindings,
+	}},
+	}
+	plan, err := store.Plan()
+	require.NoError(t, err)
+	input := bindings["limit"]
+	input.Go.Imports[0].Name = "changed-input"
+	bindings["limit"] = input
+	store.Queries[0].Bindings["limit"] = namedsql.ParameterBinding{Go: schema.GoBinding{Type: "changed.Type"}}
+	var found bool
+	for _, file := range plan.Files() {
+		if strings.Contains(string(file.Source), `url "net/url"`) {
+			found = true
+		}
+	}
+	require.True(t, found)
+}
+
+func TestStoreRejectsUnknownExplicitBinding(t *testing.T) {
+	root := t.TempDir()
+	store := generate.Store{Package: "store", Root: root, Dir: "store", Tables: []schema.TableDef{usersTableDef()}, Dialect: dialect.PostgreSQL(), Queries: []generate.Query{{
+		SQL: `SELECT id FROM users LIMIT {{bind "limit"}}`, Function: "Limited", Output: "limited_gen.go", Bindings: map[string]namedsql.ParameterBinding{"other": {Go: schema.GoBinding{Type: "int"}}},
+	}}}
+	_, err := store.Plan()
+	require.ErrorContains(t, err, `binding "other" does not name a query parameter`)
 }
 
 // TestStoreRejectsTypedBindNamingAnAbsentTable requires Plan to fail, naming

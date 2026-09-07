@@ -1,5 +1,49 @@
 # Typed queries
 
+`SelectFrom` returns an immutable builder that can finish as a dialect-free `query.Select`, a reusable `ResultQuery`,
+or a different typed projection through `RebindResult`.
+
+<!-- INCLUDE(examples/query_typed_rebind_example_test.go) -->
+```go
+package examples_test
+
+import (
+	"fmt"
+
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
+	"github.com/lestrrat-go/rasql/query"
+)
+
+type userEmail struct {
+	Email string `rasql:"email"`
+}
+
+func Example_rebindTypedResult() {
+	users := store.Users()
+	base := rasql.SelectFrom(users).WhereEqual(users.ID(), 7)
+	result, err := base.Result()
+	if err != nil {
+		return
+	}
+	_ = result
+	dto := rasql.RebindResult[userEmail](base,
+		[]query.ResultColumn{{Name: "email", Type: users.Ref().Definition().Columns[1].Type}},
+		users.Email(),
+	)
+	statement, err := dto.Build(dialect.PostgreSQL())
+	if err != nil {
+		return
+	}
+	fmt.Println(statement.SQL())
+	// Output:
+	// SELECT "users"."email" FROM "users" WHERE ("users"."id" = $1)
+}
+```
+source: [examples/query_typed_rebind_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_typed_rebind_example_test.go)
+<!-- END INCLUDE -->
+
 This page covers the ORM, the builder that knows the Go type of a row. [The SQL builder](../core/02-sql-builder.md) covers the raw path, which renders SQL text and stops there.
 
 `rasql` and `rasql/dynamic` are parallel facades over the same `query`, `render`, and `exec` layers. Neither package is built on the other. Use `rasql` when the result shape can be represented by a Go type, and use [`rasql/dynamic`](../core/05-dynamic.md) when table or column names arrive at run time.
@@ -19,9 +63,47 @@ Columns come from the generated table value, so `users.ID()` is a `query.ColumnR
 
 Generated relationship methods provide a typed join and eager-loading path for the supported relationship slice described in [Relationships](../core/01-schema.md#relationships). A child relation such as `orders.User()` exposes `Join()` for a fluent query and `Load(ctx, db, children)` for one batched lookup that returns related rows grouped by foreign-key value. The inverse parent relation such as `users.Orders()` returns children grouped by parent key. Use the ordinary `Join` API for unsupported relationship shapes.
 
+Relationship plans can add a child filter, deterministic ordering, and a per-parent cap while splitting large key sets into bounded batches:
+
+<!-- INCLUDE(examples/rasql_relationship_load_example_test.go#relationship_load) -->
+```go
+database, err := sql.Open("sqlite", ":memory:")
+if err != nil {
+	panic(err)
+}
+defer func() { _ = database.Close() }()
+if _, err := database.Exec("CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER, total INTEGER); INSERT INTO orders VALUES (1,1,10),(2,1,20),(3,1,30),(4,1,40),(5,1,50),(6,1,60),(7,1,70)"); err != nil {
+	panic(err)
+}
+db, err := rasql.New(database, dialect.SQLite())
+if err != nil {
+	panic(err)
+}
+orders := store.Orders()
+loaded, err := rasql.LoadHasManyPlan(context.Background(), db, orders, []query.ColumnRef{orders.UserID()}, []store.UsersRow{{ID: 1}}, func(user store.UsersRow) int64 { return user.ID }, func(order store.OrdersRow) int64 { return order.UserID }, func(key int64) ([]any, bool) { return []any{key}, true }, rasql.RelationshipLoadOptions{
+	Where:          query.Equal(orders.UserID(), 1),
+	OrderBy:        []query.Order{query.Desc(orders.ID())},
+	PerParentLimit: 5,
+})
+if err != nil {
+	panic(err)
+}
+fmt.Println(len(loaded[1]), loaded[1][0].ID, loaded[1][4].ID)
+```
+source: [examples/rasql_relationship_load_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_relationship_load_example_test.go)
+<!-- END INCLUDE -->
+
 Every builder is immutable. Each call returns a new builder, so a partly built query can be shared or reused without one caller's `Limit` leaking into another's.
 
 A typed query is built from the same `query` expressions [The SQL builder](../core/02-sql-builder.md) describes and renders through the same `render` package. What the root package adds is the row type: the table value knows it, so the builder decodes each result row without being told the shape a second time.
+
+When a bind names a schema column, generated static query code uses that
+column's resolved `GoBinding` type. This keeps a named application ID or
+scanner-backed value identical between query parameters and generated rows.
+Nullable referenced columns use their nullable generated form. Query
+configuration can set an explicit binding for a standalone parameter or
+override a nullable column deliberately; unconfigured standalone parameters
+remain `any`.
 
 ## Operation reference
 
@@ -62,6 +144,8 @@ The typed builder comes from `SelectFrom`, `DecodeFrom`, and `DecodeFromRef` in 
 | Method | Effect |
 | --- | --- |
 | `Project(projections…)` | Adds columns and function calls directly, and other expressions through `query.Project`. |
+| `Select()` | Returns the dialect-free `query.Select` for composition and inspection. |
+| `Result(columns…)` | Returns a reusable `query.ResultQuery`, using table metadata or the supplied result metadata. |
 | `Distinct()` | De-duplicates result rows. |
 | `Join(joins…)` | Adds a join built with `rasql.InnerJoin` or `rasql.LeftJoin`. |
 | `Where(expression)` | Adds a predicate from a `query` expression. |
@@ -76,7 +160,8 @@ The typed builder comes from `SelectFrom`, `DecodeFrom`, and `DecodeFromRef` in 
 | `Query(ctx, db)` | Executes and returns a rangeable `iter.Seq2`; use it for a large result or an early stop. |
 | `All(ctx, db)` | Executes and collects `[]T`; use it when the whole result fits in memory. |
 | `One(ctx, db)` | Executes and returns one `T`; returns `rasql.ErrNoRows` for zero rows or `rasql.ErrMultipleRows` for more than one. |
-| `Count(ctx, db)` | Executes `COUNT(*)` over the matched rows in place of the builder's projections; rejects a builder with `Limit`, `Offset`, or `Distinct` set. |
+| `Count(ctx, db)` | Executes `COUNT(*)` over the complete reusable result, preserving joins, predicates, grouping, HAVING, and DISTINCT while dropping paging. |
+| `CountPage(ctx, db)` | Executes `COUNT(*)` over the rows retained by the current LIMIT and OFFSET, preserving ordering needed to select that page. |
 
 `Where`, `WhereEqual`, and `WhereIn` accumulate: repeated calls combine with
 `AND` in the order they were made, which is what a conditionally built filter
@@ -698,7 +783,7 @@ func Example_rasql_exists() {
 source: [examples/rasql_exists_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_exists_example_test.go)
 <!-- END INCLUDE -->
 
-`Count` rejects a builder that sets `Limit` or `Offset`, because a count of a paged statement is not the count the caller built the statement to ask for. Count an unpaged builder, then page a copy of it for the rows. `SUM` and `AVG` have no equivalent helper, because their result types are not portable across dialects. Project them with `query.Sum` or `query.Avg` and decode through `rasql.DecodeFrom[R]` instead, as [Aggregates](../core/02-sql-builder.md#aggregates) covers.
+`Count` counts the complete result while preserving DISTINCT, grouping, HAVING, joins, and predicates. `CountPage` counts only rows retained by the current Limit and Offset. `SUM` and `AVG` have no equivalent helper, because their result types are not portable across dialects. Project them with `query.Sum` or `query.Avg` and decode through `rasql.DecodeFrom[R]` instead, as [Aggregates](../core/02-sql-builder.md#aggregates) covers.
 
 ## Group rows
 
@@ -892,7 +977,7 @@ func Example_rasql_distinct() {
 source: [examples/rasql_distinct_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_distinct_example_test.go)
 <!-- END INCLUDE -->
 
-`Count` rejects a distinct builder, because it replaces the projections with `COUNT(*)`: `SELECT DISTINCT COUNT(*)` is always exactly one row, never the number of distinct rows. `query.Count(column).WithDistinct()`, which [Aggregates](../core/02-sql-builder.md#aggregates) covers, counts the distinct non-NULL values of one column and decodes through `rasql.DecodeFrom[R]`. It is not a count of the rows `Distinct()` returns: it ignores NULL, which `DISTINCT` keeps as a value, and it takes only one expression rather than the several a distinct row de-duplicates on. The derived table or CTE that a portable distinct-row count needs is unsupported.
+`Count` preserves a distinct builder by counting its reusable result relation. `query.Count(column).WithDistinct()`, which [Aggregates](../core/02-sql-builder.md#aggregates) covers, counts the distinct non-NULL values of one column and decodes through `rasql.DecodeFrom[R]`. It is not a count of the rows `Distinct()` returns: it ignores NULL, which `DISTINCT` keeps as a value, and it takes only one expression rather than the several a distinct row de-duplicates on. Use `Result` or `RebindResult` when a projection contains expressions that need explicit result metadata.
 
 `DISTINCT ON`, PostgreSQL's syntax for keeping one row per group by explicit ordering, is out of scope: it needs its own dialect capability, since PostgreSQL is the only supported database that has it.
 
