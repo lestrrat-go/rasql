@@ -1053,26 +1053,29 @@ func TestSQLitePrimaryKeyNullabilityMatchesLiveSQLite(t *testing.T) {
 		targetReject bool
 		expectsEqual bool
 	}{
-		{"ordinary inline text key", "CREATE TABLE members (id TEXT PRIMARY KEY);", "CREATE TABLE members (id TEXT PRIMARY KEY NOT NULL);", "INSERT INTO members (id) VALUES (NULL);", false, true, false},
-		{"ordinary table text key", "CREATE TABLE members (id TEXT, PRIMARY KEY (id));", "CREATE TABLE members (id TEXT NOT NULL, PRIMARY KEY (id));", "INSERT INTO members (id) VALUES (NULL);", false, true, false},
-		{"ordinary composite key", "CREATE TABLE members (a TEXT, b TEXT, PRIMARY KEY (a, b));", "CREATE TABLE members (a TEXT NOT NULL, b TEXT NOT NULL, PRIMARY KEY (a, b));", "INSERT INTO members (a, b) VALUES (NULL, 'b');", false, true, false},
-		{"integer rowid alias", "CREATE TABLE members (id INTEGER PRIMARY KEY);", "CREATE TABLE members (id INTEGER, PRIMARY KEY (id));", "INSERT INTO members (id) VALUES (NULL);", false, false, true},
-		{"inline integer descending key", "CREATE TABLE members (id INTEGER PRIMARY KEY DESC);", "CREATE TABLE members (id INTEGER PRIMARY KEY);", "INSERT INTO members (id) VALUES (NULL);", false, false, false},
-		{"strict text key", "CREATE TABLE members (id TEXT PRIMARY KEY) STRICT;", "CREATE TABLE members (id TEXT PRIMARY KEY NOT NULL) STRICT;", "INSERT INTO members (id) VALUES (NULL);", true, false, true},
-		{"without rowid composite key", "CREATE TABLE members (a TEXT, b TEXT, PRIMARY KEY (a, b)) WITHOUT ROWID;", "CREATE TABLE members (a TEXT NOT NULL, b TEXT NOT NULL, PRIMARY KEY (a, b)) WITHOUT ROWID;", "INSERT INTO members (a, b) VALUES (NULL, 'b');", true, false, true},
-		{"non-key not null", "CREATE TABLE members (id TEXT PRIMARY KEY, name TEXT NOT NULL);", "CREATE TABLE members (id TEXT PRIMARY KEY, name TEXT NOT NULL);", "INSERT INTO members (id, name) VALUES ('id', 'name');", false, false, true},
+		{name: "ordinary inline text key", baseline: "CREATE TABLE members (id TEXT PRIMARY KEY);", target: "CREATE TABLE members (id TEXT PRIMARY KEY NOT NULL);", insert: "INSERT INTO members (id) VALUES (NULL);", targetReject: true},
+		{name: "ordinary table text key", baseline: "CREATE TABLE members (id TEXT, PRIMARY KEY (id));", target: "CREATE TABLE members (id TEXT NOT NULL, PRIMARY KEY (id));", insert: "INSERT INTO members (id) VALUES (NULL);", targetReject: true},
+		{name: "ordinary composite key", baseline: "CREATE TABLE members (a TEXT, b TEXT, PRIMARY KEY (a, b));", target: "CREATE TABLE members (a TEXT NOT NULL, b TEXT NOT NULL, PRIMARY KEY (a, b));", insert: "INSERT INTO members (a, b) VALUES (NULL, 'b');", targetReject: true},
+		{name: "integer rowid alias", baseline: "CREATE TABLE members (id INTEGER PRIMARY KEY);", target: "CREATE TABLE members (id INTEGER, PRIMARY KEY (id));", insert: "INSERT INTO members (id) VALUES (NULL);", expectsEqual: true},
+		{name: "inline integer descending key", baseline: "CREATE TABLE members (id INTEGER PRIMARY KEY DESC);", target: "CREATE TABLE members (id INTEGER PRIMARY KEY);", insert: "INSERT INTO members (id) VALUES (NULL);"},
+		{name: "strict text key", baseline: "CREATE TABLE members (id TEXT PRIMARY KEY) STRICT;", target: "CREATE TABLE members (id TEXT PRIMARY KEY NOT NULL) STRICT;", insert: "INSERT INTO members (id) VALUES (NULL);", rejectsNull: true, expectsEqual: true},
+		{name: "without rowid composite key", baseline: "CREATE TABLE members (a TEXT, b TEXT, PRIMARY KEY (a, b)) WITHOUT ROWID;", target: "CREATE TABLE members (a TEXT NOT NULL, b TEXT NOT NULL, PRIMARY KEY (a, b)) WITHOUT ROWID;", insert: "INSERT INTO members (a, b) VALUES (NULL, 'b');", rejectsNull: true, expectsEqual: true},
+		{name: "non-key not null", baseline: "CREATE TABLE members (id TEXT PRIMARY KEY, name TEXT NOT NULL);", target: "CREATE TABLE members (id TEXT PRIMARY KEY, name TEXT NOT NULL);", insert: "INSERT INTO members (id, name) VALUES ('id', 'name');", expectsEqual: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			analyzer := sqlite.New()
 			baseline := parseSnapshot(t, analyzer, test.baseline)
 			target := parseSnapshot(t, analyzer, test.target)
-			_, err := analyzer.Diff(baseline, target)
+			plan, err := analyzer.Diff(baseline, target)
+			require.NoError(t, err)
 			if test.expectsEqual {
-				require.NoError(t, err)
+				require.Empty(t, plan.Operations)
+				require.Empty(t, plan.Statements)
 			} else {
-				require.ErrorContains(t, err, "column members.")
+				require.NotEmpty(t, plan.Operations)
 			}
+
 			for index, source := range []string{test.baseline, test.target} {
 				database, err := sql.Open("sqlite", ":memory:")
 				require.NoError(t, err)
