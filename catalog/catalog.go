@@ -75,6 +75,12 @@ type Options struct {
 	// migrate.NewWithHistoryTable names it here, or the generated store
 	// grows a typed surface for the migration bookkeeping.
 	HistoryTable string
+
+	Namespaces     []string
+	IncludeObjects []schema.ObjectName
+	ExcludeObjects []schema.ObjectName
+	// IncludeViews includes views in a sweep or explicit selection.
+	IncludeViews bool
 }
 
 // ErrNoTables reports that the selection matched no table at all. A caller
@@ -167,6 +173,26 @@ func validateOptions(options Options) error {
 	if len(options.Include) > 0 && len(options.Exclude) > 0 {
 		return fmt.Errorf("catalog: options.Include and options.Exclude must not both be set")
 	}
+	if len(options.Include) > 0 && len(options.IncludeObjects) > 0 {
+		return fmt.Errorf("catalog: options.Include and IncludeObjects must not both be set")
+	}
+	if len(options.Exclude) > 0 && len(options.ExcludeObjects) > 0 {
+		return fmt.Errorf("catalog: options.Exclude and ExcludeObjects must not both be set")
+	}
+	if name, ok := duplicateObjects(options.Namespaces); ok {
+		return fmt.Errorf("catalog: options.Namespaces has duplicate namespace %q", name)
+	}
+	if name, ok := firstDuplicateObjects(options.IncludeObjects); ok {
+		return fmt.Errorf("catalog: options.IncludeObjects has duplicate identity %s", name)
+	}
+	if name, ok := firstDuplicateObjects(options.ExcludeObjects); ok {
+		return fmt.Errorf("catalog: options.ExcludeObjects has duplicate identity %s", name)
+	}
+	for _, object := range append(append([]schema.ObjectName{}, options.IncludeObjects...), options.ExcludeObjects...) {
+		if object.Name == "" {
+			return fmt.Errorf("catalog: object identity must name a table")
+		}
+	}
 	if name, ok := firstDuplicate(options.Include); ok {
 		return fmt.Errorf("catalog: options.Include has duplicate table name %q", name)
 	}
@@ -174,6 +200,18 @@ func validateOptions(options Options) error {
 		return fmt.Errorf("catalog: options.Exclude has duplicate table name %q", name)
 	}
 	return nil
+}
+
+func duplicateObjects(values []string) (string, bool) { return firstDuplicate(values) }
+func firstDuplicateObjects(values []schema.ObjectName) (string, bool) {
+	seen := map[schema.ObjectName]struct{}{}
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			return objectIdentity(value), true
+		}
+		seen[value] = struct{}{}
+	}
+	return "", false
 }
 
 // firstDuplicate reports the first name that appears more than once in
@@ -200,14 +238,23 @@ func selectTables(ctx context.Context, queryer inspect.Queryer, options Options)
 	}
 
 	var tables []schema.TableDef
-	if len(options.Include) > 0 {
+	if len(options.IncludeObjects) > 0 {
+		tables, err = describeIncludedObjects(ctx, inspector, options)
+	} else if len(options.Include) > 0 && len(options.Namespaces) > 0 {
+		tables, err = describeIncludedScopedLegacy(ctx, inspector, options)
+	} else if len(options.Include) > 0 && options.IncludeViews {
+		tables, err = describeIncludedViews(ctx, inspector, options.Include)
+	} else if len(options.Include) > 0 {
 		tables, err = describeIncluded(ctx, inspector, options.Include)
+	} else if len(options.Namespaces) > 0 {
+		tables, err = sweepNamespaces(ctx, inspector, options)
 	} else {
 		tables, err = sweepTables(ctx, inspector, options)
 	}
 	if err != nil {
 		return nil, err
 	}
+	normalizeRelationships(tables, options.Dialect)
 
 	sort.Slice(tables, func(i, j int) bool {
 		if tables[i].Schema != tables[j].Schema {
@@ -215,6 +262,252 @@ func selectTables(ctx context.Context, queryer inspect.Queryer, options Options)
 		}
 		return tables[i].Name < tables[j].Name
 	})
+	return tables, nil
+}
+
+func describeIncludedObjects(ctx context.Context, inspector inspect.Inspector, options Options) ([]schema.TableDef, error) {
+	selected := make(map[string]struct{}, len(options.Namespaces))
+	for _, namespace := range options.Namespaces {
+		selected[namespace] = struct{}{}
+	}
+	tables := make([]schema.TableDef, 0, len(options.IncludeObjects))
+	for _, object := range options.IncludeObjects {
+		if len(selected) > 0 {
+			if _, ok := selected[object.Schema]; !ok {
+				return nil, fmt.Errorf("catalog: included object %s is outside selected namespaces", objectIdentity(object))
+			}
+		}
+		var table schema.TableDef
+		var err error
+		if options.IncludeViews {
+			if object.Schema == "" {
+				table, err = inspector.Object(ctx, object.Name)
+			} else {
+				table, err = inspector.ObjectIn(ctx, object.Schema, object.Name)
+			}
+		} else if object.Schema == "" {
+			table, err = inspector.Table(ctx, object.Name)
+		} else {
+			table, err = inspector.TableIn(ctx, object.Schema, object.Name)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("catalog: %w", err)
+		}
+		tables = append(tables, table)
+	}
+	return applyObjectExcludes(tables, options.ExcludeObjects), nil
+}
+
+func describeIncludedScopedLegacy(ctx context.Context, inspector inspect.Inspector, options Options) ([]schema.TableDef, error) {
+	wanted := make(map[string]struct{}, len(options.Include))
+	for _, name := range options.Include {
+		wanted[name] = struct{}{}
+	}
+	candidates := make(map[string][]inspect.TableName, len(wanted))
+	for _, namespace := range options.Namespaces {
+		var names []inspect.TableName
+		var err error
+		if options.IncludeViews {
+			objects, objectErr := inspector.ObjectNamesIn(ctx, namespace)
+			if objectErr != nil {
+				return nil, fmt.Errorf("catalog: %w", objectErr)
+			}
+			for _, object := range objects {
+				names = append(names, inspect.TableName{Schema: object.Schema, Name: object.Name})
+			}
+		} else {
+			names, err = inspector.TableNamesIn(ctx, namespace)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("catalog: %w", err)
+		}
+		for _, name := range names {
+			if _, ok := wanted[name.Name]; ok {
+				candidates[name.Name] = append(candidates[name.Name], name)
+			}
+		}
+	}
+	tables := make([]schema.TableDef, 0, len(options.Include))
+	for _, name := range options.Include {
+		matches := candidates[name]
+		if len(matches) == 0 {
+			return nil, fmt.Errorf("catalog: included table %q was not found in selected namespaces", name)
+		}
+		if len(matches) > 1 {
+			choices := make([]string, len(matches))
+			for index, match := range matches {
+				choices[index] = objectIdentity(schema.ObjectName{Schema: match.Schema, Name: match.Name})
+			}
+			return nil, fmt.Errorf("catalog: included table %q is ambiguous; use IncludeObjects with one of %s", name, choices)
+		}
+		table, err := describeSweptTable(ctx, inspector, matches[0], options.IncludeViews)
+		if err != nil {
+			return nil, fmt.Errorf("catalog: %w", err)
+		}
+		tables = append(tables, table)
+	}
+	return tables, nil
+}
+
+func objectIdentity(object schema.ObjectName) string {
+	if object.Schema == "" {
+		return object.Name
+	}
+	return object.Schema + "." + object.Name
+}
+
+func sweepNamespaces(ctx context.Context, inspector inspect.Inspector, options Options) ([]schema.TableDef, error) {
+	var tables []schema.TableDef
+	allNames := make([]inspect.TableName, 0)
+	for _, namespace := range options.Namespaces {
+		var names []inspect.TableName
+		var err error
+		if options.IncludeViews {
+			objects, objectErr := inspector.ObjectNamesIn(ctx, namespace)
+			if objectErr != nil {
+				return nil, fmt.Errorf("catalog: %w", objectErr)
+			}
+			for _, object := range objects {
+				names = append(names, inspect.TableName{Schema: object.Schema, Name: object.Name})
+			}
+		} else {
+			names, err = inspector.TableNamesIn(ctx, namespace)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("catalog: %w", err)
+		}
+		allNames = append(allNames, names...)
+	}
+	if err := rejectAmbiguousLegacyExcludes(allNames, options.Exclude); err != nil {
+		return nil, err
+	}
+	for _, name := range allNames {
+		historyTable := options.HistoryTable
+		if historyTable == "" {
+			historyTable = defaultHistoryTable
+		}
+		if isDefaultHistoryIdentity(name, historyTable, options.Dialect.Name()) || containsName(options.Exclude, name.Name) {
+			continue
+		}
+		table, err := describeSweptTable(ctx, inspector, name, options.IncludeViews)
+		if err != nil {
+			return nil, fmt.Errorf("catalog: %w", err)
+		}
+		tables = append(tables, table)
+	}
+	tables = applyObjectExcludes(tables, options.ExcludeObjects)
+	if len(tables) == 0 {
+		return nil, fmt.Errorf("catalog: sweep found no tables to describe: %w", ErrNoTables)
+	}
+	return tables, nil
+}
+
+func rejectAmbiguousLegacyExcludes(names []inspect.TableName, excludes []string) error {
+	for _, excluded := range excludes {
+		matches := make([]string, 0, 2)
+		for _, name := range names {
+			if name.Name == excluded {
+				matches = append(matches, objectIdentity(schema.ObjectName{Schema: name.Schema, Name: name.Name}))
+			}
+		}
+		if len(matches) > 1 {
+			return fmt.Errorf("catalog: excluded table %q is ambiguous; use ExcludeObjects with one of %s", excluded, matches)
+		}
+	}
+	return nil
+}
+
+func isDefaultHistoryIdentity(name inspect.TableName, history, dialectName string) bool {
+	if name.Name != history {
+		return false
+	}
+	if dialectName == "sqlite" {
+		return name.Schema == "" || name.Schema == "main"
+	}
+	return name.Schema == ""
+}
+
+func containsName(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func applyObjectExcludes(tables []schema.TableDef, excludes []schema.ObjectName) []schema.TableDef {
+	if len(excludes) == 0 {
+		return tables
+	}
+	blocked := map[schema.ObjectName]struct{}{}
+	for _, object := range excludes {
+		blocked[object] = struct{}{}
+	}
+	result := tables[:0]
+	for _, table := range tables {
+		if _, ok := blocked[table.ObjectName()]; !ok {
+			result = append(result, table)
+		}
+	}
+	return result
+}
+
+func normalizeRelationships(tables []schema.TableDef, selectedDialect dialect.Dialect) {
+	if selectedDialect.Name() != dialect.SQLite().Name() {
+		return
+	}
+	for index := range tables {
+		table := &tables[index]
+		derived := schema.RelationshipsFromForeignKeys(*table)
+		matched := make([]bool, len(table.ForeignKeys))
+		relationships := append([]schema.RelationshipDef(nil), table.Relationships...)
+		for _, relationship := range relationships {
+			for keyIndex, key := range table.ForeignKeys {
+				if matched[keyIndex] || key.ReferencedSchema != relationship.ReferencedSchema || key.ReferencedTable != relationship.ReferencedTable ||
+					!slicesEqual(key.Columns, relationship.Columns) || !slicesEqual(key.ReferencedColumns, relationship.ReferencedColumns) {
+					continue
+				}
+				matched[keyIndex] = true
+				break
+			}
+		}
+		for keyIndex, relationship := range derived {
+			if matched[keyIndex] {
+				continue
+			}
+			relationships = append(relationships, relationship)
+		}
+		for relIndex := range relationships {
+			if relationships[relIndex].ReferencedSchema == "" && table.Schema != "" {
+				relationships[relIndex].ResolvedReferencedSchema = table.Schema
+			}
+		}
+		table.Relationships = relationships
+	}
+}
+
+func slicesEqual(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func describeIncludedViews(ctx context.Context, inspector inspect.Inspector, names []string) ([]schema.TableDef, error) {
+	tables := make([]schema.TableDef, len(names))
+	for index, name := range names {
+		table, err := inspector.Object(ctx, name)
+		if err != nil {
+			return nil, fmt.Errorf("catalog: %w", err)
+		}
+		tables[index] = table
+	}
 	return tables, nil
 }
 
@@ -238,7 +531,21 @@ func describeIncluded(ctx context.Context, inspector inspect.Inspector, names []
 // sweepTables resolves every base table the connection can see, minus the
 // migration history table and minus Exclude, and refuses an empty result.
 func sweepTables(ctx context.Context, inspector inspect.Inspector, options Options) ([]schema.TableDef, error) {
-	names, err := inspector.TableNames(ctx)
+	var names []inspect.TableName
+	var err error
+	if options.IncludeViews {
+		objects, objectErr := inspector.ObjectNames(ctx)
+		if objectErr != nil {
+			return nil, fmt.Errorf("catalog: %w", objectErr)
+		}
+		for _, object := range objects {
+			if object.Kind == schema.ObjectView || object.Kind == schema.ObjectTable {
+				names = append(names, inspect.TableName{Schema: object.Schema, Name: object.Name})
+			}
+		}
+	} else {
+		names, err = inspector.TableNames(ctx)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("catalog: %w", err)
 	}
@@ -247,23 +554,22 @@ func sweepTables(ctx context.Context, inspector inspect.Inspector, options Optio
 	if historyTable == "" {
 		historyTable = defaultHistoryTable
 	}
-	excluded := make(map[string]struct{}, len(options.Exclude)+1)
-	excluded[historyTable] = struct{}{}
-	for _, name := range options.Exclude {
-		excluded[name] = struct{}{}
+	if err := rejectAmbiguousLegacyExcludes(names, options.Exclude); err != nil {
+		return nil, err
 	}
 
 	tables := make([]schema.TableDef, 0, len(names))
 	for _, name := range names {
-		if _, skip := excluded[name.Name]; skip {
+		if isDefaultHistoryIdentity(name, historyTable, options.Dialect.Name()) || containsName(options.Exclude, name.Name) {
 			continue
 		}
-		table, err := describeSweptTable(ctx, inspector, name)
+		table, err := describeSweptTable(ctx, inspector, name, options.IncludeViews)
 		if err != nil {
 			return nil, fmt.Errorf("catalog: %w", err)
 		}
 		tables = append(tables, table)
 	}
+	tables = applyObjectExcludes(tables, options.ExcludeObjects)
 	if len(tables) == 0 {
 		return nil, fmt.Errorf("catalog: sweep found no tables to describe: %w", ErrNoTables)
 	}
@@ -274,7 +580,13 @@ func sweepTables(ctx context.Context, inspector inspect.Inspector, options Optio
 // TableIn when name carries a Schema (main, temp, or an attached database)
 // and the ordinary Table lookup otherwise, which is every case on
 // PostgreSQL and MySQL, and an unscoped SQLite table.
-func describeSweptTable(ctx context.Context, inspector inspect.Inspector, name inspect.TableName) (schema.TableDef, error) {
+func describeSweptTable(ctx context.Context, inspector inspect.Inspector, name inspect.TableName, includeViews bool) (schema.TableDef, error) {
+	if includeViews {
+		if name.Schema != "" {
+			return inspector.ObjectIn(ctx, name.Schema, name.Name)
+		}
+		return inspector.Object(ctx, name.Name)
+	}
 	if name.Schema != "" {
 		return inspector.TableIn(ctx, name.Schema, name.Name)
 	}

@@ -55,7 +55,175 @@ func Example_query_render_select() {
 source: [examples/query_render_select_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_render_select_example_test.go)
 <!-- END INCLUDE -->
 
+## Extend rendering with a compiler
+
+An optional `dialect.CompilerProvider` extends rendering for a custom dialect. Its compiler can emit a complete pagination
+clause or handle an external `query.Expression` through the renderer's identifier, argument, and child-expression emitter.
+The built-in dialects keep their existing SQL when no compiler is installed.
+
+<!-- INCLUDE(examples/query_custom_compiler_example_test.go) -->
+```go
+package examples_test
+
+import (
+	"fmt"
+
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
+	"github.com/lestrrat-go/rasql/query"
+)
+
+type compilerExampleDialect struct {
+	dialect.Dialect
+}
+
+func (compilerExampleDialect) Compiler() dialect.Compiler { return compilerExample{} }
+
+type compilerExample struct{}
+
+type containsExample struct {
+	column query.Expression
+	value  any
+}
+
+func (containsExample) ExpressionNode()              {}
+func (containsExample) CustomExpressionName() string { return "contains" }
+
+func (compilerExample) CompileExpression(emitter dialect.Emitter, expression query.Expression) (bool, error) {
+	contains, ok := expression.(containsExample)
+	if !ok {
+		return false, nil
+	}
+	emitter.WriteSQL("CONTAINS(")
+	if err := emitter.Expression(contains.column); err != nil {
+		return true, err
+	}
+	emitter.WriteSQL(", ")
+	if err := emitter.Argument(contains.value); err != nil {
+		return true, err
+	}
+	emitter.WriteSQL(")")
+	return true, nil
+}
+
+func (compilerExample) CompilePagination(emitter dialect.Emitter, pagination dialect.Pagination) error {
+	if pagination.HasOffset {
+		return fmt.Errorf("offset is unsupported")
+	}
+	if pagination.HasLimit {
+		emitter.WriteSQL(" FETCH FIRST ")
+		if err := emitter.Argument(pagination.Limit); err != nil {
+			return err
+		}
+		emitter.WriteSQL(" ROWS ONLY")
+	}
+	return nil
+}
+
+func Example_customCompiler() {
+	users := store.Users()
+	builder := rasql.DecodeFromRef[struct{}](users.Ref()).
+		Project(query.Project(containsExample{column: users.EmailRef(), value: "@example.com"})).
+		Limit(3)
+	statement, err := builder.Build(compilerExampleDialect{Dialect: dialect.SQLite()})
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(statement.SQL())
+	fmt.Println(statement.Args())
+	// Output:
+	// SELECT CONTAINS("users"."email", ?) FROM "users" FETCH FIRST ? ROWS ONLY
+	// [@example.com 3]
+}
+```
+source: [examples/query_custom_compiler_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_custom_compiler_example_test.go)
+<!-- END INCLUDE -->
+
 `query.MustTableRef` takes the same `schema.TableDef` that [Schemas](01-schema.md) describes, so a table read out of a live database works here as well as one written by hand. `accounts.Column("id")` builds the reference, and `query.NewSelect` reports a name the table does not hold.
+
+<!-- INCLUDE(examples/query_lock_upsert_example_test.go#row_lock) -->
+```go
+func Example_query_rowLock() {
+	queue := query.MustTableRef(schema.MustTableDef("queue", schema.Integer("id"), schema.Integer("claimed")))
+	statement, err := query.NewSelect(queue, queue.Column("id"))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	statement, err = statement.WithWhere(query.Equal(queue.Column("claimed"), 0))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	statement, err = statement.WithOrder(query.Asc(queue.Column("id")))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	statement, err = statement.WithLimit(1)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	statement, err = statement.WithLock(query.RowLock(query.LockUpdate).Wait(query.LockWaitSkipLocked))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	rendered, err := render.Select(dialect.PostgreSQL(), statement)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(rendered.SQL())
+	fmt.Println(rendered.Args()...)
+	// Output:
+	// SELECT "queue"."id" FROM "queue" WHERE ("queue"."claimed" = $1) ORDER BY "queue"."id" LIMIT $2 FOR UPDATE SKIP LOCKED
+	// 0 1
+}
+```
+source: [examples/query_lock_upsert_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_lock_upsert_example_test.go)
+<!-- END INCLUDE -->
+
+`query.RowLock` appends a measured row-locking clause after ordering and paging. Use `LockWaitSkipLocked` when each worker should claim a different queued row.
+
+<!-- INCLUDE(examples/query_expression_example_test.go#expressions) -->
+```go
+func Example_query_expressions() {
+	accounts := query.MustTableRef(schema.MustTableDef("accounts",
+		schema.Integer("id"), schema.Integer("balance"), schema.Text("email")))
+	id, balance := accounts.Column("id"), accounts.Column("balance")
+	label := query.SearchedCase(
+		query.When(query.GreaterThan(balance, 100), "large"),
+	).Else("small")
+	statement, err := query.NewSelect(accounts, query.Project(query.CastAs(query.Add(balance, 1), schema.IntegerType{})).As("next"), query.Project(label).As("size"))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	statement, err = statement.WithWhere(query.Equal(id, 1))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	rendered, err := render.Select(dialect.PostgreSQL(), statement)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(rendered.SQL())
+	fmt.Println(rendered.Args()...)
+	// Output:
+	// SELECT CAST(("accounts"."balance" + $1) AS BIGINT) AS "next", (CASE WHEN ("accounts"."balance" > $2) THEN $3 ELSE $4 END) AS "size" FROM "accounts" WHERE ("accounts"."id" = $5)
+	// 1 100 large small 1
+}
+```
+source: [examples/query_expression_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_expression_example_test.go)
+<!-- END INCLUDE -->
+
+`query.Add`, `query.SearchedCase`, and `query.CastAs` compose computed projections while keeping values as bound arguments.
 
 ## Run a rendered statement
 
@@ -67,7 +235,7 @@ The tables below enumerate what the `query` package offers. The typed builder ta
 
 ### Statement constructors
 
-The builders cover the common statements. These constructors build the same statements directly. `dynamic.Query(ctx, db, statement)` runs a `Select`, and `rasql.Exec(ctx, db, statement)` runs a write that carries no `RETURNING` clause. Both are free functions over a `rasql.DB`, so the same statement runs against a plain `DB` or a transaction, which is a `DB` too. A write refined with `WithReturning` reads its rows back through `dynamic.QueryWrite`, `rasql.QueryWriteAll[T]`, or `rasql.QueryWriteOne[T]`, because `rasql.Exec` rejects it.
+The builders cover the common statements. These constructors build the same statements directly. `dynamic.Query(ctx, db, statement)` runs a `Select`, and `dynamic.QueryResult(ctx, db, statement)` adds ordered metadata for generic consumers. `rasql.Exec(ctx, db, statement)` runs a write that carries no `RETURNING` clause. Both are free functions over a `rasql.DB`, so the same statement runs against a plain `DB` or a transaction, which is a `DB` too. A write refined with `WithReturning` reads its rows back through `dynamic.QueryWrite`, `dynamic.QueryWriteResult`, `rasql.QueryWriteAll[T]`, or `rasql.QueryWriteOne[T]`, because `rasql.Exec` rejects it.
 
 | Constructor | Statement |
 | --- | --- |

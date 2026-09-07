@@ -11,6 +11,19 @@ import (
 	"github.com/lestrrat-go/rasql/stmt"
 )
 
+// ErrUnsupportedNativeType reports that a stored native identity cannot be
+// safely reconstructed by the selected dialect.
+type ErrUnsupportedNativeType struct {
+	Dialect string
+	Table   string
+	Column  string
+	Native  schema.NativeTypeDef
+}
+
+func (e *ErrUnsupportedNativeType) Error() string {
+	return fmt.Sprintf("dialect %s cannot render native type %q for table %q column %q", e.Dialect, e.Native.Name, e.Table, e.Column)
+}
+
 // ErrUnsupportedIndexMethod is the sentinel wrapped by every
 // [UnsupportedIndexMethodError], so a caller that only needs a presence
 // check can use errors.Is instead of errors.As.
@@ -1212,7 +1225,7 @@ func (r *renderer) writeCreateTable(table schema.TableDef) error {
 
 	definitions := make([]string, 0, len(table.Columns)+len(table.UniqueConstraints)+len(table.Checks)+len(table.ForeignKeys)+1)
 	for _, column := range table.Columns {
-		definition, err := r.columnDefinition(column)
+		definition, err := r.columnDefinition(table.Name, column)
 		if err != nil {
 			return err
 		}
@@ -1513,7 +1526,7 @@ func (r *renderer) rejectUnboundedMySQLText(table schema.TableDef, names []strin
 	return nil
 }
 
-func (r *renderer) columnDefinition(column schema.ColumnDef) (string, error) {
+func (r *renderer) columnDefinition(tableName string, column schema.ColumnDef) (string, error) {
 	if column.GeneratedExpression != "" {
 		return "", &UnsupportedGeneratedColumnError{Column: column.Name, Expression: string(column.GeneratedExpression), Storage: column.GeneratedStorage}
 	}
@@ -1540,11 +1553,34 @@ func (r *renderer) columnDefinition(column schema.ColumnDef) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	typeName, err := r.dialect.TypeName(column)
+	var typeName string
+	if column.NativeType != nil {
+		namer, ok := r.dialect.(dialect.NativeTypeNamer)
+		if !ok {
+			return "", &ErrUnsupportedNativeType{Dialect: r.dialect.Name(), Table: tableName, Column: column.Name, Native: *column.NativeType}
+		}
+		var supported bool
+		typeName, supported, err = namer.NativeTypeName(*column.NativeType)
+		if err != nil {
+			return "", err
+		}
+		if !supported {
+			return "", &ErrUnsupportedNativeType{Dialect: r.dialect.Name(), Table: tableName, Column: column.Name, Native: *column.NativeType}
+		}
+	} else {
+		typeName, err = r.dialect.TypeName(column)
+	}
 	if err != nil {
 		return "", fmt.Errorf("column %q: %w", column.Name, err)
 	}
 	definition := name + " " + typeName
+	if column.Collation != "" {
+		collation, err := r.quoteIdentifier(column.Collation)
+		if err != nil {
+			return "", err
+		}
+		definition += " COLLATE " + collation
+	}
 	if !column.Nullable {
 		definition += " NOT NULL"
 	}

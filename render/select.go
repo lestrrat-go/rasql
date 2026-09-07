@@ -9,6 +9,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/lestrrat-go/rasql/stmt"
 )
@@ -18,6 +19,19 @@ type Error struct {
 	Dialect string
 	Err     error
 }
+
+var ErrUnsupportedSelectLock = errors.New("render: unsupported SELECT row lock")
+
+type UnsupportedSelectLockError struct {
+	Dialect string
+	Clause  string
+}
+
+func (e *UnsupportedSelectLockError) Error() string {
+	return fmt.Sprintf("the %s dialect cannot express SELECT %s", e.Dialect, e.Clause)
+}
+
+func (e *UnsupportedSelectLockError) Unwrap() error { return ErrUnsupportedSelectLock }
 
 func (e *Error) Error() string {
 	if e.Dialect == "" {
@@ -34,6 +48,16 @@ func (e *Error) Unwrap() error {
 // [UnsupportedMatchOperatorError], so a caller that only needs a presence
 // check can use errors.Is instead of errors.As.
 var ErrUnsupportedMatchOperator = errors.New("render: unsupported MATCH operator")
+
+var ErrUnsupportedAggregateFilter = errors.New("render: unsupported aggregate FILTER")
+
+type UnsupportedAggregateFilterError struct{ Dialect string }
+
+func (e *UnsupportedAggregateFilterError) Error() string {
+	return fmt.Sprintf("the %s dialect cannot express aggregate FILTER", e.Dialect)
+}
+
+func (e *UnsupportedAggregateFilterError) Unwrap() error { return ErrUnsupportedAggregateFilter }
 
 // UnsupportedMatchOperatorError reports that a statement compares an
 // expression with [query.OperatorMatch] against a dialect that has not been
@@ -104,12 +128,64 @@ type renderer struct {
 	// — not only at the value's own top level. EXCLUDED means nothing outside
 	// a conflict-update assignment, so writeExcludedColumn refuses one
 	// reached anywhere else.
-	excludedStyle dialect.UpsertStyle
-	inExcluded    bool
-	cteScope      []query.CTE
+	excludedStyle           dialect.UpsertStyle
+	inExcluded              bool
+	cteScope                []query.CTE
+	expressionValidator     func(query.Expression) error
+	compilerExpressionDepth int
+}
+
+type compilerEmitter struct {
+	renderer *renderer
+}
+
+func (e compilerEmitter) WriteSQL(sql string) {
+	e.renderer.builder.WriteString(sql)
+}
+
+func (e compilerEmitter) Identifier(parts ...string) error {
+	var quoted []string
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		value, err := e.renderer.quoteIdentifier(part)
+		if err != nil {
+			return err
+		}
+		quoted = append(quoted, value)
+	}
+	if len(quoted) == 0 {
+		return fmt.Errorf("identifier must contain a non-empty component")
+	}
+	e.renderer.builder.WriteString(strings.Join(quoted, "."))
+	return nil
+}
+
+func (e compilerEmitter) Argument(value any) error {
+	return e.renderer.writeArgument(value)
+}
+
+func (e compilerEmitter) Expression(expression query.Expression) error {
+	if e.renderer.expressionValidator != nil {
+		if err := e.renderer.expressionValidator(expression); err != nil {
+			return err
+		}
+	}
+	return e.renderer.writeExpression(expression)
+}
+
+func (r *renderer) compiler() dialect.Compiler {
+	provider, ok := r.dialect.(dialect.CompilerProvider)
+	if !ok {
+		return nil
+	}
+	return provider.Compiler()
 }
 
 func (r *renderer) writeSelect(s query.Select) error {
+	previousValidator := r.expressionValidator
+	defer func() { r.expressionValidator = previousValidator }()
 	previous := r.cteScope
 	owned := append([]query.CTE(nil), previous...)
 	owned = append(owned, s.CTEs()...)
@@ -145,16 +221,20 @@ func (r *renderer) writeSelect(s query.Select) error {
 		if i > 0 {
 			r.builder.WriteString(", ")
 		}
+		r.expressionValidator = func(expression query.Expression) error {
+			return s.ValidateCompilerExpression(expression, "projection", i)
+		}
 		if err := r.writeProjection(projection); err != nil {
 			return err
 		}
 	}
+	r.expressionValidator = nil
 
 	r.builder.WriteString(" FROM ")
 	if err := r.writeTable(s.From()); err != nil {
 		return err
 	}
-	for _, join := range s.Joins() {
+	for i, join := range s.Joins() {
 		r.builder.WriteByte(' ')
 		r.builder.WriteString(string(join.Type()))
 		r.builder.WriteString(" JOIN ")
@@ -162,15 +242,23 @@ func (r *renderer) writeSelect(s query.Select) error {
 			return err
 		}
 		r.builder.WriteString(" ON ")
+		r.expressionValidator = func(expression query.Expression) error {
+			return s.ValidateCompilerExpression(expression, "join", i)
+		}
 		if err := r.writeExpression(join.On()); err != nil {
 			return err
 		}
 	}
+	r.expressionValidator = nil
 	if where := s.Where(); where != nil {
 		r.builder.WriteString(" WHERE ")
+		r.expressionValidator = func(expression query.Expression) error {
+			return s.ValidateCompilerExpression(expression, "where", -1)
+		}
 		if err := r.writeExpression(where); err != nil {
 			return err
 		}
+		r.expressionValidator = nil
 	}
 
 	groupBy := s.GroupBy()
@@ -180,16 +268,24 @@ func (r *renderer) writeSelect(s query.Select) error {
 			if i > 0 {
 				r.builder.WriteString(", ")
 			}
+			r.expressionValidator = func(expression query.Expression) error {
+				return s.ValidateCompilerExpression(expression, "group", i)
+			}
 			if err := r.writeExpression(expression); err != nil {
 				return err
 			}
 		}
+		r.expressionValidator = nil
 	}
 	if having := s.Having(); having != nil {
 		r.builder.WriteString(" HAVING ")
+		r.expressionValidator = func(expression query.Expression) error {
+			return s.ValidateCompilerExpression(expression, "having", -1)
+		}
 		if err := r.writeExpression(having); err != nil {
 			return err
 		}
+		r.expressionValidator = nil
 	}
 
 	orders := s.OrderBy()
@@ -210,13 +306,26 @@ func (r *renderer) writeSelect(s query.Select) error {
 					return err
 				}
 				r.builder.WriteString(quoted)
-			} else if err := r.writeExpression(order.Expression()); err != nil {
-				return err
+			} else {
+				r.expressionValidator = func(expression query.Expression) error {
+					return s.ValidateCompilerExpression(expression, "order", i)
+				}
+				if err := r.writeExpression(order.Expression()); err != nil {
+					return err
+				}
+				r.expressionValidator = nil
 			}
 			if order.Descending() {
 				r.builder.WriteString(" DESC")
 			}
 		}
+	}
+	if compiler := r.compiler(); compiler != nil {
+		limit, hasLimit := s.Limit()
+		offset, hasOffset := s.Offset()
+		return compiler.CompilePagination(compilerEmitter{renderer: r}, dialect.Pagination{
+			Limit: limit, Offset: offset, HasLimit: hasLimit, HasOffset: hasOffset,
+		})
 	}
 	if limit, ok := s.Limit(); ok {
 		r.builder.WriteString(" LIMIT ")
@@ -229,6 +338,71 @@ func (r *renderer) writeSelect(s query.Select) error {
 		if err := r.writeArgument(offset); err != nil {
 			return err
 		}
+	}
+	if lock, ok := s.Lock(); ok {
+		if err := r.writeLock(lock); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *renderer) writeLock(lock query.Lock) error {
+	strength := lock.Strength()
+	baseCapability := dialect.CapabilitySelectForUpdate
+	clause := "FOR UPDATE"
+	switch strength {
+	case query.LockNoKeyUpdate:
+		if r.dialect.Name() != "postgresql" {
+			return &UnsupportedSelectLockError{Dialect: r.dialect.Name(), Clause: "FOR NO KEY UPDATE"}
+		}
+		clause = "FOR NO KEY UPDATE"
+	case query.LockShare:
+		baseCapability = dialect.CapabilitySelectForShare
+		clause = "FOR SHARE"
+	case query.LockKeyShare:
+		if r.dialect.Name() != "postgresql" {
+			return &UnsupportedSelectLockError{Dialect: r.dialect.Name(), Clause: "FOR KEY SHARE"}
+		}
+		baseCapability = dialect.CapabilitySelectForShare
+		clause = "FOR KEY SHARE"
+	}
+	if !r.dialect.Supports(baseCapability) {
+		return &UnsupportedSelectLockError{Dialect: r.dialect.Name(), Clause: clause}
+	}
+	if len(lock.Tables()) > 0 && !r.dialect.Supports(dialect.CapabilitySelectLockOf) {
+		return &UnsupportedSelectLockError{Dialect: r.dialect.Name(), Clause: "FOR ... OF"}
+	}
+	switch lock.WaitMode() {
+	case query.LockWaitNoWait:
+		if !r.dialect.Supports(dialect.CapabilitySelectLockNoWait) {
+			return &UnsupportedSelectLockError{Dialect: r.dialect.Name(), Clause: "FOR ... NOWAIT"}
+		}
+	case query.LockWaitSkipLocked:
+		if !r.dialect.Supports(dialect.CapabilitySelectLockSkipLocked) {
+			return &UnsupportedSelectLockError{Dialect: r.dialect.Name(), Clause: "FOR ... SKIP LOCKED"}
+		}
+	}
+	r.builder.WriteByte(' ')
+	r.builder.WriteString(clause)
+	if tables := lock.Tables(); len(tables) > 0 {
+		r.builder.WriteString(" OF ")
+		for i, table := range tables {
+			if i > 0 {
+				r.builder.WriteString(", ")
+			}
+			name, err := r.quoteIdentifier(table.Qualifier())
+			if err != nil {
+				return err
+			}
+			r.builder.WriteString(name)
+		}
+	}
+	switch lock.WaitMode() {
+	case query.LockWaitNoWait:
+		r.builder.WriteString(" NOWAIT")
+	case query.LockWaitSkipLocked:
+		r.builder.WriteString(" SKIP LOCKED")
 	}
 	return nil
 }
@@ -440,6 +614,26 @@ func (r *renderer) writeProjection(projection query.Projection) error {
 }
 
 func (r *renderer) writeExpression(expression query.Expression) error {
+	if compiler := r.compiler(); compiler != nil {
+		if r.compilerExpressionDepth >= maxCompilerExpressionDepth {
+			return errors.New("compiler expression delegation exceeds 64 nested callbacks")
+		}
+		r.compilerExpressionDepth++
+		defer func() { r.compilerExpressionDepth-- }()
+		handled, err := compiler.CompileExpression(compilerEmitter{renderer: r}, expression)
+		if err != nil {
+			return err
+		}
+		if handled {
+			return nil
+		}
+	}
+	return r.writeExpressionBuiltin(expression)
+}
+
+const maxCompilerExpressionDepth = 64
+
+func (r *renderer) writeExpressionBuiltin(expression query.Expression) error {
 	switch expression := expression.(type) {
 	case query.ColumnRef:
 		qualifier, err := r.quoteQualified(expression.Source().QualifierSchema(), expression.Source().Qualifier())
@@ -498,6 +692,118 @@ func (r *renderer) writeExpression(expression query.Expression) error {
 			return err
 		}
 		r.builder.WriteByte(')')
+		return nil
+	case query.Case:
+		r.builder.WriteString("(CASE")
+		if operand := expression.Operand(); operand != nil {
+			r.builder.WriteByte(' ')
+			if err := r.writeExpression(operand); err != nil {
+				return err
+			}
+		}
+		for _, branch := range expression.Branches() {
+			r.builder.WriteString(" WHEN ")
+			if err := r.writeExpression(branch.Predicate()); err != nil {
+				return err
+			}
+			r.builder.WriteString(" THEN ")
+			if err := r.writeExpression(branch.Result()); err != nil {
+				return err
+			}
+		}
+		if fallback, ok := expression.Fallback(); ok {
+			r.builder.WriteString(" ELSE ")
+			if err := r.writeExpression(fallback); err != nil {
+				return err
+			}
+		}
+		r.builder.WriteString(" END)")
+		return nil
+	case query.Cast:
+		r.builder.WriteString("CAST(")
+		if err := r.writeExpression(expression.Expression()); err != nil {
+			return err
+		}
+		r.builder.WriteString(" AS ")
+		typeName, err := r.dialect.TypeName(schema.ColumnDef{Type: expression.Target()})
+		if err != nil {
+			return err
+		}
+		r.builder.WriteString(typeName)
+		r.builder.WriteByte(')')
+		return nil
+	case query.Filter:
+		if !r.dialect.Supports(dialect.CapabilityAggregateFilter) {
+			return &UnsupportedAggregateFilterError{Dialect: r.dialect.Name()}
+		}
+		if err := r.writeExpression(expression.Aggregate()); err != nil {
+			return err
+		}
+		r.builder.WriteString(" FILTER (WHERE ")
+		if err := r.writeExpression(expression.Predicate()); err != nil {
+			return err
+		}
+		r.builder.WriteByte(')')
+		return nil
+	case query.Over:
+		if err := r.writeExpression(expression.Expression()); err != nil {
+			return err
+		}
+		r.builder.WriteString(" OVER (")
+		window := expression.Window()
+		if partition := window.Partition(); len(partition) > 0 {
+			r.builder.WriteString("PARTITION BY ")
+			for i, part := range partition {
+				if i > 0 {
+					r.builder.WriteString(", ")
+				}
+				if err := r.writeExpression(part); err != nil {
+					return err
+				}
+			}
+		}
+		if orders := window.Order(); len(orders) > 0 {
+			if len(window.Partition()) > 0 {
+				r.builder.WriteByte(' ')
+			}
+			r.builder.WriteString("ORDER BY ")
+			for i, order := range orders {
+				if i > 0 {
+					r.builder.WriteString(", ")
+				}
+				if err := r.writeExpression(order.Expression()); err != nil {
+					return err
+				}
+				if order.Descending() {
+					r.builder.WriteString(" DESC")
+				}
+			}
+		}
+		r.builder.WriteString(")")
+		return nil
+	case query.TrustedFragment:
+		parts := expression.Parts()
+		fragments := strings.Split(expression.SQL(), "{}")
+		for i, fragment := range fragments {
+			r.builder.WriteString(fragment)
+			if i >= len(parts) {
+				continue
+			}
+			switch part := parts[i].(type) {
+			case interface{ ValueExpression() query.Expression }:
+				if err := r.writeExpression(part.ValueExpression()); err != nil {
+					return err
+				}
+			case interface{ IdentifierValue() query.Identifier }:
+				quoted, err := r.quoteIdentifier(part.IdentifierValue().Name())
+				if err != nil {
+					return err
+				}
+				r.builder.WriteString(quoted)
+			default:
+				return fmt.Errorf("unsupported fragment part %T", part)
+			}
+		}
 		return nil
 	case query.Logical:
 		r.builder.WriteByte('(')

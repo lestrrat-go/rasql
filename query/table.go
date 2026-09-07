@@ -179,7 +179,7 @@ func (t TableRef) As(alias string) (TableRef, error) {
 	if err := t.validate(); err != nil {
 		return TableRef{}, err
 	}
-	if err := schema.ValidateIdentifier(alias); err != nil {
+	if err := schema.ValidateSimpleIdentifier(alias); err != nil {
 		return TableRef{}, fmt.Errorf("query table alias: %w", err)
 	}
 	aliased := t

@@ -51,7 +51,7 @@ This page covers the ORM, the builder that knows the Go type of a row. [The SQL 
 | | Typed `rasql` | `rasql/dynamic` |
 | --- | --- | --- |
 | Table input | `rasql.Table[T]`, usually generated | `query.TableRef` |
-| Column names | Generated typed accessors such as `users.ID()` | Strings such as `"id"`, or `query` projections |
+| Column names | Generated accessors such as `users.ID()` | Strings such as `"id"`, or `query` projections |
 | Result rows | `T`, decoded by the typed builder | `dynamic.Row`, read with `dynamic.Get` or `dynamic.Decode` |
 | Database handle | `rasql.DB` | The same `rasql.DB` |
 
@@ -59,9 +59,39 @@ Both facades build the same dialect-neutral statements and execute them through 
 
 `rasql` reads rows through a fluent builder. Start from `rasql.SelectFrom` when the result has a table's row type, and from `rasql.DecodeFrom` when a join or projection produces a shape of its own.
 
-Columns come from the generated table value, so `users.ID()` is a typed reference already bound to the `users` table. Use `users.ID().Ref()` when a dynamic `query.ColumnRef` is required. A misspelled `users.Emial()` is a compile error rather than a failed query, which [What the column accessors catch](02-generated-store.md#what-the-column-accessors-catch) demonstrates along with the cases that still fail at run time.
+Columns come from the generated table value, so `users.ID()` is a `query.ColumnRef` already bound to the `users` table. A misspelled `users.Emial()` is a compile error rather than a failed query, which [What the column accessors catch](02-generated-store.md#what-the-column-accessors-catch) demonstrates along with the cases that still fail at run time.
 
 Generated relationship methods provide a typed join and eager-loading path for the supported relationship slice described in [Relationships](../core/01-schema.md#relationships). A child relation such as `orders.User()` exposes `Join()` for a fluent query and `Load(ctx, db, children)` for one batched lookup that returns related rows grouped by foreign-key value. The inverse parent relation such as `users.Orders()` returns children grouped by parent key. Use the ordinary `Join` API for unsupported relationship shapes.
+
+Relationship plans can add a child filter, deterministic ordering, and a per-parent cap while splitting large key sets into bounded batches:
+
+<!-- INCLUDE(examples/rasql_relationship_load_example_test.go#relationship_load) -->
+```go
+database, err := sql.Open("sqlite", ":memory:")
+if err != nil {
+	panic(err)
+}
+defer func() { _ = database.Close() }()
+if _, err := database.Exec("CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER, total INTEGER); INSERT INTO orders VALUES (1,1,10),(2,1,20),(3,1,30),(4,1,40),(5,1,50),(6,1,60),(7,1,70)"); err != nil {
+	panic(err)
+}
+db, err := rasql.New(database, dialect.SQLite())
+if err != nil {
+	panic(err)
+}
+orders := store.Orders()
+loaded, err := rasql.LoadHasManyPlan(context.Background(), db, orders, []query.ColumnRef{orders.UserIDRef()}, []store.UsersRow{{ID: 1}}, func(user store.UsersRow) int64 { return user.ID }, func(order store.OrdersRow) int64 { return order.UserID }, func(key int64) ([]any, bool) { return []any{key}, true }, rasql.RelationshipLoadOptions{
+	Where:          query.Equal(orders.UserID(), 1),
+	OrderBy:        []query.Order{query.Desc(orders.IDRef())},
+	PerParentLimit: 5,
+})
+if err != nil {
+	panic(err)
+}
+fmt.Println(len(loaded[1]), loaded[1][0].ID, loaded[1][4].ID)
+```
+source: [examples/rasql_relationship_load_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_relationship_load_example_test.go)
+<!-- END INCLUDE -->
 
 Every builder is immutable. Each call returns a new builder, so a partly built query can be shared or reused without one caller's `Limit` leaking into another's.
 
@@ -1168,6 +1198,21 @@ source: [examples/rasql_debug_query_example_test.go](https://github.com/lestrrat
 <!-- END INCLUDE -->
 
 When only the SQL is wanted and no execution at all, `Build(d)` returns it from the dialect alone, with no `rasql.DB` needed.
+
+Static SQL packages can describe a query against SQLite before publishing generated code. A described query gets an
+ordered result row type and a typed execution helper. The helper follows the configured cardinality: `Many` returns an
+iterator, `ZeroOrOne` reports whether a row was found, and `ExactlyOne` returns `ErrNoRows` when the query is empty.
+The describer validates selected columns and observes nullability from the database before source generation.
+SQLite is the implemented describer. It rejects incomplete driver metadata and derives a type only for an explicitly
+aliased `COUNT(*)` or `COUNT(simple_column)` projection when SQLite omits that expression's declared type. Other
+expressions require a future engine-specific describer; expected metadata never supplies an observation.
+
+The checked-in [described-query example](../../examples/described) keeps its SQL input beside the generated
+`user_report_gen.go` owner. Its compiled example executes a real SQLite left join: `Nickname` is a nullable
+`*string`, `ProfileCount` is a non-null `int64`, and the `Many` helper exposes every returned row. The example's
+generation test describes `user_report.sql` against SQLite and compares the generated bytes with the checked-in
+owner, so changing the query or observed schema requires regeneration. This generated row reflects SQLite's
+observed result metadata; it does not claim completeness for expressions whose driver metadata is unavailable.
 
 
 ## Next

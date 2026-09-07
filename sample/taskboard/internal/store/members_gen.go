@@ -3,6 +3,7 @@
 package store
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/lestrrat-go/rasql"
@@ -90,33 +91,45 @@ func (t MembersTable) As(alias string) (MembersTable, error) {
 	return MembersTable{Table: aliased}, nil
 }
 
-type MembersCreate struct {
-	fields []rasql.MutationField[MembersRow]
+// MembersTableTasksRelation describes the Tasks relationship from MembersTable.
+type MembersTableTasksRelation struct {
+	Parent    MembersTable
+	Child     TasksTable
+	ParentKey rasql.ColumnRef
+	ChildKey  rasql.ColumnRef
 }
 
-func NewMembersCreate() MembersCreate { return MembersCreate{} }
-
-func (p MembersCreate) Name(value string) MembersCreate {
-	fields := append([]rasql.MutationField[MembersRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[MembersRow](Members().Name(), value))
-	return MembersCreate{fields: fields}
-}
-func (p MembersCreate) Plan() rasql.CreatePlan[MembersRow] {
-	plan, _ := rasql.NewCreatePlan[MembersRow](Members(), p.fields...)
-	return plan
+// Tasks returns the generated relationship descriptor.
+func (t MembersTable) Tasks() MembersTableTasksRelation {
+	child := Tasks()
+	parent := t
+	return MembersTableTasksRelation{Parent: parent, Child: child, ParentKey: parent.IDRef(), ChildKey: child.AssigneeIDRef()}
 }
 
-type MembersPatch struct {
-	fields []rasql.MutationField[MembersRow]
+// Join returns an INNER JOIN for the relationship.
+func (r MembersTableTasksRelation) Join() rasql.Join {
+	return rasql.InnerJoin(r.Child, rasql.Equal(r.ParentKey, r.ChildKey))
 }
 
-func NewMembersPatch() MembersPatch { return MembersPatch{} }
+// LoadWith fetches children with filtering, ordering, caps, and bind batching.
+func (r MembersTableTasksRelation) LoadWith(ctx context.Context, db rasql.DB, parents []MembersRow, options rasql.RelationshipLoadOptions) (map[*int64][]TasksRow, error) {
+	return rasql.LoadHasManyPlan[MembersRow, TasksRow, *int64](ctx, db, r.Child, []query.ColumnRef{r.ChildKey}, parents, func(row MembersRow) *int64 { value := row.ID; return &value }, func(row TasksRow) *int64 { return row.AssigneeID }, func(key *int64) ([]any, bool) {
+		if key == nil {
+			return nil, false
+		}
+		return []any{*key}, true
+	}, options)
+}
 
-func (p MembersPatch) Name(value string) MembersPatch {
-	fields := append([]rasql.MutationField[MembersRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[MembersRow](Members().Name(), value))
-	return MembersPatch{fields: fields}
+// Load fetches all children for parents in one query.
+func (r MembersTableTasksRelation) Load(ctx context.Context, db rasql.DB, parents []MembersRow) (map[*int64][]TasksRow, error) {
+	return r.LoadWith(ctx, db, parents, rasql.RelationshipLoadOptions{})
 }
-func (p MembersPatch) Where(predicate query.Predicate) (rasql.PatchPlan[MembersRow], error) {
-	return rasql.NewPatchPlan[MembersRow](Members(), predicate, p.fields...)
+
+// SourceKey returns the ordered source relationship key.
+func (r MembersTableTasksRelation) SourceKey(row MembersRow) *int64 {
+	return func() *int64 { value := row.ID; return &value }()
 }
+
+// TargetKey returns the ordered target relationship key.
+func (r MembersTableTasksRelation) TargetKey(row TasksRow) *int64 { return row.AssigneeID }

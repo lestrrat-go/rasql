@@ -119,7 +119,7 @@ func Relation(table TableRef) RelationRef {
 }
 
 func Derived(result ResultQuery, alias string) (RelationRef, error) {
-	if err := schema.ValidateIdentifier(alias); err != nil {
+	if err := schema.ValidateSimpleIdentifier(alias); err != nil {
 		return RelationRef{}, fmt.Errorf("derived relation alias: %w", err)
 	}
 	if result.body == nil {
@@ -361,7 +361,7 @@ type CTE struct {
 var nextCTEID uint64
 
 func CommonTable(name string, result ResultQuery) (CTE, error) {
-	if err := schema.ValidateIdentifier(name); err != nil {
+	if err := schema.ValidateSimpleIdentifier(name); err != nil {
 		return CTE{}, fmt.Errorf("CTE name: %w", err)
 	}
 	if result.body == nil {
@@ -374,7 +374,7 @@ func (c CTE) Ref(alias string) (RelationRef, error) {
 	if alias == "" {
 		alias = c.name
 	}
-	if err := schema.ValidateIdentifier(alias); err != nil {
+	if err := schema.ValidateSimpleIdentifier(alias); err != nil {
 		return RelationRef{}, fmt.Errorf("CTE alias: %w", err)
 	}
 	copy := c

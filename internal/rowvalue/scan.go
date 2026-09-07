@@ -1,10 +1,18 @@
 package rowvalue
 
 import (
-	"database/sql"
 	"fmt"
 	"iter"
+	"reflect"
 )
+
+type rowSource interface {
+	Columns() ([]string, error)
+	Next() bool
+	Scan(...any) error
+	Close() error
+	Err() error
+}
 
 // Scan returns a rangeable sequence of the result rows in rows.
 //
@@ -19,12 +27,23 @@ import (
 //
 // The sequence is single-use. Ranging over it a second time yields nothing,
 // because the underlying rows are already closed.
-func Scan(rows *sql.Rows) iter.Seq2[Row, error] {
+func Scan(rows rowSource) iter.Seq2[Row, error] {
+	return scanSource(rows, true)
+}
+
+// ScanSource decodes rows and optionally leaves ownership with the caller.
+func ScanSource(rows rowSource, closeRows bool) iter.Seq2[Row, error] {
+	return scanSource(rows, closeRows)
+}
+
+func scanSource(rows rowSource, closeRows bool) iter.Seq2[Row, error] {
 	return func(yield func(Row, error) bool) {
-		if rows == nil {
+		if rows == nil || (reflect.ValueOf(rows).Kind() == reflect.Pointer && reflect.ValueOf(rows).IsNil()) {
 			return
 		}
-		defer func() { _ = rows.Close() }()
+		if closeRows {
+			defer func() { _ = rows.Close() }()
+		}
 
 		names, err := rows.Columns()
 		if err != nil {
