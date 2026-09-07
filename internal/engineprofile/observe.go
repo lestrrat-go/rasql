@@ -83,9 +83,16 @@ func Discover(ctx context.Context, q Queryer, engine EngineID, id string) (Profi
 	}
 	p, err := Resolve(id, o)
 	if err != nil {
+		var discoveryErr *DiscoveryError
+		if errors.As(err, &discoveryErr) {
+			return Profile{}, err
+		}
 		code := ErrUnsupportedVersion
 		if engineForProfile(id) == 0 {
 			code = ErrUnknownProfile
+		}
+		if errors.Is(err, ErrProfileMismatch) {
+			code = ErrProfileMismatch
 		}
 		if errors.Is(err, ErrInvalidProfile) && engineForProfile(id) != 0 && o.Engine != engineForProfile(id) {
 			code = ErrProfileMismatch
@@ -111,6 +118,9 @@ func parseVersion(engine EngineID, raw string) (Version, error) {
 		return Version{}, fmt.Errorf("MySQL version requires major.minor.patch")
 	}
 	if engine == MySQL {
+		if len(parts) > 3 && !strings.Contains(parts[2], "-") && !strings.Contains(parts[2], "+") {
+			return Version{}, fmt.Errorf("MySQL version has extra components")
+		}
 		parts = parts[:3]
 		for i := range parts {
 			p := parts[i]

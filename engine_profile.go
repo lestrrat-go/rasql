@@ -3,6 +3,7 @@ package rasql
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/lestrrat-go/rasql/dialect"
@@ -47,6 +48,9 @@ var (
 )
 
 func DiscoverEngineProfile(ctx context.Context, db DB, id string) (EngineProfile, error) {
+	if profileEngine(id) == 0 {
+		return EngineProfile{}, fmt.Errorf("%w: unknown profile %q", ErrUnknownEngineProfile, id)
+	}
 	if db.Dialect() == nil || db.Handle() == nil {
 		return EngineProfile{}, fmt.Errorf("%w: database is empty", ErrInvalidEngineProfile)
 	}
@@ -78,7 +82,7 @@ func (p EngineProfile) Version() EngineVersion           { return p.profile.Vers
 func (p EngineProfile) Capabilities() EngineCapabilities { return p.profile.Capabilities }
 func (p EngineProfile) Limits() EngineLimits             { return p.profile.Limits }
 func (p EngineProfile) queryCompiler(d dialect.Dialect) (*querycompile.Compiler, error) {
-	if p.profile.ID == "" || d == nil {
+	if p.profile.ID == "" || d == nil || (reflect.ValueOf(d).Kind() == reflect.Pointer && reflect.ValueOf(d).IsNil()) {
 		return nil, ErrInvalidEngineProfile
 	}
 	if p.profile.Engine != engineForDialect(d) {

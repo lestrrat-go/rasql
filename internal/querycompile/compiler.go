@@ -8,6 +8,7 @@ import (
 	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/lestrrat-go/rasql/stmt"
+	"strings"
 )
 
 type Compiler struct {
@@ -16,60 +17,69 @@ type Compiler struct {
 }
 
 func New(p engineprofile.Profile) (Compiler, error) {
-	if p.ID == "" || p.Limits.MaxBindParameters <= 0 {
-		return Compiler{}, fmt.Errorf("%w: invalid profile", engineprofile.ErrInvalidProfile)
+	if err := engineprofile.Validate(p); err != nil {
+		return Compiler{}, err
 	}
 	d, err := dialectFor(p)
 	if err != nil {
 		return Compiler{}, err
 	}
-	return Compiler{profile: p, dialect: d}, nil
+	return Compiler{profile: p, dialect: engineprofile.ConstrainDialect(p, d)}, nil
 }
 
 // NewWithDialect retains the caller's validated dialect, including optional
 // compiler and identifier extensions. Profile validation remains independent
 // of the dialect value and is performed before the compiler is returned.
 func NewWithDialect(p engineprofile.Profile, d dialect.Dialect) (Compiler, error) {
-	if p.ID == "" || p.Limits.MaxBindParameters <= 0 {
-		return Compiler{}, fmt.Errorf("%w: invalid profile", engineprofile.ErrInvalidProfile)
+	if err := engineprofile.Validate(p); err != nil {
+		return Compiler{}, err
 	}
-	if d == nil {
-		return Compiler{}, fmt.Errorf("%w: dialect must not be nil", engineprofile.ErrInvalidProfile)
+	if err := engineprofile.ValidateDialect(d, p); err != nil {
+		return Compiler{}, err
 	}
-	if p.Engine != engineprofile.Custom && d.Name() != map[engineprofile.EngineID]string{engineprofile.PostgreSQL: "postgresql", engineprofile.MySQL: "mysql", engineprofile.SQLite: "sqlite"}[p.Engine] {
-		return Compiler{}, fmt.Errorf("dialect and profile disagree")
-	}
-	if p.Engine == engineprofile.Custom && p.CustomName != d.Name() {
-		return Compiler{}, fmt.Errorf("dialect and custom profile disagree")
-	}
-	return Compiler{profile: p, dialect: d}, nil
+	return Compiler{profile: p, dialect: engineprofile.ConstrainDialect(p, d)}, nil
 }
 func (c Compiler) Select(q query.ResultQuery) (stmt.Statement, error) {
+	if err := engineprofile.Validate(c.profile); err != nil {
+		return stmt.Statement{}, err
+	}
+	if err := validateResultCapabilities(c.profile, q); err != nil {
+		return stmt.Statement{}, err
+	}
 	s, err := render.Result(c.dialect, q)
 	if err != nil {
 		return stmt.Statement{}, err
 	}
 	if len(s.Args()) > c.profile.Limits.MaxBindParameters {
-		return stmt.Statement{}, fmt.Errorf("%w: %d", engineprofile.ErrBindLimit, len(s.Args()))
+		return stmt.Statement{}, &engineprofile.ProfileError{Code: engineprofile.ErrBindLimit, Engine: c.profile.Engine, Feature: "bind parameters", Detail: fmt.Sprintf("got %d, limit %d", len(s.Args()), c.profile.Limits.MaxBindParameters)}
 	}
 	return stmt.New(sqltext.Text(s.SQL()), s.Args()...), nil
 }
 func (c Compiler) Write(q query.WriteStatement) (stmt.Statement, error) {
+	if err := engineprofile.Validate(c.profile); err != nil {
+		return stmt.Statement{}, err
+	}
+	if err := validateWriteCapabilities(c.profile, q); err != nil {
+		return stmt.Statement{}, err
+	}
 	s, err := render.Write(c.dialect, q)
 	if err != nil {
 		return stmt.Statement{}, err
 	}
 	if len(s.Args()) > c.profile.Limits.MaxBindParameters {
-		return stmt.Statement{}, fmt.Errorf("%w: %d", engineprofile.ErrBindLimit, len(s.Args()))
+		return stmt.Statement{}, &engineprofile.ProfileError{Code: engineprofile.ErrBindLimit, Engine: c.profile.Engine, Feature: "bind parameters", Detail: fmt.Sprintf("got %d, limit %d", len(s.Args()), c.profile.Limits.MaxBindParameters)}
 	}
 	return stmt.New(sqltext.Text(s.SQL()), s.Args()...), nil
 }
 func (c Compiler) Native(s stmt.Statement) (stmt.Statement, error) {
-	if s.SQL() == "" {
+	if err := engineprofile.Validate(c.profile); err != nil {
+		return stmt.Statement{}, err
+	}
+	if strings.TrimSpace(s.SQL()) == "" {
 		return stmt.Statement{}, fmt.Errorf("native statement SQL must not be blank")
 	}
 	if len(s.Args()) > c.profile.Limits.MaxBindParameters {
-		return stmt.Statement{}, fmt.Errorf("%w: %d", engineprofile.ErrBindLimit, len(s.Args()))
+		return stmt.Statement{}, &engineprofile.ProfileError{Code: engineprofile.ErrBindLimit, Engine: c.profile.Engine, Feature: "bind parameters", Detail: fmt.Sprintf("got %d, limit %d", len(s.Args()), c.profile.Limits.MaxBindParameters)}
 	}
 	return stmt.New(sqltext.Text(s.SQL()), s.Args()...), nil
 }
@@ -82,6 +92,6 @@ func dialectFor(p engineprofile.Profile) (dialect.Dialect, error) {
 	case engineprofile.SQLite:
 		return dialect.SQLite(), nil
 	default:
-		return nil, fmt.Errorf("custom dialect %q is unavailable", p.CustomName)
+		return nil, fmt.Errorf("%w: custom profile %q requires an explicit dialect adapter", engineprofile.ErrUnsupportedFeature, p.CustomName)
 	}
 }

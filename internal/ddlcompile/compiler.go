@@ -16,8 +16,8 @@ type Compiler struct {
 }
 
 func New(p engineprofile.Profile) (Compiler, error) {
-	if p.ID == "" || p.Limits.MaxBindParameters <= 0 {
-		return Compiler{}, fmt.Errorf("%w: invalid profile", engineprofile.ErrInvalidProfile)
+	if err := engineprofile.Validate(p); err != nil {
+		return Compiler{}, err
 	}
 	var d dialect.Dialect
 	switch p.Engine {
@@ -28,23 +28,23 @@ func New(p engineprofile.Profile) (Compiler, error) {
 	case engineprofile.SQLite:
 		d = dialect.SQLite()
 	default:
-		return Compiler{}, fmt.Errorf("custom dialect unavailable")
+		return Compiler{}, fmt.Errorf("%w: custom profile requires an explicit dialect adapter", engineprofile.ErrUnsupportedFeature)
 	}
-	return Compiler{profile: p, dialect: d}, nil
+	return Compiler{profile: p, dialect: engineprofile.ConstrainDialect(p, d)}, nil
 }
 func NewWithDialect(p engineprofile.Profile, d dialect.Dialect) (Compiler, error) {
-	if p.ID == "" || p.Limits.MaxBindParameters <= 0 {
-		return Compiler{}, fmt.Errorf("%w: invalid profile", engineprofile.ErrInvalidProfile)
+	if err := engineprofile.Validate(p); err != nil {
+		return Compiler{}, err
 	}
-	if d == nil {
-		return Compiler{}, fmt.Errorf("%w: dialect must not be nil", engineprofile.ErrInvalidProfile)
+	if err := engineprofile.ValidateDialect(d, p); err != nil {
+		return Compiler{}, err
 	}
-	if p.Engine == engineprofile.Custom && p.CustomName != d.Name() {
-		return Compiler{}, fmt.Errorf("dialect and custom profile disagree")
-	}
-	return Compiler{profile: p, dialect: d}, nil
+	return Compiler{profile: p, dialect: engineprofile.ConstrainDialect(p, d)}, nil
 }
 func (c Compiler) CreateTable(t schema.TableDef) ([]stmt.Statement, error) {
+	if err := engineprofile.Validate(c.profile); err != nil {
+		return nil, err
+	}
 	s, err := render.CreateTable(c.dialect, t)
 	if err != nil {
 		return nil, err
@@ -52,9 +52,15 @@ func (c Compiler) CreateTable(t schema.TableDef) ([]stmt.Statement, error) {
 	return []stmt.Statement{s}, nil
 }
 func (c Compiler) CreateIndexes(t schema.TableDef) ([]stmt.Statement, error) {
+	if err := engineprofile.Validate(c.profile); err != nil {
+		return nil, err
+	}
 	return render.CreateIndexes(c.dialect, t)
 }
 func (c Compiler) DropTable(n schema.ObjectName) (stmt.Statement, error) {
+	if err := engineprofile.Validate(c.profile); err != nil {
+		return stmt.Statement{}, err
+	}
 	if n.Name == "" {
 		return stmt.Statement{}, fmt.Errorf("table name must not be blank")
 	}

@@ -3,6 +3,7 @@ package engineprofile
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 type EngineID uint8
@@ -69,6 +70,7 @@ var (
 	ErrUnsupportedFeature = errors.New("engine profile: unsupported feature")
 	ErrUnsupportedVersion = errors.New("engine profile: unsupported version")
 	ErrBindLimit          = errors.New("engine profile: bind limit exceeded")
+	ErrUnresolvedFact     = errors.New("engine profile: unresolved fact")
 )
 
 type ProfileError struct {
@@ -92,8 +94,11 @@ func less(a, b Version) bool {
 }
 
 func New(profileID string, engine EngineID, customName string, version Version, caps Capabilities, limits Limits) (Profile, error) {
-	if !validEngine(engine) || profileID == "" || limits.MaxBindParameters <= 0 {
+	if !validEngine(engine) || strings.TrimSpace(profileID) == "" || limits.MaxBindParameters <= 0 {
 		return Profile{}, &ProfileError{Code: ErrInvalidProfile, Engine: engine, Version: version, Detail: "invalid identity or bind limit"}
+	}
+	if !version.Known && (version.Major != 0 || version.Minor != 0 || version.Patch != 0) {
+		return Profile{}, &ProfileError{Code: ErrInvalidProfile, Engine: engine, Version: version, Detail: "unknown version has numeric fields"}
 	}
 	if version.Known && version.Major == 0 {
 		return Profile{}, &ProfileError{Code: ErrInvalidProfile, Engine: engine, Version: version, Detail: "known version has zero major"}
@@ -107,7 +112,7 @@ func New(profileID string, engine EngineID, customName string, version Version, 
 	if !version.Known && engine != Custom {
 		return Profile{}, &ProfileError{Code: ErrInvalidProfile, Engine: engine, Version: version, Detail: "built-in profile requires a known version"}
 	}
-	if engine == Custom && customName == "" {
+	if engine == Custom && strings.TrimSpace(customName) == "" {
 		return Profile{}, &ProfileError{Code: ErrInvalidProfile, Engine: engine, Version: version, Detail: "custom name is required"}
 	}
 	if engine != Custom {
@@ -129,7 +134,15 @@ func New(profileID string, engine EngineID, customName string, version Version, 
 	if caps.PerParentLimit == PerParentLimitWindow && !caps.WindowFunctions || caps.PerParentLimit == PerParentLimitLateral && !caps.LateralJoins {
 		return Profile{}, &ProfileError{Code: ErrInvalidProfile, Engine: engine, Version: version, Detail: "per-parent strategy lacks matching capability"}
 	}
+	if caps.Upsert == UpsertNone && (caps.ConflictTarget || caps.DefaultValuesUpsert || caps.UpsertConflictWhere || caps.UpsertUpdateWhere) {
+		return Profile{}, &ProfileError{Code: ErrInvalidProfile, Engine: engine, Version: version, Detail: "upsert capabilities require an upsert form"}
+	}
 	return Profile{ID: profileID, Engine: engine, CustomName: customName, Version: version, Capabilities: caps, Limits: limits}, nil
+}
+
+func Validate(p Profile) error {
+	_, err := New(p.ID, p.Engine, p.CustomName, p.Version, p.Capabilities, p.Limits)
+	return err
 }
 
 type profileSpec struct {
@@ -151,7 +164,7 @@ func Resolve(profileID string, observed ObservedIdentity) (Profile, error) {
 	for _, s := range specs() {
 		if s.id == profileID {
 			if observed.Engine != s.engine {
-				return Profile{}, &ProfileError{Code: ErrInvalidProfile, Engine: observed.Engine, Version: observed.Version, Detail: "observed engine does not match profile"}
+				return Profile{}, &DiscoveryError{Code: ErrProfileMismatch, RequestedEngine: observed.Engine, ProfileID: profileID, Observed: observed, Detail: "observed engine does not match profile"}
 			}
 			if !observed.Version.Known || observed.Version.Major != s.major || observed.Version.Minor < s.minMinor || observed.Version.Minor > s.maxMinor || observed.Version.Patch > s.maxPatch {
 				return Profile{}, &ProfileError{Code: ErrUnsupportedVersion, Engine: s.engine, Version: observed.Version, Detail: "observed version is outside supported range"}
@@ -159,7 +172,7 @@ func Resolve(profileID string, observed ObservedIdentity) (Profile, error) {
 			return New(s.id, s.engine, "", observed.Version, s.caps, Limits{s.binds})
 		}
 	}
-	return Profile{}, &ProfileError{Code: ErrInvalidProfile, Detail: "unknown profile " + profileID}
+	return Profile{}, &DiscoveryError{Code: ErrUnknownProfile, ProfileID: profileID, Detail: "unknown profile " + profileID}
 }
 func Builtin(profileID string, v Version) (Profile, error) {
 	return Resolve(profileID, ObservedIdentity{Engine: engineForProfile(profileID), Version: v})

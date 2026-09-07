@@ -113,6 +113,9 @@ func Result(d dialect.Dialect, s query.ResultQuery) (stmt.Statement, error) {
 		if err := s.Body().Validate(); err != nil {
 			return err
 		}
+		if err := validateResultMetadata(s); err != nil {
+			return err
+		}
 		return nil
 	}, func(r *renderer) error {
 		if body := s.Body(); body != nil {
@@ -125,12 +128,47 @@ func Result(d dialect.Dialect, s query.ResultQuery) (stmt.Statement, error) {
 	})
 }
 
+func validateResultMetadata(result query.ResultQuery) error {
+	want := len(result.Columns())
+	switch body := result.Body().(type) {
+	case query.Select:
+		if got := len(body.Projections()); got != want {
+			return fmt.Errorf("result columns count %d does not match SELECT projection count %d", want, got)
+		}
+	case *query.Select:
+		if body == nil {
+			return fmt.Errorf("result query body must not be empty")
+		}
+		if got := len(body.Projections()); got != want {
+			return fmt.Errorf("result columns count %d does not match SELECT projection count %d", want, got)
+		}
+	case query.Compound:
+		if got := len(body.Left().Columns()); got != want {
+			return fmt.Errorf("result columns count %d does not match compound output count %d", want, got)
+		}
+	case *query.Compound:
+		if body == nil {
+			return fmt.Errorf("result query body must not be empty")
+		}
+		if got := len(body.Left().Columns()); got != want {
+			return fmt.Errorf("result columns count %d does not match compound output count %d", want, got)
+		}
+	}
+	return nil
+}
+
 func bodyCorrelations(body query.QueryBody) []query.RelationRef {
 	if s, ok := body.(query.Select); ok {
 		return s.Correlations()
 	}
 	if s, ok := body.(*query.Select); ok && s != nil {
 		return s.Correlations()
+	}
+	if compound, ok := body.(query.Compound); ok {
+		return append(bodyCorrelations(compound.Left().Body()), bodyCorrelations(compound.Right().Body())...)
+	}
+	if compound, ok := body.(*query.Compound); ok && compound != nil {
+		return append(bodyCorrelations(compound.Left().Body()), bodyCorrelations(compound.Right().Body())...)
 	}
 	return nil
 }
