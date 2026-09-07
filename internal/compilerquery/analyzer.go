@@ -95,6 +95,13 @@ func (a analyzer) Analyze(ctx context.Context, request schemasource.AnalysisRequ
 		if err := validateCardinality(query, classification, request.Profile); err != nil {
 			return schemasource.AnalysisResult{}, err
 		}
+		if request.Profile.Engine != engineprofile.PostgreSQL {
+			for _, value := range append(append([]ValueDeclaration(nil), query.Parameters...), query.Results...) {
+				if value.Scalar == "" {
+					return schemasource.AnalysisResult{}, fmt.Errorf("query %q value %q requires a scalar declaration", query.ID, value.Name)
+				}
+			}
+		}
 		describer := a.describer(request.Profile.Engine)
 		if describer == nil {
 			return schemasource.AnalysisResult{}, fmt.Errorf("query %q: no describer for %s", query.ID, engine.Dialect)
@@ -113,6 +120,16 @@ func (a analyzer) Analyze(ctx context.Context, request schemasource.AnalysisRequ
 		results, err := mergeValues(query.Results, description.Results, nil)
 		if err != nil {
 			return schemasource.AnalysisResult{}, fmt.Errorf("query %q results: %w", query.ID, err)
+		}
+		if request.Profile.Engine == engineprofile.PostgreSQL {
+			for i, value := range append(append([]ValueDeclaration(nil), query.Parameters...), query.Results...) {
+				if value.Scalar == "" && i < len(append(append([]ValueEvidence(nil), description.Parameters...), description.Results...)) {
+					fact := append(append([]ValueEvidence(nil), description.Parameters...), description.Results...)[i]
+					if fact.Type.Certainty == compilerir.CertaintyUnknown || fact.Type.LogicalKind == "" {
+						return schemasource.AnalysisResult{}, fmt.Errorf("query %q value %q has unresolved type", query.ID, value.Name)
+					}
+				}
+			}
 		}
 		digest := sha256.Sum256(snapshot.Bytes())
 		queries = append(queries, compilerir.QueryAnalysis{ID: query.ID, Name: query.Function, SQLPath: snapshot.Path(), SQLSHA256: hex.EncodeToString(digest[:]), Engine: engine, Operation: classification.Operation, Parameters: parameters, Results: results, Cardinality: query.Cardinality})
@@ -172,6 +189,15 @@ func validateCardinality(q QueryConfig, c Classification, p engineprofile.Profil
 	if c.Operation != "select" && q.Cardinality != "exec" && !c.Returning {
 		return fmt.Errorf("query %q: DML without RETURNING requires exec", q.ID)
 	}
+	if c.Operation != "select" && c.Returning && q.Cardinality != "one" && q.Cardinality != "maybe" && q.Cardinality != "many" {
+		return fmt.Errorf("query %q: returning DML requires one, maybe, or many cardinality", q.ID)
+	}
+	if c.Operation != "select" && c.Returning && len(q.Results) == 0 {
+		return fmt.Errorf("query %q: returning DML requires results", q.ID)
+	}
+	if c.Returning && p.Capabilities.Returning == engineprofile.ReturningNone {
+		return fmt.Errorf("query %q: returning is unsupported by profile", q.ID)
+	}
 	if c.Returning && p.Engine == engineprofile.MySQL {
 		return fmt.Errorf("query %q: MySQL does not support returning", q.ID)
 	}
@@ -183,15 +209,20 @@ func mergeValues(declarations []ValueDeclaration, observed []ValueEvidence, name
 		collapsed := make([]ValueEvidence, 0, len(declarations))
 		seen := map[string]struct{}{}
 		for i, name := range names {
-			if _, ok := seen[name]; ok {
-				continue
-			}
-			seen[name] = struct{}{}
 			if i >= len(observed) {
 				break
 			}
 			fact := observed[i]
 			fact.Name = name
+			if _, ok := seen[name]; ok {
+				for _, prior := range collapsed {
+					if prior.Name == name && (prior.Type.LogicalKind != fact.Type.LogicalKind || prior.Type.Certainty != fact.Type.Certainty || !sameNullable(prior.Nullable, fact.Nullable)) {
+						return nil, fmt.Errorf("repeated parameter %q has conflicting evidence", name)
+					}
+				}
+				continue
+			}
+			seen[name] = struct{}{}
 			collapsed = append(collapsed, fact)
 		}
 		observed = collapsed
@@ -230,6 +261,13 @@ func mergeValues(declarations []ValueDeclaration, observed []ValueEvidence, name
 	return values, nil
 }
 
+func sameNullable(a, b *bool) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
 func compareParameterNames(declarations []ValueDeclaration, names []string) error {
 	unique := make([]string, 0, len(names))
 	seen := map[string]struct{}{}
@@ -265,6 +303,7 @@ func cloneConfig(in Config) Config {
 func lowerNamedSQL(source string, d dialect.Dialect) (string, []string, error) {
 	var out strings.Builder
 	var names []string
+	refs := map[string]string{}
 	for pos := 0; pos < len(source); {
 		start := strings.Index(source[pos:], "{{")
 		if start < 0 {
@@ -289,6 +328,14 @@ func lowerNamedSQL(source string, d dialect.Dialect) (string, []string, error) {
 		if len(fields) == 3 && !validColumnReference(fields[2]) {
 			return "", nil, fmt.Errorf("compilerquery: invalid bind column reference")
 		}
+		ref := ""
+		if len(fields) == 3 {
+			ref = fields[2]
+		}
+		if prior, ok := refs[name]; ok && prior != ref {
+			return "", nil, fmt.Errorf("compilerquery: bind %q names conflicting columns", name)
+		}
+		refs[name] = ref
 		names = append(names, name)
 		placeholder, err := d.Placeholder(len(names))
 		if err != nil {

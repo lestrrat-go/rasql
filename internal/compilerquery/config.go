@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"path/filepath"
 	"strings"
 
 	"github.com/lestrrat-go/rasql/internal/compilerir"
@@ -42,6 +44,13 @@ func DecodeConfig(data []byte) (Config, error) {
 	if err := dec.Decode(&raw); err != nil {
 		return Config{}, fmt.Errorf("compilerquery: decode config: %w", err)
 	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return Config{}, fmt.Errorf("compilerquery: trailing JSON data")
+		}
+		return Config{}, fmt.Errorf("compilerquery: trailing JSON data: %w", err)
+	}
 	queries := make([]QueryConfig, len(raw.Queries))
 	for i, item := range raw.Queries {
 		var q struct {
@@ -69,12 +78,28 @@ func ValidateConfig(c Config, engine compilerir.EngineIdentity) error {
 	if strings.TrimSpace(c.ModuleRoot) == "" {
 		return fmt.Errorf("compilerquery: module root is required")
 	}
+	if filepath.IsAbs(c.ModuleRoot) && filepath.Clean(c.ModuleRoot) != c.ModuleRoot {
+		return fmt.Errorf("compilerquery: module root must be clean")
+	}
 	seenID := map[compilerir.QueryID]struct{}{}
 	seenInput := map[string]struct{}{}
 	seenFunction := map[string]struct{}{}
+	seenOutput := map[string]struct{}{}
 	for i, q := range c.Queries {
 		if q.ID == "" || q.Input == "" || q.Function == "" {
 			return fmt.Errorf("compilerquery: query %d requires id, input, and function", i)
+		}
+		if filepath.IsAbs(q.Input) || filepath.Clean(q.Input) != q.Input || strings.Contains(q.Input, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("compilerquery: query %q input must be module-relative", q.ID)
+		}
+		if q.Output != "" {
+			if filepath.IsAbs(q.Output) || filepath.Clean(q.Output) != q.Output || strings.Contains(q.Output, ".."+string(filepath.Separator)) {
+				return fmt.Errorf("compilerquery: query %q output must be module-relative", q.ID)
+			}
+			if _, ok := seenOutput[q.Output]; ok {
+				return fmt.Errorf("compilerquery: duplicate query output %q", q.Output)
+			}
+			seenOutput[q.Output] = struct{}{}
 		}
 		if _, ok := seenID[q.ID]; ok {
 			return fmt.Errorf("compilerquery: duplicate query id %q", q.ID)

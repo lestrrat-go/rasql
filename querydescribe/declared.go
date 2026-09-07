@@ -14,10 +14,10 @@ func NewDeclared(db *sql.DB) compilerquery.Describer { return declaredDescriber{
 func NewMySQL(db *sql.DB) compilerquery.Describer    { return declaredDescriber{db: db} }
 
 func (d declaredDescriber) Describe(ctx context.Context, request compilerquery.DescribeRequest) (compilerquery.Description, error) {
-	if d.db == nil {
+	if request.DB == nil {
 		return compilerquery.Description{}, fmt.Errorf("querydescribe: nil database")
 	}
-	stmt, err := d.db.PrepareContext(ctx, request.SQL)
+	stmt, err := request.DB.PrepareContext(ctx, request.SQL)
 	if err != nil {
 		return compilerquery.Description{}, err
 	}
