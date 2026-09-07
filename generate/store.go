@@ -101,17 +101,18 @@ type Store struct {
 
 // TypedQuery describes lock-backed native SQL for offline generation.
 type TypedQuery struct {
-	Function    string
-	Output      string
-	Engine      string
-	SQL         string
-	Operation   string
-	Cardinality string
-	Result      string
-	Projection  string
-	Decoder     string
-	Parameters  []compilerir.GoField
-	Results     []compilerir.GoField
+	Function      string
+	Output        string
+	Engine        string
+	SQL           string
+	Operation     string
+	Cardinality   string
+	Result        string
+	Projection    string
+	Decoder       string
+	Parameters    []compilerir.GoField
+	Results       []compilerir.GoField
+	ArgumentNames []string
 }
 
 // TableHint carries a Go-side generation override that no live database can

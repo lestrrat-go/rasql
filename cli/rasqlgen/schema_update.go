@@ -151,7 +151,11 @@ func (c command) runSchemaUpdate(args []string) error {
 		if readErr != nil {
 			return fmt.Errorf("schema update: read query %s: %w", query.SQLPath, readErr)
 		}
-		store.TypedQueries = append(store.TypedQueries, generate.TypedQuery{Function: goQuery.Name, Output: name.File, Engine: query.Engine.Dialect, SQL: string(sqlBytes), Operation: query.Operation, Cardinality: query.Cardinality, Result: name.Result, Projection: name.Projection, Decoder: name.Decoder, Parameters: append([]compilerir.GoField(nil), goQuery.Parameters...), Results: queryFields(goQuery)})
+		sqlText, argumentNames, lowerErr := lowerTypedSQL(string(sqlBytes), string(query.ID), query.Engine.Dialect)
+		if lowerErr != nil {
+			return lowerErr
+		}
+		store.TypedQueries = append(store.TypedQueries, generate.TypedQuery{Function: goQuery.Name, Output: name.File, Engine: query.Engine.Dialect, SQL: sqlText, ArgumentNames: argumentNames, Operation: query.Operation, Cardinality: query.Cardinality, Result: name.Result, Projection: name.Projection, Decoder: name.Decoder, Parameters: append([]compilerir.GoField(nil), goQuery.Parameters...), Results: queryFields(goQuery)})
 	}
 	plan, err := store.Plan()
 	if err != nil {

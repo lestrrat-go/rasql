@@ -10,10 +10,12 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/compilerlock"
 	"github.com/lestrrat-go/rasql/internal/compilerquery"
+	"github.com/lestrrat-go/rasql/namedsql"
 )
 
 func (c command) runOfflineGenerate(settings config, configPath string, check bool) error {
@@ -127,7 +129,10 @@ func (c command) runOfflineGenerate(settings config, configPath string, check bo
 		if readErr != nil {
 			return fmt.Errorf("generate: read query %s: %w", query.SQL.Path, readErr)
 		}
-		typed.SQL = string(sqlBytes)
+		typed.SQL, typed.ArgumentNames, readErr = lowerTypedSQL(string(sqlBytes), string(query.ID), query.Evidence.Dialect)
+		if readErr != nil {
+			return readErr
+		}
 		store.TypedQueries = append(store.TypedQueries, typed)
 	}
 	if check {
@@ -177,6 +182,28 @@ func (c command) runOfflineGenerate(settings config, configPath string, check bo
 	}
 	_, _ = fmt.Fprintf(c.output, "generated %s offline\n", settings.Output)
 	return nil
+}
+
+func lowerTypedSQL(source, name, engine string) (string, []string, error) {
+	template, err := namedsql.Parse(name, source)
+	if err != nil {
+		return "", nil, err
+	}
+	var sqlDialect dialect.Dialect
+	switch engine {
+	case "postgresql", "postgres":
+		sqlDialect = dialect.PostgreSQL()
+	case "mysql":
+		sqlDialect = dialect.MySQL()
+	default:
+		sqlDialect = dialect.SQLite()
+	}
+	compiled, err := template.Compile(sqlDialect)
+	if err != nil {
+		return "", nil, err
+	}
+	definition := compiled.QueryDef()
+	return definition.SQL, definition.Parameters, nil
 }
 
 func offlineDigestGroups(root string, settings config, lock compilerlock.File) ([]string, error) {
