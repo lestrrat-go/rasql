@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
@@ -72,14 +73,14 @@ func dynamicFields(typ reflect.Type) ([]dynamicField, error) {
 	walk = func(current reflect.Type, prefix []int) error {
 		for i := 0; i < current.NumField(); i++ {
 			field := current.Field(i)
-			if field.PkgPath != "" && field.Tag.Get("rasql") == "" && field.Tag.Get("json") == "" {
-				continue
-			}
 			index := append(append([]int(nil), prefix...), i)
 			if field.Anonymous && field.Type.Kind() == reflect.Struct && field.Tag.Get("rasql") == "" && field.Tag.Get("json") == "" {
 				if err := walk(field.Type, index); err != nil {
 					return err
 				}
+				continue
+			}
+			if field.PkgPath != "" && field.Tag.Get("rasql") == "" && field.Tag.Get("json") == "" {
 				continue
 			}
 			name := field.Tag.Get("rasql")
@@ -109,15 +110,14 @@ func dynamicFields(typ reflect.Type) ([]dynamicField, error) {
 }
 
 func snakeDynamic(name string) string {
+	runes := []rune(name)
 	var out strings.Builder
-	for i, r := range name {
-		if i > 0 && r >= 'A' && r <= 'Z' {
+	for i, r := range runes {
+		if i > 0 && unicode.IsUpper(r) && (unicode.IsLower(runes[i-1]) || unicode.IsDigit(runes[i-1]) ||
+			(unicode.IsUpper(runes[i-1]) && i+1 < len(runes) && unicode.IsLower(runes[i+1]))) {
 			out.WriteByte('_')
 		}
-		if r >= 'A' && r <= 'Z' {
-			r += 'a' - 'A'
-		}
-		out.WriteRune(r)
+		out.WriteRune(unicode.ToLower(r))
 	}
 	return out.String()
 }
@@ -132,15 +132,21 @@ func compatibleDynamicField(root reflect.Type, index []int, column ResultColumn)
 		base = base.Elem()
 	}
 	scanner := reflect.PointerTo(base).Implements(reflect.TypeFor[sql.Scanner]()) || base.Implements(reflect.TypeFor[sql.Scanner]())
-	_, hasValid := base.FieldByName("Valid")
-	_, hasValue := base.FieldByName("Value")
-	nullableStruct := base.Kind() == reflect.Struct && hasValid && hasValue
+	nullableStruct := false
+	if base.Kind() == reflect.Struct {
+		_, hasValid := base.FieldByName("Valid")
+		_, hasValue := base.FieldByName("Value")
+		nullableStruct = hasValid && hasValue
+	}
 	if column.Nullable {
 		if typ.Kind() != reflect.Pointer && typ.Kind() != reflect.Interface && typ.Kind() != reflect.Slice && typ.Kind() != reflect.Map && !scanner && !nullableStruct {
 			return fmt.Errorf("nullable column %q requires nullable Go field", column.Name)
 		}
 	}
 	if scanner {
+		return nil
+	}
+	if nullableStruct {
 		return nil
 	}
 	if base == reflect.TypeFor[time.Time]() {
@@ -162,7 +168,7 @@ func compatibleDynamicField(root reflect.Type, index []int, column ResultColumn)
 		compatible = true
 	}
 	if !compatible {
-		return fmt.Errorf("Go field for %q is incompatible with %s", column.Name, column.Type.Kind())
+		return fmt.Errorf("go field for %q is incompatible with %s", column.Name, column.Type.Kind())
 	}
 	return nil
 }
@@ -236,3 +242,4 @@ func (d *dynamicDecoder[R]) bindReturnedColumns(names []string) (RowDecoder[R], 
 }
 
 var _ returnedColumnBinder[struct{}] = (*dynamicDecoder[struct{}])(nil)
+var _ = (*dynamicDecoder[any]).bindReturnedColumns

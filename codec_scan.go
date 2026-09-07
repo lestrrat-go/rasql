@@ -45,6 +45,10 @@ func (s codecScanSource) Scan(destinations ...any) error {
 				v.Elem().SetZero()
 				continue
 			}
+			if v.IsValid() && v.Kind() == reflect.Pointer && !v.IsNil() && v.Elem().Kind() == reflect.Interface {
+				v.Elem().SetZero()
+				continue
+			}
 			return &DecodeError{Column: s.columns[i].Name, Codec: CodecID(s.columns[i].Codec), Err: ErrUnexpectedNull}
 		}
 		decodeDestination := destination

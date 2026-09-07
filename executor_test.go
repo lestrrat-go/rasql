@@ -57,6 +57,9 @@ func (r *runtimeFakeRows) Err() error   { return r.iterErr }
 func (r *runtimeFakeRows) RecordRow()   { r.recorded++ }
 
 func (r *runtimeFakeRows) Finish(primary error, early bool) error {
+	if r.closed == 0 {
+		_ = r.Close()
+	}
 	r.finished++
 	r.lastFinish, r.lastEarly = primary, early
 	return errors.Join(primary, r.finishErr)
