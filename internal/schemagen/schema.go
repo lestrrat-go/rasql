@@ -1739,6 +1739,9 @@ func relationshipSpecs(table schema.TableDef, allTables []schema.TableDef, names
 	candidates := make([]inverseRelationshipCandidate, 0)
 	for _, child := range allTables {
 		for _, relationship := range child.Relationships {
+			if relationship.Kind != schema.RelationshipBelongsTo {
+				continue
+			}
 			if relationship.ReferencedTable != table.Name || relationshipTargetSchema(relationship) != table.Schema {
 				continue
 			}
@@ -1919,6 +1922,9 @@ func inverseKind(child schema.TableDef, relationship schema.RelationshipDef) sch
 func inverseRelationshipGroupSize(child, parent schema.TableDef, bindings *generatedBindings) int {
 	count := 0
 	for _, relationship := range child.Relationships {
+		if relationship.Kind != schema.RelationshipBelongsTo {
+			continue
+		}
 		if relationshipTargetSchema(relationship) != parent.Schema || relationship.ReferencedTable != parent.Name {
 			continue
 		}

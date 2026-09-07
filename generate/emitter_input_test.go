@@ -160,6 +160,49 @@ func TestLegacyStorePlanMatchesCanonicalBaseline(t *testing.T) {
 	}
 }
 
+func TestLegacyStoreCanonicalSelfForeignKeyRelations(t *testing.T) {
+	catalog := compilerir.PhysicalCatalog{
+		Engine: compilerir.EngineIdentity{Dialect: "sqlite", Version: "3"},
+		Objects: []compilerir.PhysicalObject{{
+			ID: "employees", Kind: "table", Name: "employees",
+			Columns: []compilerir.PhysicalColumn{
+				{Name: "id", Ordinal: 0, LogicalKind: "integer"},
+				{Name: "manager_id", Ordinal: 1, LogicalKind: "integer"},
+			},
+			Constraints: []compilerir.PhysicalConstraint{
+				{Kind: "primary_key", Name: "employees_pk", Columns: []string{"id"}},
+				{Kind: "foreign_key", Name: "employees_manager", Columns: []string{"manager_id"}, Reference: &compilerir.ForeignReference{Object: "employees", Columns: []string{"id"}}},
+			},
+		}},
+	}
+	semantic, diagnostics := compilerir.BuildSemantic(catalog, compilerir.MappingConfig{}, nil)
+	require.Empty(t, diagnostics)
+	config := compilerir.GoConfig{
+		Package: "store", Output: "generated", Emitter: "legacy",
+		Objects: []compilerir.ObjectGoName{{ID: "employees", File: "employees_gen.go"}},
+	}
+	model, diagnostics := compilerir.BuildGo(semantic, config)
+	require.Empty(t, diagnostics)
+	in, err := generate.NewEmitterInput(catalog, semantic, model, config, compilerir.MappingConfig{})
+	require.NoError(t, err)
+	store, err := generate.LegacyStore(in)
+	require.NoError(t, err)
+	plan, err := store.Plan()
+	require.NoError(t, err)
+	var source string
+	for _, file := range plan.Files() {
+		if filepath.Base(file.Path) == "employees_gen.go" {
+			source = string(file.Source)
+			break
+		}
+	}
+	require.NotEmpty(t, source)
+	require.Contains(t, source, "func (t EmployeesTable) Manager()")
+	require.Contains(t, source, "func (t EmployeesTable) Employees()")
+	require.NotContains(t, source, "EmployeesEmployees")
+	require.NotContains(t, source, "ManagerEmployees")
+}
+
 func TestEmitterInputAcceptsCanonicalViewWithoutWriteShapes(t *testing.T) {
 	in := plainEmitterFixture(t)
 	in.Catalog.Objects[0].Kind = "view"

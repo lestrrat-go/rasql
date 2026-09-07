@@ -1649,6 +1649,36 @@ func TestSchemaPreservesLegacyInverseName(t *testing.T) {
 	require.Contains(t, string(source), "func (t UsersTable) Projects()")
 }
 
+func TestSchemaKeepsDescriptorOnlyInverseRelations(t *testing.T) {
+	users := schema.TableDef{
+		Name:       "users",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+		Relationships: []schema.RelationshipDef{
+			{Name: "Orders", Kind: schema.RelationshipHasMany, Optionality: schema.RelationshipRequired, Columns: []string{"id"}, ReferencedTable: "orders", ReferencedColumns: []string{"user_id"}},
+			{Name: "Profile", Kind: schema.RelationshipHasOne, Optionality: schema.RelationshipRequired, Columns: []string{"id"}, ReferencedTable: "profiles", ReferencedColumns: []string{"user_id"}},
+		},
+	}
+	orders := schema.TableDef{
+		Name:       "orders",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "user_id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	profiles := schema.TableDef{
+		Name:              "profiles",
+		Columns:           []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "user_id", Type: schema.IntegerType{}}},
+		PrimaryKey:        []string{"id"},
+		UniqueConstraints: []schema.UniqueDef{{Columns: []string{"user_id"}}},
+	}
+	source, err := schemagen.PackageSource("generated", users, orders, profiles)
+	require.NoError(t, err)
+	text := string(source)
+	require.Contains(t, text, "func (t UsersTable) Orders()")
+	require.Contains(t, text, "func (t UsersTable) Profile()")
+	require.NotContains(t, text, "func (t OrdersTable) Users()")
+	require.NotContains(t, text, "func (t ProfilesTable) Users()")
+}
+
 func TestSchemaPreservesGenuineInverseNameCollision(t *testing.T) {
 	users := schema.TableDef{
 		Name:       "users",
