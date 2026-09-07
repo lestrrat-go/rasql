@@ -95,7 +95,7 @@ func (c command) runSchemaUpdate(args []string) error {
 	if emitter == "" {
 		emitter = "legacy"
 	}
-	generation := compilerir.GoConfig{Package: cfg.Package, Output: cfg.Output, Emitter: emitter, Prune: prune, Scalars: mappings.Scalars}
+	generation := compilerir.GoConfig{Package: cfg.Package, Output: cfg.Output, Emitter: emitter, Prune: prune, Scalars: mappings.Scalars, Relations: mappings.Relations}
 	rowNames := cfg.Tables.RowNames
 	configuredNames, err := cfg.names()
 	if err != nil {
@@ -174,7 +174,7 @@ func (c command) runSchemaUpdate(args []string) error {
 	if err != nil {
 		return err
 	}
-	lock := compilerlock.File{Format: compilerlock.FormatVersion, Compiler: "rasql", Source: result.Source.Record, Engine: result.Source.Engine, Catalog: compilerlock.CatalogFromPhysical(result.Catalog), Generation: compilerlock.GenerationRecord{Package: generation.Package, Output: generation.Output, Emitter: generation.Emitter, Prune: generation.Prune}}
+	lock := compilerlock.File{Format: compilerlock.FormatVersion, Compiler: "rasql", Source: result.Source.Record, Engine: result.Source.Engine, Catalog: compilerlock.CatalogFromPhysical(result.Catalog), Mappings: compilerlock.FromMappings(mappings), Generation: compilerlock.GenerationRecord{Package: generation.Package, Output: generation.Output, Emitter: generation.Emitter, Prune: generation.Prune}}
 	for _, query := range result.Queries {
 		lock.Queries = append(lock.Queries, compilerlock.QueryFromAnalysis(query))
 	}

@@ -207,7 +207,7 @@ func validateRelationMappings(c PhysicalCatalog, mappings MappingConfig) []Diagn
 		if source.Kind == "view" || target.Kind == "view" || through.Kind == "view" {
 			diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "invalid_mapping_object", Path: path, Message: "many-through mappings require physical tables"})
 		}
-		if !hasColumns(source, mapping.From) || !hasColumns(target, mapping.To) || !hasColumns(through, mapping.Through.SourceFrom) || !hasColumns(through, mapping.Through.SourceTo) || !hasColumns(through, mapping.Through.TargetFrom) || !hasColumns(through, mapping.Through.TargetTo) {
+		if !hasColumns(source, mapping.From) || !hasColumns(target, mapping.To) || !hasColumns(through, mapping.Through.SourceTo) || !hasColumns(through, mapping.Through.TargetTo) {
 			diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "unresolved_mapping_column", Path: path, Message: "mapping references an unknown column"})
 		}
 		if !hasForeignKey(through, mapping.Through.SourceTo, source, mapping.Through.SourceFrom) {

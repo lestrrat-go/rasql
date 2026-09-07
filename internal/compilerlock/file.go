@@ -370,6 +370,11 @@ func validateFile(f File) error {
 			return fmt.Errorf("compilerlock: invalid %s digest: %w", name, err)
 		}
 	}
+	if len(f.Mappings.Scalars) != 0 || len(f.Mappings.Relations) != 0 {
+		if _, err := f.Mappings.MappingConfig(); err != nil {
+			return fmt.Errorf("compilerlock: invalid mappings: %w", err)
+		}
+	}
 	if len(f.Catalog.Objects) > 0 {
 		c := ToPhysical(f)
 		if err := compilerir.ValidatePhysical(c); err != nil {
