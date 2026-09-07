@@ -186,7 +186,12 @@ func SourceOf[R any](table ReadTable[R], alias string) (TypedRelation[R], error)
 	if isNilReadTable(table) {
 		return TypedRelation[R]{}, planError("invalid_source", "table", "must not be nil")
 	}
-	ref := table.Ref()
+	definition := table.Ref().Definition()
+	detached, detachErr := ReadTableOf[R](definition)
+	if detachErr != nil {
+		return TypedRelation[R]{}, planError("invalid_source", "table", detachErr.Error())
+	}
+	ref := detached.Ref()
 	var err error
 	if alias != "" {
 		ref, err = ref.As(alias)
@@ -231,7 +236,7 @@ func (p QueryPlan) Validate() error {
 		if source.ref.QualifiedName() == "" {
 			return planError("invalid_source", fmt.Sprintf("plan.sources[%d]", i), "source is zero")
 		}
-		name := source.ref.QualifiedName()
+		name := q1SourceIdentity(source.ref)
 		if _, ok := seen[name]; ok {
 			return planError("invalid_source", fmt.Sprintf("plan.sources[%d]", i), "duplicate source")
 		}
@@ -255,8 +260,8 @@ func (p QueryPlan) Validate() error {
 		}
 	}
 	joinAllowed := make(map[string]struct{})
-	for k := range allowed {
-		joinAllowed[k] = struct{}{}
+	if len(p.sources) > 0 {
+		joinAllowed[q1SourceIdentity(p.sources[0].ref)] = struct{}{}
 	}
 	for i, join := range p.joins {
 		if join.On() == nil {
@@ -268,7 +273,7 @@ func (p QueryPlan) Validate() error {
 		if err := validateQ1Expression(join.On(), joinAllowed, fmt.Sprintf("plan.joins[%d].on", i)); err != nil {
 			return err
 		}
-		joinAllowed[join.Source().QualifiedName()] = struct{}{}
+		joinAllowed[q1SourceIdentity(join.Source())] = struct{}{}
 	}
 	for i, predicate := range append(append([]Predicate(nil), p.where...), p.having...) {
 		if predicate.node == nil {
@@ -319,6 +324,12 @@ func (p QueryPlan) Validate() error {
 	}
 	return nil
 }
+func q1SourceIdentity(ref query.RelationRef) string {
+	if table, ok := ref.Table(); ok {
+		return fmt.Sprintf("table:%#v|alias:%s", table, ref.Alias())
+	}
+	return fmt.Sprintf("relation:%s|alias:%s", ref.QualifiedName(), ref.Alias())
+}
 
 func validateQ1Expression(expression query.Expression, allowed map[string]struct{}, path string) error {
 	if expression == nil {
@@ -329,7 +340,7 @@ func validateQ1Expression(expression query.Expression, allowed map[string]struct
 		if err := node.Validate(); err != nil {
 			return planError("invalid_source", path, err.Error())
 		}
-		name := node.Source().QualifiedName()
+		name := q1SourceIdentity(node.Source())
 		if _, ok := allowed[name]; !ok {
 			return planError("invalid_source", path, "expression source is outside plan")
 		}
@@ -367,6 +378,10 @@ func (q Query[R]) Validate() error {
 	}
 	if err := q.plan.Validate(); err != nil {
 		return err
+	}
+	decoderSchema := q.projection.decoder.ResultSchema()
+	if !reflect.DeepEqual(decoderSchema.Columns(), q.projection.schema.Columns()) {
+		return planError("invalid_projection", "decoder", "schema changed after projection construction")
 	}
 	return nil
 }
