@@ -50,15 +50,35 @@ func TestRenderCompactPlansCanonicalTableSurface(t *testing.T) {
 	consumer := `package store_test
 
 import (
+	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/schema"
 	generated "example.com/compact/generated"
 	legacy "example.com/compact/legacy"
 	_ "modernc.org/sqlite"
 )
+
+type legacyUsersDecoder struct{ schema rasql.ResultSchema }
+func (d legacyUsersDecoder) ResultSchema() rasql.ResultSchema { return d.schema }
+func (legacyUsersDecoder) Presence() []rasql.Presence { return nil }
+func (legacyUsersDecoder) DecodeRow(src rasql.ScanSource, row *legacy.UsersRow) error { return row.ScanRow(src) }
+
+func collect[R any](ctx context.Context, executor rasql.Executor, query rasql.Query[R]) error {
+	rows, err := rasql.Rows(ctx, executor, query)
+	if err != nil { return err }
+	count := 0
+	for _, err := range rows {
+		if err != nil { return err }
+		count++
+	}
+	if count != 1 { return fmt.Errorf("rows = %d", count) }
+	return nil
+}
 
 func TestCompactConsumerRoundTrip(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
@@ -87,10 +107,20 @@ func BenchmarkCompactScan(b *testing.B) {
 	if _, err := db.ExecContext(b.Context(), "INSERT INTO users (id) VALUES (7)"); err != nil { b.Fatal(err) }
 	rdb, err := rasql.New(db, dialect.SQLite())
 	if err != nil { b.Fatal(err) }
- b.ResetTimer()
+	profile, err := rasql.DiscoverEngineProfile(b.Context(), rdb, "sqlite-3.35")
+	if err != nil { b.Fatal(err) }
+	executor, err := rasql.AsExecutor(rdb, profile)
+	if err != nil { b.Fatal(err) }
+	source, err := generated.Users().Source("")
+	if err != nil { b.Fatal(err) }
+	expressions, err := (generated.UsersColumns{}).Bind(source)
+	if err != nil { b.Fatal(err) }
+	projection, err := generated.UsersProjection(expressions)
+	if err != nil { b.Fatal(err) }
+	query := rasql.Select(source.Source(), projection)
+	b.ResetTimer()
  for i := 0; i < b.N; i++ {
-  rows, err := rasql.SelectFrom(generated.Users()).All(b.Context(), rdb)
-		if err != nil || len(rows) != 1 { b.Fatalf("rows=%v err=%v", rows, err) }
+		if err := collect(b.Context(), executor, query); err != nil { b.Fatal(err) }
 	}
 }
 
@@ -102,10 +132,24 @@ func BenchmarkLegacyScan(b *testing.B) {
 	if _, err := db.ExecContext(b.Context(), "INSERT INTO users (id) VALUES (7)"); err != nil { b.Fatal(err) }
 	rdb, err := rasql.New(db, dialect.SQLite())
 	if err != nil { b.Fatal(err) }
+	profile, err := rasql.DiscoverEngineProfile(b.Context(), rdb, "sqlite-3.35")
+	if err != nil { b.Fatal(err) }
+	executor, err := rasql.AsExecutor(rdb, profile)
+	if err != nil { b.Fatal(err) }
+	source, err := rasql.SourceOf(legacy.Users(), "")
+	if err != nil { b.Fatal(err) }
+	id, err := rasql.BindColumn[legacy.UsersRow, int64](source, "id", "")
+	if err != nil { b.Fatal(err) }
+	legacySchema, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}})
+	if err != nil { b.Fatal(err) }
+	legacyProjection, err := rasql.NewProjection([]rasql.ProjectionItem{
+		rasql.Item("id", id.Expr(), schema.IntegerType{}, ""),
+	}, legacyUsersDecoder{schema: legacySchema})
+	if err != nil { b.Fatal(err) }
+	query := rasql.Select(source.Source(), legacyProjection)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		rows, err := rasql.SelectFrom(legacy.Users()).All(b.Context(), rdb)
-		if err != nil || len(rows) != 1 { b.Fatalf("rows=%v err=%v", rows, err) }
+		if err := collect(b.Context(), executor, query); err != nil { b.Fatal(err) }
 	}
 }
 `
@@ -115,10 +159,11 @@ func BenchmarkLegacyScan(b *testing.B) {
 	command.Env = append(os.Environ(), "GOCACHE="+filepath.Join(root, "cache"))
 	output, err := command.CombinedOutput()
 	require.NoError(t, err, "%s", output)
-	compactBuilds := buildSamples(t, root, command.Env, "compact", "./generated")
-	legacyBuilds := buildSamples(t, root, command.Env, "legacy", "./legacy")
+	compactBuilds, legacyBuilds := pairedBuildSamples(t, root, command.Env)
 	t.Logf("compact build samples=%s median=%s", formatDurations(compactBuilds), medianDuration(compactBuilds))
 	t.Logf("legacy build samples=%s median=%s", formatDurations(legacyBuilds), medianDuration(legacyBuilds))
+	t.Logf("build median metrics compact=%s legacy=%s", formatBuildMetric(medianBuildSample(compactBuilds)), formatBuildMetric(medianBuildSample(legacyBuilds)))
+	t.Logf("build median ratios compact/legacy wall=%.2fx cpu=%.2fx rss=%.2fx binary=%.2fx", buildRatio(compactBuilds, legacyBuilds, func(sample buildSample) float64 { return sample.wall.Seconds() }), buildRatio(compactBuilds, legacyBuilds, func(sample buildSample) float64 { return sample.cpu.Seconds() }), buildRatio(compactBuilds, legacyBuilds, func(sample buildSample) float64 { return float64(sample.rssKB) }), buildRatio(compactBuilds, legacyBuilds, func(sample buildSample) float64 { return float64(sample.binary) }))
 	benchmark := exec.Command("go", "test", "-mod=mod", "-run", "^$", "-bench", "^Benchmark(Compact|Legacy)Scan$", "-benchmem", "./generated")
 	benchmark.Dir = root
 	benchmark.Env = command.Env
@@ -168,37 +213,67 @@ type buildSample struct {
 	binary int64
 }
 
-func buildSamples(t *testing.T, root string, env []string, label, packagePath string) []buildSample {
+func pairedBuildSamples(t *testing.T, root string, env []string) ([]buildSample, []buildSample) {
 	t.Helper()
 	const samples = 5
-	result := make([]buildSample, 0, samples)
+	compact := make([]buildSample, 0, samples)
+	legacy := make([]buildSample, 0, samples)
 	for index := 0; index < samples; index++ {
-		output := filepath.Join(root, fmt.Sprintf("%s-%d.test", label, index))
-		stats := filepath.Join(root, fmt.Sprintf("%s-%d.time", label, index))
-		command := exec.Command("/usr/bin/time", "-f", "%e %U %M", "-o", stats, "go", "test", "-mod=mod", "-count=1", "-run", "^$", "-c", "-o", output, packagePath)
-		command.Dir = root
-		command.Env = env
-		buildOutput, err := command.CombinedOutput()
-		require.NoError(t, err, "%s", buildOutput)
-		measurement, err := os.ReadFile(stats)
-		require.NoError(t, err)
-		fields := strings.Fields(string(measurement))
-		require.Len(t, fields, 3)
-		wallSeconds, err := strconv.ParseFloat(fields[0], 64)
-		require.NoError(t, err)
-		cpuSeconds, err := strconv.ParseFloat(fields[1], 64)
-		require.NoError(t, err)
-		rssKB, err := strconv.ParseInt(fields[2], 10, 64)
-		require.NoError(t, err)
-		binary, err := os.Stat(output)
-		require.NoError(t, err)
-		sample := buildSample{wall: time.Duration(wallSeconds * float64(time.Second)), cpu: time.Duration(cpuSeconds * float64(time.Second)), rssKB: rssKB, binary: binary.Size()}
-		result = append(result, sample)
-		t.Logf("%s build sample=%d wall=%s cpu=%s rss=%dKB binary=%d bytes", label, index+1, sample.wall.Round(time.Millisecond), sample.cpu.Round(time.Millisecond), sample.rssKB, sample.binary)
-		require.NoError(t, os.Remove(output))
-		require.NoError(t, os.Remove(stats))
+		if index%2 == 0 {
+			compact = append(compact, buildSampleAt(t, root, env, "compact", "./generated", index))
+			legacy = append(legacy, buildSampleAt(t, root, env, "legacy", "./legacy", index))
+		} else {
+			legacy = append(legacy, buildSampleAt(t, root, env, "legacy", "./legacy", index))
+			compact = append(compact, buildSampleAt(t, root, env, "compact", "./generated", index))
+		}
 	}
-	return result
+	return compact, legacy
+}
+
+func buildSampleAt(t *testing.T, root string, env []string, label, packagePath string, index int) buildSample {
+	t.Helper()
+	output := filepath.Join(root, fmt.Sprintf("%s-%d.test", label, index))
+	stats := filepath.Join(root, fmt.Sprintf("%s-%d.time", label, index))
+	command := exec.Command("/usr/bin/time", "-f", "%e %U %M", "-o", stats, "go", "test", "-mod=mod", "-count=1", "-run", "^$", "-c", "-o", output, packagePath)
+	command.Dir = root
+	command.Env = env
+	buildOutput, err := command.CombinedOutput()
+	require.NoError(t, err, "%s", buildOutput)
+	measurement, err := os.ReadFile(stats)
+	require.NoError(t, err)
+	fields := strings.Fields(string(measurement))
+	require.Len(t, fields, 3)
+	wallSeconds, err := strconv.ParseFloat(fields[0], 64)
+	require.NoError(t, err)
+	cpuSeconds, err := strconv.ParseFloat(fields[1], 64)
+	require.NoError(t, err)
+	rssKB, err := strconv.ParseInt(fields[2], 10, 64)
+	require.NoError(t, err)
+	binary, err := os.Stat(output)
+	require.NoError(t, err)
+	sample := buildSample{wall: time.Duration(wallSeconds * float64(time.Second)), cpu: time.Duration(cpuSeconds * float64(time.Second)), rssKB: rssKB, binary: binary.Size()}
+	t.Logf("%s build sample=%d wall=%s cpu=%s rss=%dKB binary=%d bytes", label, index+1, sample.wall.Round(time.Millisecond), sample.cpu.Round(time.Millisecond), sample.rssKB, sample.binary)
+	require.NoError(t, os.Remove(output))
+	require.NoError(t, os.Remove(stats))
+	return sample
+}
+
+func medianBuildSample(values []buildSample) buildSample {
+	ordered := append([]buildSample(nil), values...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].wall < ordered[j].wall })
+	return ordered[len(ordered)/2]
+}
+
+func formatBuildMetric(sample buildSample) string {
+	return fmt.Sprintf("wall=%s cpu=%s rss=%dKB binary=%d", sample.wall.Round(time.Millisecond), sample.cpu.Round(time.Millisecond), sample.rssKB, sample.binary)
+}
+
+func buildRatio(compact, legacy []buildSample, value func(buildSample) float64) float64 {
+	legacyValue := value(medianBuildSample(legacy))
+	if legacyValue == 0 {
+		return 0
+	}
+	return value(medianBuildSample(compact)) / legacyValue
 }
 
 func medianDuration(values []buildSample) time.Duration {

@@ -24,7 +24,7 @@ func TestCompactGeneratedSizeGates(t *testing.T) {
 	}
 	for _, columns := range []int{3, 31, 100} {
 		metric := metrics[columns]
-		t.Logf("compact columns=%d public=%d private=%d imports=%d declarations=%d lines=%d bytes=%d", columns, metric.publicDeclarations, metric.privateDeclarations, metric.imports, metric.declarations, metric.lines, metric.bytes)
+		t.Logf("compact columns=%d public=%d private=%d privateLines=%d privateBudget=%d imports=%d declarations=%d lines=%d bytes=%d", columns, metric.publicDeclarations, metric.privateDeclarations, metric.privateLines, 55+40+5*(columns+1), metric.imports, metric.declarations, metric.lines, metric.bytes)
 		require.LessOrEqual(t, metric.privateDeclarations, 7+14, "private declarations for one object")
 		require.LessOrEqual(t, metric.privateLines, 55+40+5*(columns+1), "private lines for one object")
 	}
