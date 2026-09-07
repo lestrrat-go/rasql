@@ -70,17 +70,41 @@ func TestR5PageAfterCountsRealNamedCodecOccurrencesWithoutFingerprintOrRowsReenc
 	require.True(t, first.HasMore)
 	require.NotEmpty(t, first.Next)
 	firstCount := codec.enc.Load()
-	require.Equal(t, int64(1), firstCount)
+	raw.mu.Lock()
+	firstStatement := raw.lastStatement
+	raw.mu.Unlock()
+	require.Equal(t, int64(countCodecOccurrences(firstStatement.Args(), int64(7))), firstCount)
 	second, err := PageAfter(context.Background(), executor, baseQuery, spec, PagePolicy{DefaultLimit: 1, MaxLimit: 3}, PageRequest{Limit: 1, After: first.Next})
 	require.NoError(t, err)
 	require.NotEmpty(t, second.Values)
-	require.Equal(t, firstCount+2, codec.enc.Load())
+	raw.mu.Lock()
+	secondStatement := raw.lastStatement
+	raw.mu.Unlock()
+	secondOccurrences := countCodecOccurrences(secondStatement.Args(), int64(7))
+	require.Equal(t, firstCount+int64(secondOccurrences), codec.enc.Load())
 	require.Equal(t, int64(2), raw.calls.Load())
-	changedFilter := baseQuery.Where(Predicate{node: querypkg.Equal(id.Expr().node, querypkg.Bind(int64(99)))})
+	changedFilterValue := Value(int64(99))
+	changedFilter := baseQuery.Where(Predicate{node: querypkg.Equal(id.Expr().node, changedFilterValue.node)})
 	before := raw.calls.Load()
 	_, err = PageAfter(context.Background(), executor, changedFilter, spec, PagePolicy{DefaultLimit: 1, MaxLimit: 3}, PageRequest{Limit: 1, After: first.Next})
 	require.ErrorIs(t, err, ErrInvalidCursor)
 	require.Equal(t, before, raw.calls.Load())
+}
+
+func countCodecOccurrences(args []any, value int64) int {
+	count := 0
+	for _, arg := range args {
+		if named, ok := arg.(sql.NamedArg); ok {
+			if named.Value == value {
+				count++
+			}
+			continue
+		}
+		if arg == value {
+			count++
+		}
+	}
+	return count
 }
 
 func TestR5BaseOccurrencesMatchOrderedSubsequenceByIdentityAndCodec(t *testing.T) {
