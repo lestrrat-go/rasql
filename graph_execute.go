@@ -3,6 +3,7 @@ package rasql
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
 	"slices"
@@ -302,9 +303,8 @@ type graphCacheEntry struct {
 }
 
 type graphCacheFingerprint struct {
-	plan  *graphPlanIdentity
-	stage string
-	data  string
+	stage  string
+	digest [sha256.Size]byte
 }
 
 func graphInvocationFingerprint(edge *graphEdgeSpec, stage string, compiled compiledQuery) graphCacheFingerprint {
@@ -331,14 +331,13 @@ func graphInvocationFingerprint(edge *graphEdgeSpec, stage string, compiled comp
 	}
 	args := compiled.statement.Args()
 	for index, slot := range compiled.bindSlots {
-		writeGraphFingerprintPart(strconv.FormatInt(int64(slot.id), 10))
 		writeGraphFingerprintPart(slot.codec)
 		writeGraphFingerprintPart(strconv.FormatBool(slot.preEncoded))
 		if index < len(args) {
 			writeGraphFingerprintValue(&key, args[index])
 		}
 	}
-	return graphCacheFingerprint{plan: edge.child.id, stage: stage, data: key.String()}
+	return graphCacheFingerprint{stage: stage, digest: sha256.Sum256([]byte(key.String()))}
 }
 
 func writeGraphFingerprintValue(key *strings.Builder, value any) {

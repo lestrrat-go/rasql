@@ -304,21 +304,48 @@ func NewGraphPlan[R, G any](q Query[R], mapper func(R) G, edges ...GraphEdge[R, 
 		if spec.options.PerParentLimit < 0 || spec.options.BindLimit < 0 {
 			return GraphPlan[R, G]{}, planError("invalid_graph_plan", "edges", "limits must not be negative")
 		}
-		if len(spec.parentKey.parts) != len(spec.childKey.parts) {
-			return GraphPlan[R, G]{}, planError("invalid_graph_plan", "edges", "key widths differ")
+		if spec.kind == graphManyThrough && (spec.junction == (Source{}) || spec.junctionParent == nil || spec.junctionChild == nil) {
+			return GraphPlan[R, G]{}, planError("invalid_graph_plan", "edges", "through metadata is incomplete")
 		}
-		for partIndex := range spec.parentKey.parts {
-			parentPart, childPart := spec.parentKey.parts[partIndex], spec.childKey.parts[partIndex]
-			if parentPart.typ != childPart.typ || parentPart.codec != childPart.codec || !reflect.DeepEqual(parentPart.columnType, childPart.columnType) {
-				return GraphPlan[R, G]{}, planError("graph_key_mismatch", "edges", "key component types differ")
+		matchParts := func(left, right *graphKeySpec, path string) error {
+			if len(left.parts) != len(right.parts) {
+				return planError("graph_key_mismatch", path, "key widths differ")
 			}
-		}
-		if spec.parentKey.parts[0].source != node.query.sourceName() || spec.childKey.parts[0].source != spec.child.query.sourceName() {
-			return GraphPlan[R, G]{}, planError("graph_key_mismatch", "edges", "key source differs from graph stage")
+			for partIndex := range left.parts {
+				leftPart, rightPart := left.parts[partIndex], right.parts[partIndex]
+				if leftPart.typ != rightPart.typ || leftPart.codec != rightPart.codec || !reflect.DeepEqual(leftPart.columnType, rightPart.columnType) {
+					return planError("graph_key_mismatch", fmt.Sprintf("%s[%d]", path, partIndex), "key component types differ")
+				}
+			}
+			return nil
 		}
 		if spec.kind == graphManyThrough {
-			if spec.junctionParent.parts[0].source != spec.junction.ref.QualifiedName() || spec.junctionChild.parts[0].source != spec.junction.ref.QualifiedName() {
-				return GraphPlan[R, G]{}, planError("graph_key_mismatch", "edges", "junction key source differs from junction")
+			if err := matchParts(spec.parentKey, spec.junctionParent, "junction_parent"); err != nil {
+				return GraphPlan[R, G]{}, err
+			}
+			if err := matchParts(spec.childKey, spec.junctionChild, "junction_child"); err != nil {
+				return GraphPlan[R, G]{}, err
+			}
+		} else if err := matchParts(spec.parentKey, spec.childKey, "edges"); err != nil {
+			return GraphPlan[R, G]{}, err
+		}
+		for _, part := range spec.parentKey.parts {
+			if part.source != node.query.sourceName() {
+				return GraphPlan[R, G]{}, planError("graph_key_mismatch", "parent_key", "key source differs from graph stage")
+			}
+		}
+		for _, part := range spec.childKey.parts {
+			if part.source != spec.child.query.sourceName() {
+				return GraphPlan[R, G]{}, planError("graph_key_mismatch", "child_key", "key source differs from graph stage")
+			}
+		}
+		if spec.kind == graphManyThrough {
+			for _, key := range []*graphKeySpec{spec.junctionParent, spec.junctionChild} {
+				for _, part := range key.parts {
+					if part.source != spec.junction.ref.QualifiedName() {
+						return GraphPlan[R, G]{}, planError("graph_key_mismatch", "junction", "junction key source differs from junction")
+					}
+				}
 			}
 		}
 		optionSource := spec.child.query.sourceName()
@@ -337,9 +364,6 @@ func NewGraphPlan[R, G any](q Query[R], mapper func(R) G, edges ...GraphEdge[R, 
 			if term.source != "" && optionSource != "" && term.source != optionSource {
 				return GraphPlan[R, G]{}, planError("invalid_graph_plan", "edge.order", "order source differs from child source")
 			}
-		}
-		if spec.kind == graphManyThrough && (spec.junction == (Source{}) || spec.junctionParent == nil || spec.junctionChild == nil) {
-			return GraphPlan[R, G]{}, planError("invalid_graph_plan", "edges", "through metadata is incomplete")
 		}
 		node.edges[i] = spec
 	}
