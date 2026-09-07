@@ -31,6 +31,7 @@ func TestMutationVersionedReturningCardinalityMatrix(t *testing.T) {
 						}
 						seen++
 						_ = item
+						//nolint:staticcheck // the explicit cardinality cases mirror the acceptance matrix.
 						if test.rows == 1 {
 							break
 						}
@@ -40,6 +41,7 @@ func TestMutationVersionedReturningCardinalityMatrix(t *testing.T) {
 						expectedSeen = 1
 					}
 					require.Equal(t, expectedSeen, seen)
+					//nolint:staticcheck // the explicit cardinality cases mirror the acceptance matrix.
 					if test.rows == 0 {
 						require.ErrorIs(t, terminalErr, rasql.ErrPrecondition)
 					} else if test.rows == 2 {
@@ -49,6 +51,7 @@ func TestMutationVersionedReturningCardinalityMatrix(t *testing.T) {
 					}
 				case "All":
 					values, err := rasql.All(t.Context(), executor, returned)
+					//nolint:staticcheck // the explicit cardinality cases mirror the acceptance matrix.
 					if test.rows == 0 {
 						require.ErrorIs(t, err, rasql.ErrPrecondition)
 						require.Empty(t, values)
@@ -61,6 +64,7 @@ func TestMutationVersionedReturningCardinalityMatrix(t *testing.T) {
 					}
 				case "One":
 					value, err := rasql.One(t.Context(), executor, returned)
+					//nolint:staticcheck // the explicit cardinality cases mirror the acceptance matrix.
 					if test.rows == 0 {
 						require.ErrorIs(t, err, rasql.ErrPrecondition)
 					} else if test.rows == 2 {
@@ -71,6 +75,7 @@ func TestMutationVersionedReturningCardinalityMatrix(t *testing.T) {
 					}
 				case "Maybe":
 					value, ok, err := rasql.Maybe(t.Context(), executor, returned)
+					//nolint:staticcheck // the explicit cardinality cases mirror the acceptance matrix.
 					if test.rows == 0 {
 						require.ErrorIs(t, err, rasql.ErrPrecondition)
 						require.False(t, ok)
@@ -103,6 +108,7 @@ func newVersionedReturningAcceptance(t *testing.T, rows int) (rasql.Executor, ra
 		require.NoError(t, createErr)
 	}
 	where := query.EqualValue(id, int64(99))
+	//nolint:staticcheck // the explicit cardinality cases mirror the acceptance matrix.
 	if rows == 1 {
 		where = query.EqualValue(id, int64(1))
 	} else if rows == 2 {

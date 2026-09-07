@@ -268,15 +268,6 @@ func (p CreatePlan[T]) lowerNormalized() (normalizedCreate[T], error) {
 	return lowered, nil
 }
 
-func isPrimaryKeyColumn(definition schema.TableDef, name string) bool {
-	for _, key := range definition.PrimaryKey {
-		if key == name {
-			return true
-		}
-	}
-	return false
-}
-
 func (p PatchPlan[T]) lower() (query.Update, error) {
 	if p.err != nil {
 		return query.Update{}, p.err

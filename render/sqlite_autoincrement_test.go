@@ -37,7 +37,7 @@ func TestSQLiteAutoincrementCreateTableAndNoReuse(t *testing.T) {
 	var ids []int
 	rows, err := database.QueryContext(t.Context(), "SELECT id FROM items ORDER BY id")
 	require.NoError(t, err)
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var id int
 		require.NoError(t, rows.Scan(&id))
