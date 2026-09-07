@@ -41,7 +41,7 @@ func (observer *statementObserver) snapshot() []int64 {
 	return append([]int64(nil), observer.rows...)
 }
 
-func openFixture(t *testing.T, cancelChild context.CancelFunc) (store.Repository, rasql.Executor, *statementObserver) {
+func openFixture(t *testing.T, cancelStatement int, cancelChild context.CancelFunc) (store.Repository, rasql.Executor, *statementObserver) {
 	t.Helper()
 	dsn := os.Getenv("TASKBOARD_TEST_DSN")
 	if dsn == "" {
@@ -84,7 +84,7 @@ func openFixture(t *testing.T, cancelChild context.CancelFunc) (store.Repository
 	observed, err := rasql.WithEventObservers(executor,
 		rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}),
 		rasql.EventObserverFunc(func(ctx context.Context, event rasql.Event) (context.Context, rasql.EventCompletion) {
-			if cancelChild != nil && event.Kind == rasql.EventStatement && event.Phase == rasql.EventStart && event.StatementIndex == 1 {
+			if cancelChild != nil && event.Kind == rasql.EventStatement && event.Phase == rasql.EventStart && event.StatementIndex == cancelStatement {
 				cancelChild()
 			}
 			return observer.start(ctx, event)
@@ -130,7 +130,7 @@ func seedFixture(t *testing.T, tx *sql.Tx) {
 }
 
 func TestOpenProjectsBoundedGraphFixture(t *testing.T) {
-	repository, _, observer := openFixture(t, nil)
+	repository, _, observer := openFixture(t, 0, nil)
 	ctx := t.Context()
 	seen := make(map[int64]struct{}, 50)
 	var after rasql.Cursor
@@ -188,12 +188,30 @@ func TestOpenProjectsBoundedGraphFixture(t *testing.T) {
 	}
 }
 
-func TestOpenProjectsCancellationBeforeChildStage(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	repository, _, _ := openFixture(t, cancel)
-	_, err := repository.OpenProjects(ctx, rasql.PageRequest{Limit: 10})
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("OpenProjects returned %v, want context.Canceled", err)
+func TestOpenProjectsCancellationBeforeEachStage(t *testing.T) {
+	tests := []struct {
+		name            string
+		statement       int
+		cancelBeforeRun bool
+	}{
+		{name: "root", cancelBeforeRun: true},
+		{name: "tasks", statement: 1},
+		{name: "assignee", statement: 2},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if test.cancelBeforeRun {
+				cancel()
+			}
+			repository, _, _ := openFixture(t, test.statement, func() {
+				cancel()
+			})
+			_, err := repository.OpenProjects(ctx, rasql.PageRequest{Limit: 10})
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("OpenProjects returned %v, want context.Canceled", err)
+			}
+		})
 	}
 }
