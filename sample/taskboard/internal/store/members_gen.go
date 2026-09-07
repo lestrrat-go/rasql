@@ -144,7 +144,32 @@ func (r MembersTableTasksRelation) Join() rasql.Join {
 
 // LoadWith fetches children with filtering, ordering, caps, and bind batching.
 func (r MembersTableTasksRelation) LoadWith(ctx context.Context, db rasql.DB, parents []MembersRow, options rasql.RelationshipLoadOptions) (map[*int64][]TasksRow, error) {
-	return rasql.LoadHasManyPlan[MembersRow, TasksRow, *int64](ctx, db, r.Child, []query.ColumnRef{r.ChildKey}, parents, func(row MembersRow) *int64 { value := row.ID; return &value }, func(row TasksRow) *int64 { return row.AssigneeID }, func(key *int64) ([]any, bool) {
+	return rasql.LoadHasManyPlan[MembersRow, TasksRow, *int64](ctx, db, r.Child, []query.ColumnRef{r.ChildKey}, parents, func(row MembersRow) *int64 { value := row.ID; return &value }, func(row TasksRow) *int64 {
+		return func() *int64 {
+			nullable, ok := any(row.AssigneeID).(rasql.NullableBindValue)
+			if !ok {
+				nullable, ok = any(&row.AssigneeID).(rasql.NullableBindValue)
+			}
+			if ok {
+				value, valid := nullable.NullableBind()
+				if !valid {
+					return nil
+				}
+				typed, ok := value.(int64)
+				if ok {
+					return &typed
+				}
+				return nil
+			}
+			if value, ok := any(row.AssigneeID).(*int64); ok {
+				return value
+			}
+			if value, ok := any(row.AssigneeID).(int64); ok {
+				return &value
+			}
+			return nil
+		}()
+	}, func(key *int64) ([]any, bool) {
 		if key == nil {
 			return nil, false
 		}
@@ -163,4 +188,29 @@ func (r MembersTableTasksRelation) SourceKey(row MembersRow) *int64 {
 }
 
 // TargetKey returns the ordered target relationship key.
-func (r MembersTableTasksRelation) TargetKey(row TasksRow) *int64 { return row.AssigneeID }
+func (r MembersTableTasksRelation) TargetKey(row TasksRow) *int64 {
+	return func() *int64 {
+		nullable, ok := any(row.AssigneeID).(rasql.NullableBindValue)
+		if !ok {
+			nullable, ok = any(&row.AssigneeID).(rasql.NullableBindValue)
+		}
+		if ok {
+			value, valid := nullable.NullableBind()
+			if !valid {
+				return nil
+			}
+			typed, ok := value.(int64)
+			if ok {
+				return &typed
+			}
+			return nil
+		}
+		if value, ok := any(row.AssigneeID).(*int64); ok {
+			return value
+		}
+		if value, ok := any(row.AssigneeID).(int64); ok {
+			return &value
+		}
+		return nil
+	}()
+}

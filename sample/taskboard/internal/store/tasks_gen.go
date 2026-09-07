@@ -352,7 +352,32 @@ func (r TasksTableAssigneeRelation) LoadThen(ctx context.Context, db rasql.DB, s
 
 // LoadWith fetches related parents with filtering, ordering, and bind batching.
 func (r TasksTableAssigneeRelation) LoadWith(ctx context.Context, db rasql.DB, children []TasksRow, options rasql.RelationshipLoadOptions) (map[*int64]MembersRow, error) {
-	return rasql.LoadBelongsToPlan[TasksRow, MembersRow, *int64](ctx, db, r.Parent, []query.ColumnRef{r.ParentKey}, children, func(row TasksRow) *int64 { return row.AssigneeID }, func(row MembersRow) *int64 { value := row.ID; return &value }, func(key *int64) ([]any, bool) {
+	return rasql.LoadBelongsToPlan[TasksRow, MembersRow, *int64](ctx, db, r.Parent, []query.ColumnRef{r.ParentKey}, children, func(row TasksRow) *int64 {
+		return func() *int64 {
+			nullable, ok := any(row.AssigneeID).(rasql.NullableBindValue)
+			if !ok {
+				nullable, ok = any(&row.AssigneeID).(rasql.NullableBindValue)
+			}
+			if ok {
+				value, valid := nullable.NullableBind()
+				if !valid {
+					return nil
+				}
+				typed, ok := value.(int64)
+				if ok {
+					return &typed
+				}
+				return nil
+			}
+			if value, ok := any(row.AssigneeID).(*int64); ok {
+				return value
+			}
+			if value, ok := any(row.AssigneeID).(int64); ok {
+				return &value
+			}
+			return nil
+		}()
+	}, func(row MembersRow) *int64 { value := row.ID; return &value }, func(key *int64) ([]any, bool) {
 		if key == nil {
 			return nil, false
 		}
@@ -366,7 +391,32 @@ func (r TasksTableAssigneeRelation) Load(ctx context.Context, db rasql.DB, child
 }
 
 // SourceKey returns the ordered source relationship key.
-func (r TasksTableAssigneeRelation) SourceKey(row TasksRow) *int64 { return row.AssigneeID }
+func (r TasksTableAssigneeRelation) SourceKey(row TasksRow) *int64 {
+	return func() *int64 {
+		nullable, ok := any(row.AssigneeID).(rasql.NullableBindValue)
+		if !ok {
+			nullable, ok = any(&row.AssigneeID).(rasql.NullableBindValue)
+		}
+		if ok {
+			value, valid := nullable.NullableBind()
+			if !valid {
+				return nil
+			}
+			typed, ok := value.(int64)
+			if ok {
+				return &typed
+			}
+			return nil
+		}
+		if value, ok := any(row.AssigneeID).(*int64); ok {
+			return value
+		}
+		if value, ok := any(row.AssigneeID).(int64); ok {
+			return &value
+		}
+		return nil
+	}()
+}
 
 // TargetKey returns the ordered target relationship key.
 func (r TasksTableAssigneeRelation) TargetKey(row MembersRow) *int64 {
