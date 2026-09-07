@@ -1,6 +1,9 @@
 package inspect_test
 
 import (
+	"context"
+	"database/sql"
+	"fmt"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -28,6 +31,38 @@ func TestSQLiteObjectNamesFallsBackAfterEmptyModernPragma(t *testing.T) {
 	objects, err := ins.ObjectNames(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, []inspect.ObjectName{{Schema: "main", Name: "events", Kind: schema.ObjectTable}}, objects)
+}
+
+func TestSQLiteObjectNamesPreservesWrappedCancellationWithoutFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"canceled", fmt.Errorf("driver: %w", context.Canceled)},
+		{"deadline", fmt.Errorf("driver: %w", context.DeadlineExceeded)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+			require.NoError(t, err)
+			mock.ExpectQuery("PRAGMA table_list").WillReturnError(tc.err)
+			mock.ExpectClose()
+			require.ErrorIs(t, mustObjectNames(t, db), tc.err)
+			require.NoError(t, db.Close())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func mustObjectNames(t *testing.T, db interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}) error {
+	t.Helper()
+	ins, err := inspect.New(db, dialect.SQLite())
+	if err != nil {
+		return err
+	}
+	_, err = ins.ObjectNames(t.Context())
+	return err
 }
 
 func TestSQLiteObjectNamesFallsBackInRequestedNamespace(t *testing.T) {

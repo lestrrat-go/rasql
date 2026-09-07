@@ -262,7 +262,7 @@ func (i Inspector) sqliteObjectNames(ctx context.Context, databaseName string) (
 	}
 	rows, err := i.queryer.QueryContext(ctx, query)
 	if err != nil {
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, err
 		}
 		legacy, legacyErr := i.sqliteLegacyObjectNames(ctx, databaseName)
