@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/internal/compilerir"
@@ -25,7 +26,7 @@ func TestPhysicalWireRoundTripFixtures(t *testing.T) {
 				t.Fatal(err)
 			}
 			c := compilerir.PhysicalCatalog{Engine: in.Engine, Objects: in.Objects}
-			f := compilerlock.File{Format: compilerlock.FormatVersion, Compiler: "test", Engine: compilerlock.EngineRecord{Dialect: in.Engine.Dialect, Version: in.Engine.Version, Profile: in.Engine.Profile}, Source: compilerlock.SourceRecord{Kind: "external", Identity: "fixture"}, Catalog: compilerlock.FromPhysical(c)}
+			f := compilerlock.File{Format: compilerlock.FormatVersion, Compiler: "test", Engine: compilerlock.EngineRecord{Dialect: in.Engine.Dialect, Version: in.Engine.Version, Profile: in.Engine.Profile}, Source: compilerlock.SourceRecord{Kind: "external", Identity: "fixture"}, Catalog: compilerlock.FromPhysical(c), Generation: compilerlock.GenerationRecord{Package: "p", Output: "o", Emitter: "compact"}, Digests: compilerlock.Digests{Source: strings.Repeat("a", 64), Mappings: strings.Repeat("b", 64), Queries: strings.Repeat("c", 64), Generation: strings.Repeat("d", 64)}}
 			encoded, err := compilerlock.Encode(f)
 			if err != nil {
 				t.Fatal(err)
@@ -49,7 +50,7 @@ func TestPhysicalWireRoundTripFixtures(t *testing.T) {
 }
 
 func TestDecodeRejectsUnknownAndTrailingJSON(t *testing.T) {
-	base := `{"format":1,"compiler":"x","source":{"kind":"external","identity":"x"},"engine":{"dialect":"sqlite","profile":"sqlite-3"},"catalog":{"objects":[]},"queries":[],"generation":{"package":"p","output":"o","emitter":"compact","prune":false,"objects":[]},"digests":{"source":"","mappings":"","queries":"","generation":""}}`
+	base := `{"format":1,"compiler":"x","source":{"kind":"external","identity":"x"},"engine":{"dialect":"sqlite","profile":"sqlite-3"},"catalog":{"objects":[]},"queries":[],"generation":{"package":"p","output":"o","emitter":"compact","prune":false,"objects":[]},"digests":{"source":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","mappings":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","queries":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","generation":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}}`
 	if _, err := compilerlock.Decode([]byte(base + `{"extra":true}`)); err == nil {
 		t.Fatal("accepted trailing JSON")
 	}

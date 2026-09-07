@@ -89,7 +89,7 @@ func oi(v compilerir.OptionalInt) OptionalIntRecord {
 func native(n *compilerir.NativeType) *NativeTypeRecord {
 	r := &NativeTypeRecord{Dialect: n.Dialect, Schema: n.Schema, Name: n.Name, Kind: n.Kind}
 	if n.Arguments != nil {
-		x := append([]string(nil), n.Arguments...)
+		x := append(make([]string, 0, len(n.Arguments)), n.Arguments...)
 		r.Arguments = &x
 	}
 	if n.Element != nil {
@@ -174,7 +174,7 @@ func toOI(v OptionalIntRecord) compilerir.OptionalInt {
 func toNative(n *NativeTypeRecord) *compilerir.NativeType {
 	r := &compilerir.NativeType{Dialect: n.Dialect, Schema: n.Schema, Name: n.Name, Kind: n.Kind}
 	if n.Arguments != nil {
-		r.Arguments = append([]string(nil), (*n.Arguments)...)
+		r.Arguments = append(make([]string, 0, len(*n.Arguments)), (*n.Arguments)...)
 	}
 	if n.Element != nil {
 		r.Element = toNative(n.Element)

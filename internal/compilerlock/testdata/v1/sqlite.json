@@ -1,0 +1,10 @@
+{
+  "format": 1,
+  "compiler": "test",
+  "source": {"kind": "external", "identity": "fixture"},
+  "engine": {"dialect": "sqlite", "version": "3.45", "profile": "sqlite-3"},
+  "catalog": {"objects": []},
+  "queries": [],
+  "generation": {"package": "store", "output": "gen", "emitter": "compact", "prune": false, "objects": []},
+  "digests": {"source": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "mappings": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "queries": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "generation": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}
+}

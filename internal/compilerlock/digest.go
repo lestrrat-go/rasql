@@ -1,15 +1,24 @@
 package compilerlock
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"path"
 	"sort"
+
+	"github.com/lestrrat-go/rasql/internal/compilerir"
 )
 
 func BuildDigests(in DigestInputs) (Digests, error) {
+	if in.Source.Record.Identity == "" || in.Source.Engine.Profile == "" {
+		return Digests{}, fmt.Errorf("compilerlock: source identity and engine profile are required")
+	}
+	if in.Source.Record.Kind != "migrations" && in.Source.Record.Kind != "external" && in.Source.Record.Kind != "live" {
+		return Digests{}, fmt.Errorf("compilerlock: unsupported source kind %q", in.Source.Record.Kind)
+	}
 	if err := validateSource(in.Source.Record); err != nil {
 		return Digests{}, err
 	}
@@ -17,6 +26,16 @@ func BuildDigests(in DigestInputs) (Digests, error) {
 	s.Files = append([]SourceFile(nil), s.Files...)
 	sort.Slice(s.Files, func(i, j int) bool { return s.Files[i].Path < s.Files[j].Path })
 	m := append([]KeyValue(nil), in.Source.Materializer...)
+	seenKV := map[string]struct{}{}
+	for _, v := range m {
+		if v.Key == "" {
+			return Digests{}, fmt.Errorf("compilerlock: empty materializer key")
+		}
+		if _, ok := seenKV[v.Key]; ok {
+			return Digests{}, fmt.Errorf("compilerlock: duplicate materializer key %q", v.Key)
+		}
+		seenKV[v.Key] = struct{}{}
+	}
 	sort.Slice(m, func(i, j int) bool { return m[i].Key < m[j].Key })
 	source := struct {
 		Record       SourceRecord `json:"record"`
@@ -24,10 +43,25 @@ func BuildDigests(in DigestInputs) (Digests, error) {
 		Materializer []KeyValue   `json:"materializer"`
 	}{s, in.Source.Engine, m}
 	q := append([]QueryDigestInput(nil), in.Queries...)
+	seenQ := map[string]struct{}{}
 	sort.Slice(q, func(i, j int) bool { return q[i].ID < q[j].ID })
 	for i := range q {
-		sort.Slice(q[i].Parameters, func(a, b int) bool { return q[i].Parameters[a].Name < q[i].Parameters[b].Name })
-		sort.Slice(q[i].Results, func(a, b int) bool { return q[i].Results[a].Name < q[i].Results[b].Name })
+		if q[i].ID == "" {
+			return Digests{}, fmt.Errorf("compilerlock: empty query ID")
+		}
+		if _, ok := seenQ[q[i].ID]; ok {
+			return Digests{}, fmt.Errorf("compilerlock: duplicate query ID %q", q[i].ID)
+		}
+		seenQ[q[i].ID] = struct{}{}
+		if q[i].Cardinality != "one" && q[i].Cardinality != "maybe" && q[i].Cardinality != "many" && q[i].Cardinality != "exec" {
+			return Digests{}, fmt.Errorf("compilerlock: invalid cardinality %q", q[i].Cardinality)
+		}
+		if err := validateValues(q[i].Parameters); err != nil {
+			return Digests{}, err
+		}
+		if err := validateValues(q[i].Results); err != nil {
+			return Digests{}, err
+		}
 		if err := validateSource(SourceRecord{Files: []SourceFile{q[i].SQL}}); err != nil {
 			return Digests{}, err
 		}
@@ -35,27 +69,49 @@ func BuildDigests(in DigestInputs) (Digests, error) {
 	g := in.Generation.Clone()
 	sort.Slice(g.Objects, func(i, j int) bool { return g.Objects[i].ID < g.Objects[j].ID })
 	sort.Slice(g.Queries, func(i, j int) bool { return g.Queries[i].ID < g.Queries[j].ID })
-	sort.Slice(g.Scalars, func(i, j int) bool { return g.Scalars[i].Name < g.Scalars[j].Name })
-	return Digests{Source: hash(source), Mappings: hash(in.Mappings.Clone()), Queries: hash(q), Generation: hash(g)}, nil
+	gen := struct {
+		Package, Output, Emitter string
+		Prune                    bool
+		Objects                  []compilerir.ObjectGoName
+		Queries                  []compilerir.QueryGoName
+	}{g.Package, g.Output, g.Emitter, g.Prune, g.Objects, g.Queries}
+	return Digests{Source: hash(source), Mappings: hash(normalizedMappings(in.Mappings)), Queries: hash(q), Generation: hash(gen)}, nil
 }
-
+func normalizedMappings(m compilerir.MappingConfig) compilerir.MappingConfig {
+	m = m.Clone()
+	sort.Slice(m.Scalars, func(i, j int) bool { return m.Scalars[i].Name < m.Scalars[j].Name })
+	for i := range m.Scalars {
+		sort.Slice(m.Scalars[i].Imports, func(a, b int) bool {
+			if m.Scalars[i].Imports[a].Path != m.Scalars[i].Imports[b].Path {
+				return m.Scalars[i].Imports[a].Path < m.Scalars[i].Imports[b].Path
+			}
+			return m.Scalars[i].Imports[a].Alias < m.Scalars[i].Imports[b].Alias
+		})
+	}
+	return m
+}
 func hash(v any) string {
-	b, _ := json.Marshal(v)
-	h := sha256.Sum256(b)
+	var b bytes.Buffer
+	e := json.NewEncoder(&b)
+	e.SetEscapeHTML(false)
+	e.SetIndent("", "  ")
+	_ = e.Encode(v)
+	h := sha256.Sum256(b.Bytes())
 	return hex.EncodeToString(h[:])
 }
-
 func ValidateDigest(s string) error {
 	if len(s) != 64 {
 		return fmt.Errorf("compilerlock: invalid digest")
 	}
-	if _, err := hex.DecodeString(s); err != nil {
-		return fmt.Errorf("compilerlock: invalid digest: %w", err)
+	for _, c := range s {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return fmt.Errorf("compilerlock: invalid lowercase digest")
+		}
 	}
 	return nil
 }
 func NormalizePath(p string) (string, error) {
-	if p == "" || path.IsAbs(p) || path.Clean(p) != p || p == ".." || len(p) >= 3 && p[:3] == "../" {
+	if p == "" || path.IsAbs(p) || path.Clean(p) != p || p == ".." || len(p) >= 3 && p[:3] == "../" || len(p) >= 2 && p[1] == ':' || bytes.Contains([]byte(p), []byte{'\\'}) {
 		return "", fmt.Errorf("compilerlock: invalid relative path %q", p)
 	}
 	return p, nil

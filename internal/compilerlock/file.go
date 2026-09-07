@@ -8,15 +8,14 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path"
 	"sort"
-	"strings"
 
 	"github.com/lestrrat-go/rasql/internal/compilerir"
 )
 
 const FormatVersion = 1
 const MaxSourceFileSize = 64 << 20
+const MaxSourceFileBytes = MaxSourceFileSize
 
 type File struct {
 	Format     int              `json:"format"`
@@ -36,30 +35,21 @@ type GenerationRecord struct {
 	Objects []ObjectNameRecord `json:"objects"`
 	Queries []QueryNameRecord  `json:"queries,omitempty"`
 }
-type ObjectNameRecord struct{ ID, Source, Row, Create, Patch, File string }
-
-func (r ObjectNameRecord) MarshalJSON() ([]byte, error) {
-	return json.Marshal(struct {
-		ID     string `json:"id"`
-		Source string `json:"source"`
-		Row    string `json:"row"`
-		Create string `json:"create"`
-		Patch  string `json:"patch"`
-		File   string `json:"file"`
-	}{r.ID, r.Source, r.Row, r.Create, r.Patch, r.File})
+type ObjectNameRecord struct {
+	ID     string `json:"id"`
+	Source string `json:"source"`
+	Row    string `json:"row"`
+	Create string `json:"create"`
+	Patch  string `json:"patch"`
+	File   string `json:"file"`
 }
-
-type QueryNameRecord struct{ ID, Function, Result, Projection, Decoder, File string }
-
-func (r QueryNameRecord) MarshalJSON() ([]byte, error) {
-	return json.Marshal(struct {
-		ID         string `json:"id"`
-		Function   string `json:"function"`
-		Result     string `json:"result"`
-		Projection string `json:"projection"`
-		Decoder    string `json:"decoder"`
-		File       string `json:"file"`
-	}{r.ID, r.Function, r.Result, r.Projection, r.Decoder, r.File})
+type QueryNameRecord struct {
+	ID         string `json:"id"`
+	Function   string `json:"function"`
+	Result     string `json:"result"`
+	Projection string `json:"projection"`
+	Decoder    string `json:"decoder"`
+	File       string `json:"file"`
 }
 
 type EngineRecord struct {
@@ -299,7 +289,6 @@ func Upgrade(b []byte) ([]byte, error) {
 		Format int `json:"format"`
 	}
 	d := json.NewDecoder(bytes.NewReader(b))
-	d.DisallowUnknownFields()
 	if err := d.Decode(&h); err != nil {
 		return nil, err
 	}
@@ -329,6 +318,11 @@ func validateFile(f File) error {
 	if err := validateSource(f.Source); err != nil {
 		return err
 	}
+	for name, value := range map[string]string{"source": f.Digests.Source, "mappings": f.Digests.Mappings, "queries": f.Digests.Queries, "generation": f.Digests.Generation} {
+		if err := ValidateDigest(value); err != nil {
+			return fmt.Errorf("compilerlock: invalid %s digest: %w", name, err)
+		}
+	}
 	if len(f.Catalog.Objects) > 0 {
 		c := ToPhysical(f)
 		if err := compilerir.ValidatePhysical(c); err != nil {
@@ -353,11 +347,31 @@ func validateFile(f File) error {
 		if err := validateValues(q.Results); err != nil {
 			return err
 		}
+		if q.Cardinality != "one" && q.Cardinality != "maybe" && q.Cardinality != "many" && q.Cardinality != "exec" {
+			return fmt.Errorf("compilerlock: invalid cardinality %q", q.Cardinality)
+		}
+		if q.Cardinality == "exec" && len(q.Results) != 0 {
+			return fmt.Errorf("compilerlock: exec query has results")
+		}
+		if q.Evidence.Dialect != f.Engine.Dialect || q.Evidence.Profile != f.Engine.Profile {
+			return fmt.Errorf("compilerlock: query %s evidence engine mismatch", q.ID)
+		}
+		if err := validateEvidence(q); err != nil {
+			return err
+		}
 	}
-	return nil
+	return validateGeneration(f.Generation, f.Catalog)
 }
 func validateValues(v []ValueRecord) error {
+	seen := map[string]struct{}{}
 	for _, x := range v {
+		if x.Name == "" || x.Scalar == "" {
+			return errors.New("compilerlock: query value requires name and scalar")
+		}
+		if _, ok := seen[x.Name]; ok {
+			return fmt.Errorf("compilerlock: duplicate query value %q", x.Name)
+		}
+		seen[x.Name] = struct{}{}
 		if x.TypeCertainty != "known" && x.TypeCertainty != "declared" && x.TypeCertainty != "unknown" {
 			return fmt.Errorf("compilerlock: unknown certainty %q", x.TypeCertainty)
 		}
@@ -367,12 +381,90 @@ func validateValues(v []ValueRecord) error {
 	}
 	return nil
 }
+func validateEvidence(q QueryRecord) error {
+	if len(q.Parameters) != len(q.Evidence.Parameters) || len(q.Results) != len(q.Evidence.Results) {
+		return fmt.Errorf("compilerlock: query %s evidence differs", q.ID)
+	}
+	for i, v := range q.Parameters {
+		if v != q.Evidence.Parameters[i] {
+			return fmt.Errorf("compilerlock: query %s parameter evidence differs", q.ID)
+		}
+	}
+	for i, v := range q.Results {
+		if v != q.Evidence.Results[i] {
+			return fmt.Errorf("compilerlock: query %s result evidence differs", q.ID)
+		}
+	}
+	for _, v := range append(append([]ValueRecord{}, q.Parameters...), q.Results...) {
+		if v.TypeCertainty == "unknown" && len(q.Evidence.Diagnostics) == 0 {
+			return fmt.Errorf("compilerlock: unknown query fact lacks diagnostic")
+		}
+	}
+	return nil
+}
+func validateGeneration(g GenerationRecord, c CatalogRecord) error {
+	if g.Package == "" || g.Emitter != "compact" && g.Emitter != "legacy" {
+		return errors.New("compilerlock: invalid generation policy")
+	}
+	if _, err := NormalizePath(g.Output); err != nil {
+		return fmt.Errorf("compilerlock: generation output: %w", err)
+	}
+	objects := map[string]struct{}{}
+	for _, o := range c.Objects {
+		objects[o.ID] = struct{}{}
+	}
+	seen := map[string]struct{}{}
+	files := map[string]struct{}{}
+	for _, o := range g.Objects {
+		if o.ID == "" {
+			return errors.New("compilerlock: empty generation object ID")
+		}
+		if _, ok := seen[o.ID]; ok {
+			return fmt.Errorf("compilerlock: duplicate generation object %q", o.ID)
+		}
+		seen[o.ID] = struct{}{}
+		if _, ok := objects[o.ID]; !ok {
+			return fmt.Errorf("compilerlock: unknown generation object %q", o.ID)
+		}
+		if o.Source == "" || o.Row == "" || o.File == "" {
+			return fmt.Errorf("compilerlock: incomplete generation object %q", o.ID)
+		}
+		if _, err := NormalizePath(o.File); err != nil {
+			return err
+		}
+		if _, ok := files[o.File]; ok {
+			return fmt.Errorf("compilerlock: conflicting generation file %q", o.File)
+		}
+		files[o.File] = struct{}{}
+	}
+	qids := map[string]struct{}{}
+	for _, q := range g.Queries {
+		if q.ID == "" {
+			return errors.New("compilerlock: empty generation query ID")
+		}
+		if _, ok := qids[q.ID]; ok {
+			return fmt.Errorf("compilerlock: duplicate generation query %q", q.ID)
+		}
+		qids[q.ID] = struct{}{}
+		if _, err := NormalizePath(q.File); err != nil {
+			return err
+		}
+		if _, ok := files[q.File]; ok {
+			return fmt.Errorf("compilerlock: conflicting generation file %q", q.File)
+		}
+		files[q.File] = struct{}{}
+	}
+	return nil
+}
 func validateSource(s SourceRecord) error {
+	if s.Kind != "" && s.Kind != "migrations" && s.Kind != "external" && s.Kind != "live" {
+		return fmt.Errorf("compilerlock: unsupported source kind %q", s.Kind)
+	}
 	seen := map[string]struct{}{}
 	for _, f := range s.Files {
-		p := strings.ReplaceAll(f.Path, "\\", "/")
-		if p != f.Path || path.IsAbs(p) || path.Clean(p) != p || p == ".." || strings.HasPrefix(p, "../") {
-			return fmt.Errorf("compilerlock: invalid source path %q", f.Path)
+		p, err := NormalizePath(f.Path)
+		if err != nil {
+			return err
 		}
 		if _, ok := seen[p]; ok {
 			return fmt.Errorf("compilerlock: duplicate source path %q", p)
@@ -390,6 +482,7 @@ func validateSource(s SourceRecord) error {
 	return nil
 }
 func normalize(f File) File {
+	f = cloneFile(f)
 	sort.Slice(f.Catalog.Objects, func(i, j int) bool {
 		a, b := f.Catalog.Objects[i], f.Catalog.Objects[j]
 		return less4(a.Kind, a.Schema, a.Name, a.ID, b.Kind, b.Schema, b.Name, b.ID)
@@ -406,8 +499,104 @@ func normalize(f File) File {
 		sort.Slice(f.Catalog.Objects[i].Indexes, func(a, b int) bool {
 			return f.Catalog.Objects[i].Indexes[a].Name < f.Catalog.Objects[i].Indexes[b].Name
 		})
+		sort.Slice(f.Catalog.Objects[i].ExclusionConstraints, func(a, b int) bool {
+			return f.Catalog.Objects[i].ExclusionConstraints[a].Name < f.Catalog.Objects[i].ExclusionConstraints[b].Name
+		})
 	}
+	sort.Slice(f.Generation.Objects, func(i, j int) bool { return f.Generation.Objects[i].ID < f.Generation.Objects[j].ID })
+	sort.Slice(f.Generation.Queries, func(i, j int) bool { return f.Generation.Queries[i].ID < f.Generation.Queries[j].ID })
 	return f
+}
+
+func cloneFile(f File) File {
+	o := f
+	o.Source.Files = append([]SourceFile(nil), f.Source.Files...)
+	o.Catalog.Objects = append([]ObjectRecord(nil), f.Catalog.Objects...)
+	for i := range o.Catalog.Objects {
+		x := &o.Catalog.Objects[i]
+		x.Columns = append([]ColumnRecord(nil), x.Columns...)
+		x.Constraints = append([]ConstraintRecord(nil), x.Constraints...)
+		x.Indexes = append([]IndexRecord(nil), x.Indexes...)
+		x.ExclusionConstraints = append([]ExclusionConstraintRecord(nil), x.ExclusionConstraints...)
+		x.VirtualTableModuleArguments = append([]string(nil), x.VirtualTableModuleArguments...)
+		for j := range x.Columns {
+			x.Columns[j] = cloneColumn(x.Columns[j])
+		}
+		for j := range x.Constraints {
+			x.Constraints[j] = cloneConstraint(x.Constraints[j])
+		}
+		for j := range x.Indexes {
+			x.Indexes[j] = cloneIndex(x.Indexes[j])
+		}
+		x.ExclusionConstraints = append([]ExclusionConstraintRecord(nil), x.ExclusionConstraints...)
+		for j := range x.ExclusionConstraints {
+			x.ExclusionConstraints[j].Elements = append([]ExclusionElementRecord(nil), x.ExclusionConstraints[j].Elements...)
+		}
+	}
+	o.Queries = append([]QueryRecord(nil), f.Queries...)
+	for i := range o.Queries {
+		o.Queries[i].Parameters = append([]ValueRecord(nil), f.Queries[i].Parameters...)
+		o.Queries[i].Results = append([]ValueRecord(nil), f.Queries[i].Results...)
+		o.Queries[i].Evidence.Parameters = append([]ValueRecord(nil), f.Queries[i].Evidence.Parameters...)
+		o.Queries[i].Evidence.Results = append([]ValueRecord(nil), f.Queries[i].Evidence.Results...)
+		o.Queries[i].Evidence.Diagnostics = append([]string(nil), f.Queries[i].Evidence.Diagnostics...)
+	}
+	o.Generation.Objects = append([]ObjectNameRecord(nil), f.Generation.Objects...)
+	o.Generation.Queries = append([]QueryNameRecord(nil), f.Generation.Queries...)
+	return o
+}
+func cloneColumn(c ColumnRecord) ColumnRecord {
+	o := c
+	if c.Native != nil {
+		o.Native = cloneNativeRecord(c.Native)
+	}
+	if c.Integer != nil {
+		x := *c.Integer
+		o.Integer = &x
+	}
+	if c.Text != nil {
+		x := *c.Text
+		o.Text = &x
+	}
+	if c.Decimal != nil {
+		x := *c.Decimal
+		o.Decimal = &x
+	}
+	return o
+}
+func cloneNativeRecord(n *NativeTypeRecord) *NativeTypeRecord {
+	if n == nil {
+		return nil
+	}
+	o := *n
+	if n.Arguments != nil {
+		x := append(make([]string, 0, len(*n.Arguments)), (*n.Arguments)...)
+		o.Arguments = &x
+	}
+	o.Element = cloneNativeRecord(n.Element)
+	return &o
+}
+func cloneConstraint(c ConstraintRecord) ConstraintRecord {
+	o := c
+	o.Columns = append([]string(nil), c.Columns...)
+	o.IncludeColumns = append([]string(nil), c.IncludeColumns...)
+	o.Keys = append([]IndexPartRecord(nil), c.Keys...)
+	o.DeleteSetColumns = append([]string(nil), c.DeleteSetColumns...)
+	o.StorageParameters = cloneMap(c.StorageParameters)
+	o.Collations = cloneMap(c.Collations)
+	if c.Reference != nil {
+		x := *c.Reference
+		x.Columns = append([]string(nil), c.Reference.Columns...)
+		o.Reference = &x
+	}
+	return o
+}
+func cloneIndex(i IndexRecord) IndexRecord {
+	o := i
+	o.Parts = append([]IndexPartRecord(nil), i.Parts...)
+	o.IncludeColumns = append([]string(nil), i.IncludeColumns...)
+	o.StorageParameters = cloneMap(i.StorageParameters)
+	return o
 }
 func less4(a, b, c, d, e, f, g, h string) bool {
 	for _, x := range [][2]string{{a, e}, {b, f}, {c, g}, {d, h}} {
