@@ -420,6 +420,12 @@ func (r *renderer) writeSelect(s query.Select) error {
 			if order.Descending() {
 				r.builder.WriteString(" DESC")
 			}
+			switch order.NullPlacement() {
+			case query.NullsFirst:
+				r.builder.WriteString(" NULLS FIRST")
+			case query.NullsLast:
+				r.builder.WriteString(" NULLS LAST")
+			}
 		}
 	}
 	if compiler := r.compiler(); compiler != nil {

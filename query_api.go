@@ -16,7 +16,10 @@ type Nullable[T any] struct {
 }
 
 // PlanError identifies an invalid immutable query plan.
-type PlanError struct{ Code, Path, Detail string }
+type PlanError struct {
+	Code, Path, Detail string
+	cause              error
+}
 
 func (e *PlanError) Error() string {
 	if e.Path == "" {
@@ -24,6 +27,7 @@ func (e *PlanError) Error() string {
 	}
 	return e.Code + " at " + e.Path + ": " + e.Detail
 }
+func (e *PlanError) Unwrap() error { return e.cause }
 func planError(code, path, detail string) *PlanError {
 	return &PlanError{Code: code, Path: path, Detail: detail}
 }
@@ -219,15 +223,22 @@ func (r TypedRelation[R]) Source() Source    { return r.source }
 func (r OptionalRelation[R]) Source() Source { return r.source }
 
 type QueryPlan struct {
-	sources       []Source
-	projection    []ProjectionItem
-	where         []Predicate
-	joins         []query.Join
-	group         []GroupKey
-	having        []Predicate
-	order         []OrderTerm
-	distinct      bool
-	limit, offset *int
+	sources        []Source
+	projection     []ProjectionItem
+	where          []Predicate
+	joins          []query.Join
+	group          []GroupKey
+	having         []Predicate
+	order          []OrderTerm
+	distinct       bool
+	limit, offset  *int
+	ctes           []query.CTE
+	body           query.QueryBody
+	partition      []GroupKey
+	partitionOrder []OrderTerm
+	partitionLimit int
+	err            error
+	projected      bool
 }
 type Query[R any] struct {
 	plan       QueryPlan
@@ -235,7 +246,12 @@ type Query[R any] struct {
 }
 
 func (p QueryPlan) Validate() error {
-	if len(p.sources) == 0 {
+	if p.err != nil {
+		return p.err
+	}
+	if p.body != nil {
+		return p.body.Validate()
+	} else if len(p.sources) == 0 {
 		return planError("invalid_source", "plan.sources", "must not be empty")
 	}
 	seen := make(map[string]struct{}, len(p.sources))
@@ -255,10 +271,18 @@ func (p QueryPlan) Validate() error {
 		}
 		seen[name] = struct{}{}
 	}
-	allowed := seen
+	allowed := make(map[string]struct{}, len(seen)+len(p.joins))
+	for identity := range seen {
+		allowed[identity] = struct{}{}
+	}
+	for _, join := range p.joins {
+		allowed[q1SourceIdentity(join.Source())] = struct{}{}
+	}
 	for i, item := range p.projection {
 		if item.bindErr != nil {
-			return planError("unsnapshotable_bind", fmt.Sprintf("plan.projection[%d]", i), item.bindErr.Error())
+			result := planError("unsnapshotable_bind", fmt.Sprintf("plan.projection[%d]", i), item.bindErr.Error())
+			result.cause = item.bindErr
+			return result
 		}
 		if err := validateQ1Expression(item.expression, allowed, fmt.Sprintf("plan.projection[%d]", i)); err != nil {
 			return err
@@ -278,7 +302,17 @@ func (p QueryPlan) Validate() error {
 		if join.Source().QualifiedName() == "" {
 			return planError("invalid_source", fmt.Sprintf("plan.joins[%d].source", i), "source is zero")
 		}
-		joinAllowed[q1SourceIdentity(join.Source())] = struct{}{}
+		qualifier := join.Source().QualifiedName()
+		if _, ok := qualifiers[qualifier]; ok {
+			return planError("invalid_source", fmt.Sprintf("plan.joins[%d].source", i), "duplicate SQL qualifier")
+		}
+		qualifiers[qualifier] = struct{}{}
+		joinIdentity := q1SourceIdentity(join.Source())
+		if _, exists := seen[joinIdentity]; exists {
+			return planError("invalid_source", fmt.Sprintf("plan.joins[%d].source", i), "duplicate source")
+		}
+		seen[joinIdentity] = struct{}{}
+		joinAllowed[joinIdentity] = struct{}{}
 		if err := validateQ1Expression(join.On(), joinAllowed, fmt.Sprintf("plan.joins[%d].on", i)); err != nil {
 			return err
 		}
@@ -288,7 +322,9 @@ func (p QueryPlan) Validate() error {
 			return planError("invalid_projection", fmt.Sprintf("plan.predicates[%d]", i), "predicate is zero")
 		}
 		if predicate.bindErr != nil {
-			return planError("unsnapshotable_bind", fmt.Sprintf("plan.predicates[%d]", i), predicate.bindErr.Error())
+			result := planError("unsnapshotable_bind", fmt.Sprintf("plan.predicates[%d]", i), predicate.bindErr.Error())
+			result.cause = predicate.bindErr
+			return result
 		}
 		if err := validateQ1Expression(predicate.node, allowed, fmt.Sprintf("plan.predicates[%d]", i)); err != nil {
 			return err
@@ -334,7 +370,9 @@ func validateQ1Expression(expression query.Expression, allowed map[string]struct
 		}
 	case query.Value:
 		if token, ok := node.Argument().(bindToken); ok && token.err != nil {
-			return planError("unsnapshotable_bind", path, token.err.Error())
+			result := planError("unsnapshotable_bind", path, token.err.Error())
+			result.cause = token.err
+			return result
 		}
 	case query.Binary:
 		if err := validateQ1Expression(node.Left(), allowed, path+".left"); err != nil {
@@ -361,11 +399,11 @@ func validateQ1Expression(expression query.Expression, allowed map[string]struct
 	return nil
 }
 func (q Query[R]) Validate() error {
-	if len(q.projection.items) == 0 || q.projection.decoder == nil {
-		return planError("invalid_projection", "projection", "projection is zero")
-	}
 	if err := q.plan.Validate(); err != nil {
 		return err
+	}
+	if len(q.projection.items) == 0 || q.projection.decoder == nil {
+		return planError("invalid_projection", "projection", "projection is zero")
 	}
 	decoderSchema := q.projection.decoder.ResultSchema()
 	if !reflect.DeepEqual(decoderSchema.Columns(), q.projection.schema.Columns()) {
@@ -416,6 +454,7 @@ func Select[R any](from Source, projection Projection[R]) Query[R] {
 }
 func Project[R any](base QueryPlan, projection Projection[R]) Query[R] {
 	base.projection = cloneItems(projection.items)
+	base.projected = true
 	return Query[R]{plan: base, projection: projection}
 }
 func (q Query[R]) Schema() ResultSchema      { return q.projection.Schema() }
@@ -429,6 +468,9 @@ func clonePlan(p QueryPlan) QueryPlan {
 	p.group = append([]GroupKey(nil), p.group...)
 	p.having = append([]Predicate(nil), p.having...)
 	p.order = append([]OrderTerm(nil), p.order...)
+	p.ctes = append([]query.CTE(nil), p.ctes...)
+	p.partition = append([]GroupKey(nil), p.partition...)
+	p.partitionOrder = append([]OrderTerm(nil), p.partitionOrder...)
 	return p
 }
 func (q Query[R]) Where(p Predicate) Query[R] {
@@ -438,13 +480,11 @@ func (q Query[R]) Where(p Predicate) Query[R] {
 }
 func (q Query[R]) Join(s Source, on Predicate) Query[R] {
 	q.plan = clonePlan(q.plan)
-	q.plan.sources = append(q.plan.sources, s)
 	q.plan.joins = append(q.plan.joins, query.InnerJoin(s.ref, on.node))
 	return q
 }
 func (q Query[R]) LeftJoin(s Source, on Predicate) Query[R] {
 	q.plan = clonePlan(q.plan)
-	q.plan.sources = append(q.plan.sources, s)
 	q.plan.joins = append(q.plan.joins, query.LeftJoin(s.ref, on.node))
 	return q
 }
@@ -478,6 +518,36 @@ func (q Query[R]) Offset(n int) (Query[R], error) {
 	}
 	q.plan = clonePlan(q.plan)
 	q.plan.offset = &n
+	return q, nil
+}
+
+func (q Query[R]) withPartitionLimit(partition []GroupKey, order []OrderTerm, limit int) (Query[R], error) {
+	if len(partition) == 0 {
+		return q, planError("invalid_partition_limit", "partition", "must not be empty")
+	}
+	for i, key := range partition {
+		if key.node == nil {
+			return q, planError("invalid_partition_limit", fmt.Sprintf("partition[%d]", i), "must not be zero")
+		}
+	}
+	if len(order) == 0 {
+		return q, planError("invalid_partition_limit", "order", "must not be empty")
+	}
+	for i, term := range order {
+		if term.node == nil {
+			return q, planError("invalid_partition_limit", fmt.Sprintf("order[%d]", i), "must not be zero")
+		}
+		if term.nulls > NullsLast {
+			return q, planError("invalid_partition_limit", fmt.Sprintf("order[%d]", i), "invalid NULL placement")
+		}
+	}
+	if limit <= 0 {
+		return q, planError("invalid_partition_limit", "limit", "must be positive")
+	}
+	q.plan = clonePlan(q.plan)
+	q.plan.partition = append([]GroupKey(nil), partition...)
+	q.plan.partitionOrder = append([]OrderTerm(nil), order...)
+	q.plan.partitionLimit = limit
 	return q, nil
 }
 

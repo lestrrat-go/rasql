@@ -113,7 +113,16 @@ type Order struct {
 	expression       Expression
 	resultProjection Projection
 	descending       bool
+	nullPlacement    NullPlacement
 }
+
+type NullPlacement uint8
+
+const (
+	NullPlacementDefault NullPlacement = iota
+	NullsFirst
+	NullsLast
+)
 
 // LockStrength identifies the row lock mode a SELECT requests.
 type LockStrength uint8
@@ -168,6 +177,14 @@ func Asc(expression any) Order {
 // Desc orders expression in descending order.
 func Desc(expression any) Order {
 	return Order{expression: operand(expression), descending: true}
+}
+
+func AscNulls(expression any, placement NullPlacement) Order {
+	return Order{expression: operand(expression), nullPlacement: placement}
+}
+
+func DescNulls(expression any, placement NullPlacement) Order {
+	return Order{expression: operand(expression), descending: true, nullPlacement: placement}
 }
 
 // AscResult orders by projection's already-computed result, in ascending
@@ -238,6 +255,8 @@ func (o Order) ResultProjection() (Projection, bool) {
 func (o Order) Descending() bool {
 	return o.descending
 }
+
+func (o Order) NullPlacement() NullPlacement { return o.nullPlacement }
 
 // Select is an immutable SELECT statement.
 type Select struct {
@@ -678,6 +697,9 @@ func (s Select) Validate() error {
 		}
 	}
 	for i, order := range s.orderBy {
+		if order.NullPlacement() > NullsLast {
+			return validationError(fmt.Sprintf("order_by[%d]", i), "invalid NULL placement")
+		}
 		if err := validateOrder(order, sources, projections, grouped, results, fmt.Sprintf("order_by[%d]", i)); err != nil {
 			return err
 		}

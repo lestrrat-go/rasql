@@ -64,6 +64,9 @@ func validateSelectCapabilities(p engineprofile.Profile, s query.Select) error {
 		return err
 	}
 	for _, order := range s.OrderBy() {
+		if order.NullPlacement() != query.NullPlacementDefault && !p.Capabilities.ExplicitNullOrdering {
+			return unsupported(p, "explicit NULL ordering")
+		}
 		if err := validateExpressionCapabilities(p, order.Expression()); err != nil {
 			return err
 		}
@@ -124,6 +127,9 @@ func validateExpressionCapabilities(p engineprofile.Profile, expression query.Ex
 			return err
 		}
 		for _, order := range window.Order() {
+			if order.NullPlacement() != query.NullPlacementDefault && !p.Capabilities.ExplicitNullOrdering {
+				return unsupported(p, "explicit NULL ordering")
+			}
 			if err := validateExpressionCapabilities(p, order.Expression()); err != nil {
 				return err
 			}
