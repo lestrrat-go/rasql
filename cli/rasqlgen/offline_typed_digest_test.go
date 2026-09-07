@@ -2,17 +2,24 @@ package rasqlgen
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/generate"
+	"github.com/lestrrat-go/rasql/internal/catalogread"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/compilerlock"
 	"github.com/lestrrat-go/rasql/internal/compilerquery"
+	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/internal/schemasource"
+	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
+
+	_ "modernc.org/sqlite"
 )
 
 func TestOfflineDigestRetainsKnownQueryEvidence(t *testing.T) {
@@ -40,7 +47,7 @@ func TestOfflineDigestRetainsKnownQueryEvidence(t *testing.T) {
 	digests, err := compilerlock.BuildDigests(compilerlock.DigestInputs{Source: source, Mappings: compilerir.MappingConfig{}, Queries: []compilerlock.QueryDigestInput{{ID: string(queryRecord.ID), SQL: queryRecord.SQL, Operation: queryRecord.Operation, Parameters: queryRecord.Parameters, Results: queryRecord.Results, Cardinality: queryRecord.Cardinality}}, Generation: generation})
 	require.NoError(t, err)
 	lock := compilerlock.File{Format: compilerlock.FormatVersion, Compiler: "rasql", Source: source.Record, Engine: source.Engine, Queries: []compilerlock.QueryRecord{queryRecord}, Generation: compilerlock.GenerationRecord{Package: generation.Package, Output: generation.Output, Emitter: generation.Emitter, Prune: generation.Prune, Queries: []compilerlock.QueryNameRecord{{ID: "report", Function: "Report", Result: "ReportResult", Projection: "ReportProjection", Decoder: "ReportDecoder", File: "report_gen.go"}}}, Digests: digests}
-	settings := config{Package: "store", Output: "internal/store", Queries: []configQuery{{ID: "report", Input: "./queries/report.sql", Engine: "postgres", Function: "Report", Output: "report_gen.go", Operation: "select", Cardinality: "many", Parameters: []compilerquery.ValueDeclaration{{Name: "on", Scalar: "time", Nullable: boolPtr(false)}}, Results: []compilerquery.ValueDeclaration{{Name: "overdue", Scalar: "integer", Nullable: boolPtr(false)}}}}}
+	settings := config{Package: "store", Output: "internal/store", Queries: []configQuery{{ID: "report", Input: "./queries/report.sql", Engine: "postgres", Function: "Report", Output: "report_gen.go", Operation: "select", Cardinality: "many", Parameters: []compilerquery.ValueDeclaration{{Name: "on", Nullable: boolPtr(false)}}, Results: []compilerquery.ValueDeclaration{{Name: "overdue", Nullable: boolPtr(false)}}}}}
 
 	groups, err := offlineDigestGroups(root, settings, lock)
 	require.NoError(t, err)
@@ -50,6 +57,45 @@ func TestOfflineDigestRetainsKnownQueryEvidence(t *testing.T) {
 	groups, err = offlineDigestGroups(root, settings, lock)
 	require.NoError(t, err)
 	require.Equal(t, []string{"generation"}, groups)
+}
+
+func TestOfflineKnownPostgreSQLEvidenceParity(t *testing.T) {
+	fixture := newKnownPostgreSQLFixture(t)
+	var output, diagnostics bytes.Buffer
+	command := fixture.command(t, &output, &diagnostics)
+	command.schemaDependencies = func() schemasource.Dependencies { return fixture.dependencies() }
+	require.NoError(t, command.run([]string{"schema", "update", "-config", fixture.configPath, "-dsn", "postgresql://known-evidence"}), diagnostics.String())
+	onlineFiles := snapshotGeneratedFiles(t, fixture.root)
+	onlineLock := workflowRead(t, filepath.Join(fixture.root, "rasql.lock.json"))
+	for path := range onlineFiles {
+		require.NoError(t, os.Remove(filepath.Join(fixture.root, path)))
+	}
+	poison := &materializationCounters{}
+	command.schemaDependencies = func() schemasource.Dependencies {
+		poison.provider++
+		return poison.dependencies()
+	}
+	output.Reset()
+	diagnostics.Reset()
+	require.NoError(t, command.run([]string{"generate", "-config", fixture.configPath}), diagnostics.String())
+	require.Equal(t, onlineFiles, snapshotGeneratedFiles(t, fixture.root))
+	require.Equal(t, onlineLock, workflowRead(t, filepath.Join(fixture.root, "rasql.lock.json")))
+	require.Equal(t, 0, poison.provider)
+	require.Equal(t, 0, poison.factory)
+	require.Equal(t, 0, poison.opener)
+	require.Equal(t, 0, poison.process)
+	require.Equal(t, 0, poison.analyzer)
+	output.Reset()
+	diagnostics.Reset()
+	require.NoError(t, command.run([]string{"check", "-config", fixture.configPath}), diagnostics.String())
+	require.Equal(t, onlineFiles, snapshotGeneratedFiles(t, fixture.root))
+	require.Equal(t, onlineLock, workflowRead(t, filepath.Join(fixture.root, "rasql.lock.json")))
+	require.Equal(t, 0, poison.provider)
+	require.Equal(t, 0, poison.factory)
+	require.Equal(t, 0, poison.opener)
+	require.Equal(t, 0, poison.process)
+	require.Equal(t, 0, poison.analyzer)
+	require.NoFileExists(t, filepath.Join(fixture.root, pendingMarkerName))
 }
 
 func TestOfflineTypedQueryPolicyChangesAreStaleWithoutWrites(t *testing.T) {
@@ -154,6 +200,102 @@ func TestOfflineTypedQueryGenerationNamesAreStale(t *testing.T) {
 			require.Equal(t, beforeLock, workflowRead(t, filepath.Join(fixture.root, "rasql.lock.json")))
 		})
 	}
+}
+
+type knownPostgreSQLFixture struct {
+	root, configPath, queryPath string
+	query                       compilerir.QueryAnalysis
+}
+
+func newKnownPostgreSQLFixture(t *testing.T) knownPostgreSQLFixture {
+	t.Helper()
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "migrations"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "queries"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.test/known\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => "+filepath.ToSlash(repoRoot(t))+"\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "migrations", "001.sql"), []byte("-- known evidence fixture\n"), 0o600))
+	queryPath := filepath.Join(root, "queries", "report.sql")
+	require.NoError(t, os.WriteFile(queryPath, []byte("SELECT id, created_at FROM reports WHERE id = {{bind \"id\"}}\n"), 0o600))
+	query := compilerir.QueryAnalysis{
+		ID: "report", Name: "Report", SQLPath: "queries/report.sql", Operation: "select", Cardinality: "many",
+		Engine:     compilerir.EngineIdentity{Dialect: "postgresql", Profile: "postgresql-16"},
+		Parameters: []compilerir.SemanticValue{{Name: "id", Scalar: "integer", Nullable: false, TypeCertainty: compilerir.CertaintyKnown, NullabilityCertainty: compilerir.CertaintyKnown, LogicalKind: "integer", Native: &compilerir.NativeType{Dialect: "postgresql", Name: "int8", Kind: "builtin"}, Integer: &compilerir.IntegerTypeFacts{}}},
+		Results:    []compilerir.SemanticValue{{Name: "id", Scalar: "integer", Nullable: false, TypeCertainty: compilerir.CertaintyKnown, NullabilityCertainty: compilerir.CertaintyKnown, LogicalKind: "integer", Native: &compilerir.NativeType{Dialect: "postgresql", Name: "int8", Kind: "builtin"}, Integer: &compilerir.IntegerTypeFacts{}}, {Name: "created_at", Scalar: "time", Nullable: false, TypeCertainty: compilerir.CertaintyKnown, NullabilityCertainty: compilerir.CertaintyKnown, LogicalKind: "time", Native: &compilerir.NativeType{Dialect: "postgresql", Name: "timestamp", Kind: "builtin"}}},
+	}
+	config := map[string]any{
+		"engine":  map[string]string{"dialect": "postgresql", "profile": "postgresql-16"},
+		"schema":  map[string]any{"kind": "migrations", "identity": "known-postgresql", "paths": []string{"migrations/*.sql"}},
+		"package": "store", "output": "internal/store", "emitter": "legacy",
+		"queries": []any{map[string]any{
+			"id": "report", "input": "queries/report.sql", "engine": "postgresql", "function": "Report", "output": "report_gen.go",
+			"operation": "select", "cardinality": "many",
+			"parameters": []any{map[string]any{"name": "id", "nullable": false}},
+			"results":    []any{map[string]any{"name": "id", "nullable": false}, map[string]any{"name": "created_at", "nullable": false}},
+		}},
+	}
+	configBytes, err := json.Marshal(config)
+	require.NoError(t, err)
+	configPath := filepath.Join(root, "rasql.json")
+	require.NoError(t, os.WriteFile(configPath, configBytes, 0o600))
+	return knownPostgreSQLFixture{root: root, configPath: configPath, queryPath: queryPath, query: query}
+}
+
+func (f knownPostgreSQLFixture) command(t *testing.T, output, diagnostics *bytes.Buffer) *command {
+	t.Helper()
+	return &command{program: "rasql", output: output, diagnostics: diagnostics, ctx: t.Context()}
+}
+
+func (f knownPostgreSQLFixture) dependencies() schemasource.Dependencies {
+	return schemasource.Dependencies{
+		Factory:    knownPostgreSQLFactory{},
+		Profiles:   knownPostgreSQLProfiles{},
+		Migrations: knownPostgreSQLMigrations{},
+		Catalogs:   knownPostgreSQLCatalogs{},
+		Analyzer:   knownPostgreSQLAnalyzer{root: f.root, query: f.query},
+	}
+}
+
+type knownPostgreSQLFactory struct{}
+
+func (knownPostgreSQLFactory) Create(context.Context, schemasource.FactoryRequest) (schemasource.DisposableDatabase, error) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		return schemasource.DisposableDatabase{}, err
+	}
+	return schemasource.DisposableDatabase{DB: db, DSN: "postgresql://known-evidence", CloseAndDrop: func(context.Context) error { return db.Close() }}, nil
+}
+
+type knownPostgreSQLProfiles struct{}
+
+func (knownPostgreSQLProfiles) Resolve(context.Context, *sql.DB, schemasource.EngineConfig) (engineprofile.Profile, error) {
+	return engineprofile.Builtin("postgresql-16", engineprofile.Version{Known: true, Major: 16})
+}
+
+type knownPostgreSQLMigrations struct{}
+
+func (knownPostgreSQLMigrations) Apply(context.Context, *sql.DB, engineprofile.Profile, []compilerlock.SourceFileSnapshot) error {
+	return nil
+}
+
+type knownPostgreSQLCatalogs struct{}
+
+func (knownPostgreSQLCatalogs) Read(context.Context, catalogread.DB, engineprofile.Profile, catalogread.Scope) (catalogread.Result, error) {
+	return catalogread.Result{Tables: []schema.TableDef{{Name: "reports", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}}}}, nil
+}
+
+type knownPostgreSQLAnalyzer struct {
+	root  string
+	query compilerir.QueryAnalysis
+}
+
+func (a knownPostgreSQLAnalyzer) Analyze(context.Context, schemasource.AnalysisRequest) (schemasource.AnalysisResult, error) {
+	snapshot, err := compilerlock.SnapshotSourceFile(a.root, a.query.SQLPath)
+	if err != nil {
+		return schemasource.AnalysisResult{}, err
+	}
+	query := a.query
+	query.SQLSHA256 = snapshot.Record().SHA256
+	return schemasource.AnalysisResult{Queries: []compilerir.QueryAnalysis{query}, Snapshots: []compilerlock.SourceFileSnapshot{snapshot}}, nil
 }
 
 func updateTypedQueryConfig(t *testing.T, path string, change func(map[string]any)) {

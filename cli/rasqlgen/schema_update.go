@@ -62,7 +62,7 @@ func (c command) runSchemaUpdate(args []string) error {
 	if c.schemaDependencies != nil {
 		deps = c.schemaDependencies()
 	}
-	if len(cfg.Queries) != 0 {
+	if len(cfg.Queries) != 0 && deps.Analyzer == nil {
 		queryConfig := cfg.compilerQueries(root)
 		analyzer, analyzerErr := compilerquery.NewAnalyzer(queryConfig, compilerquery.Describers{PostgreSQL: querydescribe.NewPostgreSQL(), MySQL: querydescribe.NewMySQL(nil), SQLite: querydescribe.NewSQLitePrepare(nil)})
 		if analyzerErr != nil {

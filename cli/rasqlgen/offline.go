@@ -250,7 +250,7 @@ func offlineDigestGroups(root string, settings config, lock compilerlock.File) (
 	}
 	for _, query := range lock.Queries {
 		configured, configuredOK := configuredQueries[query.ID]
-		if !configuredOK || !queryDeclarationPolicyMatches(configured, query) {
+		if !configuredOK || !queryDeclarationPolicyMatches(configured, query, mappings) {
 			queryChanged = true
 		}
 		input := query.SQL
@@ -311,26 +311,61 @@ func offlineDigestGroups(root string, settings config, lock compilerlock.File) (
 	return groups, nil
 }
 
-func queryDeclarationPolicyMatches(configured configQuery, locked compilerlock.QueryRecord) bool {
+func queryDeclarationPolicyMatches(configured configQuery, locked compilerlock.QueryRecord, mappings compilerir.MappingConfig) bool {
 	if normalizeQueryPath(configured.Input) != normalizeQueryPath(locked.SQL.Path) ||
 		normalizeQueryEngine(configured.Engine) != normalizeQueryEngine(locked.Evidence.Dialect) ||
 		!strings.EqualFold(configured.Operation, locked.Operation) ||
 		!strings.EqualFold(configured.Cardinality, locked.Cardinality) {
 		return false
 	}
-	return queryValuePolicyMatches(configured.Parameters, locked.Parameters) && queryValuePolicyMatches(configured.Results, locked.Results)
+	return queryValuePolicyMatches(configured.Parameters, locked.Parameters, mappings) &&
+		queryValuePolicyMatches(configured.Results, locked.Results, mappings)
 }
 
-func queryValuePolicyMatches(configured []compilerquery.ValueDeclaration, locked []compilerlock.ValueRecord) bool {
+func queryValuePolicyMatches(configured []compilerquery.ValueDeclaration, locked []compilerlock.ValueRecord, mappings compilerir.MappingConfig) bool {
 	if len(configured) != len(locked) {
 		return false
 	}
 	for index, value := range configured {
-		if value.Nullable == nil || value.Name != locked[index].Name || value.Scalar != locked[index].Scalar || *value.Nullable != locked[index].Nullable {
+		if value.Nullable == nil || value.Name != locked[index].Name || *value.Nullable != locked[index].Nullable {
+			return false
+		}
+		scalar := value.Scalar
+		if scalar == "" {
+			scalar, _ = compilerir.ResolveQueryScalar(
+				locked[index].LogicalKind,
+				lockNative(locked[index].Native),
+				lockInteger(locked[index].Integer),
+				mappings,
+			)
+			if scalar == "" {
+				scalar = locked[index].LogicalKind
+			}
+		}
+		if scalar != locked[index].Scalar {
 			return false
 		}
 	}
 	return true
+}
+
+func lockNative(record *compilerlock.NativeTypeRecord) *compilerir.NativeType {
+	if record == nil {
+		return nil
+	}
+	native := compilerir.NativeType{Dialect: record.Dialect, Schema: record.Schema, Name: record.Name, Kind: record.Kind}
+	if record.Arguments != nil {
+		native.Arguments = append([]string(nil), (*record.Arguments)...)
+	}
+	native.Element = lockNative(record.Element)
+	return &native
+}
+
+func lockInteger(record *compilerlock.IntegerTypeFactsRecord) *compilerir.IntegerTypeFacts {
+	if record == nil {
+		return nil
+	}
+	return &compilerir.IntegerTypeFacts{Unsigned: record.Unsigned, DisplayWidth: compilerir.OptionalInt{Value: record.DisplayWidth.Value, Set: record.DisplayWidth.Set}, ZeroFill: record.ZeroFill}
 }
 
 func normalizeQueryPath(value string) string {
