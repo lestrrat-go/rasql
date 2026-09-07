@@ -253,12 +253,7 @@ func loadConfig(path string) (config, error) {
 		return config{}, fmt.Errorf("generate: parse config %s mappings: %w", path, err)
 	}
 	if loaded.Schema != nil {
-		if len(loaded.Queries) != 0 {
-			return config{}, fmt.Errorf("generate: schema mode does not support queries")
-		}
-		if loaded.Emitter != "" && loaded.Emitter != "legacy" {
-			return config{}, fmt.Errorf("generate: schema mode requires emitter legacy")
-		}
+		// Schema-backed generation may include lock-backed typed SQL queries.
 	}
 	return loaded, nil
 }
