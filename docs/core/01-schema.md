@@ -49,7 +49,8 @@ func Example_schema_table_definition() {
 	// constraint itself. RelationshipNamed additionally derives the belongs-to
 	// schema.RelationshipDef that rasqlgen would otherwise name on its own
 	// from the local column, letting the generated method read
-	// orders.Buyer() rather than orders.Customer().
+	// orders.Buyer() rather than orders.Customer(). InverseNamed pins the
+	// public inverse method when a child has several links to one parent.
 	orders := schema.MustTableDef("orders",
 		schema.Integer("id"),
 		schema.Integer("customer_id"),
@@ -175,11 +176,13 @@ none of those facts has an option-form constructor.
 
 ## Relationships
 
-`ForeignKeys` remain the source of database constraints. `rasqlgen` derives a `schema.RelationshipDef` with kind `schema.RelationshipBelongsTo` for each foreign key that has no matching entry in `Relationships`. The `schema.RelationshipNamed` foreign-key option states one explicitly instead, in the option form. Set `Relationships` explicitly when the generated method name should differ from the local column name, but keep its local columns and referenced schema, table, and columns matched to a declared foreign key. Relationship metadata does not change DDL.
+`ForeignKeys` remain the source of database constraints. `rasqlgen` derives a `schema.RelationshipDef` with kind `schema.RelationshipBelongsTo` for each foreign key that has no matching entry in `Relationships`. The `schema.RelationshipNamed` foreign-key option states one explicitly instead, in the option form. Set `Relationships` explicitly for logical direct links or through-table links; direct metadata may match a physical foreign key, while logical metadata does not change DDL. Use `schema.Relationship` with `schema.Through` for many-to-many links.
 
-The generated API covers one bounded slice: a non-null single-column foreign key that targets a non-null single-column primary key with the same generated Go type. When both tables are generated in the package, the child table exposes a belongs-to method and the parent table exposes the inverse has-many method. Each relation exposes `Join` and `Load`. `Load` fetches all related rows with one secondary `IN` query and groups them by key. Callers must split very large parent slices themselves when they approach the database parameter limit.
+An inverse method uses the child table shorthand only when that child has one relationship to the parent. Multiple relationships receive names that include the relationship name, so adding a foreign key cannot silently change an existing method's join. Use `schema.InverseNamed` with `schema.RelationshipNamed` to pin a public inverse method across descriptor changes.
 
-Composite keys, nullable foreign keys, nullable or non-primary target columns, many-to-many links, polymorphic links, nested preloading, and relationships whose target table is not generated in the package remain unsupported. The foreign key and its ordinary SQL join remain available for each of those cases.
+The generated API supports nullable and composite direct links, unique has-one inverses, through-table many-to-many links, bounded `LoadWith` options, and nested `LoadThen` callbacks. When both tables are generated in the package, each relation exposes `Join`, `Load`, and `LoadWith`; collection relations also expose `LoadThen`. Loads omit missing nullable keys, preserve ordered composite keys, group rows by source key, and split binds within the configured relationship budget.
+
+Polymorphic links and relationships whose target table is not generated in the package remain unsupported. The foreign key and its ordinary SQL join remain available for those cases.
 
 ## Name the generated row type
 
@@ -191,7 +194,7 @@ Nothing is guessed: `rasqlgen` never singularizes a table name to derive a row n
 
 `Schema` is optional and names the namespace holding the table: a PostgreSQL schema, a MySQL database, or a SQLite attached-database name. rasql takes no position on what a namespace means to a server: it validates `Schema` as a simple identifier exactly like `Name`, quotes it as a separate identifier in the SQL that reads the field, and never creates, drops, or connects to a namespace itself. An application that needs `audit.events` to exist creates it with a reviewed native migration, the same way every other piece of DDL this library does not synthesize gets created. An empty `Schema` leaves the table unqualified, which resolves through the connection's own default and is what every descriptor written before this field existed still does.
 
-Qualification reaches DML, column references, and DDL. A `SELECT`, `INSERT`, `UPDATE`, or `DELETE` built from a qualified descriptor renders `"audit"."events"` as its target, a column reached through the unaliased table renders `"audit"."events"."id"`, and `render.CreateTable`, `render.CreateIndexes`, and `rasql.CreateTable` render `CREATE TABLE "audit"."events"` and its indexes into the named namespace on every dialect that can express it. rasql never creates, drops, or connects to the namespace itself: an application that needs `audit` to exist creates it with a reviewed native migration, the same way every other piece of DDL this library does not synthesize gets created, and `rasql.CreateTable` then fails with the server's own error if that namespace does not exist. SQLite inspection preserves the database name in `Schema`, including when a lookup is scoped with `TableIn`, and [`rasqlgen`](../orm/01-codegen.md) emits that non-empty `Schema` value in generated descriptors. PostgreSQL and MySQL inspection leave `Schema` empty, so `rasqlgen` emits no `Schema` field for those dialects. Qualified PostgreSQL and MySQL inspection and generation are not supported yet, so a qualified table on those dialects is re-read through a hand-written descriptor.
+Qualification reaches DML, column references, and DDL. A `SELECT`, `INSERT`, `UPDATE`, or `DELETE` built from a qualified descriptor renders `"audit"."events"` as its target, a column reached through the unaliased table renders `"audit"."events"."id"`, and `render.CreateTable`, `render.CreateIndexes`, and `rasql.CreateTable` render `CREATE TABLE "audit"."events"` and its indexes into the named namespace on every dialect that can express it. rasql never creates, drops, or connects to the namespace itself: an application that needs `audit` to exist creates it with a reviewed native migration, the same way every other piece of DDL this library does not synthesize gets created, and `rasql.CreateTable` then fails with the server's own error if that namespace does not exist. Inspection preserves the requested namespace in `Schema`, including when a lookup is scoped with `TableIn`, and [`rasqlgen`](../orm/01-codegen.md) emits that non-empty `Schema` value in generated descriptors.
 
 A foreign key that references a table in another schema names it with `ForeignKeyDef.ReferencedSchema`, validated the same way as `Table.Schema` and left empty for the server to resolve, exactly like an empty `Table.Schema`. PostgreSQL and MySQL render a stated `ReferencedSchema` as a second qualified identifier in the `REFERENCES` clause. SQLite cannot: it rejects a schema-qualified `REFERENCES` outright, even when the reference names the referencing table's own schema, so rasql drops a same-schema qualifier there rather than refuse a reference that means the same thing either way, and refuses to render a genuinely cross-schema reference instead of silently pointing it at the wrong table. An unqualified table's foreign keys are unaffected either way: qualifying `Table.Schema` alone, without also stating `ForeignKeyDef.ReferencedSchema`, would let PostgreSQL resolve an unqualified `REFERENCES` through the connection's `search_path` rather than the table's own schema, which is why the two fields ship together. `inspect.Table` fills `ReferencedSchema` for a PostgreSQL or MySQL foreign key that references a table outside the current schema.
 
@@ -323,6 +326,8 @@ A column also carries `Nullable`, `Default`, and its concrete `Type`. Type-speci
 | `DecimalType.Unsigned`, `.ZeroFill` | The same two MySQL-only modifiers for a decimal column (see [Decimal UNSIGNED and ZEROFILL](#decimal-unsigned-and-zerofill)). |
 | `ColumnDef.GeneratedExpression`, `.GeneratedStorage` | A generated column (see [Generated columns](08-inspection-facts.md#generated-columns)). |
 | `ColumnDef.Identity` | An identity column (see [Identity columns](#identity-columns)). |
+
+`ColumnDef.Collation` names a column's explicit collation without SQL quote delimiters. Its empty value means the database default applies. `render.CreateTable` places a stated collation after the column type and quotes it with the selected dialect.
 
 Identifiers must be simple. `schema.ValidateIdentifier` accepts a leading letter or underscore followed by letters, digits, or underscores. Everything else is rejected rather than quoted around.
 
@@ -549,9 +554,9 @@ Call a generated accessor's `Ref()` when code needs the dynamic `query.ColumnRef
 
 ## Read a table out of a database
 
-A generator normally calls `catalog.FromDatabase` rather than using `inspect` table-by-table. Its `catalog.Options` controls `Include`, `Exclude`, and `HistoryTable` selection while keeping the metadata read in one transaction, and `rasql codegen generate` states those three through its settings file.
+A generator normally calls `catalog.FromDatabase` rather than using `inspect` table-by-table. Its `catalog.Options` controls `Namespaces`, exact `IncludeObjects` and `ExcludeObjects`, legacy `Include` and `Exclude`, and `HistoryTable` selection while keeping the metadata read in one transaction. Same-name objects require qualified identities.
 
-`inspect` turns live database metadata back into a `schema.TableDef`, normalizing native column types into logical ones. `Inspector.Table` looks up an unscoped table name. On SQLite, it searches `main`, `temp`, and attached databases. When the name exists in more than one of them, it returns the typed `*inspect.AmbiguousTableError` (also detectable with `inspect.ErrAmbiguousTable`) instead of choosing one. Use `Inspector.TableIn(ctx, databaseName, tableName)` to select `main`, `temp`, or an attached database. The returned `schema.TableDef.Schema` preserves that SQLite database name, so rendering or executing the descriptor continues to address the inspected scope. `inspect.New` accepts a SQLite `*sql.DB` for ordinary `main` tables. A retained `*sql.Conn` or `*sql.Tx` is required for `temp` or an attached database, and the same handle must execute descriptors that refer to those scopes because they belong to one connection rather than the `*sql.DB` pool. `TableIn` is supported only for SQLite. The inspector falls back to each database's `sqlite_master` catalog when `PRAGMA table_list` is unavailable on older SQLite engines.
+`inspect` turns live database metadata back into a `schema.TableDef`, normalizing native column types into logical ones. `Inspector.Table` looks up an unscoped table name. `Inspector.TableIn(ctx, namespace, tableName)` selects a PostgreSQL schema, MySQL database, or SQLite attached database and preserves it in `TableDef.Schema`. `TableNamesIn` is the matching scoped enumeration. SQLite still requires a retained connection for attached databases; PostgreSQL and MySQL pass the requested namespace to every metadata query.
 
 <!-- INCLUDE(examples/inspect_sqlite_table_example_test.go) -->
 ```go
@@ -635,7 +640,7 @@ func Example_inspect_sqlite_table() {
 source: [examples/inspect_sqlite_table_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/inspect_sqlite_table_example_test.go)
 <!-- END INCLUDE -->
 
-`Inspector.TableNames(ctx)` returns the base tables in the inspected scope as `[]inspect.TableName`, excluding views and sorted by `Schema` then `Name`, so a caller does not need to already know a table name to start inspecting it. PostgreSQL scopes to `current_schema()` and MySQL to `DATABASE()`, the same scope `Table` reads columns from, and both leave every `TableName.Schema` empty: `Table` itself never fills `schema.TableDef.Schema` for those two dialects, and filling it here would silently qualify SQL that is unqualified today. SQLite has no single equivalent scope. `TableNames` reports across `main`, `temp`, and every database attached to the connection, which is `Table`'s own default too. `TableName.Schema` names the database each table came from, which a bare table name cannot carry, so two databases holding a table of the same name still come back as two results a caller can tell apart. `Inspector.TableNamesIn(ctx, databaseName)` scopes SQLite to one database instead, the enumeration counterpart of `TableIn`, and carries the same retained-connection requirement for `temp` or an attached database. Every `TableName.Schema` it returns equals `databaseName`. `TableNamesIn` is supported only for SQLite.
+`Inspector.TableNames(ctx)` retains default-scope behavior, while `TableNamesIn(ctx, namespace)` enumerates one explicit schema, database, or attached SQLite database. Results are sorted by namespace then name, and every scoped result carries the requested namespace. Default PostgreSQL and MySQL results remain unqualified for compatibility.
 
 <!-- INCLUDE(examples/inspect_sqlite_table_names_example_test.go) -->
 ```go
@@ -743,4 +748,26 @@ For PostgreSQL and SQLite, `Table` never returns a descriptor silently missing c
 
 ## Next
 
+`NativeType` carries complete server identity when portable `Type` loses information. PostgreSQL domains, enums, arrays,
+JSON versus JSONB, numeric variants, and time variants retain their catalog names. MySQL ENUM and SET retain ordered
+labels, including escaped values. SQLite retains validated declarations when affinity mapping would lose their spelling.
+`OpaqueType` generates `any`; callers provide explicit `sql.Scanner` and `driver.Valuer` wrappers for concrete values.
+Generated descriptors preserve nested native metadata, including a distinction between nil and empty `Arguments`.
+
 [Querying](../02-querying.md) reads rows through these descriptors, or [Writing rows](../orm/04-writing.md) puts rows into them.
+# Native column identities
+
+Schema descriptors can preserve a server-native type in `ColumnDef.NativeType` while retaining a portable
+`ColumnDef.Type` when one is known. An `OpaqueType` keeps a complete native identity when no portable family is safe.
+Native identities render only on a matching dialect; cross-dialect DDL returns `render.ErrUnsupportedNativeType`.
+
+# Typed read surfaces for views
+
+Inspected views expose `schema.ObjectView` and read-only operations. Generated
+view wrappers embed `rasql.ReadTable[T]`, so typed selects and relationship
+loads compile while insert, update, delete, and table DDL require
+`rasql.Table[T]` and fail at compile time.
+
+Use `rasql.ReadTableOf[T]` for a hand-built queryable descriptor. Use
+`catalog.Options{IncludeViews: true}` when generating a store that includes
+inspected views.

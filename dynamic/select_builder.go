@@ -144,6 +144,15 @@ func (b SelectBuilder) Build(d dialect.Dialect) (stmt.Statement, error) {
 // returns, so a sequence that is never ranged opens no cursor to leak; a
 // sequence that is ranged closes the underlying rows when it ends.
 func (b SelectBuilder) Query(ctx context.Context, db exec.DB) (iter.Seq2[Row, error], error) {
+	result, err := b.QueryResult(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	return result.Rows(), nil
+}
+
+// QueryResult renders the statement and returns a lazy result with ordered metadata.
+func (b SelectBuilder) QueryResult(ctx context.Context, db exec.DB) (*Result, error) {
 	if err := db.Validate(); err != nil {
 		return nil, err
 	}
@@ -151,7 +160,7 @@ func (b SelectBuilder) Query(ctx context.Context, db exec.DB) (iter.Seq2[Row, er
 	if err != nil {
 		return nil, fmt.Errorf("rasql: render SELECT: %w", err)
 	}
-	return scanRendered(ctx, db, s), nil
+	return resultForStatement(ctx, db, s), nil
 }
 
 // Count executes COUNT(*) over the rows the statement matches.
@@ -171,7 +180,10 @@ func (b SelectBuilder) Count(ctx context.Context, db exec.DB) (int64, error) {
 	// Count consumes the sequence itself, so the statement runs before Count
 	// returns either way. It goes through scanRendered so that no call site
 	// outside that one closure holds a *sql.Rows.
-	return exactlyOne(countValues(scanRendered(ctx, db, s)))
+	rows, finish := scanRenderedOwned(ctx, db, s, false)
+	counted, err := exactlyOne(countValues(rows))
+	finish(err)
+	return counted, err
 }
 
 // countValues adapts a sequence of result rows into the int64 held by each

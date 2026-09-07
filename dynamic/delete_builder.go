@@ -156,6 +156,18 @@ func (b DeleteReturningBuilder) Query(ctx context.Context, db exec.DB) (iter.Seq
 	return QueryWrite(ctx, db, s)
 }
 
+// QueryResult runs the delete lazily and returns its ordered RETURNING metadata.
+func (b DeleteReturningBuilder) QueryResult(ctx context.Context, db exec.DB) (*Result, error) {
+	if err := db.Validate(); err != nil {
+		return nil, err
+	}
+	s, err := b.statement()
+	if err != nil {
+		return nil, err
+	}
+	return QueryWriteResult(ctx, db, s)
+}
+
 func (b DeleteReturningBuilder) statement() (query.Delete, error) {
 	if b.err != nil {
 		return query.Delete{}, b.err

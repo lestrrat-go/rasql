@@ -12,6 +12,11 @@ The generated package contains one `<table>_gen.go` file per table,
 scan and mapping methods, the table type, column accessors, and the package
 accessor. The descriptor file contains the runtime `schema.TableDef` values.
 
+When a physical table or column name contains spaces, punctuation, or a
+keyword, configure `generate.Store.Names` with its exact `schema.ObjectName`.
+The generated Go names remain stable while descriptors, scan switches, and SQL
+column references keep the original physical names.
+
 This is the generated surface for a `users` table:
 
 <!-- INCLUDE(examples/store/users_gen.go) -->
@@ -475,3 +480,9 @@ across row fields, scanners, writes, relationships, and descriptors.
 
 [Typed queries](03-typed-queries.md) reads rows through the generated table, and
 [Writing rows](04-writing.md) inserts, updates, and deletes them.
+# Generated view reads
+
+Store generation can include inspected views with
+`catalog.Options{IncludeViews: true}`. Generated view types provide row fields,
+column accessors, typed selects, aliases, and relationship reads. They do not
+implement mutation or table DDL capabilities.

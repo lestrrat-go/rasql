@@ -37,7 +37,8 @@ func Example_schema_table_definition() {
 	// constraint itself. RelationshipNamed additionally derives the belongs-to
 	// schema.RelationshipDef that rasqlgen would otherwise name on its own
 	// from the local column, letting the generated method read
-	// orders.Buyer() rather than orders.Customer().
+	// orders.Buyer() rather than orders.Customer(). InverseNamed pins the
+	// public inverse method when a child has several links to one parent.
 	orders := schema.MustTableDef("orders",
 		schema.Integer("id"),
 		schema.Integer("customer_id"),

@@ -122,16 +122,18 @@ func parseCommandFlags(flags *flag.FlagSet, args []string) error {
 		return err
 	}
 	if rest := flags.Args(); len(rest) > 0 {
-		return unexpectedArgumentsError(rest)
+		return unexpectedArgumentsError(len(rest))
 	}
 	return err
 }
 
-// unexpectedArgumentsError reports the leftover arguments a command did not consume.
-// Every argument is quoted, so an empty argument stays visible and an argument
-// holding spaces cannot be mistaken for several arguments.
-func unexpectedArgumentsError(rest []string) error {
-	return fmt.Errorf("unexpected arguments: %q", rest)
+// unexpectedArgumentsError reports only how many leftover arguments a command
+// did not consume and never echoes their values.
+func unexpectedArgumentsError(count int) error {
+	if count == 1 {
+		return errors.New("unexpected positional argument; generate accepts flags only")
+	}
+	return fmt.Errorf("unexpected %d positional arguments; generate accepts flags only", count)
 }
 
 func (c command) newFlagSet(name string) *flag.FlagSet {

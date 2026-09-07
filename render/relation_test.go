@@ -285,7 +285,7 @@ func TestReusableRelationValidationBoundaries(t *testing.T) {
 	_, err = query.ResultOf(base, query.ResultColumn{Name: "", Type: schema.IntegerType{}})
 	require.Error(t, err)
 	_, err = query.ResultOf(base, query.ResultColumn{Name: "bad-name", Type: schema.IntegerType{}})
-	require.Error(t, err)
+	require.NoError(t, err)
 	_, err = query.ResultOf(base,
 		query.ResultColumn{Name: "id", Type: schema.IntegerType{}},
 		query.ResultColumn{Name: "id", Type: schema.IntegerType{}},

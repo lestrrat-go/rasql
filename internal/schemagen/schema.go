@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"go/format"
 	"go/token"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -116,7 +117,7 @@ func PackageLevelNames(packageName string, tables ...schema.TableDef) ([]string,
 		if tableHasTimeColumn(table) {
 			unique[timeScannerTypeName(table.Name)] = struct{}{}
 		}
-		for _, relationship := range relationshipSpecs(table, clones) {
+		for _, relationship := range relationshipSpecs(table, clones, nil, nil) {
 			unique[relationship.typeName] = struct{}{}
 		}
 	}
@@ -144,6 +145,25 @@ func PackageSourceInDir(dir, packageName string, tables ...schema.TableDef) ([]b
 	return schemaSource(dir, packageName, clones, clones, withDescriptors)
 }
 
+type SourceOptions struct {
+	Dir   string
+	Names *ResolvedNames
+}
+
+func PackageSourceWithOptions(packageName string, options SourceOptions, tables ...schema.TableDef) ([]byte, error) {
+	clones, err := prepareSchemaWithNames(packageName, tables)
+	if err != nil {
+		return nil, err
+	}
+	if options.Names == nil {
+		options.Names, err = ResolveNames(packageName, clones, NameOverrides{})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return schemaSourceWithOptions(packageName, clones, clones, withDescriptors, options)
+}
+
 // TableSource returns a whole generated package holding one table. allTables
 // supplies the package-wide descriptors used to derive relationship methods,
 // and only table itself is emitted. generate.TableSource documents what a
@@ -155,6 +175,10 @@ func TableSource(packageName string, table schema.TableDef, allTables ...schema.
 
 func TableSourceInDir(dir, packageName string, table schema.TableDef, allTables ...schema.TableDef) ([]byte, error) {
 	return tableSource(dir, packageName, table, allTables, withDescriptors)
+}
+
+func TableSourceWithOptions(packageName string, table schema.TableDef, options SourceOptions, allTables ...schema.TableDef) ([]byte, error) {
+	return tableSourceWithOptions(packageName, table, allTables, withDescriptors, options)
 }
 
 // TableSurfaceSource returns the same source as TableSource without the
@@ -174,6 +198,10 @@ func TableSurfaceSourceInDir(dir, packageName string, table schema.TableDef, all
 	return tableSource(dir, packageName, table, allTables, withoutDescriptors)
 }
 
+func TableSurfaceSourceWithOptions(packageName string, table schema.TableDef, options SourceOptions, allTables ...schema.TableDef) ([]byte, error) {
+	return tableSourceWithOptions(packageName, table, allTables, withoutDescriptors, options)
+}
+
 func tableSource(dir, packageName string, table schema.TableDef, allTables []schema.TableDef, descriptors descriptorMode) ([]byte, error) {
 	if len(allTables) == 0 {
 		allTables = []schema.TableDef{table}
@@ -183,8 +211,30 @@ func tableSource(dir, packageName string, table schema.TableDef, allTables []sch
 		return nil, err
 	}
 	for _, candidate := range clones {
-		if candidate.Schema == table.Schema && candidate.Name == table.Name {
+		if candidate.ObjectName() == table.ObjectName() {
 			return schemaSource(dir, packageName, []schema.TableDef{candidate}, clones, descriptors)
+		}
+	}
+	return nil, fmt.Errorf("generate: table %q is not present in allTables", table.QualifiedName())
+}
+
+func tableSourceWithOptions(packageName string, table schema.TableDef, allTables []schema.TableDef, descriptors descriptorMode, options SourceOptions) ([]byte, error) {
+	if len(allTables) == 0 {
+		allTables = []schema.TableDef{table}
+	}
+	clones, err := prepareSchemaWithNames(packageName, allTables)
+	if err != nil {
+		return nil, err
+	}
+	if options.Names == nil {
+		options.Names, err = ResolveNames(packageName, clones, NameOverrides{})
+		if err != nil {
+			return nil, err
+		}
+	}
+	for _, candidate := range clones {
+		if candidate.ObjectName() == table.ObjectName() {
+			return schemaSourceWithOptions(packageName, []schema.TableDef{candidate}, clones, descriptors, options)
 		}
 	}
 	return nil, fmt.Errorf("generate: table %q is not present in allTables", table.QualifiedName())
@@ -205,10 +255,29 @@ const (
 // function, As, and any relationships. Each table's runtime descriptor comes
 // with it unless descriptors says otherwise.
 func schemaSource(dir, packageName string, tables, allTables []schema.TableDef, descriptors descriptorMode) ([]byte, error) {
-	bindings, err := newGeneratedBindings(dir, packageName, tables, allTables)
+	names, err := ResolveNames(packageName, allTables, NameOverrides{})
 	if err != nil {
 		return nil, err
 	}
+	return schemaSourceWithOptions(packageName, tables, allTables, descriptors, SourceOptions{Dir: dir, Names: names})
+}
+
+func schemaSourceWithNames(packageName string, tables, allTables []schema.TableDef, descriptors descriptorMode, names *ResolvedNames) ([]byte, error) {
+	return schemaSourceWithOptions(packageName, tables, allTables, descriptors, SourceOptions{Names: names})
+}
+
+func schemaSourceWithOptions(packageName string, tables, allTables []schema.TableDef, descriptors descriptorMode, options SourceOptions) ([]byte, error) {
+	if options.Names == nil {
+		return nil, fmt.Errorf("generate: resolved names must not be nil")
+	}
+	if err := options.Names.validateCoverage(tables, allTables); err != nil {
+		return nil, err
+	}
+	bindings, err := newGeneratedBindings(options.Dir, packageName, tables, allTables)
+	if err != nil {
+		return nil, err
+	}
+	names := options.Names
 
 	var source bytes.Buffer
 	source.WriteString("// Code generated by rasqlgen; DO NOT EDIT.\n\n")
@@ -222,7 +291,7 @@ func schemaSource(dir, packageName string, tables, allTables []schema.TableDef, 
 		if containsTime(tables) {
 			source.WriteString("\t\"time\"\n")
 		}
-		if containsRelationships(tables, allTables, bindings) {
+		if containsRelationships(tables, allTables, names, &bindings) {
 			source.WriteString("\t\"context\"\n")
 		}
 		source.WriteString("\n")
@@ -251,29 +320,29 @@ func schemaSource(dir, packageName string, tables, allTables []schema.TableDef, 
 		source.WriteString(")\n\n")
 	}
 	for _, table := range tables {
-		if err := writeRowType(&source, table, bindings); err != nil {
+		if err := writeRowType(&source, table, names, bindings); err != nil {
 			return nil, err
 		}
 		source.WriteString("\n")
-		writeRowScan(&source, table)
+		writeRowScan(&source, table, names)
 		source.WriteString("\n")
-		writeRowColumnValue(&source, table)
+		writeRowColumnValue(&source, table, names)
 		source.WriteString("\n")
-		writeTableType(&source, table)
+		writeTableType(&source, table, names)
 		source.WriteString("\n")
-		if err := writeTableColumns(&source, table, bindings); err != nil {
+		if err := writeTableColumns(&source, table, names, bindings); err != nil {
 			return nil, err
 		}
 		source.WriteString("\n")
 		if descriptors == withDescriptors {
-			writeTableDescriptor(&source, table)
+			writeTableDescriptor(&source, table, names)
 			source.WriteString("\n")
 		}
-		writeTableAccessor(&source, table)
+		writeTableAccessor(&source, table, names)
 		source.WriteString("\n")
-		writeTableAs(&source, table)
+		writeTableAs(&source, table, names)
 		source.WriteString("\n")
-		if err := writeRelationships(&source, table, allTables, bindings); err != nil {
+		if err := writeRelationships(&source, table, allTables, names, bindings); err != nil {
 			return nil, err
 		}
 		source.WriteString("\n")
@@ -303,7 +372,32 @@ func DescriptorSource(packageName string, tables ...schema.TableDef) ([]byte, er
 	return descriptorSource(packageName, clones)
 }
 
+func DescriptorSourceWithOptions(packageName string, options SourceOptions, tables ...schema.TableDef) ([]byte, error) {
+	clones, err := prepareSchemaWithNames(packageName, tables)
+	if err != nil {
+		return nil, err
+	}
+	if options.Names == nil {
+		options.Names, err = ResolveNames(packageName, clones, NameOverrides{})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return descriptorSourceWithNames(packageName, clones, options.Names)
+}
+
 func descriptorSource(packageName string, tables []schema.TableDef) ([]byte, error) {
+	names, err := ResolveNames(packageName, tables, NameOverrides{})
+	if err != nil {
+		return nil, err
+	}
+	return descriptorSourceWithNames(packageName, tables, names)
+}
+
+func descriptorSourceWithNames(packageName string, tables []schema.TableDef, names *ResolvedNames) ([]byte, error) {
+	if err := names.validateCoverage(tables, tables); err != nil {
+		return nil, err
+	}
 	var source bytes.Buffer
 	source.WriteString("// Code generated by rasqlgen; DO NOT EDIT.\n\n")
 	source.WriteString("package ")
@@ -325,10 +419,10 @@ func descriptorSource(packageName string, tables []schema.TableDef) ([]byte, err
 		source.WriteString("import \"github.com/lestrrat-go/rasql/schema\"\n\n")
 	}
 	for _, table := range tables {
-		writeTableDescriptor(&source, table)
+		writeTableDescriptor(&source, table, names)
 		source.WriteString("\n")
 	}
-	writeTablesFunc(&source, tables)
+	writeTablesFunc(&source, tables, names)
 	formatted, err := format.Source(source.Bytes())
 	if err != nil {
 		return nil, fmt.Errorf("generate: format source: %w", err)
@@ -347,14 +441,15 @@ func descriptorSource(packageName string, tables []schema.TableDef) ([]byte, err
 // that guarantee rather than restating it, and
 // TestGeneratedTablesHandOutIndependentDescriptors in generate/ exercises
 // the emitted function against it.
-func writeTablesFunc(source *bytes.Buffer, tables []schema.TableDef) {
+func writeTablesFunc(source *bytes.Buffer, tables []schema.TableDef, names *ResolvedNames) {
 	source.WriteString("// Tables returns a clone of every table's descriptor, in the order this\n")
 	source.WriteString("// file declares them.\n")
 	source.WriteString("func Tables() []schema.TableDef {\n")
 	source.WriteString("\treturn []schema.TableDef{\n")
 	for _, table := range tables {
 		source.WriteString("\t\t")
-		source.WriteString(definitionName(table.Name))
+		object, _ := names.Object(table)
+		source.WriteString(object.DefinitionVar)
 		source.WriteString(".Clone(),\n")
 	}
 	source.WriteString("\t}\n")
@@ -367,32 +462,37 @@ func writeTablesFunc(source *bytes.Buffer, tables []schema.TableDef) {
 // variable stays unexported because rasql.TableFrom does not clone: the
 // table value shares its slices in place, so an exported variable would let
 // any importer change a live table by writing to one of its fields.
-func writeTableDescriptor(source *bytes.Buffer, table schema.TableDef) {
+func writeTableDescriptor(source *bytes.Buffer, table schema.TableDef, names *ResolvedNames) {
+	object, _ := names.Object(table)
 	source.WriteString("var ")
-	source.WriteString(definitionName(table.Name))
+	source.WriteString(object.DefinitionVar)
 	source.WriteString(" = ")
 	writeTableDefLiteral(source, table)
 	source.WriteString("\n\n")
 
 	source.WriteString("var ")
-	source.WriteString(descriptorName(table.Name))
+	source.WriteString(object.DescriptorVar)
 	source.WriteString(" = ")
-	source.WriteString(tableTypeName(table.Name))
-	source.WriteString("{rasql.TableFrom[")
-	source.WriteString(rowTypeName(table))
+	source.WriteString(object.TableType)
+	if table.EffectiveKind() == schema.ObjectView {
+		source.WriteString("{rasql.ReadTableFrom[")
+	} else {
+		source.WriteString("{rasql.TableFrom[")
+	}
+	source.WriteString(object.RowType)
 	source.WriteString("](")
-	source.WriteString(definitionName(table.Name))
+	source.WriteString(object.DefinitionVar)
 	source.WriteString(")}\n\n")
 
 	source.WriteString("// ")
-	source.WriteString(definitionAccessorName(table.Name))
+	source.WriteString(object.DefinitionAccessor)
 	source.WriteString(" returns a copy of the descriptor for the ")
 	source.WriteString(quote(table.Name))
 	source.WriteString(" table.\n")
 	source.WriteString("func ")
-	source.WriteString(definitionAccessorName(table.Name))
+	source.WriteString(object.DefinitionAccessor)
 	source.WriteString("() schema.TableDef { return ")
-	source.WriteString(definitionName(table.Name))
+	source.WriteString(object.DefinitionVar)
 	source.WriteString(".Clone() }\n")
 }
 
@@ -455,7 +555,32 @@ func DescriptorTestSource(packageName string, tables ...schema.TableDef) ([]byte
 	return descriptorTestSource(packageName, clones)
 }
 
+func DescriptorTestSourceWithOptions(packageName string, options SourceOptions, tables ...schema.TableDef) ([]byte, error) {
+	clones, err := prepareSchemaWithNames(packageName, tables)
+	if err != nil {
+		return nil, err
+	}
+	if options.Names == nil {
+		options.Names, err = ResolveNames(packageName, clones, NameOverrides{})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return descriptorTestSourceWithNames(packageName, clones, options.Names)
+}
+
 func descriptorTestSource(packageName string, tables []schema.TableDef) ([]byte, error) {
+	names, err := ResolveNames(packageName, tables, NameOverrides{})
+	if err != nil {
+		return nil, err
+	}
+	return descriptorTestSourceWithNames(packageName, tables, names)
+}
+
+func descriptorTestSourceWithNames(packageName string, tables []schema.TableDef, names *ResolvedNames) ([]byte, error) {
+	if err := names.validateCoverage(tables, tables); err != nil {
+		return nil, err
+	}
 	var source bytes.Buffer
 	source.WriteString("// Code generated by rasqlgen; DO NOT EDIT.\n\n")
 	source.WriteString("package ")
@@ -470,7 +595,8 @@ func descriptorTestSource(packageName string, tables []schema.TableDef) ([]byte,
 		if index > 0 {
 			source.WriteString(", ")
 		}
-		source.WriteString(definitionName(table.Name))
+		object, _ := names.Object(table)
+		source.WriteString(object.DefinitionVar)
 	}
 	source.WriteString("} {\n")
 	source.WriteString("\t\tif err := definition.Validate(); err != nil {\n")
@@ -485,6 +611,17 @@ func descriptorTestSource(packageName string, tables []schema.TableDef) ([]byte,
 }
 
 func prepareSchema(packageName string, tables []schema.TableDef) ([]schema.TableDef, error) {
+	clones, err := prepareSchemaWithNames(packageName, tables)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateVariableNames(clones); err != nil {
+		return nil, err
+	}
+	return clones, nil
+}
+
+func prepareSchemaWithNames(packageName string, tables []schema.TableDef) ([]schema.TableDef, error) {
 	if !isUsablePackageName(packageName) {
 		return nil, packageNameError(packageName)
 	}
@@ -501,39 +638,113 @@ func prepareSchema(packageName string, tables []schema.TableDef) ([]schema.Table
 		}
 		clones[i].Relationships = mergeRelationships(clones[i])
 	}
-	sort.Slice(clones, func(left, right int) bool {
-		return clones[left].Name < clones[right].Name
+	sort.SliceStable(clones, func(i, j int) bool {
+		if clones[i].Schema != clones[j].Schema {
+			return clones[i].Schema < clones[j].Schema
+		}
+		return clones[i].Name < clones[j].Name
 	})
-	if err := validateVariableNames(clones); err != nil {
+	if err := validateRelationshipPackage(clones); err != nil {
 		return nil, err
 	}
 	return clones, nil
 }
 
-func derivedRelationships(table schema.TableDef) []schema.RelationshipDef {
-	relationships := make([]schema.RelationshipDef, 0, len(table.ForeignKeys))
-	for _, key := range table.ForeignKeys {
-		if len(key.Columns) == 0 {
-			continue
-		}
-		name := key.Columns[0]
-		name = strings.TrimSuffix(name, "_id")
-		name = variableName(name)
-		if name == "" {
-			name = variableName(key.ReferencedTable)
-		}
-		relationships = append(relationships, schema.RelationshipDef{
-			Name:              name,
-			Kind:              schema.RelationshipBelongsTo,
-			Columns:           append([]string(nil), key.Columns...),
-			ReferencedSchema:  key.ReferencedSchema,
-			ReferencedTable:   key.ReferencedTable,
-			ReferencedColumns: append([]string(nil), key.ReferencedColumns...),
-		})
+func validateRelationshipPackage(tables []schema.TableDef) error {
+	lookup := make(map[string]schema.TableDef, len(tables))
+	for _, table := range tables {
+		lookup[table.Schema+"\x00"+table.Name] = table
 	}
-	return relationships
+	for index := range tables {
+		table := &tables[index]
+		seen := make(map[string]struct{}, len(table.Relationships))
+		for relationshipIndex := range table.Relationships {
+			relationship := &table.Relationships[relationshipIndex]
+			if _, ok := seen[relationship.Name]; ok {
+				return fmt.Errorf("generate: table %q has duplicate relationship name %q", table.Name, relationship.Name)
+			}
+			seen[relationship.Name] = struct{}{}
+			if relationship.InverseName != "" {
+				if _, ok := seen[relationship.InverseName]; ok {
+					return fmt.Errorf("generate: relationships on table %q collide on generated method %q", table.Name, relationship.InverseName)
+				}
+				seen[relationship.InverseName] = struct{}{}
+			}
+			if relationship.Optionality == schema.RelationshipOptionalityInferred {
+				matched := false
+				for _, foreignKey := range table.ForeignKeys {
+					if !relationshipMatchesForeignKey(*relationship, foreignKey) {
+						continue
+					}
+					matched = true
+					relationship.Optionality = schema.RelationshipRequired
+					for _, name := range relationship.Columns {
+						column, _ := table.Column(name)
+						if column.Nullable {
+							relationship.Optionality = schema.RelationshipOptional
+							break
+						}
+					}
+					break
+				}
+				if !matched {
+					return fmt.Errorf("generate: relationship %q on %q must state optionality without a matching foreign key", relationship.Name, table.Name)
+				}
+			}
+			target, ok := lookup[relationshipTargetSchema(*relationship)+"\x00"+relationship.ReferencedTable]
+			if !ok {
+				return fmt.Errorf("generate: relationship %q on %q targets missing table", relationship.Name, table.Name)
+			}
+			if len(relationship.Columns) != len(relationship.ReferencedColumns) {
+				return fmt.Errorf("generate: relationship %q has mismatched key widths", relationship.Name)
+			}
+			for columnIndex, name := range relationship.Columns {
+				sourceColumn, sourceOK := table.Column(name)
+				targetColumn, targetOK := target.Column(relationship.ReferencedColumns[columnIndex])
+				if !sourceOK || !targetOK {
+					return fmt.Errorf("generate: relationship %q references missing key column", relationship.Name)
+				}
+				if ColumnGoType(sourceColumn) != ColumnGoType(targetColumn) {
+					return fmt.Errorf("generate: relationship %q has mismatched key types", relationship.Name)
+				}
+			}
+			if relationship.Kind == schema.RelationshipBelongsTo || relationship.Kind == schema.RelationshipHasOne {
+				if !columnsAreUnique(target, relationship.ReferencedColumns) {
+					return fmt.Errorf("generate: scalar relationship %q targets non-unique columns", relationship.Name)
+				}
+			}
+			if relationship.Kind != schema.RelationshipManyToMany {
+				continue
+			}
+			through := relationship.Through
+			if through == nil {
+				return fmt.Errorf("generate: many-to-many relationship %q has no through table", relationship.Name)
+			}
+			throughTable, ok := lookup[through.Table.Schema+"\x00"+through.Table.Name]
+			if !ok {
+				return fmt.Errorf("generate: relationship %q targets missing through table", relationship.Name)
+			}
+			if len(through.SourceColumns) != len(relationship.Columns) || len(through.TargetColumns) != len(relationship.ReferencedColumns) {
+				return fmt.Errorf("generate: relationship %q has invalid through widths", relationship.Name)
+			}
+			for columnIndex, name := range through.SourceColumns {
+				throughColumn, throughOK := throughTable.Column(name)
+				sourceColumn, sourceOK := table.Column(relationship.Columns[columnIndex])
+				if !throughOK || !sourceOK || ColumnGoType(throughColumn) != ColumnGoType(sourceColumn) {
+					return fmt.Errorf("generate: relationship %q has invalid through source key", relationship.Name)
+				}
+			}
+			for columnIndex, name := range through.TargetColumns {
+				throughColumn, throughOK := throughTable.Column(name)
+				targetColumn, targetOK := target.Column(relationship.ReferencedColumns[columnIndex])
+				if !throughOK || !targetOK || ColumnGoType(throughColumn) != ColumnGoType(targetColumn) {
+					return fmt.Errorf("generate: relationship %q has invalid through target key", relationship.Name)
+				}
+			}
+		}
+	}
+	return nil
 }
-
 func mergeRelationships(table schema.TableDef) []schema.RelationshipDef {
 	relationships := make([]schema.RelationshipDef, 0, len(table.ForeignKeys))
 	matched := make([]bool, len(table.ForeignKeys))
@@ -551,10 +762,19 @@ func mergeRelationships(table schema.TableDef) []schema.RelationshipDef {
 		if matched[index] {
 			continue
 		}
-		derived := derivedRelationships(schema.TableDef{ForeignKeys: []schema.ForeignKeyDef{key}})
+		derivedTable := table
+		derivedTable.ForeignKeys = []schema.ForeignKeyDef{key}
+		derived := schema.RelationshipsFromForeignKeys(derivedTable)
 		relationships = append(relationships, derived...)
 	}
 	return relationships
+}
+
+func relationshipTargetSchema(relationship schema.RelationshipDef) string {
+	if relationship.ResolvedReferencedSchema != "" {
+		return relationship.ResolvedReferencedSchema
+	}
+	return relationship.ReferencedSchema
 }
 
 func relationshipMatchesForeignKey(relationship schema.RelationshipDef, key schema.ForeignKeyDef) bool {
@@ -643,9 +863,6 @@ func validateVariableNames(tables []schema.TableDef) error {
 			if method == "" || !token.IsIdentifier(method) {
 				return fmt.Errorf("generate: column %q on table %q cannot become a Go method", column.Name, table.Name)
 			}
-			if _, exists := reservedFieldNames[method]; exists {
-				return fmt.Errorf("generate: column %q on table %q uses reserved generated method %q", column.Name, table.Name, method)
-			}
 			for _, generated := range []string{method, method + "Ref"} {
 				if _, exists := reservedFieldNames[generated]; exists {
 					return fmt.Errorf("generate: column %q on table %q uses reserved generated method %q", column.Name, table.Name, generated)
@@ -691,14 +908,22 @@ func validateVariableNames(tables []schema.TableDef) error {
 				return fmt.Errorf("generate: relationship %q on table %q collides with generated method %q", relationship.Name, table.Name, method)
 			}
 		}
-		for _, relationship := range relationshipSpecs(table, tables) {
+		for _, relationship := range relationshipSpecs(table, tables, nil, nil) {
+			if relationship.method == "" || reservedRelationshipMethod(relationship.method) {
+				return fmt.Errorf("generate: inverse relationship on table %q uses invalid or reserved generated method %q", table.Name, relationship.method)
+			}
 			if _, exists := methods[relationship.method]; exists {
 				return fmt.Errorf("generate: relationship %q on table %q collides with generated method %q", relationship.method, table.Name, relationship.method)
 			}
 		}
 	}
 	for _, table := range tables {
-		for _, relationship := range relationshipSpecs(table, tables) {
+		seenMethods := make(map[string]string)
+		for _, relationship := range relationshipSpecs(table, tables, nil, nil) {
+			if previous, exists := seenMethods[relationship.method]; exists {
+				return fmt.Errorf("generate: relationships %q and %q on table %q collide on generated method %q", previous, relationship.identity, table.Name, relationship.method)
+			}
+			seenMethods[relationship.method] = relationship.identity
 			if _, exists := names[relationship.typeName]; exists {
 				return fmt.Errorf("generate: relationship %q on table %q duplicates generated name %q", relationship.method, table.Name, relationship.typeName)
 			}
@@ -741,59 +966,86 @@ func validateRowName(table schema.TableDef) error {
 	return nil
 }
 
-func relationshipSupportedRef(child, parent schema.TableDef, relationship schema.RelationshipDef, bindings *generatedBindings) (schema.ColumnDef, schema.ColumnDef, BindingRef, bool) {
-	if relationship.Kind != schema.RelationshipBelongsTo || len(relationship.Columns) != 1 || len(relationship.ReferencedColumns) != 1 {
-		return schema.ColumnDef{}, schema.ColumnDef{}, BindingRef{}, false
+func relationshipColumnsSupported(child, parent schema.TableDef, relationship schema.RelationshipDef, bindings *generatedBindings) ([]schema.ColumnDef, []schema.ColumnDef, string, BindingRef, bool) {
+	if (relationship.Kind != schema.RelationshipBelongsTo && relationship.Kind != schema.RelationshipHasOne && relationship.Kind != schema.RelationshipHasMany) || len(relationship.Columns) == 0 || len(relationship.Columns) != len(relationship.ReferencedColumns) {
+		return nil, nil, "", BindingRef{}, false
 	}
-	childColumn, ok := child.Column(relationship.Columns[0])
-	if !ok || childColumn.Nullable {
-		return schema.ColumnDef{}, schema.ColumnDef{}, BindingRef{}, false
-	}
-	parentColumn, ok := parent.Column(relationship.ReferencedColumns[0])
-	if !ok || parentColumn.Nullable || len(parent.PrimaryKey) != 1 || parent.PrimaryKey[0] != parentColumn.Name {
-		return schema.ColumnDef{}, schema.ColumnDef{}, BindingRef{}, false
-	}
-	_, ok = relationKeyType(parentColumn)
-	if !ok {
-		return schema.ColumnDef{}, schema.ColumnDef{}, BindingRef{}, false
-	}
-	var parentRef BindingRef
-	var childRef BindingRef
-	if bindings != nil {
-		var parentOK, childOK bool
-		parentRef, parentOK = bindings.ref(parent, parentColumn)
-		childRef, childOK = bindings.ref(child, childColumn)
-		if !parentOK || !childOK || !SameBindingType(parentRef, childRef, false) {
-			return schema.ColumnDef{}, schema.ColumnDef{}, BindingRef{}, false
+	children := make([]schema.ColumnDef, len(relationship.Columns))
+	parents := make([]schema.ColumnDef, len(relationship.Columns))
+	for index, name := range relationship.Columns {
+		childColumn, ok := child.Column(name)
+		if !ok {
+			return nil, nil, "", BindingRef{}, false
 		}
-	} else {
-		keyType, compatible := sameColumnBindingType(parentColumn, childColumn)
-		if !compatible {
-			return schema.ColumnDef{}, schema.ColumnDef{}, BindingRef{}, false
+		parentColumn, ok := parent.Column(relationship.ReferencedColumns[index])
+		if !ok || parentColumn.Nullable {
+			return nil, nil, "", BindingRef{}, false
 		}
-		resolved, err := ResolveGoBinding(parentColumn)
-		if err != nil || keyType != resolved.For(false) {
-			return schema.ColumnDef{}, schema.ColumnDef{}, BindingRef{}, false
+		if bindings != nil {
+			parentRef, parentOK := bindings.ref(parent, parentColumn)
+			childRef, childOK := bindings.ref(child, childColumn)
+			if !parentOK || !childOK || !SameBindingType(parentRef, childRef, false) {
+				return nil, nil, "", BindingRef{}, false
+			}
+		} else if ColumnGoType(childColumn) != ColumnGoType(parentColumn) {
+			return nil, nil, "", BindingRef{}, false
 		}
-		parentRef = BindingRef{key: keyType, nullable: "*" + keyType, resolved: resolved}
+		children[index], parents[index] = childColumn, parentColumn
 	}
-	return parentColumn, childColumn, parentRef, true
+	if relationship.Kind == schema.RelationshipHasMany {
+		if len(children) == 1 {
+			keyRef, ok := relationshipBindingRef(parent, parents[0], child, children[0], bindings)
+			if !ok {
+				return nil, nil, "", BindingRef{}, false
+			}
+			return children, parents, keyRef.resolved.For(false), keyRef, true
+		}
+		return children, parents, "", BindingRef{}, true
+	}
+	if len(parents) == 1 {
+		if !columnsAreUnique(parent, relationship.ReferencedColumns) {
+			return nil, nil, "", BindingRef{}, false
+		}
+		keyRef, ok := relationshipBindingRef(parent, parents[0], child, children[0], bindings)
+		if !ok {
+			return nil, nil, "", BindingRef{}, false
+		}
+		keyType := keyRef.resolved.For(false)
+		if children[0].Nullable {
+			keyType = "*" + keyType
+		}
+		return children, parents, keyType, keyRef, true
+	}
+	return children, parents, "", BindingRef{}, true
 }
 
-func relationshipSupported(child, parent schema.TableDef, relationship schema.RelationshipDef) (schema.ColumnDef, schema.ColumnDef, string, bool) {
-	parentColumn, childColumn, ref, ok := relationshipSupportedRef(child, parent, relationship, nil)
-	if !ok {
-		return schema.ColumnDef{}, schema.ColumnDef{}, "", false
+func relationshipBindingRef(parent schema.TableDef, parentColumn schema.ColumnDef, child schema.TableDef, childColumn schema.ColumnDef, bindings *generatedBindings) (BindingRef, bool) {
+	if bindings != nil {
+		parentRef, parentOK := bindings.ref(parent, parentColumn)
+		childRef, childOK := bindings.ref(child, childColumn)
+		return parentRef, parentOK && childOK && SameBindingType(parentRef, childRef, false)
 	}
-	return parentColumn, childColumn, ref.resolved.For(false), true
+	keyType, compatible := sameColumnBindingType(parentColumn, childColumn)
+	if !compatible {
+		return BindingRef{}, false
+	}
+	resolved, err := ResolveGoBinding(parentColumn)
+	if err != nil || keyType != resolved.For(false) {
+		return BindingRef{}, false
+	}
+	return BindingRef{key: keyType, nullable: "*" + keyType, resolved: resolved}, true
 }
 
 func relationshipSupportedForTable(table schema.TableDef, relationship schema.RelationshipDef, allTables []schema.TableDef) bool {
-	parent, ok := relationshipTable(allTables, relationship.ReferencedSchema, relationship.ReferencedTable)
+	parent, ok := relationshipTable(allTables, relationshipTargetSchema(relationship), relationship.ReferencedTable)
 	if !ok {
 		return false
 	}
-	_, _, _, ok = relationshipSupported(table, parent, relationship)
+	if relationship.Kind == schema.RelationshipManyToMany {
+		_, _, _, ok = manyToManyColumnsSupported(table, parent, relationship, allTables)
+		return ok
+	}
+	_, _, _, _, ok = relationshipColumnsSupported(table, parent, relationship, nil)
 	return ok
 }
 
@@ -935,8 +1187,9 @@ func containsIndexExpressions(tables []schema.TableDef) bool {
 
 // writeTableType writes the exported wrapper type: the typed table plus one
 // query.ColumnRef field per column, so a mistyped column name fails to compile.
-func writeTableType(source *bytes.Buffer, table schema.TableDef) {
-	typeName := tableTypeName(table.Name)
+func writeTableType(source *bytes.Buffer, table schema.TableDef, names *ResolvedNames) {
+	object, _ := names.Object(table)
+	typeName := object.TableType
 	source.WriteString("// ")
 	source.WriteString(typeName)
 	source.WriteString(" is the generated table type for the ")
@@ -944,21 +1197,28 @@ func writeTableType(source *bytes.Buffer, table schema.TableDef) {
 	source.WriteString(" table.\n")
 	source.WriteString("type ")
 	source.WriteString(typeName)
-	source.WriteString(" struct {\n\trasql.Table[")
-	source.WriteString(rowTypeName(table))
+	source.WriteString(" struct {\n\trasql.")
+	if table.EffectiveKind() == schema.ObjectView {
+		source.WriteString("ReadTable[")
+	} else {
+		source.WriteString("Table[")
+	}
+	source.WriteString(object.RowType)
 	source.WriteString("]\n}\n")
 }
 
 // writeTableColumns writes one accessor method per column, returning a
 // reference to that column on t.
-func writeTableColumns(source *bytes.Buffer, table schema.TableDef, bindings generatedBindings) error {
-	typeName := tableTypeName(table.Name)
+func writeTableColumns(source *bytes.Buffer, table schema.TableDef, names *ResolvedNames, bindings generatedBindings) error {
+	object, _ := names.Object(table)
+	typeName := object.TableType
 	for _, column := range table.Columns {
+		resolved, _ := names.Column(table, column.Name)
+		method := resolved.Accessor
 		fieldType, err := bindings.typeFor(table, column, column.Nullable)
 		if err != nil {
 			return err
 		}
-		method := goName(column.Name)
 		source.WriteString("// ")
 		source.WriteString(method)
 		source.WriteString(" returns a reference to the ")
@@ -973,7 +1233,7 @@ func writeTableColumns(source *bytes.Buffer, table schema.TableDef, bindings gen
 		} else {
 			source.WriteString("() query.TypedColumn[")
 		}
-		source.WriteString(rowTypeName(table))
+		source.WriteString(object.RowType)
 		source.WriteString(", ")
 		source.WriteString(fieldType)
 		source.WriteString("] { return query.")
@@ -983,25 +1243,36 @@ func writeTableColumns(source *bytes.Buffer, table schema.TableDef, bindings gen
 			source.WriteString("TypedColumnOf")
 		}
 		source.WriteString("[")
-		source.WriteString(rowTypeName(table))
+		source.WriteString(object.RowType)
 		source.WriteString(", ")
 		source.WriteString(fieldType)
-		source.WriteString("](rasql.ColumnOf(t.Table, ")
+		source.WriteString("](")
+		if table.EffectiveKind() == schema.ObjectView {
+			source.WriteString("t.Column(")
+		} else {
+			source.WriteString("rasql.ColumnOf(t.Table, ")
+		}
 		source.WriteString(quote(column.Name))
 		source.WriteString(")) }\n")
 		source.WriteString("func (t ")
 		source.WriteString(typeName)
 		source.WriteString(") ")
 		source.WriteString(method)
-		source.WriteString("Ref() rasql.ColumnRef { return rasql.ColumnOf(t.Table, ")
+		source.WriteString("Ref() rasql.ColumnRef { return ")
+		if table.EffectiveKind() == schema.ObjectView {
+			source.WriteString("t.Column(")
+		} else {
+			source.WriteString("rasql.ColumnOf(t.Table, ")
+		}
 		source.WriteString(quote(column.Name))
 		source.WriteString(") }\n")
 	}
 	return nil
 }
 
-func writeTableAccessor(source *bytes.Buffer, table schema.TableDef) {
-	accessor := variableName(table.Name)
+func writeTableAccessor(source *bytes.Buffer, table schema.TableDef, names *ResolvedNames) {
+	object, _ := names.Object(table)
+	accessor := object.Accessor
 	source.WriteString("// ")
 	source.WriteString(accessor)
 	source.WriteString(" returns the descriptor for the ")
@@ -1010,35 +1281,45 @@ func writeTableAccessor(source *bytes.Buffer, table schema.TableDef) {
 	source.WriteString("func ")
 	source.WriteString(accessor)
 	source.WriteString("() ")
-	source.WriteString(tableTypeName(table.Name))
+	source.WriteString(object.TableType)
 	source.WriteString(" {\n\treturn ")
-	source.WriteString(descriptorName(table.Name))
+	source.WriteString(object.DescriptorVar)
 	source.WriteString("\n}\n")
 }
 
 // writeTableAs writes the alias constructor. Its body is fixed regardless of
 // table width: the accessor methods read the embedded table they are called
 // on, so nothing needs rebinding.
-func writeTableAs(source *bytes.Buffer, table schema.TableDef) {
-	typeName := tableTypeName(table.Name)
+func writeTableAs(source *bytes.Buffer, table schema.TableDef, names *ResolvedNames) {
+	object, _ := names.Object(table)
+	typeName := object.TableType
 	source.WriteString("// As returns the table under alias.\n")
 	source.WriteString("func (t ")
 	source.WriteString(typeName)
 	source.WriteString(") As(alias string) (")
 	source.WriteString(typeName)
 	source.WriteString(", error) {\n")
-	source.WriteString("\taliased, err := rasql.As(t.Table, alias)\n")
+	if table.EffectiveKind() == schema.ObjectView {
+		source.WriteString("\taliased, err := rasql.AsRead(t.ReadTable, alias)\n")
+	} else {
+		source.WriteString("\taliased, err := rasql.As(t.Table, alias)\n")
+	}
 	source.WriteString("\tif err != nil {\n\t\treturn ")
 	source.WriteString(typeName)
 	source.WriteString("{}, err\n\t}\n\treturn ")
 	source.WriteString(typeName)
-	source.WriteString("{Table: aliased}, nil\n}\n")
+	if table.EffectiveKind() == schema.ObjectView {
+		source.WriteString("{ReadTable: aliased}, nil\n}\n")
+	} else {
+		source.WriteString("{Table: aliased}, nil\n}\n")
+	}
 }
 
 // writeRowType writes the exported row type: one field per column, in the
 // order the table declares them.
-func writeRowType(source *bytes.Buffer, table schema.TableDef, bindings generatedBindings) error {
-	typeName := rowTypeName(table)
+func writeRowType(source *bytes.Buffer, table schema.TableDef, names *ResolvedNames, bindings generatedBindings) error {
+	object, _ := names.Object(table)
+	typeName := object.RowType
 	source.WriteString("// ")
 	source.WriteString(typeName)
 	source.WriteString(" is one row of the ")
@@ -1049,7 +1330,8 @@ func writeRowType(source *bytes.Buffer, table schema.TableDef, bindings generate
 	source.WriteString(" struct {\n")
 	for _, column := range table.Columns {
 		source.WriteString("\t")
-		source.WriteString(goName(column.Name))
+		resolved, _ := names.Column(table, column.Name)
+		source.WriteString(resolved.Field)
 		source.WriteByte(' ')
 		fieldType, err := bindings.typeFor(table, column, column.Nullable)
 		if err != nil {
@@ -1063,107 +1345,240 @@ func writeRowType(source *bytes.Buffer, table schema.TableDef, bindings generate
 }
 
 type relationshipSpec struct {
-	kind          schema.RelationshipKind
-	method        string
-	typeName      string
-	parent        schema.TableDef
-	child         schema.TableDef
-	parentColumn  schema.ColumnDef
-	childColumn   schema.ColumnDef
-	parentField   string
-	childField    string
-	parentKeyType string
-	parentKeyRef  BindingRef
+	kind                   schema.RelationshipKind
+	method                 string
+	identity               string
+	typeName               string
+	parent                 schema.TableDef
+	child                  schema.TableDef
+	parentColumn           schema.ColumnDef
+	childColumn            schema.ColumnDef
+	parentField            string
+	childField             string
+	parentAccessor         string
+	childAccessor          string
+	parentKeyType          string
+	parentType             string
+	childType              string
+	parentRow              string
+	childRow               string
+	parentKeyRef           BindingRef
+	parentColumns          []schema.ColumnDef
+	childColumns           []schema.ColumnDef
+	parentFields           []string
+	childFields            []string
+	keyName                string
+	keyFields              []string
+	keyColumns             []schema.ColumnDef
+	through                schema.TableDef
+	throughSource          []schema.ColumnDef
+	throughTarget          []schema.ColumnDef
+	throughRow             string
+	throughTableAccessor   string
+	childTableAccessor     string
+	throughSourceAccessors []string
+	throughTargetAccessors []string
+	childColumnAccessors   []string
+	childAllAccessors      []string
+	targetPrimaryKeyTypes  []string
+	targetPrimaryKeyFields []string
+	parentColumnTypes      []string
+	childColumnTypes       []string
 }
 
 type inverseRelationshipCandidate struct {
-	child        schema.TableDef
-	relationship schema.RelationshipDef
-	parentColumn schema.ColumnDef
-	childColumn  schema.ColumnDef
-	keyType      string
-	keyRef       BindingRef
+	child         schema.TableDef
+	relationship  schema.RelationshipDef
+	parentColumn  schema.ColumnDef
+	childColumn   schema.ColumnDef
+	keyType       string
+	parentColumns []schema.ColumnDef
+	childColumns  []schema.ColumnDef
+	kind          schema.RelationshipKind
+	keyRef        BindingRef
 }
 
-func containsRelationships(tables, allTables []schema.TableDef, bindings ...generatedBindings) bool {
-	var state *generatedBindings
-	if len(bindings) > 0 {
-		state = &bindings[0]
-	}
+func containsRelationships(tables, allTables []schema.TableDef, names *ResolvedNames, bindings *generatedBindings) bool {
 	for _, table := range tables {
-		if len(relationshipSpecs(table, allTables, state)) > 0 {
+		if len(relationshipSpecs(table, allTables, names, bindings)) > 0 {
 			return true
 		}
 	}
 	return false
 }
 
-func relationshipSpecs(table schema.TableDef, allTables []schema.TableDef, bindings ...*generatedBindings) []relationshipSpec {
-	var state *generatedBindings
-	if len(bindings) > 0 {
-		state = bindings[0]
-	}
+func relationshipSpecs(table schema.TableDef, allTables []schema.TableDef, names *ResolvedNames, bindings *generatedBindings) []relationshipSpec {
 	result := make([]relationshipSpec, 0)
 	usedMethods := make(map[string]struct{})
 	for _, column := range table.Columns {
-		method := goName(column.Name)
-		usedMethods[method] = struct{}{}
-		usedMethods[method+"Ref"] = struct{}{}
+		accessor := resolvedColumnName(names, table, column.Name).Accessor
+		usedMethods[accessor] = struct{}{}
+		usedMethods[accessor+"Ref"] = struct{}{}
 	}
 	for _, relationship := range table.Relationships {
-		parent, ok := relationshipTable(allTables, relationship.ReferencedSchema, relationship.ReferencedTable)
+		parent, ok := relationshipTable(allTables, relationshipTargetSchema(relationship), relationship.ReferencedTable)
 		if !ok {
 			continue
 		}
-		parentColumn, childColumn, keyRef, ok := relationshipSupportedRef(table, parent, relationship, state)
+		if relationship.Kind == schema.RelationshipManyToMany {
+			through, sourceColumns, targetColumns, ok := manyToManyColumnsSupported(table, parent, relationship, allTables)
+			if !ok {
+				continue
+			}
+			method := goName(relationship.Name)
+			if !token.IsIdentifier(method) || reservedRelationshipMethod(method) {
+				continue
+			}
+			if _, exists := usedMethods[method]; exists {
+				method = nextRelationshipMethod(method, usedMethods)
+			}
+			usedMethods[method] = struct{}{}
+			keyType := ""
+			var keyRef BindingRef
+			if len(sourceColumns) == 1 {
+				if bindings != nil {
+					keyRef, ok = bindings.ref(table, sourceColumns[0])
+					if !ok {
+						continue
+					}
+				} else {
+					resolved, err := ResolveGoBinding(sourceColumns[0])
+					if err != nil {
+						continue
+					}
+					keyRef = BindingRef{key: resolved.For(false), nullable: resolved.For(true), resolved: resolved}
+				}
+				keyType = keyRef.resolved.For(false)
+			}
+			parentObject := resolvedObjectName(names, table)
+			childObject := resolvedObjectName(names, parent)
+			throughObject := resolvedObjectName(names, through)
+			parentColumn := resolvedColumnName(names, table, sourceColumns[0].Name)
+			childColumn := resolvedColumnName(names, parent, targetColumns[0].Name)
+			throughSource := relationshipThroughColumns(through, relationship.Through.SourceColumns)
+			throughTarget := relationshipThroughColumns(through, relationship.Through.TargetColumns)
+			result = append(result, relationshipSpec{kind: relationship.Kind, method: method, identity: relationshipIdentity(table, relationship), typeName: parentObject.TableType + method + "Relation", parent: table, child: parent, parentColumn: sourceColumns[0], childColumn: targetColumns[0], parentField: parentColumn.Field, childField: childColumn.Field, parentAccessor: parentColumn.Accessor, childAccessor: childColumn.Accessor, parentKeyType: keyType, parentColumns: sourceColumns, childColumns: targetColumns, parentFields: resolvedColumnFields(names, table, sourceColumns), childFields: resolvedColumnFields(names, parent, targetColumns), keyName: parentObject.TableType + method + "Key", keyFields: resolvedColumnFields(names, table, sourceColumns), keyColumns: sourceColumns, through: through, throughSource: throughSource, throughTarget: throughTarget, parentType: parentObject.TableType, childType: childObject.TableType, parentRow: parentObject.RowType, childRow: childObject.RowType, parentKeyRef: keyRef, throughRow: throughObject.RowType, throughTableAccessor: throughObject.Accessor, childTableAccessor: childObject.Accessor, throughSourceAccessors: resolvedColumnAccessors(names, through, throughSource), throughTargetAccessors: resolvedColumnAccessors(names, through, throughTarget), childColumnAccessors: resolvedColumnAccessors(names, parent, targetColumns), childAllAccessors: resolvedColumnAccessors(names, parent, parent.Columns)})
+			continue
+		}
+		childColumns, parentColumns, keyType, keyRef, ok := relationshipColumnsSupported(table, parent, relationship, bindings)
 		if !ok {
 			continue
 		}
+		if relationship.Kind == schema.RelationshipHasMany {
+			method := goName(relationship.Name)
+			if !token.IsIdentifier(method) || reservedRelationshipMethod(method) {
+				continue
+			}
+			if _, exists := usedMethods[method]; exists {
+				method = nextRelationshipMethod(method, usedMethods)
+			}
+			usedMethods[method] = struct{}{}
+			parentObject := resolvedObjectName(names, table)
+			childObject := resolvedObjectName(names, parent)
+			parentColumnName := resolvedColumnName(names, table, childColumns[0].Name)
+			childColumnName := resolvedColumnName(names, parent, parentColumns[0].Name)
+			result = append(result, relationshipSpec{
+				kind:           relationship.Kind,
+				method:         method,
+				identity:       relationshipIdentity(table, relationship),
+				typeName:       parentObject.TableType + method + "Relation",
+				parent:         table,
+				child:          parent,
+				parentColumn:   childColumns[0],
+				childColumn:    parentColumns[0],
+				parentField:    parentColumnName.Field,
+				childField:     childColumnName.Field,
+				parentAccessor: parentColumnName.Accessor,
+				childAccessor:  childColumnName.Accessor,
+				parentKeyType:  keyType,
+				parentColumns:  childColumns,
+				childColumns:   parentColumns,
+				parentFields:   resolvedColumnFields(names, table, childColumns),
+				childFields:    resolvedColumnFields(names, parent, parentColumns),
+				keyName:        parentObject.TableType + method + "Key",
+				keyFields:      resolvedColumnFields(names, table, childColumns),
+				keyColumns:     childColumns,
+				parentType:     parentObject.TableType, childType: childObject.TableType,
+				parentRow: parentObject.RowType, childRow: childObject.RowType,
+				parentKeyRef: keyRef,
+			})
+			continue
+		}
+		parentColumn, childColumn := parentColumns[0], childColumns[0]
 		method := goName(relationship.Name)
 		if !token.IsIdentifier(method) || reservedRelationshipMethod(method) {
 			continue
 		}
 		if _, exists := usedMethods[method]; exists {
-			base := method
-			for suffix := 2; ; suffix++ {
-				candidate := base + strconv.Itoa(suffix)
-				if _, occupied := usedMethods[candidate]; !occupied && !reservedRelationshipMethod(candidate) {
-					method = candidate
-					break
-				}
-			}
+			method = nextRelationshipMethod(method, usedMethods)
 		}
 		usedMethods[method] = struct{}{}
+		childType := tableTypeName(table.Name)
+		parentType := tableTypeName(parent.Name)
+		childRow := rowTypeName(table)
+		parentRow := rowTypeName(parent)
+		parentField, childField := goName(parentColumn.Name), goName(childColumn.Name)
+		parentAccessor, childAccessor := parentField, childField
+		if names != nil {
+			if resolved, ok := names.Object(table); ok {
+				childType = resolved.TableType
+				childRow = resolved.RowType
+			}
+			if resolved, ok := names.Object(parent); ok {
+				parentType = resolved.TableType
+				parentRow = resolved.RowType
+			}
+			if resolved, ok := names.Column(parent, parentColumn.Name); ok {
+				parentAccessor = resolved.Accessor
+				parentField = resolved.Field
+			}
+			if resolved, ok := names.Column(table, childColumn.Name); ok {
+				childAccessor = resolved.Accessor
+				childField = resolved.Field
+			}
+		}
 		result = append(result, relationshipSpec{
-			kind:          schema.RelationshipBelongsTo,
-			method:        method,
-			typeName:      tableTypeName(table.Name) + method + "Relation",
-			parent:        parent,
-			child:         table,
-			parentColumn:  parentColumn,
-			childColumn:   childColumn,
-			parentField:   goName(parentColumn.Name),
-			childField:    goName(childColumn.Name),
-			parentKeyType: keyRef.resolved.For(false), parentKeyRef: keyRef,
+			kind:           relationship.Kind,
+			method:         method,
+			identity:       relationshipIdentity(table, relationship),
+			typeName:       childType + method + "Relation",
+			parent:         parent,
+			child:          table,
+			parentColumn:   parentColumn,
+			childColumn:    childColumn,
+			parentField:    parentField,
+			childField:     childField,
+			parentKeyType:  keyType,
+			parentAccessor: parentAccessor, childAccessor: childAccessor,
+			parentType: parentType, childType: childType, parentRow: parentRow, childRow: childRow,
+			parentKeyRef:  keyRef,
+			parentColumns: parentColumns, childColumns: childColumns,
+			parentFields: resolvedColumnFields(names, parent, parentColumns), childFields: resolvedColumnFields(names, table, childColumns),
+			keyName:   childType + method + "Key",
+			keyFields: resolvedColumnFields(names, table, childColumns), keyColumns: childColumns,
 		})
 	}
 
 	candidates := make([]inverseRelationshipCandidate, 0)
 	for _, child := range allTables {
 		for _, relationship := range child.Relationships {
-			if relationship.ReferencedTable != table.Name || relationship.ReferencedSchema != table.Schema {
+			if relationship.ReferencedTable != table.Name || relationshipTargetSchema(relationship) != table.Schema {
 				continue
 			}
-			parentColumn, childColumn, keyRef, ok := relationshipSupportedRef(child, table, relationship, state)
+			childColumns, parentColumns, keyType, keyRef, ok := relationshipColumnsSupported(child, table, relationship, bindings)
 			if !ok {
 				continue
 			}
+			parentColumn, childColumn := parentColumns[0], childColumns[0]
 			candidates = append(candidates, inverseRelationshipCandidate{
-				child:        child,
-				relationship: relationship,
-				parentColumn: parentColumn,
-				childColumn:  childColumn,
-				keyType:      keyRef.resolved.For(false), keyRef: keyRef,
+				child:         child,
+				relationship:  relationship,
+				parentColumn:  parentColumn,
+				childColumn:   childColumn,
+				keyType:       keyType,
+				parentColumns: parentColumns, childColumns: childColumns,
+				kind:   inverseKind(child, relationship),
+				keyRef: keyRef,
 			})
 		}
 	}
@@ -1172,67 +1587,181 @@ func relationshipSpecs(table schema.TableDef, allTables []schema.TableDef, bindi
 		rightKey := inverseRelationshipSortKey(candidates[right])
 		return leftKey < rightKey
 	})
+	groups := make(map[string]int)
 	for _, candidate := range candidates {
-		method := inverseRelationshipMethodName(candidate.child, candidate.relationship, usedMethods)
-		if method == "" {
-			continue
+		key := candidate.child.Schema + "\x00" + candidate.child.Name + "\x00" + table.Schema + "\x00" + table.Name
+		groups[key]++
+	}
+	for _, candidate := range candidates {
+		key := candidate.child.Schema + "\x00" + candidate.child.Name + "\x00" + table.Schema + "\x00" + table.Name
+		method := inverseRelationshipMethodName(candidate.child, candidate.relationship, groups[key])
+		parentType, childType := tableTypeName(table.Name), tableTypeName(candidate.child.Name)
+		parentRow, childRow := rowTypeName(table), rowTypeName(candidate.child)
+		parentField, childField := goName(candidate.parentColumn.Name), goName(candidate.childColumn.Name)
+		parentAccessor, childAccessor := parentField, childField
+		if names != nil {
+			if resolved, ok := names.Object(table); ok {
+				parentType, parentRow = resolved.TableType, resolved.RowType
+			}
+			if resolved, ok := names.Object(candidate.child); ok {
+				childType, childRow = resolved.TableType, resolved.RowType
+			}
+			if resolved, ok := names.Column(table, candidate.parentColumn.Name); ok {
+				parentAccessor = resolved.Accessor
+				parentField = resolved.Field
+			}
+			if resolved, ok := names.Column(candidate.child, candidate.childColumn.Name); ok {
+				childAccessor = resolved.Accessor
+				childField = resolved.Field
+			}
 		}
-		usedMethods[method] = struct{}{}
 		result = append(result, relationshipSpec{
-			kind:          schema.RelationshipHasMany,
-			method:        method,
-			typeName:      tableTypeName(table.Name) + method + "Relation",
-			parent:        table,
-			child:         candidate.child,
-			parentColumn:  candidate.parentColumn,
-			childColumn:   candidate.childColumn,
-			parentField:   goName(candidate.parentColumn.Name),
-			childField:    goName(candidate.childColumn.Name),
-			parentKeyType: candidate.keyType,
+			kind:           candidate.kind,
+			method:         method,
+			identity:       relationshipIdentity(candidate.child, candidate.relationship),
+			typeName:       parentType + method + "Relation",
+			parent:         table,
+			child:          candidate.child,
+			parentColumn:   candidate.parentColumn,
+			childColumn:    candidate.childColumn,
+			parentField:    parentField,
+			childField:     childField,
+			parentKeyType:  candidate.keyType,
+			parentAccessor: parentAccessor, childAccessor: childAccessor,
+			parentType: parentType, childType: childType, parentRow: parentRow, childRow: childRow,
 			parentKeyRef:  candidate.keyRef,
+			parentColumns: candidate.parentColumns, childColumns: candidate.childColumns,
+			parentFields: resolvedColumnFields(names, table, candidate.parentColumns), childFields: resolvedColumnFields(names, candidate.child, candidate.childColumns),
+			keyName:   parentType + method + "Key",
+			keyFields: resolvedColumnFields(names, table, candidate.parentColumns), keyColumns: candidate.parentColumns,
 		})
+	}
+	for index := range result {
+		result[index].parentColumnTypes = relationshipColumnTypes(bindings, result[index].parent, result[index].parentColumns)
+		result[index].childColumnTypes = relationshipColumnTypes(bindings, result[index].child, result[index].childColumns)
+		target := result[index].child
+		if result[index].kind == schema.RelationshipBelongsTo {
+			target = result[index].parent
+		}
+		result[index].targetPrimaryKeyTypes = make([]string, len(target.PrimaryKey))
+		result[index].targetPrimaryKeyFields = make([]string, len(target.PrimaryKey))
+		for keyIndex, name := range target.PrimaryKey {
+			column, _ := target.Column(name)
+			if bindings != nil {
+				result[index].targetPrimaryKeyTypes[keyIndex], _ = bindings.typeFor(target, column, false)
+			} else {
+				binding, _ := ResolveGoBinding(column)
+				result[index].targetPrimaryKeyTypes[keyIndex] = binding.For(false)
+			}
+			resolved := resolvedColumnName(names, target, name)
+			result[index].targetPrimaryKeyFields[keyIndex] = resolved.Field
+		}
 	}
 	return result
 }
 
+func nextRelationshipMethod(base string, used map[string]struct{}) string {
+	for suffix := 2; ; suffix++ {
+		candidate := base + strconv.Itoa(suffix)
+		if _, occupied := used[candidate]; !occupied && !reservedRelationshipMethod(candidate) {
+			return candidate
+		}
+	}
+}
+
+func relationshipColumnTypes(bindings *generatedBindings, table schema.TableDef, columns []schema.ColumnDef) []string {
+	types := make([]string, len(columns))
+	for index, column := range columns {
+		if bindings != nil {
+			types[index], _ = bindings.typeFor(table, column, false)
+		} else {
+			binding, _ := ResolveGoBinding(column)
+			types[index] = binding.For(false)
+		}
+	}
+	return types
+}
+
+func relationshipThroughColumns(table schema.TableDef, names []string) []schema.ColumnDef {
+	result := make([]schema.ColumnDef, len(names))
+	for index, name := range names {
+		result[index], _ = table.Column(name)
+	}
+	return result
+}
+
+func manyToManyColumnsSupported(source, target schema.TableDef, relationship schema.RelationshipDef, allTables []schema.TableDef) (schema.TableDef, []schema.ColumnDef, []schema.ColumnDef, bool) {
+	if relationship.Through == nil || len(relationship.Columns) == 0 || len(relationship.Columns) != len(relationship.ReferencedColumns) || len(relationship.Columns) != len(relationship.Through.SourceColumns) || len(relationship.ReferencedColumns) != len(relationship.Through.TargetColumns) {
+		return schema.TableDef{}, nil, nil, false
+	}
+	through, ok := relationshipTable(allTables, relationship.Through.Table.Schema, relationship.Through.Table.Name)
+	if !ok {
+		return schema.TableDef{}, nil, nil, false
+	}
+	sourceColumns, targetColumns := relationshipThroughColumns(source, relationship.Columns), relationshipThroughColumns(target, relationship.ReferencedColumns)
+	for index, name := range relationship.Through.SourceColumns {
+		throughColumn, found := through.Column(name)
+		_, compatible := sameColumnBindingType(throughColumn, sourceColumns[index])
+		if !found || !compatible {
+			return schema.TableDef{}, nil, nil, false
+		}
+	}
+	for index, name := range relationship.Through.TargetColumns {
+		throughColumn, found := through.Column(name)
+		_, compatible := sameColumnBindingType(throughColumn, targetColumns[index])
+		if !found || !compatible {
+			return schema.TableDef{}, nil, nil, false
+		}
+	}
+	return through, sourceColumns, targetColumns, true
+}
+
 func inverseRelationshipSortKey(candidate inverseRelationshipCandidate) string {
+	return relationshipIdentity(candidate.child, candidate.relationship)
+}
+
+func inverseKind(child schema.TableDef, relationship schema.RelationshipDef) schema.RelationshipKind {
+	if columnsAreUnique(child, relationship.Columns) {
+		return schema.RelationshipHasOne
+	}
+	return schema.RelationshipHasMany
+}
+
+func columnsAreUnique(table schema.TableDef, columns []string) bool {
+	if slices.Equal(table.PrimaryKey, columns) {
+		return true
+	}
+	for _, unique := range table.UniqueConstraints {
+		if slices.Equal(unique.Columns, columns) {
+			return true
+		}
+	}
+	return false
+}
+
+func relationshipIdentity(child schema.TableDef, relationship schema.RelationshipDef) string {
 	return strings.Join([]string{
-		candidate.child.Schema,
-		candidate.child.Name,
-		candidate.relationship.Name,
-		strings.Join(candidate.relationship.Columns, "\x00"),
-		strings.Join(candidate.relationship.ReferencedColumns, "\x00"),
-		candidate.parentColumn.Name,
-		candidate.childColumn.Name,
+		child.Schema,
+		child.Name,
+		relationship.Name,
+		strings.Join(relationship.Columns, "\x00"),
+		relationshipTargetSchema(relationship),
+		relationship.ReferencedTable,
+		strings.Join(relationship.ReferencedColumns, "\x00"),
 	}, "\x00")
 }
 
 // Inverse methods use the child table name when it is available. A collision
 // or reserved name gets the relationship name as a stable prefix, followed by
 // a numeric suffix only when that name is also occupied.
-func inverseRelationshipMethodName(child schema.TableDef, relationship schema.RelationshipDef, usedMethods map[string]struct{}) string {
-	base := variableName(child.Name)
-	if base == "" {
-		return ""
+func inverseRelationshipMethodName(child schema.TableDef, relationship schema.RelationshipDef, groupSize int) string {
+	if relationship.InverseName != "" {
+		return goName(relationship.InverseName)
 	}
-	if _, exists := usedMethods[base]; !exists && !reservedRelationshipMethod(base) {
-		return base
+	if groupSize == 1 {
+		return variableName(child.Name)
 	}
-
-	prefix := goName(relationship.Name)
-	if prefix == "" {
-		return ""
-	}
-	base = prefix + base
-	if _, exists := usedMethods[base]; !exists && !reservedRelationshipMethod(base) {
-		return base
-	}
-	for suffix := 2; ; suffix++ {
-		candidate := base + strconv.Itoa(suffix)
-		if _, exists := usedMethods[candidate]; !exists && !reservedRelationshipMethod(candidate) {
-			return candidate
-		}
-	}
+	return goName(relationship.Name) + variableName(child.Name)
 }
 
 func relationshipTable(tables []schema.TableDef, referencedSchema, referencedName string) (schema.TableDef, bool) {
@@ -1248,16 +1777,40 @@ func relationshipTable(tables []schema.TableDef, referencedSchema, referencedNam
 	return schema.TableDef{}, false
 }
 
-func relationKeyType(column schema.ColumnDef) (string, bool) {
-	binding, err := ResolveGoBinding(column)
-	if err != nil {
-		return "", false
+func resolvedColumnFields(names *ResolvedNames, table schema.TableDef, columns []schema.ColumnDef) []string {
+	fields := make([]string, len(columns))
+	for index, column := range columns {
+		resolved := resolvedColumnName(names, table, column.Name)
+		fields[index] = resolved.Field
 	}
-	fieldType := binding.For(false)
-	if fieldType == "[]byte" || column.Nullable {
-		return "", false
+	return fields
+}
+
+func resolvedColumnAccessors(names *ResolvedNames, table schema.TableDef, columns []schema.ColumnDef) []string {
+	accessors := make([]string, len(columns))
+	for index, column := range columns {
+		resolved := resolvedColumnName(names, table, column.Name)
+		accessors[index] = resolved.Accessor
 	}
-	return fieldType, true
+	return accessors
+}
+
+func resolvedObjectName(names *ResolvedNames, table schema.TableDef) ResolvedObjectNames {
+	if names != nil {
+		if resolved, ok := names.Object(table); ok {
+			return resolved
+		}
+	}
+	return ResolvedObjectNames{Accessor: variableName(table.Name), TableType: tableTypeName(table.Name), RowType: rowTypeName(table)}
+}
+
+func resolvedColumnName(names *ResolvedNames, table schema.TableDef, column string) ResolvedColumnNames {
+	if names != nil {
+		if resolved, ok := names.Column(table, column); ok {
+			return resolved
+		}
+	}
+	return ResolvedColumnNames{Field: goName(column), Accessor: goName(column)}
 }
 
 func reservedRelationshipMethod(name string) bool {
@@ -1267,57 +1820,94 @@ func reservedRelationshipMethod(name string) bool {
 
 func selfRelationshipAlias(relationship relationshipSpec) string {
 	role := "parent"
-	if relationship.kind == schema.RelationshipHasMany {
+	if relationship.kind == schema.RelationshipHasMany || relationship.kind == schema.RelationshipManyToMany {
 		role = "child"
 	}
 	return strings.ToLower(variableName(relationship.parent.Name)) + "_" + strings.ToLower(relationship.method) + "_" + role
 }
 
-func writeRelationships(source *bytes.Buffer, table schema.TableDef, allTables []schema.TableDef, bindings generatedBindings) error {
-	for _, relationship := range relationshipSpecs(table, allTables, &bindings) {
-		keyType, err := bindings.set.Type(relationship.parentKeyRef, false)
-		if err != nil {
-			return err
+func writeRelationships(source *bytes.Buffer, table schema.TableDef, allTables []schema.TableDef, names *ResolvedNames, bindings generatedBindings) error {
+	tableObject, _ := names.Object(table)
+	for _, relationship := range relationshipSpecs(table, allTables, names, &bindings) {
+		if len(relationship.parentColumns) == 1 {
+			keyType, err := bindings.set.Type(relationship.parentKeyRef, false)
+			if err != nil {
+				return err
+			}
+			if strings.HasPrefix(relationship.parentKeyType, "*") {
+				keyType = "*" + keyType
+			}
+			relationship.parentKeyType = keyType
 		}
-		relationship.parentKeyType = keyType
+		if len(relationship.parentColumns) > 1 {
+			keyTable := relationship.parent
+			if relationship.kind == schema.RelationshipBelongsTo {
+				keyTable = relationship.child
+			}
+			source.WriteString("// ")
+			source.WriteString(relationship.keyName)
+			source.WriteString(" is the ordered composite key for the ")
+			source.WriteString(relationship.method)
+			source.WriteString(" relationship.\ntype ")
+			source.WriteString(relationship.keyName)
+			source.WriteString(" struct {\n")
+			for index, column := range relationship.keyColumns {
+				source.WriteString("\t")
+				source.WriteString(relationship.keyFields[index])
+				source.WriteByte(' ')
+				fieldType, err := bindings.typeFor(keyTable, column, column.Nullable)
+				if err != nil {
+					return err
+				}
+				source.WriteString(fieldType)
+				source.WriteByte('\n')
+			}
+			source.WriteString("}\n\n")
+		}
 		source.WriteString("// ")
 		source.WriteString(relationship.typeName)
 		source.WriteString(" describes the ")
 		source.WriteString(relationship.method)
 		source.WriteString(" relationship from ")
-		source.WriteString(tableTypeName(table.Name))
+		source.WriteString(tableObject.TableType)
 		source.WriteString(".\n")
 		source.WriteString("type ")
 		source.WriteString(relationship.typeName)
 		source.WriteString(" struct {\n")
 		source.WriteString("\tParent ")
-		source.WriteString(tableTypeName(relationship.parent.Name))
+		source.WriteString(relationship.parentType)
 		source.WriteString("\n\tChild ")
-		source.WriteString(tableTypeName(relationship.child.Name))
-		source.WriteString("\n\tParentKey rasql.ColumnRef\n\tChildKey rasql.ColumnRef\n}\n\n")
+		source.WriteString(relationship.childType)
+		if len(relationship.parentColumns) == 1 {
+			source.WriteString("\n\tParentKey rasql.ColumnRef\n\tChildKey rasql.ColumnRef\n}\n\n")
+		} else {
+			source.WriteString("\n\tParentKey []rasql.ColumnRef\n\tChildKey []rasql.ColumnRef\n}\n\n")
+		}
 
 		source.WriteString("// ")
 		source.WriteString(relationship.method)
 		source.WriteString(" returns the generated relationship descriptor.\n")
 		source.WriteString("func (t ")
-		source.WriteString(tableTypeName(table.Name))
+		source.WriteString(tableObject.TableType)
 		source.WriteString(") ")
 		source.WriteString(relationship.method)
 		source.WriteString("() ")
 		source.WriteString(relationship.typeName)
 		source.WriteString(" {\n")
-		if relationship.kind == schema.RelationshipHasMany {
+		if relationship.kind != schema.RelationshipBelongsTo {
 			source.WriteString("\tchild := ")
-			source.WriteString(variableName(relationship.child.Name))
+			childObject, _ := names.Object(relationship.child)
+			source.WriteString(childObject.Accessor)
 			source.WriteString("()\n\tparent := t\n")
 		} else {
 			source.WriteString("\tchild := t\n\tparent := ")
-			source.WriteString(variableName(relationship.parent.Name))
+			parentObject, _ := names.Object(relationship.parent)
+			source.WriteString(parentObject.Accessor)
 			source.WriteString("()\n")
 		}
 		if relationship.parent.Schema == relationship.child.Schema && relationship.parent.Name == relationship.child.Name {
 			joined := "parent"
-			if relationship.kind == schema.RelationshipHasMany {
+			if relationship.kind == schema.RelationshipHasMany || relationship.kind == schema.RelationshipManyToMany {
 				joined = "child"
 			}
 			source.WriteString("\taliased, err := ")
@@ -1330,100 +1920,998 @@ func writeRelationships(source *bytes.Buffer, table schema.TableDef, allTables [
 		}
 		source.WriteString("\treturn ")
 		source.WriteString(relationship.typeName)
-		source.WriteString("{Parent: parent, Child: child, ParentKey: parent.")
-		source.WriteString(relationship.parentField)
-		source.WriteString("().Ref(), ChildKey: child.")
-		source.WriteString(relationship.childField)
-		source.WriteString("().Ref()}\n}\n\n")
+		source.WriteString("{Parent: parent, Child: child, ")
+		if len(relationship.parentColumns) == 1 {
+			source.WriteString("ParentKey: parent.")
+			source.WriteString(relationship.parentAccessor)
+			source.WriteString("Ref(), ChildKey: child.")
+			source.WriteString(relationship.childAccessor)
+			source.WriteString("Ref()}")
+		} else {
+			source.WriteString("ParentKey: []rasql.ColumnRef{")
+			for index := range relationship.parentFields {
+				if index > 0 {
+					source.WriteString(", ")
+				}
+				source.WriteString("parent.")
+				resolved, _ := names.Column(relationship.parent, relationship.parentColumns[index].Name)
+				source.WriteString(resolved.Accessor)
+				source.WriteString("Ref()")
+			}
+			source.WriteString("}, ChildKey: []rasql.ColumnRef{")
+			for index := range relationship.childFields {
+				if index > 0 {
+					source.WriteString(", ")
+				}
+				source.WriteString("child.")
+				resolved, _ := names.Column(relationship.child, relationship.childColumns[index].Name)
+				source.WriteString(resolved.Accessor)
+				source.WriteString("Ref()")
+			}
+			source.WriteString("}}")
+		}
+		source.WriteString("\n}\n\n")
 
 		source.WriteString("// Join returns an INNER JOIN for the relationship.\n")
 		source.WriteString("func (r ")
 		source.WriteString(relationship.typeName)
 		source.WriteString(") Join() rasql.Join {\n\treturn rasql.InnerJoin(r.")
-		if relationship.kind == schema.RelationshipHasMany {
+		if relationship.kind == schema.RelationshipHasMany || relationship.kind == schema.RelationshipManyToMany {
 			source.WriteString("Child")
 		} else {
 			source.WriteString("Parent")
 		}
-		source.WriteString(", rasql.Equal(r.ParentKey, r.ChildKey))\n}\n\n")
+		if len(relationship.parentColumns) == 1 {
+			source.WriteString(", rasql.Equal(r.ParentKey, r.ChildKey))\n}\n\n")
+		} else {
+			source.WriteString(", query.And(")
+			for index := range relationship.parentColumns {
+				if index > 0 {
+					source.WriteString(", ")
+				}
+				source.WriteString("query.Equal(r.ParentKey")
+				fmt.Fprintf(source, "[%d], r.ChildKey[%d]", index, index)
+				source.WriteByte(')')
+			}
+			source.WriteString("))\n}\n\n")
+		}
 		writeRelationshipLoad(source, relationship)
+		writeRelationshipKeyHelpers(source, relationship)
 	}
 	return nil
 }
 
+func writeRelationshipKeyHelpers(source *bytes.Buffer, relationship relationshipSpec) {
+	key := relationship.parentKeyType
+	if key == "" {
+		key = relationship.keyName
+	}
+	sourceType, targetType := relationship.parentRow, relationship.childRow
+	sourceFields, targetFields := relationship.parentFields, relationship.childFields
+	if relationship.kind == schema.RelationshipBelongsTo {
+		sourceType, targetType = targetType, sourceType
+		sourceFields, targetFields = relationship.childFields, relationship.parentFields
+	}
+	source.WriteString("// SourceKey returns the ordered source relationship key.\nfunc (r ")
+	source.WriteString(relationship.typeName)
+	source.WriteString(") SourceKey(row ")
+	source.WriteString(sourceType)
+	source.WriteString(") ")
+	source.WriteString(key)
+	source.WriteString(" { return ")
+	writeRelationshipKeyValue(source, relationship, key, sourceFields, false)
+	source.WriteString(" }\n\n")
+	source.WriteString("// TargetKey returns the ordered target relationship key.\nfunc (r ")
+	source.WriteString(relationship.typeName)
+	source.WriteString(") TargetKey(row ")
+	source.WriteString(targetType)
+	source.WriteString(") ")
+	source.WriteString(key)
+	source.WriteString(" { return ")
+	writeRelationshipKeyValue(source, relationship, key, targetFields, true)
+	source.WriteString(" }\n\n")
+}
+
+func writeRelationshipKeyValue(source *bytes.Buffer, relationship relationshipSpec, key string, fields []string, target bool) {
+	if len(fields) == 1 && key != relationship.keyName {
+		if strings.HasPrefix(key, "*") && !target && relationship.kind != schema.RelationshipBelongsTo {
+			source.WriteString("func() ")
+			source.WriteString(key)
+			source.WriteString(" { value := row.")
+			source.WriteString(fields[0])
+			source.WriteString("; return &value }()")
+			return
+		}
+		if target && relationship.kind == schema.RelationshipBelongsTo && relationship.childColumn.Nullable {
+			source.WriteString("func() *")
+			source.WriteString(relationship.childColumnTypes[0])
+			source.WriteString(" { value := row.")
+			source.WriteString(fields[0])
+			source.WriteString("; return &value }()")
+			return
+		}
+		source.WriteString("row.")
+		source.WriteString(fields[0])
+		return
+	}
+	if len(fields) == 1 {
+		if strings.HasPrefix(key, "*") && !target && relationship.kind != schema.RelationshipBelongsTo {
+			source.WriteString("func() ")
+			source.WriteString(key)
+			source.WriteString(" { value := row.")
+			source.WriteString(fields[0])
+			source.WriteString("; return &value }()")
+			return
+		}
+		if target && relationship.kind == schema.RelationshipBelongsTo && relationship.childColumn.Nullable {
+			source.WriteString("func() *")
+			source.WriteString(relationship.childColumnTypes[0])
+			source.WriteString(" { value := row.")
+			source.WriteString(fields[0])
+			source.WriteString("; return &value }()")
+			return
+		}
+		source.WriteString("row.")
+		source.WriteString(fields[0])
+		return
+	}
+	if target && relationship.kind != schema.RelationshipBelongsTo {
+		hasNullable := false
+		for index := range relationship.childColumns {
+			if relationship.childColumns[index].Nullable {
+				hasNullable = true
+				break
+			}
+		}
+		if hasNullable {
+			source.WriteString("func() ")
+			source.WriteString(key)
+			source.WriteString(" { ")
+			for index := range relationship.childColumns {
+				if relationship.childColumns[index].Nullable {
+					source.WriteString("if row.")
+					source.WriteString(fields[index])
+					source.WriteString(" == nil { return ")
+					source.WriteString(key)
+					source.WriteString("{} }; ")
+				}
+			}
+			source.WriteString("return ")
+			source.WriteString(key)
+			source.WriteString("{")
+			for index, field := range fields {
+				if index > 0 {
+					source.WriteString(", ")
+				}
+				source.WriteString(relationship.keyFields[index])
+				source.WriteString(": *row.")
+				source.WriteString(field)
+			}
+			source.WriteString("} }()")
+			return
+		}
+	}
+	source.WriteString(key)
+	source.WriteString("{")
+	for index, field := range fields {
+		if index > 0 {
+			source.WriteString(", ")
+		}
+		source.WriteString(relationship.keyFields[index])
+		source.WriteString(": ")
+		if target && relationship.kind == schema.RelationshipBelongsTo && relationship.childColumns[index].Nullable {
+			source.WriteString("func() *")
+			source.WriteString(relationship.childColumnTypes[index])
+			source.WriteString(" { value := row.")
+			source.WriteString(field)
+			source.WriteString("; return &value }()")
+		} else {
+			source.WriteString("row.")
+			source.WriteString(field)
+		}
+	}
+	source.WriteString("}")
+}
+
+func writeGeneratedKeyValue(source *bytes.Buffer, relationship relationshipSpec, index int, field string, dereference bool) {
+	if dereference && index < len(relationship.childColumns) && relationship.childColumns[index].Nullable {
+		source.WriteString("*row.")
+		source.WriteString(field)
+		return
+	}
+	nullable := index < len(relationship.keyColumns) && relationship.keyColumns[index].Nullable
+	if nullable {
+		column := relationship.keyColumns[index]
+		source.WriteString("func() *")
+		source.WriteString(ColumnGoType(column))
+		source.WriteString(" { value := row.")
+		source.WriteString(field)
+		source.WriteString("; return &value }()")
+		return
+	}
+	source.WriteString("row.")
+	source.WriteString(field)
+}
+
 func writeRelationshipLoad(source *bytes.Buffer, relationship relationshipSpec) {
+	if relationship.kind == schema.RelationshipBelongsTo || relationship.kind == schema.RelationshipHasOne {
+		writeScalarLoadThen(source, relationship)
+	}
+	if relationship.kind == schema.RelationshipManyToMany {
+		writeManyToManyRelationshipLoad(source, relationship)
+		return
+	}
+	if len(relationship.parentColumns) > 1 {
+		writeCompositeRelationshipLoad(source, relationship)
+		return
+	}
+	if relationship.kind == schema.RelationshipHasOne {
+		writeHasOneRelationshipLoad(source, relationship)
+		return
+	}
+	if strings.HasPrefix(relationship.parentKeyType, "*") {
+		writeNullableRelationshipLoad(source, relationship)
+		return
+	}
 	if relationship.kind == schema.RelationshipHasMany {
-		source.WriteString("// Load fetches all children for parents in one query and groups them by parent key.\n")
+		source.WriteString("// LoadWith fetches children with filtering, ordering, caps, and bind batching.\n")
 		source.WriteString("func (r ")
 		source.WriteString(relationship.typeName)
-		source.WriteString(") Load(ctx context.Context, db rasql.DB, parents []")
-		source.WriteString(rowTypeName(relationship.parent))
-		source.WriteString(") (map[")
+		source.WriteString(") LoadWith(ctx context.Context, db rasql.DB, parents []")
+		source.WriteString(relationship.parentRow)
+		source.WriteString(", options rasql.RelationshipLoadOptions) (map[")
 		source.WriteString(relationship.parentKeyType)
 		source.WriteString("][]")
-		source.WriteString(rowTypeName(relationship.child))
-		source.WriteString(", error) {\n\treturn rasql.LoadHasMany[")
-		source.WriteString(rowTypeName(relationship.parent))
+		source.WriteString(relationship.childRow)
+		source.WriteString(", error) {\n\treturn rasql.LoadHasManyPlan[")
+		source.WriteString(relationship.parentRow)
 		source.WriteString(", ")
-		source.WriteString(rowTypeName(relationship.child))
+		source.WriteString(relationship.childRow)
 		source.WriteString(", ")
 		source.WriteString(relationship.parentKeyType)
-		source.WriteString("](ctx, db, r.Child, r.ChildKey, parents, func(row ")
-		source.WriteString(rowTypeName(relationship.parent))
+		source.WriteString("](ctx, db, r.Child, []query.ColumnRef{r.ChildKey}, parents, func(row ")
+		source.WriteString(relationship.parentRow)
 		source.WriteString(") ")
 		source.WriteString(relationship.parentKeyType)
 		source.WriteString(" { return row.")
 		source.WriteString(relationship.parentField)
 		source.WriteString(" }, func(row ")
-		source.WriteString(rowTypeName(relationship.child))
+		source.WriteString(relationship.childRow)
 		source.WriteString(") ")
 		source.WriteString(relationship.parentKeyType)
 		source.WriteString(" { return row.")
 		source.WriteString(relationship.childField)
-		source.WriteString(" })\n}\n\n")
+		source.WriteString(" }, func(key ")
+		source.WriteString(relationship.parentKeyType)
+		source.WriteString(") ([]any, bool) { return []any{key}, true }, options)\n}\n\n")
+		source.WriteString("// Load fetches all children for parents in one query.\nfunc (r ")
+		source.WriteString(relationship.typeName)
+		source.WriteString(") Load(ctx context.Context, db rasql.DB, parents []")
+		source.WriteString(relationship.parentRow)
+		source.WriteString(") (map[")
+		source.WriteString(relationship.parentKeyType)
+		source.WriteString("][]")
+		source.WriteString(relationship.childRow)
+		source.WriteString(", error) { return r.LoadWith(ctx, db, parents, rasql.RelationshipLoadOptions{}) }\n\n")
 		return
 	}
 
-	source.WriteString("// Load fetches all related parents for children in one query and groups them by foreign-key value.\n")
+	source.WriteString("// LoadWith fetches related parents with filtering, ordering, and bind batching.\n")
 	source.WriteString("func (r ")
 	source.WriteString(relationship.typeName)
-	source.WriteString(") Load(ctx context.Context, db rasql.DB, children []")
-	source.WriteString(rowTypeName(relationship.child))
-	source.WriteString(") (map[")
+	source.WriteString(") LoadWith(ctx context.Context, db rasql.DB, children []")
+	source.WriteString(relationship.childRow)
+	source.WriteString(", options rasql.RelationshipLoadOptions) (map[")
 	source.WriteString(relationship.parentKeyType)
 	source.WriteString("]")
-	source.WriteString(rowTypeName(relationship.parent))
-	source.WriteString(", error) {\n\treturn rasql.LoadBelongsTo[")
-	source.WriteString(rowTypeName(relationship.child))
+	source.WriteString(relationship.parentRow)
+	source.WriteString(", error) {\n\treturn rasql.LoadBelongsToPlan[")
+	source.WriteString(relationship.childRow)
 	source.WriteString(", ")
-	source.WriteString(rowTypeName(relationship.parent))
+	source.WriteString(relationship.parentRow)
 	source.WriteString(", ")
 	source.WriteString(relationship.parentKeyType)
-	source.WriteString("](ctx, db, r.Parent, r.ParentKey, children, func(row ")
-	source.WriteString(rowTypeName(relationship.child))
+	source.WriteString("](ctx, db, r.Parent, []query.ColumnRef{r.ParentKey}, children, func(row ")
+	source.WriteString(relationship.childRow)
 	source.WriteString(") ")
 	source.WriteString(relationship.parentKeyType)
 	source.WriteString(" { return row.")
 	source.WriteString(relationship.childField)
 	source.WriteString(" }, func(row ")
-	source.WriteString(rowTypeName(relationship.parent))
+	source.WriteString(relationship.parentRow)
 	source.WriteString(") ")
 	source.WriteString(relationship.parentKeyType)
 	source.WriteString(" { return row.")
 	source.WriteString(relationship.parentField)
-	source.WriteString(" })\n}\n\n")
+	source.WriteString(" }, func(key ")
+	source.WriteString(relationship.parentKeyType)
+	source.WriteString(") ([]any, bool) { return []any{key}, true }, options)\n}\n\n")
+	source.WriteString("// Load fetches all related parents for children in one query.\nfunc (r ")
+	source.WriteString(relationship.typeName)
+	source.WriteString(") Load(ctx context.Context, db rasql.DB, children []")
+	source.WriteString(relationship.childRow)
+	source.WriteString(") (map[")
+	source.WriteString(relationship.parentKeyType)
+	source.WriteString("]")
+	source.WriteString(relationship.parentRow)
+	source.WriteString(", error) { return r.LoadWith(ctx, db, children, rasql.RelationshipLoadOptions{}) }\n\n")
+}
+
+func writeScalarLoadThen(source *bytes.Buffer, relationship relationshipSpec) {
+	key := relationship.parentKeyType
+	if key == "" {
+		key = relationship.keyName
+	}
+	sourceType, targetType := relationship.parentRow, relationship.childRow
+	if relationship.kind == schema.RelationshipBelongsTo {
+		sourceType, targetType = targetType, sourceType
+	}
+	source.WriteString("// LoadThen loads a scalar relationship and invokes next once.\nfunc (r ")
+	source.WriteString(relationship.typeName)
+	source.WriteString(") LoadThen(ctx context.Context, db rasql.DB, sources []")
+	source.WriteString(sourceType)
+	source.WriteString(", options rasql.RelationshipLoadOptions, next func([]")
+	source.WriteString(targetType)
+	source.WriteString(") error) (map[")
+	source.WriteString(key)
+	source.WriteString("]")
+	source.WriteString(targetType)
+	source.WriteString(", error) {\n")
+	if relationship.kind == schema.RelationshipBelongsTo {
+		source.WriteString("loaded, err := r.LoadWith(ctx, db, sources, options)\n")
+	} else {
+		source.WriteString("loaded, err := r.LoadWith(ctx, db, sources, options)\n")
+	}
+	source.WriteString("if err != nil || next == nil { return loaded, err }; rows := make([]")
+	source.WriteString(targetType)
+	source.WriteString(", 0)\n")
+	writeTargetSeenDeclaration(source, relationship)
+	source.WriteString("for _, source := range sources { key := r.SourceKey(source); if row, ok := loaded[key]; ok {")
+	writeTargetSeenCheck(source, relationship, "row")
+	source.WriteString(" rows = append(rows, row) } }; if err := next(rows); err != nil { return loaded, err }; return loaded, nil\n}\n\n")
+}
+
+func writeManyToManyRelationshipLoad(source *bytes.Buffer, relationship relationshipSpec) {
+	key := relationship.parentKeyType
+	if key == "" {
+		key = relationship.keyName
+	}
+	parent, child := relationship.parentRow, relationship.childRow
+	source.WriteString("// LoadWith fetches targets through the ordered join table in bounded batches.\nfunc (r ")
+	source.WriteString(relationship.typeName)
+	source.WriteString(") LoadWith(ctx context.Context, db rasql.DB, parents []")
+	source.WriteString(parent)
+	source.WriteString(", options rasql.RelationshipLoadOptions) (map[")
+	source.WriteString(key)
+	source.WriteString("][]")
+	source.WriteString(child)
+	source.WriteString(", error) {\n\treturn rasql.LoadManyToManyPlan[")
+	source.WriteString(parent)
+	source.WriteString(", ")
+	source.WriteString(relationship.throughRow)
+	source.WriteString(", ")
+	source.WriteString(child)
+	source.WriteString(", ")
+	source.WriteString(key)
+	source.WriteString("](ctx, db, ")
+	source.WriteString(relationship.throughTableAccessor)
+	source.WriteString("(), ")
+	source.WriteString(relationship.childTableAccessor)
+	source.WriteString("(), ")
+	writeColumnRefsFromAccessor(source, relationship.throughTableAccessor, relationship.throughSourceAccessors)
+	source.WriteString(", ")
+	writeColumnRefsFromAccessor(source, relationship.throughTableAccessor, relationship.throughTargetAccessors)
+	source.WriteString(", ")
+	writeColumnRefsFromAccessor(source, relationship.childTableAccessor, relationship.childColumnAccessors)
+	source.WriteString(", ")
+	writeColumnRefsFromAccessor(source, relationship.childTableAccessor, relationship.childAllAccessors)
+	source.WriteString(", parents, ")
+	writeKeyFromRow(source, relationship, parent, "row", false)
+	source.WriteString(", ")
+	writeKeyValues(source, relationship, key)
+	source.WriteString(", func(src rasql.ScanSource) (")
+	source.WriteString(key)
+	source.WriteString(", ")
+	source.WriteString(child)
+	source.WriteString(", error) {\n\t\tvar row ")
+	source.WriteString(child)
+	source.WriteString("\n\t\tvar zeroKey ")
+	source.WriteString(key)
+	source.WriteString("\n\t\tdestinations, err := row.ScanDestinations([]string{")
+	for index, column := range relationship.child.Columns {
+		if index > 0 {
+			source.WriteString(", ")
+		}
+		source.WriteString(quote(column.Name))
+	}
+	source.WriteString("})\n\t\tif err != nil { return ")
+	source.WriteString("zeroKey, row, err }\n\t\t")
+	writeScanValues(source, relationship)
+	source.WriteString("values = append(values, destinations...)\n\t\tif err := src.Scan(values...); err != nil { return ")
+	source.WriteString("zeroKey, row, err }\n\t\treturn ")
+	writeDecodedKey(source, relationship, key)
+	source.WriteString(", row, nil\n\t}, options)\n}\n\n")
+	source.WriteString("// Load fetches all targets through the join table in one query.\nfunc (r ")
+	source.WriteString(relationship.typeName)
+	source.WriteString(") Load(ctx context.Context, db rasql.DB, parents []")
+	source.WriteString(parent)
+	source.WriteString(") (map[")
+	source.WriteString(key)
+	source.WriteString("][]")
+	source.WriteString(child)
+	source.WriteString(", error) { return r.LoadWith(ctx, db, parents, rasql.RelationshipLoadOptions{}) }\n\n")
+	writeLoadThen(source, relationship, key, parent, child)
+}
+
+func writeLoadThen(source *bytes.Buffer, relationship relationshipSpec, key, parent, child string) {
+	source.WriteString("// LoadThen loads targets and invokes next once with rows in source-key order.\nfunc (r ")
+	source.WriteString(relationship.typeName)
+	source.WriteString(") LoadThen(ctx context.Context, db rasql.DB, parents []")
+	source.WriteString(parent)
+	source.WriteString(", options rasql.RelationshipLoadOptions, next func([]")
+	source.WriteString(child)
+	source.WriteString(") error) (map[")
+	source.WriteString(key)
+	source.WriteString("][]")
+	source.WriteString(child)
+	source.WriteString(", error) {\n\tloaded, err := r.LoadWith(ctx, db, parents, options)\n\tif err != nil || next == nil { return loaded, err }\n\trows := make([]")
+	source.WriteString(child)
+	source.WriteString(", 0)\n")
+	writeTargetSeenDeclaration(source, relationship)
+	source.WriteString("\tfor _, parent := range parents {\n\t\tkey := r.SourceKey(parent)")
+	source.WriteString("\n\t\tfor _, row := range loaded[key] {\n")
+	source.WriteString("\t\t\t")
+	writeTargetSeenCheck(source, relationship, "row")
+	source.WriteByte('\n')
+	source.WriteString("\t\t\trows = append(rows, row)\n\t\t}\n\t}\n\tif err := next(rows); err != nil { return loaded, err }\n\treturn loaded, nil\n}\n\n")
+}
+
+func writeTargetSeenDeclaration(source *bytes.Buffer, relationship relationshipSpec) {
+	if len(relationship.targetPrimaryKeyTypes) == 0 {
+		return
+	}
+	source.WriteString("seen := make(map[")
+	writeTargetPrimaryKeyType(source, relationship)
+	source.WriteString("]struct{})\n")
+}
+
+func writeTargetSeenCheck(source *bytes.Buffer, relationship relationshipSpec, row string) {
+	if len(relationship.targetPrimaryKeyTypes) == 0 {
+		return
+	}
+	source.WriteString("if _, ok := seen[")
+	writeTargetPrimaryKeyValue(source, relationship, row)
+	source.WriteString("]; ok { continue }; seen[")
+	writeTargetPrimaryKeyValue(source, relationship, row)
+	source.WriteString("] = struct{}{};")
+}
+
+func writeTargetPrimaryKeyType(source *bytes.Buffer, relationship relationshipSpec) {
+	if len(relationship.targetPrimaryKeyTypes) == 1 {
+		source.WriteString(relationship.targetPrimaryKeyTypes[0])
+		return
+	}
+	source.WriteString("struct { ")
+	for index, field := range relationship.targetPrimaryKeyFields {
+		if index > 0 {
+			source.WriteByte(' ')
+		}
+		source.WriteString(field)
+		source.WriteByte(' ')
+		source.WriteString(relationship.targetPrimaryKeyTypes[index])
+		source.WriteByte(';')
+	}
+	source.WriteString(" }")
+}
+
+func writeTargetPrimaryKeyValue(source *bytes.Buffer, relationship relationshipSpec, row string) {
+	if len(relationship.targetPrimaryKeyFields) == 1 {
+		source.WriteString(row)
+		source.WriteByte('.')
+		source.WriteString(relationship.targetPrimaryKeyFields[0])
+		return
+	}
+	source.WriteString("struct { ")
+	for index, field := range relationship.targetPrimaryKeyFields {
+		if index > 0 {
+			source.WriteByte(' ')
+		}
+		source.WriteString(field)
+		source.WriteByte(' ')
+		source.WriteString(relationship.targetPrimaryKeyTypes[index])
+		source.WriteByte(';')
+	}
+	source.WriteString(" }{")
+	for index, field := range relationship.targetPrimaryKeyFields {
+		if index > 0 {
+			source.WriteString(", ")
+		}
+		source.WriteString(field)
+		source.WriteString(": ")
+		source.WriteString(row)
+		source.WriteByte('.')
+		source.WriteString(field)
+	}
+	source.WriteString("}")
+}
+
+func writeColumnRefsFromAccessor(source *bytes.Buffer, tableAccessor string, accessors []string) {
+	source.WriteString("[]query.ColumnRef{")
+	for index, accessor := range accessors {
+		if index > 0 {
+			source.WriteString(", ")
+		}
+		source.WriteString(tableAccessor)
+		source.WriteString("().")
+		source.WriteString(accessor)
+		source.WriteString("Ref()")
+	}
+	source.WriteString("}")
+}
+
+func writeKeyFromRow(source *bytes.Buffer, relationship relationshipSpec, rowType, variable string, pointer bool) {
+	source.WriteString("func(")
+	source.WriteString(variable)
+	source.WriteString(" ")
+	source.WriteString(rowType)
+	source.WriteString(") ")
+	key := relationship.parentKeyType
+	if key == "" {
+		key = relationship.keyName
+	}
+	source.WriteString(key)
+	source.WriteString(" { ")
+	if len(relationship.parentColumns) == 1 {
+		source.WriteString("return ")
+		source.WriteString(variable)
+		source.WriteString(".")
+		source.WriteString(relationship.parentFields[0])
+	} else {
+		source.WriteString("return ")
+		source.WriteString(key)
+		source.WriteString("{")
+		for index, field := range relationship.parentFields {
+			if index > 0 {
+				source.WriteString(", ")
+			}
+			source.WriteString(field)
+			source.WriteString(": ")
+			source.WriteString(variable)
+			source.WriteString(".")
+			source.WriteString(field)
+		}
+		source.WriteString("}")
+	}
+	source.WriteString(" }")
+}
+func writeKeyValues(source *bytes.Buffer, relationship relationshipSpec, key string) {
+	source.WriteString("func(value ")
+	source.WriteString(key)
+	source.WriteString(") ([]any, bool) { return []any{")
+	if len(relationship.parentColumns) == 1 {
+		source.WriteString("value")
+	} else {
+		for index, field := range relationship.parentFields {
+			if index > 0 {
+				source.WriteString(", ")
+			}
+			source.WriteString("value.")
+			source.WriteString(field)
+		}
+	}
+	source.WriteString("}, true }")
+}
+func writeScanValues(source *bytes.Buffer, relationship relationshipSpec) {
+	source.WriteString("var ")
+	if len(relationship.parentColumns) == 1 {
+		source.WriteString("keyValue ")
+		source.WriteString(relationship.parentColumnTypes[0])
+		source.WriteString("\n\t\tvalues := []any{&keyValue}; ")
+	} else {
+		source.WriteString("keyValue ")
+		source.WriteString(relationship.keyName)
+		source.WriteString("\n\t\tvalues := []any{")
+		for index, field := range relationship.parentFields {
+			if index > 0 {
+				source.WriteString(", ")
+			}
+			source.WriteString("&keyValue.")
+			source.WriteString(field)
+		}
+		source.WriteString("}; ")
+	}
+}
+func writeDecodedKey(source *bytes.Buffer, relationship relationshipSpec, key string) {
+	if len(relationship.parentColumns) == 1 {
+		source.WriteString("keyValue")
+	} else {
+		source.WriteString("keyValue")
+	}
+}
+
+func writeHasOneRelationshipLoad(source *bytes.Buffer, relationship relationshipSpec) {
+	parent, child, key := relationship.parentRow, relationship.childRow, relationship.parentKeyType
+	source.WriteString("// LoadWith fetches one child per parent with filtering, ordering, and bind batching.\nfunc (r ")
+	source.WriteString(relationship.typeName)
+	source.WriteString(") LoadWith(ctx context.Context, db rasql.DB, parents []")
+	source.WriteString(parent)
+	source.WriteString(", options rasql.RelationshipLoadOptions) (map[")
+	source.WriteString(key)
+	source.WriteString("]")
+	source.WriteString(child)
+	source.WriteString(", error) { return rasql.LoadHasOnePlan[")
+	source.WriteString(parent)
+	source.WriteString(", ")
+	source.WriteString(child)
+	source.WriteString(", ")
+	source.WriteString(key)
+	source.WriteString("](ctx, db, r.Child, []query.ColumnRef{r.ChildKey}, parents, func(row ")
+	source.WriteString(parent)
+	source.WriteString(") ")
+	source.WriteString(key)
+	source.WriteString(" { return row.")
+	source.WriteString(relationship.parentField)
+	source.WriteString(" }, func(row ")
+	source.WriteString(child)
+	source.WriteString(") ")
+	source.WriteString(key)
+	source.WriteString(" { return row.")
+	source.WriteString(relationship.childField)
+	source.WriteString(" }, func(key ")
+	source.WriteString(key)
+	source.WriteString(") ([]any, bool) { return []any{key}, true }, options) }\n\n")
+	source.WriteString("// Load fetches one child per parent in one query.\nfunc (r ")
+	source.WriteString(relationship.typeName)
+	source.WriteString(") Load(ctx context.Context, db rasql.DB, parents []")
+	source.WriteString(parent)
+	source.WriteString(") (map[")
+	source.WriteString(key)
+	source.WriteString("]")
+	source.WriteString(child)
+	source.WriteString(", error) { return r.LoadWith(ctx, db, parents, rasql.RelationshipLoadOptions{}) }\n\n")
+}
+
+func writeNullableRelationshipLoad(source *bytes.Buffer, relationship relationshipSpec) {
+	key, parent, child := relationship.parentKeyType, relationship.parentRow, relationship.childRow
+	if relationship.kind == schema.RelationshipHasMany {
+		source.WriteString("// LoadWith fetches children with filtering, ordering, caps, and bind batching.\nfunc (r ")
+		source.WriteString(relationship.typeName)
+		source.WriteString(") LoadWith(ctx context.Context, db rasql.DB, parents []")
+		source.WriteString(parent)
+		source.WriteString(", options rasql.RelationshipLoadOptions) (map[")
+		source.WriteString(key)
+		source.WriteString("][]")
+		source.WriteString(child)
+		source.WriteString(", error) { return rasql.LoadHasManyPlan[")
+		source.WriteString(parent)
+		source.WriteString(", ")
+		source.WriteString(child)
+		source.WriteString(", ")
+		source.WriteString(key)
+		source.WriteString("](ctx, db, r.Child, []query.ColumnRef{r.ChildKey}, parents, func(row ")
+		source.WriteString(parent)
+		source.WriteString(") ")
+		source.WriteString(key)
+		source.WriteString(" { value := row.")
+		source.WriteString(relationship.parentField)
+		source.WriteString("; return &value }, func(row ")
+		source.WriteString(child)
+		source.WriteString(") ")
+		source.WriteString(key)
+		source.WriteString(" { return row.")
+		source.WriteString(relationship.childField)
+		source.WriteString(" }, func(key ")
+		source.WriteString(key)
+		source.WriteString(") ([]any, bool) { if key == nil { return nil, false }; return []any{*key}, true }, options) }\n\n")
+		source.WriteString("// Load fetches all children for parents in one query.\nfunc (r ")
+		source.WriteString(relationship.typeName)
+		source.WriteString(") Load(ctx context.Context, db rasql.DB, parents []")
+		source.WriteString(parent)
+		source.WriteString(") (map[")
+		source.WriteString(key)
+		source.WriteString("][]")
+		source.WriteString(child)
+		source.WriteString(", error) { return r.LoadWith(ctx, db, parents, rasql.RelationshipLoadOptions{}) }\n\n")
+		return
+	}
+	source.WriteString("// LoadWith fetches related parents with filtering, ordering, and bind batching.\nfunc (r ")
+	source.WriteString(relationship.typeName)
+	source.WriteString(") LoadWith(ctx context.Context, db rasql.DB, children []")
+	source.WriteString(child)
+	source.WriteString(", options rasql.RelationshipLoadOptions) (map[")
+	source.WriteString(key)
+	source.WriteString("]")
+	source.WriteString(parent)
+	source.WriteString(", error) { return rasql.LoadBelongsToPlan[")
+	source.WriteString(child)
+	source.WriteString(", ")
+	source.WriteString(parent)
+	source.WriteString(", ")
+	source.WriteString(key)
+	source.WriteString("](ctx, db, r.Parent, []query.ColumnRef{r.ParentKey}, children, func(row ")
+	source.WriteString(child)
+	source.WriteString(") ")
+	source.WriteString(key)
+	source.WriteString(" { return row.")
+	source.WriteString(relationship.childField)
+	source.WriteString(" }, func(row ")
+	source.WriteString(parent)
+	source.WriteString(") ")
+	source.WriteString(key)
+	source.WriteString(" { value := row.")
+	source.WriteString(relationship.parentField)
+	source.WriteString("; return &value }, func(key ")
+	source.WriteString(key)
+	source.WriteString(") ([]any, bool) { if key == nil { return nil, false }; return []any{*key}, true }, options) }\n\n")
+	source.WriteString("// Load fetches all related parents for children in one query.\nfunc (r ")
+	source.WriteString(relationship.typeName)
+	source.WriteString(") Load(ctx context.Context, db rasql.DB, children []")
+	source.WriteString(child)
+	source.WriteString(") (map[")
+	source.WriteString(key)
+	source.WriteString("]")
+	source.WriteString(parent)
+	source.WriteString(", error) { return r.LoadWith(ctx, db, children, rasql.RelationshipLoadOptions{}) }\n\n")
+}
+
+func writeCompositeRelationshipLoad(source *bytes.Buffer, relationship relationshipSpec) {
+	key := relationship.keyName
+	rowSource, rowTarget := relationship.parentRow, relationship.childRow
+	if relationship.kind == schema.RelationshipHasOne {
+		writeCompositeHasOneRelationshipLoad(source, relationship)
+		return
+	}
+	if relationship.kind == schema.RelationshipHasMany {
+		source.WriteString("// LoadWith fetches children with filtering, ordering, caps, and bind batching.\nfunc (r ")
+		source.WriteString(relationship.typeName)
+		source.WriteString(") LoadWith(ctx context.Context, db rasql.DB, parents []")
+		source.WriteString(rowSource)
+		source.WriteString(", options rasql.RelationshipLoadOptions) (map[")
+		source.WriteString(key)
+		source.WriteString("][]")
+		source.WriteString(rowTarget)
+		source.WriteString(", error) {\n\treturn rasql.LoadHasManyPlan[")
+		source.WriteString(rowSource)
+		source.WriteString(", ")
+		source.WriteString(rowTarget)
+		source.WriteString(", ")
+		source.WriteString(key)
+		source.WriteString("](ctx, db, r.Child, r.ChildKey, parents, func(row ")
+		source.WriteString(rowSource)
+		source.WriteString(") ")
+		source.WriteString(key)
+		source.WriteString(" { return ")
+		source.WriteString(key)
+		source.WriteString("{")
+		for index, field := range relationship.parentFields {
+			if index > 0 {
+				source.WriteString(", ")
+			}
+			source.WriteString(field)
+			source.WriteString(": ")
+			writeGeneratedKeyValue(source, relationship, index, field, false)
+		}
+		source.WriteString("} }, func(row ")
+		source.WriteString(rowTarget)
+		source.WriteString(") ")
+		source.WriteString(key)
+		source.WriteString(" { ")
+		for index, field := range relationship.childFields {
+			if relationship.childColumns[index].Nullable {
+				source.WriteString("if row.")
+				source.WriteString(field)
+				source.WriteString(" == nil { return ")
+				source.WriteString(key)
+				source.WriteString("{} }; ")
+			}
+		}
+		source.WriteString("return ")
+		source.WriteString(key)
+		source.WriteString("{")
+		for index, field := range relationship.childFields {
+			if index > 0 {
+				source.WriteString(", ")
+			}
+			source.WriteString(relationship.parentFields[index])
+			source.WriteString(": ")
+			writeGeneratedKeyValue(source, relationship, index, field, true)
+		}
+		source.WriteString("} }, func(key ")
+		source.WriteString(key)
+		source.WriteString(") ([]any, bool) { return []any{")
+		for index, field := range relationship.parentFields {
+			if index > 0 {
+				source.WriteString(", ")
+			}
+			source.WriteString("key.")
+			source.WriteString(field)
+		}
+		source.WriteString("}, true }, options)\n}\n\n")
+		source.WriteString("// Load fetches all children for parents in one query.\nfunc (r ")
+		source.WriteString(relationship.typeName)
+		source.WriteString(") Load(ctx context.Context, db rasql.DB, parents []")
+		source.WriteString(rowSource)
+		source.WriteString(") (map[")
+		source.WriteString(key)
+		source.WriteString("][]")
+		source.WriteString(rowTarget)
+		source.WriteString(", error) { return r.LoadWith(ctx, db, parents, rasql.RelationshipLoadOptions{}) }\n\n")
+		return
+	}
+	source.WriteString("// LoadWith fetches related parents with filtering, ordering, and bind batching.\nfunc (r ")
+	source.WriteString(relationship.typeName)
+	source.WriteString(") LoadWith(ctx context.Context, db rasql.DB, children []")
+	source.WriteString(rowTarget)
+	source.WriteString(", options rasql.RelationshipLoadOptions) (map[")
+	source.WriteString(key)
+	source.WriteString("]")
+	source.WriteString(rowSource)
+	source.WriteString(", error) {\n\treturn rasql.LoadBelongsToPlan[")
+	source.WriteString(rowTarget)
+	source.WriteString(", ")
+	source.WriteString(rowSource)
+	source.WriteString(", ")
+	source.WriteString(key)
+	source.WriteString("](ctx, db, r.Parent, r.ParentKey, children, func(row ")
+	source.WriteString(rowTarget)
+	source.WriteString(") ")
+	source.WriteString(key)
+	source.WriteString(" { ")
+	for index, field := range relationship.childFields {
+		if relationship.childColumns[index].Nullable {
+			source.WriteString("if row.")
+			source.WriteString(field)
+			source.WriteString(" == nil { return ")
+			source.WriteString(key)
+			source.WriteString("{} }; ")
+		}
+	}
+	source.WriteString("return ")
+	source.WriteString(key)
+	source.WriteString("{")
+	for index, field := range relationship.childFields {
+		if index > 0 {
+			source.WriteString(", ")
+		}
+		source.WriteString(relationship.keyFields[index])
+		source.WriteString(": row.")
+		source.WriteString(field)
+	}
+	source.WriteString("} }, func(row ")
+	source.WriteString(rowSource)
+	source.WriteString(") ")
+	source.WriteString(key)
+	source.WriteString(" { return ")
+	source.WriteString(key)
+	source.WriteString("{")
+	for index, field := range relationship.parentFields {
+		if index > 0 {
+			source.WriteString(", ")
+		}
+		source.WriteString(relationship.keyFields[index])
+		if relationship.kind == schema.RelationshipBelongsTo && relationship.childColumns[index].Nullable {
+			source.WriteString(": func() *")
+			source.WriteString(relationship.childColumnTypes[index])
+			source.WriteString(" { value := row.")
+			source.WriteString(field)
+			source.WriteString("; return &value }()")
+		} else {
+			source.WriteString(": row.")
+			source.WriteString(field)
+		}
+	}
+	source.WriteString("} }, func(key ")
+	source.WriteString(key)
+	source.WriteString(") ([]any, bool) { ")
+	if relationship.kind == schema.RelationshipBelongsTo {
+		for index := range relationship.childColumns {
+			if relationship.childColumns[index].Nullable {
+				source.WriteString("if key.")
+				source.WriteString(relationship.keyFields[index])
+				source.WriteString(" == nil { return nil, false }; ")
+			}
+		}
+	}
+	source.WriteString("return []any{")
+	for index := range relationship.parentFields {
+		if index > 0 {
+			source.WriteString(", ")
+		}
+		source.WriteString("key.")
+		source.WriteString(relationship.keyFields[index])
+	}
+	source.WriteString("}, true }, options)\n}\n\n")
+	source.WriteString("// Load fetches all related parents for children in one query.\nfunc (r ")
+	source.WriteString(relationship.typeName)
+	source.WriteString(") Load(ctx context.Context, db rasql.DB, children []")
+	source.WriteString(rowTarget)
+	source.WriteString(") (map[")
+	source.WriteString(key)
+	source.WriteString("]")
+	source.WriteString(rowSource)
+	source.WriteString(", error) { return r.LoadWith(ctx, db, children, rasql.RelationshipLoadOptions{}) }\n\n")
+}
+
+func writeCompositeHasOneRelationshipLoad(source *bytes.Buffer, relationship relationshipSpec) {
+	key := relationship.keyName
+	parent, child := relationship.parentRow, relationship.childRow
+	source.WriteString("// LoadWith fetches one child per parent with filtering, ordering, and bind batching.\nfunc (r ")
+	source.WriteString(relationship.typeName)
+	source.WriteString(") LoadWith(ctx context.Context, db rasql.DB, parents []")
+	source.WriteString(parent)
+	source.WriteString(", options rasql.RelationshipLoadOptions) (map[")
+	source.WriteString(key)
+	source.WriteString("]")
+	source.WriteString(child)
+	source.WriteString(", error) {\n\treturn rasql.LoadHasOnePlan[")
+	source.WriteString(parent)
+	source.WriteString(", ")
+	source.WriteString(child)
+	source.WriteString(", ")
+	source.WriteString(key)
+	source.WriteString("](ctx, db, r.Child, r.ChildKey, parents, func(row ")
+	source.WriteString(parent)
+	source.WriteString(") ")
+	source.WriteString(key)
+	source.WriteString(" { return ")
+	source.WriteString(key)
+	source.WriteString("{")
+	for index, field := range relationship.parentFields {
+		if index > 0 {
+			source.WriteString(", ")
+		}
+		source.WriteString(field)
+		source.WriteString(": row.")
+		source.WriteString(field)
+	}
+	source.WriteString("} }, func(row ")
+	source.WriteString(child)
+	source.WriteString(") ")
+	source.WriteString(key)
+	source.WriteString(" { return ")
+	source.WriteString(key)
+	source.WriteString("{")
+	for index, field := range relationship.childFields {
+		if index > 0 {
+			source.WriteString(", ")
+		}
+		source.WriteString(relationship.parentFields[index])
+		source.WriteString(": row.")
+		source.WriteString(field)
+	}
+	source.WriteString("} }, func(key ")
+	source.WriteString(key)
+	source.WriteString(") ([]any, bool) { return []any{")
+	for index, field := range relationship.parentFields {
+		if index > 0 {
+			source.WriteString(", ")
+		}
+		source.WriteString("key.")
+		source.WriteString(field)
+	}
+	source.WriteString("}, true }, options)\n}\n\n")
+	source.WriteString("// Load fetches one child per parent in one query.\nfunc (r ")
+	source.WriteString(relationship.typeName)
+	source.WriteString(") Load(ctx context.Context, db rasql.DB, parents []")
+	source.WriteString(parent)
+	source.WriteString(") (map[")
+	source.WriteString(key)
+	source.WriteString("]")
+	source.WriteString(child)
+	source.WriteString(", error) { return r.LoadWith(ctx, db, parents, rasql.RelationshipLoadOptions{}) }\n\n")
 }
 
 // writeRowScan writes the direct database/sql scan path and the runtime result
 // column mapping path.
-func writeRowScan(source *bytes.Buffer, table schema.TableDef) {
-	typeName := rowTypeName(table)
+func writeRowScan(source *bytes.Buffer, table schema.TableDef, names *ResolvedNames) {
+	object, _ := names.Object(table)
+	typeName := object.RowType
 	if tableHasTimeColumn(table) {
 		source.WriteString("type ")
-		source.WriteString(timeScannerTypeName(table.Name))
+		source.WriteString(object.TimeScanner)
 		source.WriteString(" func(any) error\n\n")
 		source.WriteString("func (s ")
-		source.WriteString(timeScannerTypeName(table.Name))
+		source.WriteString(object.TimeScanner)
 		source.WriteString(") Scan(value any) error {\n\treturn s(value)\n}\n\n")
 	}
 	source.WriteString("// ScanRow scans each result column directly into its field.\n")
@@ -1437,7 +2925,8 @@ func writeRowScan(source *bytes.Buffer, table schema.TableDef) {
 		source.WriteString("\ttimeScanner")
 		source.WriteString(strconv.Itoa(index))
 		source.WriteString(" := ")
-		writeTimeScannerLiteral(source, table.Name, "&r."+goName(column.Name))
+		resolved, _ := names.Column(table, column.Name)
+		writeTimeScannerLiteralResolved(source, object.TimeScanner, "&r."+resolved.Field)
 		source.WriteString("\n")
 	}
 	source.WriteString("\treturn src.Scan(")
@@ -1450,7 +2939,8 @@ func writeRowScan(source *bytes.Buffer, table schema.TableDef) {
 			source.WriteString(strconv.Itoa(index))
 		} else {
 			source.WriteString("&r.")
-			source.WriteString(goName(column.Name))
+			resolved, _ := names.Column(table, column.Name)
+			source.WriteString(resolved.Field)
 		}
 	}
 	source.WriteString(")\n}\n")
@@ -1463,7 +2953,8 @@ func writeRowScan(source *bytes.Buffer, table schema.TableDef) {
 		source.WriteString("\tconst (\n")
 		for index, column := range table.Columns {
 			source.WriteString("\t\t")
-			source.WriteString(scanIndexName(column.Name))
+			resolved, _ := names.Column(table, column.Name)
+			source.WriteString(resolved.ScanIndex)
 			if index == 0 {
 				source.WriteString(" = iota")
 			}
@@ -1478,7 +2969,8 @@ func writeRowScan(source *bytes.Buffer, table schema.TableDef) {
 		source.WriteString("\ttimeScanner")
 		source.WriteString(strconv.Itoa(index))
 		source.WriteString(" := ")
-		writeTimeScannerLiteral(source, table.Name, "&r."+goName(column.Name))
+		resolved, _ := names.Column(table, column.Name)
+		writeTimeScannerLiteralResolved(source, object.TimeScanner, "&r."+resolved.Field)
 		source.WriteString("\n")
 	}
 	source.WriteString("\tdestinations := make([]any, len(columns))\n")
@@ -1490,11 +2982,12 @@ func writeRowScan(source *bytes.Buffer, table schema.TableDef) {
 	source.WriteString("\tvar discard any\n")
 	source.WriteString("\tfor index, column := range columns {\n\t\tswitch column {\n")
 	for index, column := range table.Columns {
-		field := goName(column.Name)
+		resolved, _ := names.Column(table, column.Name)
+		field := resolved.Field
 		source.WriteString("\t\tcase ")
 		source.WriteString(quote(column.Name))
 		source.WriteString(":\n\t\t\tif !scanned.Mark(")
-		source.WriteString(scanIndexName(column.Name))
+		source.WriteString(resolved.ScanIndex)
 		source.WriteString(") {\n\t\t\t\treturn nil, fmt.Errorf(\"duplicate result column %q\", column)\n\t\t\t}\n")
 		source.WriteString("\t\t\tdestinations[index] = ")
 		if isTimeColumn(column) {
@@ -1527,8 +3020,8 @@ func timeScannerTypeName(tableName string) string {
 	return strings.TrimSuffix(descriptorName(tableName), "Table") + "TimeScanner"
 }
 
-func writeTimeScannerLiteral(source *bytes.Buffer, tableName string, destination string) {
-	source.WriteString(timeScannerTypeName(tableName))
+func writeTimeScannerLiteralResolved(source *bytes.Buffer, scanner string, destination string) {
+	source.WriteString(scanner)
 	source.WriteString("(func(value any) error {\n")
 	source.WriteString("\t\treturn rasql.ScanValue(")
 	source.WriteString(destination)
@@ -1543,8 +3036,9 @@ func scanIndexName(columnName string) string {
 
 // writeRowColumnValue writes the rasql.ColumnValuer implementation, which is
 // the write-direction counterpart of the scan methods.
-func writeRowColumnValue(source *bytes.Buffer, table schema.TableDef) {
-	typeName := rowTypeName(table)
+func writeRowColumnValue(source *bytes.Buffer, table schema.TableDef, names *ResolvedNames) {
+	object, _ := names.Object(table)
+	typeName := object.RowType
 	source.WriteString("// ColumnValue returns the value of the named column.\n")
 	source.WriteString("func (r ")
 	source.WriteString(typeName)
@@ -1554,7 +3048,8 @@ func writeRowColumnValue(source *bytes.Buffer, table schema.TableDef) {
 		source.WriteString("\tcase ")
 		source.WriteString(quote(column.Name))
 		source.WriteString(":\n\t\treturn r.")
-		source.WriteString(goName(column.Name))
+		resolved, _ := names.Column(table, column.Name)
+		source.WriteString(resolved.Field)
 		source.WriteString(", true\n")
 	}
 	source.WriteString("\t}\n\treturn nil, false\n}\n")
@@ -1611,6 +3106,16 @@ func writeTableDefLiteral(source *bytes.Buffer, table schema.TableDef) {
 		source.WriteString("Schema: ")
 		source.WriteString(quote(table.Schema))
 		source.WriteString(",\n")
+	}
+	if table.Kind != "" {
+		source.WriteString("Kind: schema.ObjectKind(")
+		source.WriteString(quote(string(table.Kind)))
+		source.WriteString("),\n")
+	}
+	if table.Operations != 0 {
+		source.WriteString("Operations: schema.Operation(")
+		source.WriteString(strconv.Itoa(int(table.Operations)))
+		source.WriteString("),\n")
 	}
 	source.WriteString("Name: ")
 	source.WriteString(quote(table.Name))
@@ -1963,6 +3468,10 @@ func writeColumnDefLiteral(source *bytes.Buffer, column schema.ColumnDef) {
 		}
 		source.WriteString("}")
 	}
+	if column.Collation != "" {
+		source.WriteString(", Collation: ")
+		source.WriteString(quote(column.Collation))
+	}
 	if column.GeneratedExpression != "" {
 		source.WriteString(", GeneratedExpression: ")
 		source.WriteString(quote(column.GeneratedExpression))
@@ -1978,7 +3487,40 @@ func writeColumnDefLiteral(source *bytes.Buffer, column schema.ColumnDef) {
 	if column.Hidden {
 		source.WriteString(", Hidden: true")
 	}
+	if column.NativeType != nil {
+		source.WriteString(", NativeType: ")
+		writeNativeTypeLiteral(source, column.NativeType)
+	}
 	source.WriteString("},\n")
+}
+
+func writeNativeTypeLiteral(source *bytes.Buffer, native *schema.NativeTypeDef) {
+	source.WriteString("&schema.NativeTypeDef{Dialect: ")
+	source.WriteString(quote(native.Dialect))
+	if native.Schema != "" {
+		source.WriteString(", Schema: ")
+		source.WriteString(quote(native.Schema))
+	}
+	source.WriteString(", Name: ")
+	source.WriteString(quote(native.Name))
+	source.WriteString(", Kind: schema.NativeTypeKind(")
+	source.WriteString(quote(string(native.Kind)))
+	source.WriteString(")")
+	if native.Arguments != nil {
+		source.WriteString(", Arguments: []string{")
+		for index, argument := range native.Arguments {
+			if index > 0 {
+				source.WriteString(", ")
+			}
+			source.WriteString(quote(argument))
+		}
+		source.WriteString("}")
+	}
+	if native.Element != nil {
+		source.WriteString(", Element: ")
+		writeNativeTypeLiteral(source, native.Element)
+	}
+	source.WriteString("}")
 }
 
 func generatedStorageConstant(storage schema.GeneratedStorage) string {
@@ -2010,6 +3552,8 @@ func identityGenerationConstant(generation schema.IdentityGeneration) string {
 // apart from an unstated one; every other type is a plain literal.
 func writeColumnTypeLiteral(source *bytes.Buffer, columnType schema.ColumnType) {
 	switch typed := columnType.(type) {
+	case schema.OpaqueType:
+		source.WriteString("schema.OpaqueType{}")
 	case schema.IntegerType:
 		width, stated := typed.DisplayWidth.Value()
 		if !typed.Unsigned && !stated && !typed.ZeroFill {
@@ -2139,18 +3683,42 @@ func writeForeignKeyDefLiteral(source *bytes.Buffer, key schema.ForeignKeyDef) {
 func writeRelationshipDefLiteral(source *bytes.Buffer, relationship schema.RelationshipDef) {
 	source.WriteString("{Name: ")
 	source.WriteString(quote(relationship.Name))
+	if relationship.InverseName != "" {
+		source.WriteString(", InverseName: ")
+		source.WriteString(quote(relationship.InverseName))
+	}
 	source.WriteString(", Kind: ")
 	source.WriteString(relationshipKindConstant(relationship.Kind))
+	if relationship.Optionality != "" {
+		source.WriteString(", Optionality: schema.RelationshipOptionality(")
+		source.WriteString(quote(string(relationship.Optionality)))
+		source.WriteString(")")
+	}
 	source.WriteString(", Columns: ")
 	writeStringLiteralSlice(source, relationship.Columns)
 	if relationship.ReferencedSchema != "" {
 		source.WriteString(", ReferencedSchema: ")
 		source.WriteString(quote(relationship.ReferencedSchema))
 	}
+	if relationship.ResolvedReferencedSchema != "" {
+		source.WriteString(", ResolvedReferencedSchema: ")
+		source.WriteString(quote(relationship.ResolvedReferencedSchema))
+	}
 	source.WriteString(", ReferencedTable: ")
 	source.WriteString(quote(relationship.ReferencedTable))
 	source.WriteString(", ReferencedColumns: ")
 	writeStringLiteralSlice(source, relationship.ReferencedColumns)
+	if relationship.Through != nil {
+		source.WriteString(", Through: &schema.RelationshipThrough{Table: schema.ObjectName{Schema: ")
+		source.WriteString(quote(relationship.Through.Table.Schema))
+		source.WriteString(", Name: ")
+		source.WriteString(quote(relationship.Through.Table.Name))
+		source.WriteString("}, SourceColumns: ")
+		writeStringLiteralSlice(source, relationship.Through.SourceColumns)
+		source.WriteString(", TargetColumns: ")
+		writeStringLiteralSlice(source, relationship.Through.TargetColumns)
+		source.WriteString("}")
+	}
 	source.WriteString("},\n")
 }
 
@@ -2160,6 +3728,10 @@ func relationshipKindConstant(kind schema.RelationshipKind) string {
 		return "schema.RelationshipBelongsTo"
 	case schema.RelationshipHasMany:
 		return "schema.RelationshipHasMany"
+	case schema.RelationshipHasOne:
+		return "schema.RelationshipHasOne"
+	case schema.RelationshipManyToMany:
+		return "schema.RelationshipManyToMany"
 	default:
 		return "schema.RelationshipKind(" + quote(string(kind)) + ")"
 	}

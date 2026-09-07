@@ -193,6 +193,56 @@ func TestValidateAcceptsUsablePackageNames(t *testing.T) {
 	}
 }
 
+func TestRelationshipValidationAndHasManyApplyToEverySourceEntryPoint(t *testing.T) {
+	users := schema.TableDef{
+		Name:       "users",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+	}
+	children := schema.TableDef{
+		Name: "children",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "user_id", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+		Relationships: []schema.RelationshipDef{{
+			Name:              "Children",
+			Kind:              schema.RelationshipHasMany,
+			Optionality:       schema.RelationshipRequired,
+			Columns:           []string{"user_id"},
+			ReferencedTable:   "users",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+	source, err := generate.PackageSource("generated", users, children)
+	require.NoError(t, err)
+	require.Contains(t, string(source), "func (t UsersTable) Children() UsersTableChildrenRelation")
+	require.Contains(t, string(source), "LoadHasManyPlan")
+
+	missing := children
+	missing.Relationships[0].ReferencedTable = "missing"
+	for name, call := range map[string]func() error{
+		"PackageSource": func() error { _, err := generate.PackageSource("generated", users, missing); return err },
+		"TableSource": func() error {
+			_, err := generate.TableSource("generated", users, users, missing)
+			return err
+		},
+		"DescriptorSource": func() error {
+			_, err := generate.DescriptorSource("generated", users, missing)
+			return err
+		},
+		"DescriptorTestSource": func() error {
+			_, err := generate.DescriptorTestSource("generated", users, missing)
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.ErrorContains(t, call(), "targets missing table")
+		})
+	}
+}
+
 func TestDescriptorTestSourceNamesTheGenerator(t *testing.T) {
 	users := schema.TableDef{
 		Name:       "users",

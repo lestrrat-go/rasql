@@ -8,6 +8,7 @@ import (
 )
 
 var membersDef = schema.TableDef{
+	Kind: schema.ObjectKind("table"),
 	Name: "members",
 	Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityAlways},
@@ -22,6 +23,7 @@ var membersTable = MembersTable{rasql.TableFrom[MembersRow](membersDef)}
 func MembersDef() schema.TableDef { return membersDef.Clone() }
 
 var projectsDef = schema.TableDef{
+	Kind: schema.ObjectKind("table"),
 	Name: "projects",
 	Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityAlways},
@@ -36,6 +38,7 @@ var projectsTable = ProjectsTable{rasql.TableFrom[ProjectsRow](projectsDef)}
 func ProjectsDef() schema.TableDef { return projectsDef.Clone() }
 
 var tasksDef = schema.TableDef{
+	Kind: schema.ObjectKind("table"),
 	Name: "tasks",
 	Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityAlways},
@@ -43,8 +46,8 @@ var tasksDef = schema.TableDef{
 		{Name: "assignee_id", Type: schema.IntegerType{}, Nullable: true},
 		{Name: "title", Type: schema.TextType{}},
 		{Name: "is_open", Type: schema.BooleanType{}, Default: "true"},
-		{Name: "created_at", Type: schema.TimeType{}, Default: "now()"},
-		{Name: "due_on", Type: schema.TimeType{}, Nullable: true},
+		{Name: "created_at", Type: schema.TimeType{}, Default: "now()", NativeType: &schema.NativeTypeDef{Dialect: "postgresql", Schema: "pg_catalog", Name: "timestamptz", Kind: schema.NativeTypeKind("builtin"), Arguments: []string{"6"}}},
+		{Name: "due_on", Type: schema.TimeType{}, Nullable: true, NativeType: &schema.NativeTypeDef{Dialect: "postgresql", Schema: "pg_catalog", Name: "date", Kind: schema.NativeTypeKind("builtin")}},
 	},
 	PrimaryKey: []string{"id"},
 	Indexes: []schema.IndexDef{
@@ -55,8 +58,8 @@ var tasksDef = schema.TableDef{
 		{Name: "tasks_project_id_fkey", Columns: []string{"project_id"}, ReferencedTable: "projects", ReferencedColumns: []string{"id"}, OnDelete: schema.Cascade, OnUpdate: schema.NoAction},
 	},
 	Relationships: []schema.RelationshipDef{
-		{Name: "Assignee", Kind: schema.RelationshipBelongsTo, Columns: []string{"assignee_id"}, ReferencedTable: "members", ReferencedColumns: []string{"id"}},
-		{Name: "Project", Kind: schema.RelationshipBelongsTo, Columns: []string{"project_id"}, ReferencedTable: "projects", ReferencedColumns: []string{"id"}},
+		{Name: "Assignee", Kind: schema.RelationshipBelongsTo, Optionality: schema.RelationshipOptionality("optional"), Columns: []string{"assignee_id"}, ReferencedTable: "members", ReferencedColumns: []string{"id"}},
+		{Name: "Project", Kind: schema.RelationshipBelongsTo, Optionality: schema.RelationshipOptionality("required"), Columns: []string{"project_id"}, ReferencedTable: "projects", ReferencedColumns: []string{"id"}},
 	},
 }
 

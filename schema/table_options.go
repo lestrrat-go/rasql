@@ -2,6 +2,31 @@ package schema
 
 import "github.com/lestrrat-go/rasql/sqltext"
 
+// Relationship declares application relationship metadata without creating a foreign key.
+func Relationship(name string, kind RelationshipKind, columns []string, target ObjectName, targetColumns []string, options ...RelationshipOption) TableOption {
+	def := RelationshipDef{Name: name, Kind: kind, Columns: append([]string(nil), columns...), ReferencedSchema: target.Schema, ReferencedTable: target.Name, ReferencedColumns: append([]string(nil), targetColumns...)}
+	for _, option := range options {
+		if option != nil {
+			option(&def)
+		}
+	}
+	return relationshipTableOption{definition: def}
+}
+
+type relationshipTableOption struct{ definition RelationshipDef }
+
+func (o relationshipTableOption) applyTable(builder *tableBuilder) error {
+	builder.relationships = append(builder.relationships, o.definition.Clone())
+	return nil
+}
+
+// Through configures a many-to-many relationship's join table and ordered columns.
+func Through(table ObjectName, sourceColumns, targetColumns []string) RelationshipOption {
+	return func(relationship *RelationshipDef) {
+		relationship.Through = &RelationshipThrough{Table: table, SourceColumns: append([]string(nil), sourceColumns...), TargetColumns: append([]string(nil), targetColumns...)}
+	}
+}
+
 // TableOption configures NewTableDef and MustTableDef. A column constructor
 // such as Integer or Text and a constraint constructor such as PrimaryKey,
 // Unique, Check, Index, or ForeignKey each return a TableOption, so every

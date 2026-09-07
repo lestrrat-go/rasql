@@ -14,8 +14,8 @@ import (
 
 // SelectFrom starts a typed fluent SELECT builder for table.
 // It selects every table column by default so All and One can decode T.
-func SelectFrom[T any](table Table[T]) TypedSelectBuilder[T] {
-	if isNilTable(table) {
+func SelectFrom[T any](table ReadTable[T]) TypedSelectBuilder[T] {
+	if isNilReadTable(table) {
 		return TypedSelectBuilder[T]{
 			builder: render.SelectFrom(nil, query.TableRef{}),
 			err:     fmt.Errorf("rasql: table must not be nil"),
@@ -39,8 +39,8 @@ func SelectFrom[T any](table Table[T]) TypedSelectBuilder[T] {
 // R is explicit and T is inferred from table. R's fields are mapped by their
 // rasql tags, or by their snake-cased names when untagged; a row type
 // carrying generated scan methods is filled through those instead.
-func DecodeFrom[R any, T any](table Table[T]) TypedSelectBuilder[R] {
-	if isNilTable(table) {
+func DecodeFrom[R any, T any](table ReadTable[T]) TypedSelectBuilder[R] {
+	if isNilReadTable(table) {
 		return TypedSelectBuilder[R]{
 			builder: render.SelectFrom(nil, query.TableRef{}),
 			err:     fmt.Errorf("rasql: table must not be nil"),
@@ -60,8 +60,8 @@ func DecodeFromRef[R any](table query.TableRef) TypedSelectBuilder[R] {
 // InnerJoin returns an INNER JOIN on table with on as its condition.
 // It adapts a typed table for the dialect-neutral query API, which cannot
 // import this package.
-func InnerJoin[T any](table Table[T], on query.Expression) query.Join {
-	if isNilTable(table) {
+func InnerJoin[T any](table ReadTable[T], on query.Expression) query.Join {
+	if isNilReadTable(table) {
 		return query.InnerJoin(query.TableRef{}, on)
 	}
 	return query.InnerJoin(table.Ref(), on)
@@ -70,8 +70,8 @@ func InnerJoin[T any](table Table[T], on query.Expression) query.Join {
 // LeftJoin returns a LEFT JOIN on table with on as its condition.
 // It adapts a typed table for the dialect-neutral query API, which cannot
 // import this package.
-func LeftJoin[T any](table Table[T], on query.Expression) query.Join {
-	if isNilTable(table) {
+func LeftJoin[T any](table ReadTable[T], on query.Expression) query.Join {
+	if isNilReadTable(table) {
 		return query.LeftJoin(query.TableRef{}, on)
 	}
 	return query.LeftJoin(table.Ref(), on)
@@ -319,7 +319,9 @@ func (b TypedSelectBuilder[T]) Count(ctx context.Context, db DB) (int64, error) 
 	// returns either way. It reads through the same static-scan path a
 	// generated row type takes, so the counted value never becomes an any this
 	// package owns.
-	counted, err := exactlyOne(scanTypedRenderedStatic[countRow](ctx, db, s))
+	countRows, finish := scanTypedRenderedOwned(ctx, db, s, scanTypedRowsStatic[countRow], false)
+	counted, err := exactlyOne(countRows)
+	finish(err)
 	if err != nil {
 		return 0, err
 	}
@@ -404,11 +406,21 @@ func resultMetadata(statement query.Select, supplied []query.ResultColumn, suppl
 // [ErrMultipleRows] when it matched more than one.
 func (b TypedSelectBuilder[T]) One(ctx context.Context, db DB) (T, error) {
 	var zero T
-	rows, err := b.Query(ctx, db)
-	if err != nil {
+	if err := db.Validate(); err != nil {
 		return zero, err
 	}
-	return exactlyOne(rows)
+	s, err := b.Build(db.Dialect())
+	if err != nil {
+		return zero, fmt.Errorf("rasql: render SELECT: %w", err)
+	}
+	scan := scanTypedRows[T]
+	if b.staticScan {
+		scan = scanTypedRowsStatic[T]
+	}
+	rows, finish := scanTypedRenderedOwned(ctx, db, s, scan, false)
+	value, err := exactlyOne(rows)
+	finish(err)
+	return value, err
 }
 
 func (b TypedSelectBuilder[T]) withError(err error) TypedSelectBuilder[T] {

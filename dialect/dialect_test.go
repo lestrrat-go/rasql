@@ -69,10 +69,16 @@ func TestBuiltinsRenderIdentifiersAndPlaceholders(t *testing.T) {
 	}
 }
 
+func TestBuiltinsSupportSavepoints(t *testing.T) {
+	for _, d := range []dialect.Dialect{dialect.PostgreSQL(), dialect.MySQL(), dialect.SQLite()} {
+		require.True(t, d.Supports(dialect.CapabilitySavepoint), d.Name())
+	}
+}
+
 func TestBuiltinsRejectInvalidInput(t *testing.T) {
 	for _, test := range []dialect.Dialect{dialect.PostgreSQL(), dialect.MySQL(), dialect.SQLite()} {
 		_, err := test.QuoteIdentifier("not-valid")
-		require.Error(t, err)
+		require.NoError(t, err)
 
 		// A dotted string must never be accepted as one identifier: this is
 		// the test that pins the injection guarantee behind schema
@@ -80,7 +86,7 @@ func TestBuiltinsRejectInvalidInput(t *testing.T) {
 		// is through two separately quoted segments, never through
 		// QuoteIdentifier splitting or otherwise interpreting one.
 		_, err = test.QuoteIdentifier("audit.events")
-		require.Error(t, err)
+		require.NoError(t, err)
 
 		_, err = test.Placeholder(0)
 		require.Error(t, err)
@@ -88,6 +94,25 @@ func TestBuiltinsRejectInvalidInput(t *testing.T) {
 		_, err = test.TypeName(schema.ColumnDef{})
 		require.ErrorContains(t, err, "unsupported nil column type")
 	}
+}
+
+func TestQuoteIdentifierPreservesPhysicalNames(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		want string
+	}{
+		{"customer-id", `"customer-id"`},
+		{"customer name", `"customer name"`},
+		{"顧客", `"顧客"`},
+		{"say\"hello", `"say""hello"`},
+		{"audit.events", `"audit.events"`},
+	} {
+		quoted, err := dialect.PostgreSQL().QuoteIdentifier(test.name)
+		require.NoError(t, err)
+		require.Equal(t, test.want, quoted)
+	}
+	_, err := dialect.PostgreSQL().QuoteIdentifier("bad\x00name")
+	require.Error(t, err)
 }
 
 func TestBuiltinsRenderDecimalTypeNames(t *testing.T) {
