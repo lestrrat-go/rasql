@@ -95,6 +95,9 @@ func NewPageSpec[R any](order []PageKey[R], uniqueSuffix ...PageKey[R]) (PageSpe
 	if len(uniqueSuffix) == 0 {
 		return PageSpec[R]{}, planError("order_not_unique", "uniqueSuffix", "must not be empty")
 	}
+	if len(order) > 255 {
+		return PageSpec[R]{}, planError("invalid_page_spec", "order", "must contain at most 255 keys")
+	}
 	keys := make([]*pageKey[R], len(order))
 	for i, item := range order {
 		key, ok := item.(*pageKey[R])
@@ -220,12 +223,18 @@ func decodeBuiltinCursor(data []byte, typ reflect.Type) (any, error) {
 		if len(data) != 1 || data[0] > 1 {
 			return nil, errors.New("invalid bool cursor")
 		}
-		return data[0] == 1, nil
+		out := reflect.New(typ).Elem()
+		out.SetBool(data[0] == 1)
+		return out.Interface(), nil
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		if len(data) != 8 {
 			return nil, errors.New("invalid integer cursor")
 		}
 		v := int64(binary.BigEndian.Uint64(data) ^ (1 << 63))
+		bits := typ.Bits()
+		if bits < 64 && (v < -(int64(1)<<(bits-1)) || v > (int64(1)<<(bits-1))-1) {
+			return nil, errors.New("integer cursor overflows destination type")
+		}
 		out := reflect.New(typ).Elem()
 		out.SetInt(v)
 		return out.Interface(), nil
@@ -233,11 +242,17 @@ func decodeBuiltinCursor(data []byte, typ reflect.Type) (any, error) {
 		if len(data) != 8 {
 			return nil, errors.New("invalid integer cursor")
 		}
+		value := binary.BigEndian.Uint64(data)
+		if bits := typ.Bits(); bits < 64 && value > (uint64(1)<<bits)-1 {
+			return nil, errors.New("unsigned cursor overflows destination type")
+		}
 		out := reflect.New(typ).Elem()
-		out.SetUint(binary.BigEndian.Uint64(data))
+		out.SetUint(value)
 		return out.Interface(), nil
 	case reflect.String:
-		return string(data), nil
+		out := reflect.New(typ).Elem()
+		out.SetString(string(data))
+		return out.Interface(), nil
 	case reflect.Slice:
 		if typ.Elem().Kind() == reflect.Uint8 {
 			return append([]byte(nil), data...), nil
@@ -249,11 +264,20 @@ func decodeBuiltinCursor(data []byte, typ reflect.Type) (any, error) {
 const cursorVersion byte = 1
 
 func encodeCursorEnvelope[R any](fingerprint [32]byte, keys []*pageKey[R], values []cursorValue) (Cursor, error) {
+	if len(keys) > 255 || len(values) != len(keys) {
+		return "", errors.New("cursor envelope key count is out of range")
+	}
 	var b bytes.Buffer
 	b.WriteByte(cursorVersion)
 	b.Write(fingerprint[:])
 	b.WriteByte(byte(len(keys)))
 	for i, key := range keys {
+		if len(key.codec) > 255 || len(values[i].data) > math.MaxUint16 {
+			return "", errors.New("cursor envelope field is too large")
+		}
+		if !values[i].present && len(values[i].data) != 0 {
+			return "", errors.New("absent cursor value has a payload")
+		}
 		b.WriteByte(byte(key.direction))
 		if key.nullable {
 			b.WriteByte(1)
@@ -270,6 +294,9 @@ func encodeCursorEnvelope[R any](fingerprint [32]byte, keys []*pageKey[R], value
 		}
 		_ = binary.Write(&b, binary.BigEndian, uint32(len(values[i].data)))
 		b.Write(values[i].data)
+	}
+	if b.Len() > 64*1024 {
+		return "", errors.New("cursor envelope exceeds 64 KiB")
 	}
 	return Cursor(base64.RawURLEncoding.EncodeToString(b.Bytes())), nil
 }

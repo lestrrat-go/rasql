@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/stmt"
 )
 
@@ -180,14 +181,23 @@ func decodePageCursor[R any](cursor Cursor, spec PageSpec[R], executor Executor)
 		if offset+4 > len(raw) {
 			return nil, fp, invalidCursor(errors.New("truncated cursor"))
 		}
-		direction, nullable, nulls, codecLen := PageDirection(raw[offset]), raw[offset+1] != 0, NullOrder(raw[offset+2]), int(raw[offset+3])
+		direction := PageDirection(raw[offset])
+		nullableMarker, nulls, codecLen := raw[offset+1], NullOrder(raw[offset+2]), int(raw[offset+3])
+		if nullableMarker > 1 || nulls > NullsLast {
+			return nil, fp, invalidCursor(errors.New("invalid cursor metadata marker"))
+		}
+		nullable := nullableMarker == 1
 		offset += 4
 		if offset+codecLen+5 > len(raw) {
 			return nil, fp, invalidCursor(errors.New("truncated cursor metadata"))
 		}
 		codec := string(raw[offset : offset+codecLen])
 		offset += codecLen
-		present := raw[offset] != 0
+		presenceMarker := raw[offset]
+		if presenceMarker > 1 {
+			return nil, fp, invalidCursor(errors.New("invalid cursor presence marker"))
+		}
+		present := presenceMarker == 1
 		offset++
 		length := int(binary.BigEndian.Uint32(raw[offset:]))
 		offset += 4
@@ -200,6 +210,9 @@ func decodePageCursor[R any](cursor Cursor, spec PageSpec[R], executor Executor)
 			return nil, fp, invalidCursor(errors.New("cursor metadata mismatch"))
 		}
 		if !present {
+			if length != 0 || !key.nullable {
+				return nil, fp, invalidCursor(errors.New("invalid absent cursor value"))
+			}
 			values[i] = decodedCursor{}
 			continue
 		}
@@ -331,9 +344,13 @@ func pageFingerprint[R any](engine, sqlText string, statementSchema ResultSchema
 	writeField(h, "rasql-keyset-v1")
 	writeField(h, engine)
 	writeField(h, sqlText)
-	for _, column := range statementSchema.Columns() {
+	columns := statementSchema.Columns()
+	writeUintField(h, "column-count", uint64(len(columns)))
+	for _, column := range columns {
 		writeField(h, column.Name)
-		writeField(h, fmt.Sprintf("%T", column.Type))
+		if err := writeColumnType(h, column.Type); err != nil {
+			return [32]byte{}, err
+		}
 		writeField(h, column.Codec)
 		if column.Nullable {
 			writeField(h, "nullable")
@@ -341,12 +358,14 @@ func pageFingerprint[R any](engine, sqlText string, statementSchema ResultSchema
 			writeField(h, "required")
 		}
 	}
+	writeUintField(h, "key-count", uint64(len(keys)))
 	for _, key := range keys {
 		writeField(h, string([]byte{byte(key.direction), byte(key.term.nulls)}))
 		writeField(h, key.codec)
 		writeField(h, key.term.source)
 	}
 	args := statement.Args()
+	writeUintField(h, "argument-count", uint64(len(indexes)))
 	for _, index := range indexes {
 		if index < 0 || index >= len(args) {
 			return [32]byte{}, planError("internal_plan", "binds", "matched argument index is invalid")
@@ -358,6 +377,66 @@ func pageFingerprint[R any](engine, sqlText string, statementSchema ResultSchema
 	var result [32]byte
 	copy(result[:], h.Sum(nil))
 	return result, nil
+}
+
+func writeColumnType(h hashWriter, columnType schema.ColumnType) error {
+	writeField(h, "column-type")
+	writeField(h, string(columnType.Kind()))
+	writeField(h, "parameters")
+	switch typed := columnType.(type) {
+	case schema.BooleanType, schema.FloatType, schema.BytesType, schema.TimeType, schema.JSONType, schema.UUIDType, schema.OpaqueType:
+		return nil
+	case schema.IntegerType:
+		writeBoolField(h, "unsigned", typed.Unsigned)
+		width, stated := typed.DisplayWidth.Value()
+		writeBoolField(h, "display-width-stated", stated)
+		if stated {
+			writeIntField(h, "display-width", int64(width))
+		}
+		writeBoolField(h, "zerofill", typed.ZeroFill)
+	case schema.TextType:
+		width, stated := typed.Width.Value()
+		writeBoolField(h, "width-stated", stated)
+		if stated {
+			writeIntField(h, "width", int64(width))
+		}
+		writeBoolField(h, "fixed", typed.Fixed)
+	case schema.DecimalType:
+		writeIntField(h, "precision", int64(typed.Precision))
+		scale, stated := typed.Scale.Value()
+		writeBoolField(h, "scale-stated", stated)
+		if stated {
+			writeIntField(h, "scale", int64(scale))
+		}
+		writeBoolField(h, "unsigned", typed.Unsigned)
+		writeBoolField(h, "zerofill", typed.ZeroFill)
+	default:
+		return fmt.Errorf("unsupported column type %T", columnType)
+	}
+	return nil
+}
+
+func writeBoolField(h hashWriter, tag string, value bool) {
+	writeField(h, tag)
+	if value {
+		writeField(h, "1")
+	} else {
+		writeField(h, "0")
+	}
+}
+
+func writeIntField(h hashWriter, tag string, value int64) {
+	writeField(h, tag)
+	var data [8]byte
+	binary.BigEndian.PutUint64(data[:], uint64(value))
+	writeField(h, string(data[:]))
+}
+
+func writeUintField(h hashWriter, tag string, value uint64) {
+	writeField(h, tag)
+	var data [8]byte
+	binary.BigEndian.PutUint64(data[:], value)
+	writeField(h, string(data[:]))
 }
 
 func writeField(h hashWriter, value string) {
