@@ -1,4 +1,4 @@
-package rasqlgen_test
+package rasqlgen
 
 import (
 	"bytes"
@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/lestrrat-go/rasql/cli/rasqlgen"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
@@ -35,26 +34,40 @@ func TestTypedSQLSchemaUpdateOfflineParity(t *testing.T) {
 	require.NoError(t, db.Close())
 	t.Chdir(root)
 	var out, diag bytes.Buffer
-	require.NoError(t, rasqlgen.RunTopLevel([]string{"schema", "update", "-config", configPath, "-dsn", dsn}, &out, &diag), diag.String())
+	require.NoError(t, RunTopLevel([]string{"schema", "update", "-config", configPath, "-dsn", dsn}, &out, &diag), diag.String())
 	online := snapshotGenerated(t, root)
-	lock := mustRead(t, filepath.Join(root, "rasql.lock.json"))
+	lock := workflowRead(t, filepath.Join(root, "rasql.lock.json"))
 	require.NoError(t, os.Remove(filepath.Join(root, "internal", "store", "events_query_gen.go")))
 	out.Reset()
 	diag.Reset()
-	require.NoError(t, rasqlgen.RunTopLevel([]string{"generate", "-config", configPath}, &out, &diag), diag.String())
+	require.NoError(t, RunTopLevel([]string{"generate", "-config", configPath}, &out, &diag), diag.String())
 	require.Equal(t, online, snapshotGenerated(t, root))
-	require.Equal(t, lock, mustRead(t, filepath.Join(root, "rasql.lock.json")))
+	require.Equal(t, lock, workflowRead(t, filepath.Join(root, "rasql.lock.json")))
 	out.Reset()
 	diag.Reset()
-	require.NoError(t, rasqlgen.RunTopLevel([]string{"check", "-config", configPath}, &out, &diag), diag.String())
+	require.NoError(t, RunTopLevel([]string{"check", "-config", configPath}, &out, &diag), diag.String())
+	generatedBefore := snapshotGenerated(t, root)
+	lockBefore := workflowRead(t, filepath.Join(root, "rasql.lock.json"))
+	queryPath := filepath.Join(root, "queries", "events.sql")
+	cmd := command{program: "rasql", output: &out, diagnostics: &diag, beforePublication: func() {
+		_ = os.WriteFile(queryPath, []byte("SELECT id, amount, occurred_at, note FROM events WHERE id > 0\n"), 0o600)
+	}}
+	out.Reset()
+	diag.Reset()
+	err = cmd.run([]string{"schema", "update", "-config", configPath, "-dsn", dsn})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "source")
+	require.Equal(t, generatedBefore, snapshotGenerated(t, root))
+	require.Equal(t, lockBefore, workflowRead(t, filepath.Join(root, "rasql.lock.json")))
+	require.NoFileExists(t, filepath.Join(root, ".rasql-update.pending.json"))
 }
 
 func snapshotGenerated(t *testing.T, root string) []byte {
 	t.Helper()
-	return mustRead(t, filepath.Join(root, "internal", "store", "events_query_gen.go"))
+	return workflowRead(t, filepath.Join(root, "internal", "store", "events_query_gen.go"))
 }
 
-func mustRead(t *testing.T, path string) []byte {
+func workflowRead(t *testing.T, path string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
