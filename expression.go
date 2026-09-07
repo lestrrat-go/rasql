@@ -2,6 +2,7 @@ package rasql
 
 import (
 	"database/sql"
+	"errors"
 	"reflect"
 	"sync/atomic"
 	"time"
@@ -135,7 +136,7 @@ func EqualExpr[T comparable](left, right Expr[T]) Predicate {
 func EqualValue[T comparable](left Expr[T], right T) Predicate {
 	id := bindID(atomic.AddUint64(&nextBindID, 1))
 	snapshot, err := snapshotBind(right)
-	return Predicate{node: query.Equal(left.node, query.Bind(bindToken{id: id, value: snapshot, codec: left.codec})), source: left.source, bindErr: err}
+	return Predicate{node: query.Equal(left.node, query.Bind(bindToken{id: id, value: snapshot, codec: left.codec, err: err})), source: left.source, bindErr: err}
 }
 func EqualNullable[T comparable](left, right NullExpr[T]) Predicate {
 	return Predicate{node: query.Equal(left.node, right.node), source: left.source, source2: right.source}
@@ -222,26 +223,45 @@ func MinNullExpr[T any](value NullExpr[T]) NullExpr[T] {
 	return NullExpr[T]{node: query.Min(value.node), codec: value.codec, source: value.source}
 }
 
-func cloneBindValue[T any](value T) any {
-	cloned := cloneReflectValue(reflect.ValueOf(value))
-	if !cloned.IsValid() {
-		return nil
-	}
-	return cloned.Interface()
-}
-
 func snapshotBind[T any](value T) (any, error) {
 	if snapshotter, ok := any(value).(BindSnapshotter[T]); ok {
-		return snapshotter.SnapshotBind()
+		adopted, err := snapshotter.SnapshotBind()
+		if err != nil {
+			return nil, snapshotError(err)
+		}
+		return adopted, nil
 	}
-	return snapshotReflectValue(reflect.ValueOf(value), make(map[uintptr]bool))
+	return snapshotReflectValue(reflect.ValueOf(value), make(map[snapshotIdentity]bool))
 }
-func snapshotReflectValue(value reflect.Value, active map[uintptr]bool) (any, error) {
+
+type snapshotIdentity struct {
+	typ  reflect.Type
+	kind reflect.Kind
+	ptr  uintptr
+	len  int
+	cap  int
+}
+
+func snapshotError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var planErr *PlanError
+	if errors.As(err, &planErr) && planErr.Code == "unsnapshotable_bind" {
+		return err
+	}
+	return planError("unsnapshotable_bind", "bind", err.Error())
+}
+
+func snapshotReflectValue(value reflect.Value, active map[snapshotIdentity]bool) (any, error) {
 	if !value.IsValid() {
 		return nil, nil
 	}
 	if value.Type() == reflect.TypeOf(time.Time{}) {
 		return value.Interface(), nil
+	}
+	if snapshot, ok := snapshotMethod(value); ok {
+		return snapshot()
 	}
 	if value.Kind() == reflect.Interface {
 		if value.IsNil() {
@@ -253,7 +273,7 @@ func snapshotReflectValue(value reflect.Value, active map[uintptr]bool) (any, er
 		if value.IsNil() {
 			return reflect.Zero(value.Type()).Interface(), nil
 		}
-		key := value.Pointer()
+		key := snapshotKey(value)
 		if active[key] {
 			return nil, planError("unsnapshotable_bind", "bind", "cycle detected")
 		}
@@ -296,8 +316,8 @@ func snapshotReflectValue(value reflect.Value, active map[uintptr]bool) (any, er
 		result := reflect.MakeMapWithSize(value.Type(), value.Len())
 		iter := value.MapRange()
 		for iter.Next() {
-			if iter.Key().Kind() == reflect.Pointer || iter.Key().Kind() == reflect.Map || iter.Key().Kind() == reflect.Slice {
-				return nil, planError("unsnapshotable_bind", "bind", "mutable map key")
+			if err := validateSnapshotMapKey(iter.Key()); err != nil {
+				return nil, err
 			}
 			v, err := snapshotReflectValue(iter.Value(), active)
 			if err != nil {
@@ -338,6 +358,61 @@ func snapshotReflectValue(value reflect.Value, active map[uintptr]bool) (any, er
 		return value.Interface(), nil
 	}
 }
+
+func snapshotKey(value reflect.Value) snapshotIdentity {
+	key := snapshotIdentity{typ: value.Type(), kind: value.Kind(), ptr: value.Pointer()}
+	if value.Kind() == reflect.Slice {
+		key.len, key.cap = value.Len(), value.Cap()
+	}
+	return key
+}
+
+func snapshotMethod(value reflect.Value) (func() (any, error), bool) {
+	method := value.MethodByName("SnapshotBind")
+	if !method.IsValid() {
+		return nil, false
+	}
+	methodType := method.Type()
+	if methodType.NumIn() != 0 || methodType.NumOut() != 2 || methodType.Out(1) != reflect.TypeOf((*error)(nil)).Elem() || methodType.Out(0) != value.Type() {
+		return nil, false
+	}
+	return func() (any, error) {
+		results := method.Call(nil)
+		if !results[1].IsNil() {
+			return nil, snapshotError(results[1].Interface().(error))
+		}
+		return results[0].Interface(), nil
+	}, true
+}
+
+func validateSnapshotMapKey(value reflect.Value) error {
+	if !value.IsValid() {
+		return nil
+	}
+	switch value.Kind() {
+	case reflect.Interface, reflect.Pointer, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan, reflect.UnsafePointer:
+		return planError("unsnapshotable_bind", "bind", "mutable map key")
+	case reflect.Array:
+		for i := 0; i < value.Len(); i++ {
+			if err := validateSnapshotMapKey(value.Index(i)); err != nil {
+				return err
+			}
+		}
+	case reflect.Struct:
+		if value.Type() == reflect.TypeOf(time.Time{}) {
+			return nil
+		}
+		for i := 0; i < value.NumField(); i++ {
+			if value.Type().Field(i).PkgPath != "" {
+				return planError("unsnapshotable_bind", "bind", "mutable map key")
+			}
+			if err := validateSnapshotMapKey(value.Field(i)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
 func setSnapshot(dst, src reflect.Value) {
 	if !src.IsValid() || (src.Kind() == reflect.Interface && src.IsNil()) {
 		dst.Set(reflect.Zero(dst.Type()))
@@ -349,80 +424,5 @@ func setSnapshot(dst, src reflect.Value) {
 	}
 	if src.Type().ConvertibleTo(dst.Type()) {
 		dst.Set(src.Convert(dst.Type()))
-	}
-}
-func cloneReflectValue(value reflect.Value) reflect.Value {
-	if !value.IsValid() {
-		return value
-	}
-	if value.Type() == reflect.TypeOf(time.Time{}) {
-		return value
-	}
-	switch value.Kind() {
-	case reflect.Pointer:
-		if value.IsNil() {
-			return reflect.Zero(value.Type())
-		}
-		copy := reflect.New(value.Type().Elem())
-		copy.Elem().Set(cloneReflectValue(value.Elem()))
-		return copy
-	case reflect.Interface:
-		if value.IsNil() {
-			return reflect.Zero(value.Type())
-		}
-		copy := cloneReflectValue(value.Elem())
-		result := reflect.New(value.Type()).Elem()
-		result.Set(copy)
-		return result
-	case reflect.Slice:
-		if value.IsNil() {
-			return reflect.Zero(value.Type())
-		}
-		copy := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
-		for i := 0; i < value.Len(); i++ {
-			copy.Index(i).Set(cloneReflectValue(value.Index(i)))
-		}
-		return copy
-	case reflect.Map:
-		if value.IsNil() {
-			return reflect.Zero(value.Type())
-		}
-		copy := reflect.MakeMapWithSize(value.Type(), value.Len())
-		iter := value.MapRange()
-		for iter.Next() {
-			copy.SetMapIndex(cloneReflectValue(iter.Key()), cloneReflectValue(iter.Value()))
-		}
-		return copy
-	case reflect.Array:
-		copy := reflect.New(value.Type()).Elem()
-		for i := 0; i < value.Len(); i++ {
-			copy.Index(i).Set(cloneReflectValue(value.Index(i)))
-		}
-		return copy
-	case reflect.Struct:
-		if value.Type() == reflect.TypeOf(time.Time{}) {
-			return value
-		}
-		if value.Type() == reflect.TypeOf(sql.NamedArg{}) {
-			argument := value.Interface().(sql.NamedArg)
-			argument.Value = cloneBindValue(argument.Value)
-			return reflect.ValueOf(argument)
-		}
-		copy := reflect.New(value.Type()).Elem()
-		for i := 0; i < value.NumField(); i++ {
-			if value.Type().Field(i).PkgPath != "" {
-				continue
-			}
-			if copy.Field(i).CanSet() && value.Field(i).CanInterface() {
-				copy.Field(i).Set(cloneReflectValue(value.Field(i)))
-				continue
-			}
-			if copy.Field(i).CanSet() {
-				copy.Field(i).Set(value.Field(i))
-			}
-		}
-		return copy
-	default:
-		return value
 	}
 }

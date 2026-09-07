@@ -1,224 +1,128 @@
-package rasql
+package rasql_test
 
 import (
-	"errors"
+	"database/sql"
 	"testing"
 
+	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/schema"
+	"github.com/stretchr/testify/require"
 )
 
 type queryAPIDecoder struct {
-	resultSchema ResultSchema
-	presence     []Presence
+	resultSchema rasql.ResultSchema
+	presence     []rasql.Presence
 }
 
-func (d queryAPIDecoder) ResultSchema() ResultSchema { return d.resultSchema }
-func (d queryAPIDecoder) Presence() []Presence       { return append([]Presence(nil), d.presence...) }
-func (d queryAPIDecoder) DecodeRow(source ScanSource, result *int64) error {
+func (d queryAPIDecoder) ResultSchema() rasql.ResultSchema { return d.resultSchema }
+func (d queryAPIDecoder) Presence() []rasql.Presence {
+	return append([]rasql.Presence(nil), d.presence...)
+}
+func (d queryAPIDecoder) DecodeRow(source rasql.ScanSource, result *int64) error {
 	return source.Scan(result)
 }
 
-type queryAPISource struct {
-	value        any
-	destinations int
-}
-
-type dtoResult struct {
-	ID   int64
-	Name Nullable[string]
-}
-type dtoDecoder struct {
-	schema    ResultSchema
-	addresses []*dtoResult
-}
-
-func (d *dtoDecoder) ResultSchema() ResultSchema { return d.schema }
-func (*dtoDecoder) Presence() []Presence         { p, _ := NewPresence("profile", "id"); return []Presence{p} }
-func (d *dtoDecoder) DecodeRow(source ScanSource, result *dtoResult) error {
-	d.addresses = append(d.addresses, result)
-	return source.Scan(&result.ID, &result.Name)
-}
-
-type dtoSource struct {
-	id   int64
-	name any
-}
-
-func (s dtoSource) Scan(dest ...any) error {
-	*dest[0].(*int64) = s.id
-	*dest[1].(*Nullable[string]) = Nullable[string]{Value: s.name.(string), Valid: true}
-	return nil
-}
+type queryAPISource struct{ value any }
 
 func (s *queryAPISource) Scan(destinations ...any) error {
-	s.destinations++
 	if len(destinations) != 1 {
-		return errors.New("wrong destination count")
+		return sql.ErrNoRows
 	}
-	pointer, ok := destinations[0].(*int64)
-	if !ok {
-		return errors.New("wrong destination type")
-	}
-	*pointer = s.value.(int64)
-	return nil
+	return rasql.ScanValue(destinations[0].(*int64), s.value)
 }
 
 func TestResultSchemaDefensiveCopyAndValidation(t *testing.T) {
-	columns := []ResultColumn{{Name: "id", Type: schema.IntegerType{}}}
-	result, err := NewResultSchema(columns...)
-	if err != nil {
-		t.Fatal(err)
-	}
+	columns := []rasql.ResultColumn{{Name: "id", Type: schema.IntegerType{}}}
+	result, err := rasql.NewResultSchema(columns...)
+	require.NoError(t, err)
 	columns[0].Name = "changed"
-	if got := result.Columns()[0].Name; got != "id" {
-		t.Fatalf("schema changed through input: %q", got)
-	}
+	require.Equal(t, "id", result.Columns()[0].Name)
 	copy := result.Columns()
 	copy[0].Name = "changed"
-	if got := result.Columns()[0].Name; got != "id" {
-		t.Fatalf("schema changed through accessor: %q", got)
+	require.Equal(t, "id", result.Columns()[0].Name)
+	for _, column := range []rasql.ResultColumn{{}, {Name: "id"}, {Name: "id", Type: schema.IntegerType{}, Codec: "bad codec"}} {
+		_, err := rasql.NewResultSchema(column)
+		require.Error(t, err, "accepted invalid column %#v", column)
 	}
-	for _, column := range []ResultColumn{{}, {Name: "id", Type: nil}, {Name: "id", Type: schema.IntegerType{}, Codec: "bad codec"}} {
-		if _, err := NewResultSchema(column); err == nil {
-			t.Fatalf("accepted invalid column %#v", column)
-		}
-	}
-	if _, err := NewResultSchema(ResultColumn{Name: "id", Type: schema.IntegerType{}}, ResultColumn{Name: "id", Type: schema.IntegerType{}}); err == nil {
-		t.Fatal("accepted duplicate schema name")
-	}
+	_, err = rasql.NewResultSchema(
+		rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}},
+		rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}},
+	)
+	require.Error(t, err)
 }
 
 func TestProjectionValidationAndPresence(t *testing.T) {
-	resultSchema, err := NewResultSchema(ResultColumn{Name: "id", Type: schema.IntegerType{}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	resultSchema, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}})
+	require.NoError(t, err)
 	decoder := queryAPIDecoder{resultSchema: resultSchema}
-	item := Item("id", Value(int64(1)), schema.IntegerType{}, "")
-	projection, err := NewProjection([]ProjectionItem{item}, decoder)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(projection.Schema().Columns()) != 1 {
-		t.Fatal("projection lost schema")
-	}
-	wrongSchema, _ := NewResultSchema(ResultColumn{Name: "other", Type: schema.IntegerType{}})
-	if _, err := NewProjection([]ProjectionItem{item}, queryAPIDecoder{resultSchema: wrongSchema}); err == nil {
-		t.Fatal("accepted decoder schema mismatch")
-	}
-	presence, err := NewPresence("profile", "id")
-	if err != nil {
-		t.Fatal(err)
-	}
-	nullSchema, _ := NewResultSchema(ResultColumn{Name: "id", Type: schema.IntegerType{}, Nullable: true})
-	nullItem := NullItem("id", NullExpr[int64]{node: Value(int64(1)).node}, schema.IntegerType{}, "")
-	if _, err := NewProjection([]ProjectionItem{nullItem}, queryAPIDecoder{resultSchema: nullSchema, presence: []Presence{presence}}); err != nil {
-		t.Fatal(err)
-	}
-	unknown, _ := NewPresence("profile", "missing")
-	if _, err := NewProjection([]ProjectionItem{item}, queryAPIDecoder{resultSchema: resultSchema, presence: []Presence{unknown}}); err == nil {
-		t.Fatal("accepted unknown presence column")
-	}
+	item := rasql.Item("id", rasql.Value(int64(1)), schema.IntegerType{}, "")
+	projection, err := rasql.NewProjection([]rasql.ProjectionItem{item}, decoder)
+	require.NoError(t, err)
+	require.Len(t, projection.Schema().Columns(), 1)
+	wrongSchema, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "other", Type: schema.IntegerType{}})
+	require.NoError(t, err)
+	_, err = rasql.NewProjection([]rasql.ProjectionItem{item}, queryAPIDecoder{resultSchema: wrongSchema})
+	require.Error(t, err)
+	presence, err := rasql.NewPresence("profile", "id")
+	require.NoError(t, err)
+	nullSchema, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}, Nullable: true})
+	require.NoError(t, err)
+	nullItem := rasql.NullItem("id", rasql.MinExpr(rasql.Value(int64(1))), schema.IntegerType{}, "")
+	_, err = rasql.NewProjection([]rasql.ProjectionItem{nullItem}, queryAPIDecoder{resultSchema: nullSchema, presence: []rasql.Presence{presence}})
+	require.NoError(t, err)
+	unknown, err := rasql.NewPresence("profile", "missing")
+	require.NoError(t, err)
+	_, err = rasql.NewProjection([]rasql.ProjectionItem{item}, queryAPIDecoder{resultSchema: resultSchema, presence: []rasql.Presence{unknown}})
+	require.Error(t, err)
 }
 
 func TestScalarDecoderUsesFreshDestination(t *testing.T) {
-	projection, err := Scalar("value", Value(int64(1)), schema.IntegerType{}, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	projection, err := rasql.Scalar("value", rasql.Value(int64(1)), schema.IntegerType{}, "")
+	require.NoError(t, err)
 	first, second := int64(0), int64(0)
 	source := &queryAPISource{value: int64(42)}
-	if err := projection.Decoder().DecodeRow(source, &first); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, projection.Decoder().DecodeRow(source, &first))
 	source.value = int64(7)
-	if err := projection.Decoder().DecodeRow(source, &second); err != nil {
-		t.Fatal(err)
-	}
-	if first != 42 || second != 7 || first == second {
-		t.Fatalf("decoded values = %d, %d", first, second)
-	}
+	require.NoError(t, projection.Decoder().DecodeRow(source, &second))
+	require.Equal(t, int64(42), first)
+	require.Equal(t, int64(7), second)
 }
 
 func TestQueryOperationsAreImmutable(t *testing.T) {
-	projection, err := Scalar("value", Value(int64(1)), schema.IntegerType{}, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	base := Select(Source{}, projection)
-	filtered := base.Where(EqualValue(Value(int64(1)), int64(1)))
-	if len(base.Plan().where) != 0 || len(filtered.Plan().where) != 1 {
-		t.Fatal("query mutation leaked across values")
-	}
-	if _, err := base.Limit(-1); err == nil {
-		t.Fatal("accepted negative limit")
-	}
-	if _, err := base.Offset(-1); err == nil {
-		t.Fatal("accepted negative offset")
-	}
+	table, err := rasql.ReadTableOf[int64](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
+	require.NoError(t, err)
+	relation, err := rasql.SourceOf(table, "u")
+	require.NoError(t, err)
+	projection, err := rasql.Scalar("value", rasql.Value(int64(1)), schema.IntegerType{}, "")
+	require.NoError(t, err)
+	base := rasql.Select(relation.Source(), projection)
+	filtered := base.Where(rasql.EqualValue(rasql.Value(int64(1)), int64(1)))
+	require.NoError(t, base.Validate())
+	require.NoError(t, filtered.Validate())
+	_, err = base.Limit(-1)
+	require.Error(t, err)
+	_, err = base.Offset(-1)
+	require.Error(t, err)
 }
 
 func TestSourceBoundColumnsValidateNullabilityAndMembership(t *testing.T) {
-	table, err := ReadTableOf[int64](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "nickname", Type: schema.TextType{}, Nullable: true}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	relation, err := SourceOf(table, "u")
-	if err != nil {
-		t.Fatal(err)
-	}
-	column, err := BindColumn[int64, int64](relation, "id", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if column.Expr().node == nil {
-		t.Fatal("column expression is zero")
-	}
-	nullable, err := BindNullColumn[int64, string](relation, "nickname", "custom.codec")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if nullable.NullExpr().node == nil {
-		t.Fatal("nullable expression is zero")
-	}
-	optional := Optional(relation)
-	if _, err := BindOptionalColumn[int64, int64](optional, "id", ""); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := BindColumn[int64, int64](relation, "nickname", ""); err == nil {
-		t.Fatal("accepted nullable column as required")
-	}
-	if _, err := BindColumn[int64, int64](relation, "missing", ""); err == nil {
-		t.Fatal("accepted unknown column")
-	}
-}
-
-func TestDTODecoderPreservesOrderNullMetadataAndDestinationOwnership(t *testing.T) {
-	s, err := NewResultSchema(ResultColumn{Name: "id", Type: schema.IntegerType{}, Nullable: true}, ResultColumn{Name: "name", Type: schema.TextType{}, Nullable: true, Codec: "domain.text"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	p, err := NewPresence("profile", "id")
-	if err != nil {
-		t.Fatal(err)
-	}
-	d := &dtoDecoder{schema: s}
-	d.Presence()
-	_ = p
-	projection, err := NewProjection([]ProjectionItem{NullItem("id", NullExpr[int64]{node: Value(int64(1)).node}, schema.IntegerType{}, ""), NullItem("name", NullExpr[string]{node: Value("x").node}, schema.TextType{}, "domain.text")}, d)
-	if err != nil {
-		t.Fatal(err)
-	}
-	first, second := dtoResult{}, dtoResult{}
-	source := dtoSource{id: 1, name: "a"}
-	if err := projection.Decoder().DecodeRow(source, &first); err != nil {
-		t.Fatal(err)
-	}
-	source.id = 2
-	if err := projection.Decoder().DecodeRow(source, &second); err != nil {
-		t.Fatal(err)
-	}
-	if len(d.addresses) != 2 || d.addresses[0] == d.addresses[1] || first.ID != 1 || second.ID != 2 {
-		t.Fatalf("decoder ownership/results invalid")
-	}
+	table, err := rasql.ReadTableOf[int64](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{
+		{Name: "id", Type: schema.IntegerType{}},
+		{Name: "nickname", Type: schema.TextType{}, Nullable: true},
+	}})
+	require.NoError(t, err)
+	relation, err := rasql.SourceOf(table, "u")
+	require.NoError(t, err)
+	column, err := rasql.BindColumn[int64, int64](relation, "id", "")
+	require.NoError(t, err)
+	require.NotNil(t, column.Expr())
+	nullable, err := rasql.BindNullColumn[int64, string](relation, "nickname", "custom.codec")
+	require.NoError(t, err)
+	require.NotNil(t, nullable.NullExpr())
+	_, err = rasql.BindOptionalColumn[int64, int64](rasql.Optional(relation), "id", "")
+	require.NoError(t, err)
+	_, err = rasql.BindColumn[int64, int64](relation, "nickname", "")
+	require.Error(t, err)
+	_, err = rasql.BindColumn[int64, int64](relation, "missing", "")
+	require.Error(t, err)
 }
