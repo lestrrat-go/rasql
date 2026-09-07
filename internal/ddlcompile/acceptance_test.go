@@ -4,10 +4,12 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/ddlcompile"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/sqltext"
+	"github.com/lestrrat-go/rasql/stmt"
 	"github.com/stretchr/testify/require"
 )
 
@@ -99,4 +101,41 @@ func TestAcceptanceDDLCompilerIsReusableConcurrently(t *testing.T) {
 		require.NoError(t, errs[i])
 		require.Equal(t, results[0], results[i])
 	}
+	first, err := c.CreateIndexes(table)
+	require.NoError(t, err)
+	second, err := c.CreateIndexes(table)
+	require.NoError(t, err)
+	first[0] = stmt.Statement{}
+	require.Equal(t, `CREATE UNIQUE INDEX "events_name_idx" ON "audit"."events" ("name")`, second[0].SQL())
+}
+
+type ddlExtensionDialect struct{ dialect.Dialect }
+
+func (ddlExtensionDialect) Name() string { return "custom-extension" }
+
+func (ddlExtensionDialect) NativeTypeName(schema.NativeTypeDef) (string, bool, error) {
+	return "CUSTOM_TYPE", true, nil
+}
+
+type ddlBareExtensionDialect struct{ dialect.Dialect }
+
+func (ddlBareExtensionDialect) Name() string { return "custom-extension" }
+
+func TestAcceptanceDDLPreservesCustomNativeTypeExtension(t *testing.T) {
+	base, err := engineprofile.Builtin("postgresql-17", engineprofile.Version{Known: true, Major: 17})
+	require.NoError(t, err)
+	profile, err := engineprofile.New("custom:extension", engineprofile.Custom, "custom-extension", engineprofile.Version{}, base.Capabilities, engineprofile.Limits{MaxBindParameters: 100})
+	require.NoError(t, err)
+	table := schema.TableDef{Name: "events", Columns: []schema.ColumnDef{{Name: "kind", Type: schema.OpaqueType{}, NativeType: &schema.NativeTypeDef{Dialect: "custom-extension", Name: "kind_t", Kind: schema.NativeOther}}}}
+	withNative, err := ddlcompile.NewWithDialect(profile, ddlExtensionDialect{Dialect: dialect.PostgreSQL()})
+	require.NoError(t, err)
+	statements, err := withNative.CreateTable(table)
+	require.NoError(t, err)
+	require.Equal(t, `CREATE TABLE "events" ("kind" CUSTOM_TYPE NOT NULL)`, statements[0].SQL())
+
+	withoutNative, err := ddlcompile.NewWithDialect(profile, ddlBareExtensionDialect{Dialect: dialect.PostgreSQL()})
+	require.NoError(t, err)
+	statements, err = withoutNative.CreateTable(table)
+	require.Error(t, err)
+	require.Nil(t, statements)
 }

@@ -83,3 +83,35 @@ func TestSQLiteObjectNamesFallsBackInRequestedNamespace(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []inspect.ObjectName{{Schema: "aux", Name: "archive", Kind: schema.ObjectTable}}, objects)
 }
+
+func TestSQLiteObjectNamesAcceptsEmptyModernAndLegacyCatalogs(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		query string
+	}{
+		{"modern", "PRAGMA table_list"},
+		{"legacy", "PRAGMA table_list"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+			require.NoError(t, err)
+			ins, err := inspect.New(db, dialect.SQLite())
+			require.NoError(t, err)
+			if tc.name == "modern" {
+				mock.ExpectQuery(tc.query).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "type", "ncol", "wr", "strict"}))
+			} else {
+				mock.ExpectQuery(tc.query).WillReturnError(fmt.Errorf("unsupported pragma"))
+			}
+			mock.ExpectQuery("PRAGMA database_list").WillReturnRows(sqlmock.NewRows([]string{"seq", "name", "file"}).AddRow(0, "main", "").AddRow(1, "aux", ""))
+			for _, database := range []string{"main", "aux"} {
+				mock.ExpectQuery(`SELECT name, type, sql FROM "` + database + `".sqlite_master WHERE type IN ('table', 'view')`).WillReturnRows(sqlmock.NewRows([]string{"name", "type", "sql"}))
+			}
+			objects, err := ins.ObjectNames(t.Context())
+			require.NoError(t, err)
+			require.Empty(t, objects)
+			mock.ExpectClose()
+			require.NoError(t, db.Close())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}

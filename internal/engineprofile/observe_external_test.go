@@ -65,3 +65,69 @@ func TestObserveExternalCardinalityAndQueryErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestObserveExternalRowAndCloseFailures(t *testing.T) {
+	rowErr := errors.New("row iteration failed")
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	mock.ExpectQuery("SHOW server_version_num").WillReturnRows(
+		sqlmock.NewRows([]string{"version"}).AddRow("170000").RowError(0, rowErr),
+	).RowsWillBeClosed()
+	mock.ExpectClose()
+	_, err = engineprofile.Observe(t.Context(), db, engineprofile.PostgreSQL)
+	require.ErrorIs(t, err, engineprofile.ErrVersionObservation)
+	require.NoError(t, db.Close())
+	require.NoError(t, mock.ExpectationsWereMet())
+
+	db, mock, err = sqlmock.New()
+	require.NoError(t, err)
+	closeErr := errors.New("row close failed")
+	mock.ExpectQuery("SHOW server_version_num").WillReturnRows(
+		sqlmock.NewRows([]string{"version", "extra"}).AddRow("170000", "x").CloseError(closeErr),
+	).RowsWillBeClosed()
+	mock.ExpectClose()
+	_, err = engineprofile.Observe(t.Context(), db, engineprofile.PostgreSQL)
+	require.ErrorIs(t, err, engineprofile.ErrVersionObservation)
+	require.NoError(t, db.Close())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestObserveExternalContextFailure(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	mock.ExpectQuery("SHOW server_version_num").WillReturnError(context.Canceled)
+	mock.ExpectClose()
+	_, err = engineprofile.Observe(t.Context(), db, engineprofile.PostgreSQL)
+	require.ErrorIs(t, err, engineprofile.ErrVersionObservation)
+	require.NoError(t, db.Close())
+}
+
+func TestObserveExternalMalformedResponses(t *testing.T) {
+	cases := []struct {
+		name   string
+		engine engineprofile.EngineID
+		query  string
+		raw    string
+	}{
+		{name: "postgres below minimum", engine: engineprofile.PostgreSQL, query: "SHOW server_version_num", raw: "99999"},
+		{name: "postgres non decimal", engine: engineprofile.PostgreSQL, query: "SHOW server_version_num", raw: "17.6"},
+		{name: "mysql missing patch", engine: engineprofile.MySQL, query: `SELECT VERSION\(\)`, raw: "8.4"},
+		{name: "mysql extra component", engine: engineprofile.MySQL, query: `SELECT VERSION\(\)`, raw: "8.4.1.2"},
+		{name: "mysql trailing text", engine: engineprofile.MySQL, query: `SELECT VERSION\(\)`, raw: "8.4.1vendor"},
+		{name: "sqlite missing component", engine: engineprofile.SQLite, query: `SELECT sqlite_version\(\)`, raw: "3.35"},
+		{name: "sqlite suffix", engine: engineprofile.SQLite, query: `SELECT sqlite_version\(\)`, raw: "3.35.0-ubuntu"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			mock.ExpectQuery(tc.query).WillReturnRows(sqlmock.NewRows([]string{"version"}).AddRow(tc.raw))
+			mock.ExpectClose()
+			got, err := engineprofile.Observe(t.Context(), db, tc.engine)
+			require.ErrorIs(t, err, engineprofile.ErrVersionParse)
+			require.Equal(t, engineprofile.ObservedIdentity{}, got)
+			require.NoError(t, db.Close())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}

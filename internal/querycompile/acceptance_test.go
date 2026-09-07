@@ -1,6 +1,7 @@
 package querycompile_test
 
 import (
+	"strings"
 	"sync"
 	"testing"
 
@@ -77,6 +78,103 @@ func TestAcceptanceQueryCompilesSelectAndWritesWithExactSQLAndArgs(t *testing.T)
 	require.Equal(t, []any{7}, deleteStatement.Args())
 }
 
+func TestAcceptanceQueryCompilesEveryWriteAndOrderedSelectForAllBuiltins(t *testing.T) {
+	users := queryTable(t)
+	id, name := users.Column("id"), users.Column("name")
+	base, err := query.NewSelect(users, id, name)
+	require.NoError(t, err)
+	base, err = base.WithWhere(query.GreaterThan(id, 3))
+	require.NoError(t, err)
+	base, err = base.WithOrder(query.Desc(name), query.Asc(id))
+	require.NoError(t, err)
+	base, err = base.WithLimit(5)
+	require.NoError(t, err)
+	base, err = base.WithOffset(2)
+	require.NoError(t, err)
+	result, err := query.ResultOf(base,
+		query.ResultColumn{Name: "id", Type: schema.IntegerType{}},
+		query.ResultColumn{Name: "name", Type: schema.TextType{}},
+	)
+	require.NoError(t, err)
+	insert, err := query.NewInsert(users, query.Set(id, 7), query.Set(name, "Ada"))
+	require.NoError(t, err)
+	update, err := query.NewUpdate(users, query.Set(name, "Grace"))
+	require.NoError(t, err)
+	update, err = update.WithWhere(query.Equal(id, 7))
+	require.NoError(t, err)
+	deleteStatement, err := query.NewDelete(users)
+	require.NoError(t, err)
+	deleteStatement, err = deleteStatement.WithWhere(query.Equal(id, 7))
+	require.NoError(t, err)
+	upsert, err := query.NewUpsert(insert, []query.ColumnRef{id}, []query.Assignment{query.Set(name, query.Excluded(name))})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name       string
+		profileID  string
+		version    engineprofile.Version
+		selectSQL  string
+		writeSQL   []string
+		selectArgs []any
+	}{
+		{
+			name: "postgresql", profileID: "postgresql-17", version: engineprofile.Version{Known: true, Major: 17},
+			selectSQL: `SELECT "users"."id", "users"."name" FROM "users" WHERE ("users"."id" > $1) ORDER BY "users"."name" DESC, "users"."id" LIMIT $2 OFFSET $3`,
+			writeSQL: []string{
+				`INSERT INTO "users" ("id", "name") VALUES ($1, $2)`,
+				`UPDATE "users" SET "name" = $1 WHERE ("users"."id" = $2)`,
+				`DELETE FROM "users" WHERE ("users"."id" = $1)`,
+				`INSERT INTO "users" ("id", "name") VALUES ($1, $2) ON CONFLICT ("id") DO UPDATE SET "name" = EXCLUDED."name"`,
+			},
+			selectArgs: []any{3, 5, 2},
+		},
+		{
+			name: "mysql", profileID: "mysql-8.4", version: engineprofile.Version{Known: true, Major: 8, Minor: 4},
+			selectSQL: "SELECT `users`.`id`, `users`.`name` FROM `users` WHERE (`users`.`id` > ?) ORDER BY `users`.`name` DESC, `users`.`id` LIMIT ? OFFSET ?",
+			writeSQL: []string{
+				"INSERT INTO `users` (`id`, `name`) VALUES (?, ?)",
+				"UPDATE `users` SET `name` = ? WHERE (`users`.`id` = ?)",
+				"DELETE FROM `users` WHERE (`users`.`id` = ?)",
+				"INSERT INTO `users` (`id`, `name`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `name` = VALUES(`name`)",
+			},
+			selectArgs: []any{3, 5, 2},
+		},
+		{
+			name: "sqlite", profileID: "sqlite-3.35", version: engineprofile.Version{Known: true, Major: 3, Minor: 35},
+			selectSQL: `SELECT "users"."id", "users"."name" FROM "users" WHERE ("users"."id" > ?) ORDER BY "users"."name" DESC, "users"."id" LIMIT ? OFFSET ?`,
+			writeSQL: []string{
+				`INSERT INTO "users" ("id", "name") VALUES (?, ?)`,
+				`UPDATE "users" SET "name" = ? WHERE ("users"."id" = ?)`,
+				`DELETE FROM "users" WHERE ("users"."id" = ?)`,
+				`INSERT INTO "users" ("id", "name") VALUES (?, ?) ON CONFLICT ("id") DO UPDATE SET "name" = EXCLUDED."name"`,
+			},
+			selectArgs: []any{3, 5, 2},
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			profile, profileErr := engineprofile.Builtin(testCase.profileID, testCase.version)
+			require.NoError(t, profileErr)
+			compiler, compilerErr := querycompile.New(profile)
+			require.NoError(t, compilerErr)
+			statement, compileErr := compiler.Select(result)
+			require.NoError(t, compileErr)
+			require.Equal(t, testCase.selectSQL, statement.SQL())
+			require.Equal(t, testCase.selectArgs, statement.Args())
+			writes := []query.WriteStatement{insert, update, deleteStatement, upsert}
+			if testCase.name == "mysql" {
+				writes[3], err = query.NewUpsert(insert, nil, []query.Assignment{query.Set(name, query.Excluded(name))})
+				require.NoError(t, err)
+			}
+			for index, write := range writes {
+				compiled, writeErr := compiler.Write(write)
+				require.NoError(t, writeErr)
+				require.Equal(t, testCase.writeSQL[index], compiled.SQL())
+			}
+		})
+	}
+}
+
 func TestAcceptanceQueryPreservesReturningPresentNilAndNativeArguments(t *testing.T) {
 	c, err := querycompile.New(queryProfile(t))
 	require.NoError(t, err)
@@ -150,6 +248,30 @@ func TestAcceptanceQueryCompilerIsReusableConcurrently(t *testing.T) {
 	}
 }
 
+func TestAcceptanceQueryReturnedArgumentsAndNestedMetadataAreIndependent(t *testing.T) {
+	c, err := querycompile.New(queryProfile(t))
+	require.NoError(t, err)
+	users := queryTable(t)
+	payload := []byte("payload")
+	body, err := query.NewSelect(users, users.Column("id"))
+	require.NoError(t, err)
+	body, err = body.WithWhere(query.Equal(users.Column("name"), payload))
+	require.NoError(t, err)
+	result, err := query.ResultOf(body, query.ResultColumn{Name: "id", Type: schema.IntegerType{}})
+	require.NoError(t, err)
+	first, err := c.Select(result)
+	require.NoError(t, err)
+	second, err := c.Select(result)
+	require.NoError(t, err)
+	firstArgs := first.BoundArgs()
+	firstArgs[0].([]byte)[0] = 'X'
+	require.Equal(t, []byte("payload"), second.Args()[0])
+
+	columns := result.Columns()
+	columns[0].Name = "changed"
+	require.Equal(t, "id", result.Columns()[0].Name)
+}
+
 func TestAcceptanceQueryDialectProfileMismatchIsRejected(t *testing.T) {
 	p := queryProfile(t)
 	_, err := querycompile.NewWithDialect(p, dialect.SQLite())
@@ -189,6 +311,106 @@ func TestAcceptanceQueryRejectsTypedNilDialect(t *testing.T) {
 	var adapter *typedNilDialect
 	_, err = querycompile.NewWithDialect(p, adapter)
 	require.Error(t, err)
+}
+
+type extensionExpression struct{ value int }
+
+func (extensionExpression) ExpressionNode() {}
+
+type extensionCompiler struct{}
+
+func (extensionCompiler) CompileExpression(emitter dialect.Emitter, expression query.Expression) (bool, error) {
+	node, ok := expression.(extensionExpression)
+	if !ok {
+		return false, nil
+	}
+	emitter.WriteSQL("CUSTOM(")
+	if err := emitter.Argument(node.value); err != nil {
+		return true, err
+	}
+	emitter.WriteSQL(")")
+	return true, nil
+}
+
+func (extensionCompiler) CompilePagination(dialect.Emitter, dialect.Pagination) error { return nil }
+
+type extensionDialect struct {
+	dialect.Dialect
+	compiler dialect.Compiler
+	compare  func(string, string) bool
+}
+
+func (d extensionDialect) Name() string { return "custom-extension" }
+
+func (d extensionDialect) Compiler() dialect.Compiler { return d.compiler }
+
+func (d extensionDialect) IdentifiersEqual(left, right string) bool {
+	if d.compare == nil {
+		return left == right
+	}
+	return d.compare(left, right)
+}
+
+type bareExtensionDialect struct{ dialect.Dialect }
+
+func (bareExtensionDialect) Name() string { return "custom-extension" }
+
+func customExtensionProfile(t *testing.T) engineprofile.Profile {
+	t.Helper()
+	base, err := engineprofile.Builtin("postgresql-17", engineprofile.Version{Known: true, Major: 17})
+	require.NoError(t, err)
+	profile, err := engineprofile.New("custom:extension", engineprofile.Custom, "custom-extension", engineprofile.Version{}, base.Capabilities, engineprofile.Limits{MaxBindParameters: 100})
+	require.NoError(t, err)
+	return profile
+}
+
+func TestAcceptanceQueryPreservesCustomCompilerAndIdentifierExtensions(t *testing.T) {
+	profile := customExtensionProfile(t)
+	d := extensionDialect{Dialect: dialect.PostgreSQL(), compiler: extensionCompiler{}, compare: func(left, right string) bool {
+		return strings.EqualFold(left, right)
+	}}
+	compiler, err := querycompile.NewWithDialect(profile, d)
+	require.NoError(t, err)
+	users := queryTable(t)
+	body, err := query.NewSelect(users, query.Project(extensionExpression{value: 9}))
+	require.NoError(t, err)
+	result, err := query.ResultOf(body, query.ResultColumn{Name: "custom", Type: schema.IntegerType{}})
+	require.NoError(t, err)
+	statement, err := compiler.Select(result)
+	require.NoError(t, err)
+	require.Equal(t, `SELECT CUSTOM($1) FROM "users"`, statement.SQL())
+	require.Equal(t, []any{9}, statement.Args())
+
+	base, err := query.NewSelect(users, users.Column("id"))
+	require.NoError(t, err)
+	baseResult, err := query.ResultOf(base, query.ResultColumn{Name: "id", Type: schema.IntegerType{}})
+	require.NoError(t, err)
+	first, err := query.CommonTable("local", baseResult)
+	require.NoError(t, err)
+	second, err := query.CommonTable("LOCAL", baseResult)
+	require.NoError(t, err)
+	outer, err := query.NewSelect(users, users.Column("id"))
+	require.NoError(t, err)
+	outer, err = outer.WithCTEs(first, second)
+	require.NoError(t, err)
+	outerResult, err := query.ResultOf(outer, query.ResultColumn{Name: "id", Type: schema.IntegerType{}})
+	require.NoError(t, err)
+	_, err = compiler.Select(outerResult)
+	require.Error(t, err)
+}
+
+func TestAcceptanceQueryRejectsCustomDialectWithoutCompilerProvider(t *testing.T) {
+	profile := customExtensionProfile(t)
+	compiler, err := querycompile.NewWithDialect(profile, bareExtensionDialect{Dialect: dialect.PostgreSQL()})
+	require.NoError(t, err)
+	users := queryTable(t)
+	body, err := query.NewSelect(users, query.Project(extensionExpression{value: 9}))
+	require.NoError(t, err)
+	result, err := query.ResultOf(body, query.ResultColumn{Name: "custom", Type: schema.IntegerType{}})
+	require.NoError(t, err)
+	statement, err := compiler.Select(result)
+	require.Error(t, err)
+	require.Empty(t, statement.SQL())
 }
 
 func customPostgresProfile(t *testing.T, edit func(*engineprofile.Capabilities)) engineprofile.Profile {
@@ -239,6 +461,41 @@ func TestAcceptanceQueryTraversesCTEForNestedCapabilities(t *testing.T) {
 	cteResult, err := query.ResultOf(cteBody, query.ResultColumn{Name: "row", Type: schema.IntegerType{}})
 	require.NoError(t, err)
 	statement, err := c.Select(cteResult)
+	require.ErrorIs(t, err, engineprofile.ErrUnsupportedFeature)
+	require.Empty(t, statement.SQL())
+}
+
+func TestAcceptanceQueryRejectsCapabilitiesOnlyInNestedCTE(t *testing.T) {
+	p := customPostgresProfile(t, func(c *engineprofile.Capabilities) {
+		c.WindowFunctions = false
+		c.PerParentLimit = engineprofile.PerParentLimitUnsupported
+	})
+	c, err := querycompile.NewWithDialect(p, dialect.PostgreSQL())
+	require.NoError(t, err)
+	users := queryTable(t)
+	windowBody, err := query.NewSelect(users, query.Project(query.OverWindow(query.Func("row_number"), query.Window(nil, query.Asc(users.Column("id"))))).As("row"))
+	require.NoError(t, err)
+	windowResult, err := query.ResultOf(windowBody, query.ResultColumn{Name: "row", Type: schema.IntegerType{}})
+	require.NoError(t, err)
+	inner, err := query.CommonTable("inner_rows", windowResult)
+	require.NoError(t, err)
+	innerRef, err := inner.Ref("")
+	require.NoError(t, err)
+	outerBody, err := query.NewSelect(innerRef, innerRef.Column("row"))
+	require.NoError(t, err)
+	outerResult, err := query.ResultOf(outerBody, query.ResultColumn{Name: "row", Type: schema.IntegerType{}})
+	require.NoError(t, err)
+	outer, err := query.CommonTable("outer_rows", outerResult)
+	require.NoError(t, err)
+	outerRef, err := outer.Ref("")
+	require.NoError(t, err)
+	rootBody, err := query.NewSelect(outerRef, outerRef.Column("row"))
+	require.NoError(t, err)
+	rootBody, err = rootBody.WithCTEs(outer, inner)
+	require.NoError(t, err)
+	rootResult, err := query.ResultOf(rootBody, query.ResultColumn{Name: "row", Type: schema.IntegerType{}})
+	require.NoError(t, err)
+	statement, err := c.Select(rootResult)
 	require.ErrorIs(t, err, engineprofile.ErrUnsupportedFeature)
 	require.Empty(t, statement.SQL())
 }
