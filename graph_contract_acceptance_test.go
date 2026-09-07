@@ -78,10 +78,10 @@ func graphContractPlan(t *testing.T, order bool) (Executor, GraphPlan[graphParen
 }
 
 func TestGraphContractRejectsMetadataAndOrderViolations(t *testing.T) {
-	executor, plan, parentKey, childKey, parentSource, childSource := graphContractPlan(t, true)
+	_, plan, parentKey, childKey, parentSource, childSource := graphContractPlan(t, true)
 	require.NotNil(t, plan.node)
-	_, unordered, _, _, _, _ := graphContractPlan(t, false)
-	_, err := LoadGraph(t.Context(), executor, unordered)
+	unorderedExecutor, unordered, _, _, _, _ := graphContractPlan(t, false)
+	_, err := LoadGraph(t.Context(), unorderedExecutor, unordered)
 	var orderErr *PlanError
 	require.ErrorAs(t, err, &orderErr)
 	require.Equal(t, "order_not_unique", orderErr.Code)
