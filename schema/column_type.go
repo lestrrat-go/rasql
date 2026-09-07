@@ -30,6 +30,9 @@ type ColumnType interface {
 	columnType()
 }
 
+// Type is the public shorthand used by expression APIs for a column type.
+type Type = ColumnType
+
 // BooleanType describes a boolean column.
 type BooleanType struct{}
 
@@ -175,6 +178,57 @@ func validColumnType(columnType ColumnType) bool {
 	default:
 		return false
 	}
+}
+
+// ValidateColumnType checks that columnType is a supported, well-formed
+// built-in type. It is exported for APIs that carry column metadata without a
+// full TableDef.
+func ValidateColumnType(columnType ColumnType) error {
+	if columnType == nil {
+		return fmt.Errorf("column type must not be nil")
+	}
+	value := reflect.ValueOf(columnType)
+	if value.Kind() == reflect.Pointer && value.IsNil() {
+		return fmt.Errorf("column type must not be a typed nil")
+	}
+	if value.Kind() == reflect.Pointer {
+		value = value.Elem()
+	}
+	base := value.Interface().(ColumnType)
+	if !validColumnType(base) {
+		return fmt.Errorf("unsupported column type %T", columnType)
+	}
+	switch typed := base.(type) {
+	case DecimalType:
+		if typed.Precision < 1 {
+			return fmt.Errorf("decimal precision must be at least 1")
+		}
+		scale, stated := typed.Scale.Value()
+		if !stated {
+			return fmt.Errorf("decimal scale must be stated")
+		}
+		if scale < 0 || scale > typed.Precision {
+			return fmt.Errorf("decimal scale must be between 0 and precision")
+		}
+	case TextType:
+		width, stated := typed.Width.Value()
+		if stated && width < 0 {
+			return fmt.Errorf("text width must not be negative")
+		}
+		if typed.Fixed && !stated {
+			return fmt.Errorf("fixed-width text requires a width")
+		}
+	case IntegerType:
+		if width, stated := typed.DisplayWidth.Value(); stated && width < 0 {
+			return fmt.Errorf("integer display width must not be negative")
+		}
+	}
+	return nil
+}
+
+// CloneColumnType returns an independent copy of a built-in column type.
+func CloneColumnType(columnType ColumnType) ColumnType {
+	return cloneColumnType(columnType)
 }
 
 func marshalColumnType(columnType ColumnType) ([]byte, error) {

@@ -17,9 +17,12 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/migrationdir"
+	"github.com/lestrrat-go/rasql/migrate"
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/migrate/diff/mysql"
+	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,13 +44,13 @@ func TestRunDiffPreviewsAndWritesPostgreSQLMigration(t *testing.T) {
 	writeTestSchema(t, target, "tables/members.sql", "CREATE TABLE members (id bigint PRIMARY KEY, email text);\n")
 	outputBuffer := setCommandOutput(t)
 	require.NoError(t, run([]string{"diff", "-dialect", "postgresql", "-from", baseline, "-to", target}))
-	require.Equal(t, "-- 001_add_column_members_email.sql: add column members.email\nALTER TABLE members ADD COLUMN email text;\n", outputBuffer.String())
+	require.Equal(t, "-- operation add_column_postgresql_members_email (add_column): add column members.email\n-- 001_add_column_members_email.sql: add column members.email\nALTER TABLE members ADD COLUMN email text;\n-- reverse 001_add_column_members_email.down.sql\nALTER TABLE members DROP COLUMN email;\n", outputBuffer.String())
 
 	migrationDirectory := filepath.Join(t.TempDir(), "002_add_member_email")
 	outputBuffer.Reset()
 	require.NoError(t, run([]string{"diff", "-dialect", "postgresql", "-from", baseline, "-to", target, "-output", migrationDirectory}))
 	require.Equal(t, "created "+migrationDirectory+"\n", outputBuffer.String())
-	contents, err := os.ReadFile(filepath.Join(migrationDirectory, "001_add_column_members_email.sql"))
+	contents, err := os.ReadFile(filepath.Join(migrationDirectory, "001_add_column_members_email.up.sql"))
 	require.NoError(t, err)
 	require.Equal(t, "ALTER TABLE members ADD COLUMN email text;\n", string(contents))
 }
@@ -59,15 +62,15 @@ func TestRunDiffPreviewsMySQLMigration(t *testing.T) {
 	writeTestSchema(t, target, "tables/members.sql", "CREATE TABLE members (id bigint PRIMARY KEY, email text);\n")
 	outputBuffer := setCommandOutput(t)
 	require.NoError(t, run([]string{"diff", "-dialect", "mysql", "-from", baseline, "-to", target}))
-	require.Equal(t, "-- 001_add_column_members_email.sql: add column members.email\nALTER TABLE members ADD COLUMN email text;\n", outputBuffer.String())
+	require.Equal(t, "-- operation add_column_mysql_members_email (add_column): add column members.email\n-- 001_add_column_members_email.sql: add column members.email\nALTER TABLE `members` ADD COLUMN `email` text;\n-- reverse 001_add_column_members_email.down.sql\nALTER TABLE `members` DROP COLUMN `email`;\n", outputBuffer.String())
 
 	migrationDirectory := filepath.Join(t.TempDir(), "002_add_member_email")
 	outputBuffer.Reset()
 	require.NoError(t, run([]string{"diff", "-dialect", "mysql", "-from", baseline, "-to", target, "-output", migrationDirectory}))
 	require.Equal(t, "created "+migrationDirectory+"\n", outputBuffer.String())
-	contents, err := os.ReadFile(filepath.Join(migrationDirectory, "001_add_column_members_email.sql"))
+	contents, err := os.ReadFile(filepath.Join(migrationDirectory, "001_add_column_members_email.up.sql"))
 	require.NoError(t, err)
-	require.Equal(t, "ALTER TABLE members ADD COLUMN email text;\n", string(contents))
+	require.Equal(t, "ALTER TABLE `members` ADD COLUMN `email` text;\n", string(contents))
 }
 
 func TestRunDiffPreviewsSQLiteMigration(t *testing.T) {
@@ -77,13 +80,13 @@ func TestRunDiffPreviewsSQLiteMigration(t *testing.T) {
 	writeTestSchema(t, target, "tables/members.sql", "CREATE TABLE members (id integer PRIMARY KEY, email text);\n")
 	outputBuffer := setCommandOutput(t)
 	require.NoError(t, run([]string{"diff", "-dialect", "sqlite", "-from", baseline, "-to", target}))
-	require.Equal(t, "-- 001_add_column_members_email.sql: add column members.email\nALTER TABLE members ADD COLUMN email text;\n", outputBuffer.String())
+	require.Equal(t, "-- 001_add_column_members_email.sql: add column members.email\nALTER TABLE members ADD COLUMN email text;\n-- reverse 001_add_column_members_email.down.sql\nALTER TABLE members DROP COLUMN email;\n", outputBuffer.String())
 
 	migrationDirectory := filepath.Join(t.TempDir(), "002_add_member_email")
 	outputBuffer.Reset()
 	require.NoError(t, run([]string{"diff", "-dialect", "sqlite", "-from", baseline, "-to", target, "-output", migrationDirectory}))
 	require.Equal(t, "created "+migrationDirectory+"\n", outputBuffer.String())
-	contents, err := os.ReadFile(filepath.Join(migrationDirectory, "001_add_column_members_email.sql"))
+	contents, err := os.ReadFile(filepath.Join(migrationDirectory, "001_add_column_members_email.up.sql"))
 	require.NoError(t, err)
 	require.Equal(t, "ALTER TABLE members ADD COLUMN email text;\n", string(contents))
 }
@@ -105,7 +108,7 @@ func TestRunDiffLivePreviewsSQLiteMigration(t *testing.T) {
 		"-table", "members",
 		"-to", target,
 	}))
-	require.Equal(t, "-- 001_add_column_members_email.sql: add column members.email\nALTER TABLE members ADD COLUMN email text;\n", outputBuffer.String())
+	require.Equal(t, "-- 001_add_column_members_email.sql: add column members.email\nALTER TABLE members ADD COLUMN email text;\n-- reverse 001_add_column_members_email.down.sql\nALTER TABLE members DROP COLUMN email;\n", outputBuffer.String())
 }
 
 func TestRunDiffLiveAddsNullableSQLiteInlineForeignKeyColumn(t *testing.T) {
@@ -126,7 +129,7 @@ func TestRunDiffLiveAddsNullableSQLiteInlineForeignKeyColumn(t *testing.T) {
 		"-table", "children",
 		"-to", target,
 	}))
-	require.Equal(t, "-- 001_add_column_children_parent_id.sql: add column children.parent_id\nALTER TABLE children ADD COLUMN parent_id integer REFERENCES parents (id);\n", outputBuffer.String())
+	require.Equal(t, "-- 001_add_column_children_parent_id.sql: add column children.parent_id\nALTER TABLE children ADD COLUMN parent_id integer REFERENCES parents (id);\n-- reverse 001_add_column_children_parent_id.down.sql\nALTER TABLE children DROP COLUMN parent_id;\n", outputBuffer.String())
 }
 
 func TestRunDiffLiveInspectsMixedCaseSQLiteTable(t *testing.T) {
@@ -168,7 +171,7 @@ func TestRunDiffLiveMatchesMixedCaseSQLiteTableWhenSelectedLowercase(t *testing.
 		"-table", "members",
 		"-to", target,
 	}))
-	require.Equal(t, "-- 001_add_column_members_email.sql: add column members.email\nALTER TABLE members ADD COLUMN email text;\n", outputBuffer.String())
+	require.Equal(t, "-- 001_add_column_members_email.sql: add column members.email\nALTER TABLE members ADD COLUMN email text;\n-- reverse 001_add_column_members_email.down.sql\nALTER TABLE members DROP COLUMN email;\n", outputBuffer.String())
 }
 
 func TestRunDiffLivePreservesSQLiteForeignKeys(t *testing.T) {
@@ -354,7 +357,7 @@ func TestRunDiffLiveRefusesDestructiveChange(t *testing.T) {
 		"-table", "members",
 		"-to", target,
 	})
-	require.ErrorContains(t, err, "column members.email was removed")
+	require.ErrorContains(t, err, "missing inverse mapping for members.email")
 	require.Empty(t, outputBuffer.String())
 }
 
@@ -446,6 +449,29 @@ func TestRunDiffLiveInspectsWithinOneTransaction(t *testing.T) {
 	require.Equal(t, 0, state.queriesOutsideTransaction)
 	require.True(t, state.transactionStarted)
 	require.True(t, state.transactionReadOnly)
+}
+
+func TestRunDiffLiveRollsBackAfterResolutionReadFailure(t *testing.T) {
+	previousOpenDatabase := openDatabase
+	state := &snapshotInspectionState{}
+	snapshotInspectionStateForTest = state
+	t.Cleanup(func() {
+		openDatabase = previousOpenDatabase
+		snapshotInspectionStateForTest = nil
+	})
+	openDatabase = func(string, string) (*sql.DB, error) {
+		return sql.Open(snapshotInspectionDriverName, "")
+	}
+
+	target := filepath.Join(t.TempDir(), "target")
+	writeTestSchema(t, target, "tables/members.sql", "CREATE TABLE members (id INTEGER PRIMARY KEY, email TEXT NOT NULL);\n")
+	err := run([]string{
+		"diff-live", "-dialect", "sqlite", "-dsn", "secret.sqlite",
+		"-table", "members", "-to", target,
+		"-backfill", "backfill_sqlite_members_email=" + filepath.Join(t.TempDir(), "missing.sql"),
+	})
+	require.ErrorContains(t, err, "read -backfill")
+	require.EqualValues(t, 1, state.rollback.Load())
 }
 
 func TestLiveInspectionTxOptionsUseRepeatableReadWhereSupported(t *testing.T) {
@@ -563,6 +589,98 @@ func TestRunApplyStatusAndVerifySQLiteSQLSources(t *testing.T) {
 	outputBuffer.Reset()
 	require.NoError(t, run([]string{"verify", "-dir", directory, "-dialect", "sqlite", "-dsn", dsn}))
 	require.Equal(t, "migration verification passed\n", outputBuffer.String())
+}
+
+func TestRunDiffGeneratedSQLiteMigrationRoundTrip(t *testing.T) {
+	baseline := filepath.Join(t.TempDir(), "baseline")
+	target := filepath.Join(t.TempDir(), "target")
+	writeTestSchema(t, baseline, "tables/members.sql", "CREATE TABLE members (id INTEGER PRIMARY KEY);\n")
+	writeTestSchema(t, target, "tables/members.sql", "CREATE TABLE members (id INTEGER PRIMARY KEY, email TEXT);\n")
+	directory := filepath.Join(t.TempDir(), "001_add_email")
+	dsn := filepath.Join(t.TempDir(), "application.db")
+	database, err := sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE members (id INTEGER PRIMARY KEY)")
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+	setCommandOutput(t)
+	require.NoError(t, run([]string{"diff", "-dialect", "sqlite", "-from", baseline, "-to", target, "-output", directory}))
+	require.NoError(t, run([]string{"plan", "-dir", filepath.Dir(directory)}))
+	require.NoError(t, run([]string{"apply", "-dir", filepath.Dir(directory), "-dialect", "sqlite", "-dsn", dsn}))
+	require.NoError(t, run([]string{"status", "-dir", filepath.Dir(directory), "-dialect", "sqlite", "-dsn", dsn}))
+	require.NoError(t, run([]string{"verify", "-dir", filepath.Dir(directory), "-dialect", "sqlite", "-dsn", dsn}))
+
+	database, err = sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	var column string
+	require.NoError(t, database.QueryRowContext(t.Context(), "SELECT name FROM pragma_table_info('members') WHERE name = 'email'").Scan(&column))
+	require.Equal(t, "email", column)
+	require.NoError(t, database.Close())
+
+	require.NoError(t, run([]string{"revert", "-dir", filepath.Dir(directory), "-dialect", "sqlite", "-dsn", dsn, "-steps", "1"}))
+	database, err = sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	err = database.QueryRowContext(t.Context(), "SELECT name FROM pragma_table_info('members') WHERE name = 'email'").Scan(&column)
+	require.ErrorIs(t, err, sql.ErrNoRows)
+	require.NoError(t, database.Close())
+}
+
+func TestIrreversibleDiskArtifactAppliesAndRefusesRevert(t *testing.T) {
+	root := t.TempDir()
+	plan := diff.Plan{
+		Dialect:            "sqlite",
+		IrreversibleReason: "data transformation cannot be reversed",
+		Statements: []diff.PlannedStatement{{
+			Source: "001_create_users.sql",
+			SQL:    "CREATE TABLE users (id INTEGER PRIMARY KEY);\n",
+		}},
+	}
+	require.NoError(t, diff.WriteMigration(filepath.Join(root, "001_irreversible"), plan))
+	migrations, err := migrationdir.Load(root)
+	require.NoError(t, err)
+	database, err := sql.Open("sqlite", filepath.Join(root, "application.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = database.Close() })
+	runner, err := migrate.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	_, err = runner.Apply(t.Context(), migrate.AllPending(), migrations...)
+	require.NoError(t, err)
+	_, err = runner.RevertPlan(t.Context(), migrate.Steps(1), migrations...)
+	require.ErrorContains(t, err, "has no reverse SQL source")
+	var table string
+	require.NoError(t, database.QueryRowContext(t.Context(), "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'users'").Scan(&table))
+	require.Equal(t, "users", table)
+	var history int
+	require.NoError(t, database.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM rasql_schema_migrations").Scan(&history))
+	require.Equal(t, 1, history)
+}
+
+func TestRunSQLiteGeneratedMultiSourceArtifactRoundTrip(t *testing.T) {
+	root := t.TempDir()
+	migrationRoot := filepath.Join(root, "migrations")
+	directory := filepath.Join(migrationRoot, "001_projects")
+	files, err := buildMigrationFormatFiles(dialect.SQLite(), []schema.TableDef{{
+		Name:       "projects",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "name", Type: schema.TextType{}}},
+		PrimaryKey: []string{"id"},
+		Indexes:    []schema.IndexDef{{Name: "projects_name_idx", Columns: []string{"name"}}},
+	}})
+	require.NoError(t, err)
+	require.Len(t, files, 4)
+	require.NoError(t, os.MkdirAll(directory, 0o700))
+	for _, file := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(directory, file.Name), []byte(file.SQL), 0o600))
+	}
+	dsn := filepath.Join(root, "application.db")
+	setCommandOutput(t)
+	require.NoError(t, run([]string{"apply", "-dir", migrationRoot, "-dialect", "sqlite", "-dsn", dsn}))
+	require.NoError(t, run([]string{"revert", "-dir", migrationRoot, "-dialect", "sqlite", "-dsn", dsn, "-steps", "1"}))
+	database, err := sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = database.Close() })
+	var count int
+	require.NoError(t, database.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM sqlite_master WHERE name = 'projects'").Scan(&count))
+	require.Zero(t, count)
 }
 
 // TestRunApplyToStopsAtTheNamedMigration pins what -to means on apply: the
@@ -880,6 +998,7 @@ type snapshotInspectionState struct {
 	queriesOutsideTransaction int
 	transactionStarted        bool
 	transactionReadOnly       bool
+	rollback                  atomic.Int32
 }
 
 type snapshotInspectionDriver struct{}
@@ -941,6 +1060,7 @@ func (tx snapshotInspectionTx) Commit() error {
 
 func (tx snapshotInspectionTx) Rollback() error {
 	tx.conn.inTx = false
+	tx.conn.state.rollback.Add(1)
 	return nil
 }
 
@@ -962,6 +1082,8 @@ func snapshotInspectionRows(query string) (driver.Rows, error) {
 		return newSnapshotInspectionRows([]string{"seq", "name", "unique", "origin", "partial"}), nil
 	case `PRAGMA "main".foreign_key_list("members")`:
 		return newSnapshotInspectionRows([]string{"id", "seq", "table", "from", "to", "on_update", "on_delete", "match"}), nil
+	case `SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE name IS NOT NULL`:
+		return newSnapshotInspectionRows([]string{"type", "name", "tbl_name", "sql"}), nil
 	default:
 		return nil, fmt.Errorf("snapshot inspection driver received unexpected query %q", query)
 	}

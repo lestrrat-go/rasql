@@ -59,3 +59,47 @@ func TestFromDatabaseSweepsLiveMySQL(t *testing.T) {
 	require.Len(t, tables, 1)
 	require.Equal(t, "users", tables[0].Name)
 }
+
+func TestFromDatabaseReadsSelectedPostgreSQLSchemas(t *testing.T) {
+	database := dbtest.PostgreSQLDB(t)
+	ctx := t.Context()
+	mustExecLive(t, ctx, database, "CREATE SCHEMA catalog_billing")
+	mustExecLive(t, ctx, database, "CREATE SCHEMA catalog_audit")
+	t.Cleanup(func() {
+		_, _ = database.ExecContext(ctx, "DROP SCHEMA catalog_billing CASCADE")
+		_, _ = database.ExecContext(ctx, "DROP SCHEMA catalog_audit CASCADE")
+	})
+	mustExecLive(t, ctx, database, "CREATE TABLE catalog_billing.events (id integer PRIMARY KEY)")
+	mustExecLive(t, ctx, database, "CREATE TABLE catalog_audit.events (id integer PRIMARY KEY, billing_id integer REFERENCES catalog_billing.events(id))")
+
+	tables, err := catalog.FromDatabase(ctx, database, catalog.Options{
+		Dialect: dialect.PostgreSQL(), Namespaces: []string{"catalog_billing", "catalog_audit"},
+	})
+	require.NoError(t, err)
+	require.Len(t, tables, 2)
+	require.Equal(t, "catalog_audit", tables[0].Schema)
+	require.Equal(t, "catalog_billing", tables[1].Schema)
+	require.Equal(t, "catalog_billing", tables[0].ForeignKeys[0].ReferencedSchema)
+}
+
+func TestFromDatabaseReadsSelectedMySQLDatabases(t *testing.T) {
+	database := dbtest.MySQLDB(t)
+	ctx := t.Context()
+	mustExecLive(t, ctx, database, "CREATE DATABASE catalog_billing")
+	mustExecLive(t, ctx, database, "CREATE DATABASE catalog_audit")
+	t.Cleanup(func() {
+		_, _ = database.ExecContext(ctx, "DROP DATABASE catalog_billing")
+		_, _ = database.ExecContext(ctx, "DROP DATABASE catalog_audit")
+	})
+	mustExecLive(t, ctx, database, "CREATE TABLE catalog_billing.events (id integer PRIMARY KEY)")
+	mustExecLive(t, ctx, database, "CREATE TABLE catalog_audit.events (id integer PRIMARY KEY, billing_id integer, CONSTRAINT fk_billing FOREIGN KEY (billing_id) REFERENCES catalog_billing.events(id))")
+
+	tables, err := catalog.FromDatabase(ctx, database, catalog.Options{
+		Dialect: dialect.MySQL(), Namespaces: []string{"catalog_billing", "catalog_audit"},
+	})
+	require.NoError(t, err)
+	require.Len(t, tables, 2)
+	require.Equal(t, "catalog_audit", tables[0].Schema)
+	require.Equal(t, "catalog_billing", tables[1].Schema)
+	require.Equal(t, "catalog_billing", tables[0].ForeignKeys[0].ReferencedSchema)
+}

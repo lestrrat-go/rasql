@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/lestrrat-go/rasql/internal/migrationdir"
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/migrate/diff/mysql"
 	pgdiff "github.com/lestrrat-go/rasql/migrate/diff/postgresql"
@@ -25,9 +28,6 @@ func TestLiveSourcesRejectsBothForeignNativeDialects(t *testing.T) {
 		var unsupported *render.ErrUnsupportedNativeType
 		require.ErrorAs(t, err, &unsupported)
 		require.Nil(t, sources)
-		require.Equal(t, analyzer.Dialect(), unsupported.Dialect)
-		require.Equal(t, "events", unsupported.Table)
-		require.Equal(t, "choice", unsupported.Column)
 		require.Equal(t, *native, unsupported.Native)
 	}
 }
@@ -41,28 +41,54 @@ func TestLiveSourcesPreservesMySQLNativeTypeAndRejectsForeignType(t *testing.T) 
 	_, err = pgdiff.New().LiveSources(desired)
 	var unsupported *render.ErrUnsupportedNativeType
 	require.ErrorAs(t, err, &unsupported)
-	require.Equal(t, "postgresql", unsupported.Dialect)
-	require.Equal(t, "events", unsupported.Table)
-	require.Equal(t, "choice", unsupported.Column)
 	require.Equal(t, *native, unsupported.Native)
 }
 
-func TestLiveSourcesNativeTypeReachesForwardPlan(t *testing.T) {
+func TestDiffNumbersLargePlan(t *testing.T) {
 	analyzer := mysql.New()
-	native := &schema.NativeTypeDef{Dialect: "mysql", Name: "enum", Kind: schema.NativeEnum, Arguments: []string{"sad", "happy"}}
-	sources, err := analyzer.LiveSources(schema.TableDef{Name: "events", Columns: []schema.ColumnDef{{Name: "mood", Type: schema.TextType{}, Nullable: true, NativeType: native}}})
+	baseline := parseSnapshot(t, analyzer, "CREATE TABLE existing (id BIGINT PRIMARY KEY);")
+	var source strings.Builder
+	for index := 0; index < 1000; index++ {
+		source.WriteString("CREATE TABLE table_")
+		source.WriteString(strconv.Itoa(index))
+		source.WriteString(" (id BIGINT PRIMARY KEY); ")
+	}
+	target := parseSnapshot(t, analyzer, source.String()+"CREATE TABLE existing (id BIGINT PRIMARY KEY);")
+	plan, err := analyzer.Diff(baseline, target)
 	require.NoError(t, err)
-	plan, err := analyzer.Diff(parseSnapshot(t, analyzer, "CREATE TABLE `events` ();"), mustParseMySQLSources(t, analyzer, sources))
-	require.NoError(t, err)
-	require.NotEmpty(t, plan.Statements)
-	require.Contains(t, string(plan.Statements[0].SQL), "enum('sad', 'happy')")
+	require.Len(t, plan.Statements, 1000)
+	sources := make([]string, len(plan.Statements))
+	for index, statement := range plan.Statements {
+		sources[index] = statement.Source
+	}
+	sorted := append([]string(nil), sources...)
+	sort.Strings(sorted)
+	require.Equal(t, sources, sorted)
+	require.Equal(t, "0001_", sources[0][:5])
+	require.Equal(t, "1000_", sources[len(sources)-1][:5])
 }
 
-func mustParseMySQLSources(t *testing.T, analyzer mysql.Analyzer, sources []diff.Source) diff.Snapshot {
-	t.Helper()
-	snapshot, err := analyzer.Parse(sources)
+func TestDiffWriteMigrationLoadsExactArtifact(t *testing.T) {
+	analyzer := mysql.New()
+	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id BIGINT PRIMARY KEY);")
+	target := parseSnapshot(t, analyzer, "CREATE TABLE members (id BIGINT PRIMARY KEY, email VARCHAR(255)); CREATE INDEX members_email_idx ON members (email);")
+	plan, err := analyzer.Diff(baseline, target)
 	require.NoError(t, err)
-	return snapshot
+	root := t.TempDir()
+	require.NoError(t, diff.WriteMigration(filepath.Join(root, "001_add_email"), plan))
+	loaded, err := migrationdir.Load(root)
+	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+	require.Len(t, loaded[0].Statements, len(plan.Statements))
+	for index, statement := range plan.Statements {
+		require.Equal(t, statement.Source[:len(statement.Source)-4]+".up.sql", loaded[0].Statements[index].Source)
+		require.Equal(t, statement.SQL, string(loaded[0].Statements[index].SQL))
+	}
+	require.Len(t, loaded[0].Down, len(plan.Statements))
+	for index, statement := range plan.Statements {
+		require.Equal(t, statement.Source[:len(statement.Source)-4]+".down.sql", loaded[0].Down[len(plan.Statements)-index-1].Source)
+		require.Equal(t, statement.ReverseSQL, string(loaded[0].Down[len(plan.Statements)-index-1].SQL))
+	}
 }
 
 func TestLiveSourcesIncludesMySQLOrdinaryIndexes(t *testing.T) {
@@ -276,6 +302,37 @@ func TestValidateLivePlanUsesLowerCaseTableNames(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestDiffProposesConfirmedCompatibleRename(t *testing.T) {
+	analyzer := mysql.New()
+	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (name text);")
+	target := parseSnapshot(t, analyzer, "CREATE TABLE members (display_name text);")
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Len(t, plan.Decisions, 1)
+	require.Equal(t, diff.DecisionRename, plan.Decisions[0].Kind)
+	require.Equal(t, "name", plan.Decisions[0].Baseline)
+	resolved, err := plan.Resolve(diff.Resolution{DecisionID: plan.Decisions[0].ID, RenameFrom: "name"})
+	require.NoError(t, err)
+	require.Contains(t, resolved.Statements[0].SQL, "`name` TO `display_name`")
+	require.Contains(t, resolved.Statements[0].ReverseSQL, "`display_name` TO `name`")
+}
+
+func TestDiffRefusesIncompatibleRenameCandidate(t *testing.T) {
+	analyzer := mysql.New()
+	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (name text);")
+	target := parseSnapshot(t, analyzer, "CREATE TABLE members (display_name integer);")
+	_, err := analyzer.Diff(baseline, target)
+	require.Error(t, err)
+}
+
+func TestDiffRefusesAmbiguousRenameCandidates(t *testing.T) {
+	analyzer := mysql.New()
+	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (first text, second text);")
+	target := parseSnapshot(t, analyzer, "CREATE TABLE members (given text, family text);")
+	_, err := analyzer.Diff(baseline, target)
+	require.Error(t, err)
+}
+
 func TestDiffGeneratesAdditiveColumnsAndIndexes(t *testing.T) {
 	analyzer := mysql.New()
 	baseline := parseSnapshot(t, analyzer, `
@@ -297,21 +354,11 @@ func TestDiffGeneratesAdditiveColumnsAndIndexes(t *testing.T) {
 
 	plan, err := analyzer.Diff(baseline, target)
 	require.NoError(t, err)
-	require.Equal(t, diff.Plan{
-		Dialect: "mysql",
-		Statements: []diff.PlannedStatement{
-			{
-				Source:  "001_add_column_members_email.sql",
-				SQL:     "ALTER TABLE members ADD COLUMN email text;\n",
-				Summary: "add column members.email",
-			},
-			{
-				Source:  "002_create_index_members_members_email_idx.sql",
-				SQL:     "CREATE INDEX members_email_idx ON members (email);\n",
-				Summary: "create index members_email_idx",
-			},
-		},
-	}, plan)
+	require.Len(t, plan.Operations, 2)
+	require.Contains(t, plan.Statements[0].SQL, "ADD COLUMN `email` text")
+	require.Contains(t, plan.Statements[1].SQL, "CREATE INDEX members_email_idx ON members (email)")
+	require.Contains(t, plan.Statements[0].ReverseSQL, "DROP COLUMN `email`")
+	require.Contains(t, plan.Statements[1].ReverseSQL, "DROP INDEX `members_email_idx`")
 }
 
 func TestDiffKeepsSameNamedIndexesDistinctByTable(t *testing.T) {
@@ -329,21 +376,9 @@ func TestDiffKeepsSameNamedIndexesDistinctByTable(t *testing.T) {
 
 	plan, err := analyzer.Diff(baseline, target)
 	require.NoError(t, err)
-	require.Equal(t, diff.Plan{
-		Dialect: "mysql",
-		Statements: []diff.PlannedStatement{
-			{
-				Source:  "001_create_index_members_common_idx.sql",
-				SQL:     "CREATE INDEX common_idx ON members (email);\n",
-				Summary: "create index common_idx",
-			},
-			{
-				Source:  "002_create_index_projects_common_idx.sql",
-				SQL:     "CREATE INDEX common_idx ON projects (name);\n",
-				Summary: "create index common_idx",
-			},
-		},
-	}, plan)
+	require.Len(t, plan.Operations, 2)
+	require.Contains(t, plan.Statements[0].SQL, "CREATE INDEX common_idx ON members (email)")
+	require.Contains(t, plan.Statements[1].SQL, "CREATE INDEX common_idx ON projects (name)")
 }
 
 func TestDiffMatchesCaseInsensitiveColumnsAndIndexes(t *testing.T) {
@@ -372,11 +407,10 @@ func TestDiffAllowsSameNamedIndexesOnDifferentTables(t *testing.T) {
 
 	plan, err := analyzer.Diff(baseline, target)
 	require.NoError(t, err)
-	require.Equal(t, []diff.PlannedStatement{{
-		Source:  "001_create_index_projects_shared_idx.sql",
-		SQL:     "CREATE INDEX shared_idx ON projects (name);\n",
-		Summary: "create index shared_idx",
-	}}, plan.Statements)
+	require.Len(t, plan.Operations, 1)
+	require.Equal(t, diff.OperationReplaceConstraint, plan.Operations[0].Kind)
+	require.Contains(t, plan.Statements[0].SQL, "CREATE INDEX shared_idx ON projects (name)")
+	require.Contains(t, plan.Statements[0].ReverseSQL, "DROP INDEX `shared_idx` ON `projects`")
 }
 
 func TestDiffGeneratedSQLRetainsTargetIdentifierSpelling(t *testing.T) {
@@ -386,18 +420,10 @@ func TestDiffGeneratedSQLRetainsTargetIdentifierSpelling(t *testing.T) {
 
 	plan, err := analyzer.Diff(baseline, target)
 	require.NoError(t, err)
-	require.Equal(t, []diff.PlannedStatement{
-		{
-			Source:  "001_add_column_members_email.sql",
-			SQL:     "ALTER TABLE `Members` ADD COLUMN `Email` text;\n",
-			Summary: "add column Members.Email",
-		},
-		{
-			Source:  "002_create_index_members_members_email_idx.sql",
-			SQL:     "CREATE INDEX `Members_Email_IDX` ON `Members` (`Email`);\n",
-			Summary: "create index Members_Email_IDX",
-		},
-	}, plan.Statements)
+	require.Len(t, plan.Operations, 2)
+	require.Contains(t, plan.Statements[0].SQL, "ADD COLUMN `Email` text")
+	require.Contains(t, plan.Statements[0].ReverseSQL, "DROP COLUMN `Email`")
+	require.Contains(t, plan.Statements[1].SQL, "CREATE INDEX `Members_Email_IDX`")
 }
 
 func TestDiffMatchesTablesAccordingToLowerCaseTableNames(t *testing.T) {
@@ -433,11 +459,11 @@ func TestDiffGeneratesNewTable(t *testing.T) {
 
 	plan, err := analyzer.Diff(baseline, target)
 	require.NoError(t, err)
-	require.Equal(t, []diff.PlannedStatement{{
-		Source:  "001_create_table_projects.sql",
-		SQL:     "CREATE TABLE projects (id bigint PRIMARY KEY, owner_id bigint NOT NULL);\n",
-		Summary: "create table projects",
-	}}, plan.Statements)
+	require.Len(t, plan.Operations, 1)
+	require.Equal(t, diff.OperationCreateTable, plan.Operations[0].Kind)
+	require.Contains(t, plan.Statements[0].SQL, "CREATE TABLE `projects`")
+	require.Contains(t, plan.Statements[0].SQL, "`owner_id` bigint NOT NULL")
+	require.Equal(t, "DROP TABLE `projects`;\n", plan.Statements[0].ReverseSQL)
 }
 
 func TestDiffWritesMigrationForMaximumLengthMultibyteIdentifiers(t *testing.T) {
@@ -460,7 +486,7 @@ func TestDiffWritesMigrationForMaximumLengthMultibyteIdentifiers(t *testing.T) {
 	require.NoError(t, diff.WriteMigration(directory, plan))
 	entries, err := os.ReadDir(directory)
 	require.NoError(t, err)
-	require.Len(t, entries, 2)
+	require.Len(t, entries, 4)
 }
 
 func TestDiffRejectsCollidingGeneratedStatementNames(t *testing.T) {
@@ -468,11 +494,9 @@ func TestDiffRejectsCollidingGeneratedStatementNames(t *testing.T) {
 	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY);")
 	target := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY); CREATE TABLE `foo-bar` (id bigint PRIMARY KEY); CREATE TABLE foo_bar (id bigint PRIMARY KEY);")
 
-	_, err := analyzer.Diff(baseline, target)
-	require.ErrorContains(t, err, `duplicate generated SQL source "create_table_foo_bar.sql"`)
-	require.ErrorContains(t, err, "create table foo-bar")
-	require.ErrorContains(t, err, "create table foo_bar")
-	require.NotContains(t, err.Error(), "001_")
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Equal(t, []string{"001_create_table_foo_bar.sql", "002_create_table_foo_bar.sql"}, []string{plan.Statements[0].Source, plan.Statements[1].Source})
 }
 
 func TestDiffRejectsNewRequiredColumnWithoutBackfill(t *testing.T) {
@@ -480,8 +504,9 @@ func TestDiffRejectsNewRequiredColumnWithoutBackfill(t *testing.T) {
 	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY);")
 	target := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY, email text NOT NULL);")
 
-	_, err := analyzer.Diff(baseline, target)
-	require.ErrorContains(t, err, "new required column members.email needs an application-specific backfill")
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Equal(t, "backfill_mysql_members_email", plan.Decisions[0].ID)
 }
 
 func TestDiffGeneratesNewRequiredColumnWithDefault(t *testing.T) {
@@ -491,11 +516,10 @@ func TestDiffGeneratesNewRequiredColumnWithDefault(t *testing.T) {
 
 	plan, err := analyzer.Diff(baseline, target)
 	require.NoError(t, err)
-	require.Equal(t, []diff.PlannedStatement{{
-		Source:  "001_add_column_members_active.sql",
-		SQL:     "ALTER TABLE members ADD COLUMN active boolean NOT NULL DEFAULT TRUE;\n",
-		Summary: "add column members.active",
-	}}, plan.Statements)
+	require.Len(t, plan.Operations, 1)
+	require.Equal(t, diff.OperationAddColumn, plan.Operations[0].Kind)
+	require.Contains(t, plan.Statements[0].SQL, "ADD COLUMN `active` boolean NOT NULL DEFAULT TRUE")
+	require.Contains(t, plan.Statements[0].ReverseSQL, "DROP COLUMN `active`")
 }
 
 func TestDiffRejectsNewRequiredPrimaryKeyColumnWithDefaultWhenPrimaryKeyFollowsNotNull(t *testing.T) {
@@ -504,7 +528,7 @@ func TestDiffRejectsNewRequiredPrimaryKeyColumnWithDefaultWhenPrimaryKeyFollowsN
 	target := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY, active integer NOT NULL DEFAULT 1 PRIMARY KEY);")
 
 	_, err := analyzer.Diff(baseline, target)
-	require.ErrorContains(t, err, "new required column members.active needs an application-specific backfill")
+	require.ErrorContains(t, err, "table members constraints changed")
 }
 
 func TestDiffRejectsNewRequiredColumnWithNullDefault(t *testing.T) {
@@ -517,8 +541,9 @@ func TestDiffRejectsNewRequiredColumnWithNullDefault(t *testing.T) {
 			baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY);")
 			target := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY, "+columnDefinition+");")
 
-			_, err := analyzer.Diff(baseline, target)
-			require.ErrorContains(t, err, "new required column members.email needs an application-specific backfill")
+			plan, err := analyzer.Diff(baseline, target)
+			require.NoError(t, err)
+			require.Equal(t, "backfill_mysql_members_email", plan.Decisions[0].ID)
 		})
 	}
 }

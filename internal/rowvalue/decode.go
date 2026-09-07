@@ -61,29 +61,12 @@ func Assign[T any](r Row, name string, destination *T) error {
 // such as a missing column, that a field reached earlier in declaration order
 // would have reported first under the old, per-row walk.
 func Decode[T any](r Row) (T, error) {
-	var result T
-	plan := planFor(reflect.TypeFor[T]())
-	if plan.err != nil {
-		return result, plan.err
+	decoder, err := NewDecoder[T]()
+	if err != nil {
+		var zero T
+		return zero, err
 	}
-	if !plan.isStruct {
-		return result, fmt.Errorf("row: decode destination %T must be a struct", result)
-	}
-	if len(plan.fields) == 0 {
-		return result, fmt.Errorf("row: decode destination %T has no exported fields", result)
-	}
-
-	destination := reflect.ValueOf(&result).Elem()
-	for _, field := range plan.fields {
-		value, ok := r.lookup(field.column)
-		if !ok {
-			return result, fmt.Errorf("row: column %q is not present", field.column)
-		}
-		if err := assign(destination.Field(field.index), value); err != nil {
-			return result, fmt.Errorf("row: decode column %q: %w", field.column, err)
-		}
-	}
-	return result, nil
+	return decoder.Decode(r)
 }
 
 // snakeCase derives the column name of an untagged field. It is lossy, so it
@@ -115,17 +98,7 @@ func assign(destination reflect.Value, value any) error {
 		case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
 			destination.SetZero()
 			return nil
-		default:
-			return fmt.Errorf("expected %s, got NULL", destination.Type())
 		}
-	}
-	if destination.Kind() == reflect.Pointer {
-		decoded := reflect.New(destination.Type().Elem())
-		if err := assign(decoded.Elem(), value); err != nil {
-			return err
-		}
-		destination.Set(decoded)
-		return nil
 	}
 	if destination.CanAddr() {
 		if scanner, ok := destination.Addr().Interface().(sql.Scanner); ok {
@@ -134,6 +107,17 @@ func assign(destination reflect.Value, value any) error {
 			}
 			return nil
 		}
+	}
+	if value == nil {
+		return fmt.Errorf("expected %s, got NULL", destination.Type())
+	}
+	if destination.Kind() == reflect.Pointer {
+		decoded := reflect.New(destination.Type().Elem())
+		if err := assign(decoded.Elem(), value); err != nil {
+			return err
+		}
+		destination.Set(decoded)
+		return nil
 	}
 	if destination.Type() == timeType {
 		decoded, err := decodeTime(value)
@@ -157,9 +141,6 @@ func assign(destination reflect.Value, value any) error {
 	}
 
 	switch destination.Kind() {
-	case reflect.Interface:
-		destination.Set(source)
-		return nil
 	case reflect.String:
 		switch source.Kind() {
 		case reflect.String:
@@ -242,7 +223,11 @@ func assign(destination reflect.Value, value any) error {
 			destination.SetFloat(float64(source.Uint()))
 			return nil
 		case source.Kind() == reflect.Float32 || source.Kind() == reflect.Float64:
-			destination.SetFloat(source.Float())
+			value := source.Float()
+			if !math.IsInf(value, 0) && !math.IsNaN(value) && destination.OverflowFloat(value) {
+				return fmt.Errorf("%v overflows %s", value, destination.Type())
+			}
+			destination.SetFloat(value)
 			return nil
 		}
 	}

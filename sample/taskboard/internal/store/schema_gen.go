@@ -8,6 +8,7 @@ import (
 )
 
 var membersDef = schema.TableDef{
+	Kind: schema.ObjectKind("table"),
 	Name: "members",
 	Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityAlways},
@@ -22,6 +23,7 @@ var membersTable = MembersTable{rasql.TableFrom[MembersRow](membersDef)}
 func MembersDef() schema.TableDef { return membersDef.Clone() }
 
 var projectsDef = schema.TableDef{
+	Kind: schema.ObjectKind("table"),
 	Name: "projects",
 	Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityAlways},
@@ -36,6 +38,7 @@ var projectsTable = ProjectsTable{rasql.TableFrom[ProjectsRow](projectsDef)}
 func ProjectsDef() schema.TableDef { return projectsDef.Clone() }
 
 var tasksDef = schema.TableDef{
+	Kind: schema.ObjectKind("table"),
 	Name: "tasks",
 	Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityAlways},

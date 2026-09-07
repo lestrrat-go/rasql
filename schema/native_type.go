@@ -138,12 +138,12 @@ func (n *NativeTypeDef) validate(path string, depth int) error {
 		return validationError(path+".kind", "is unsupported")
 	}
 	if n.Schema != "" {
-		if err := ValidateIdentifier(n.Schema); err != nil {
+		if err := ValidateSimpleIdentifier(n.Schema); err != nil {
 			return validationError(path+".schema", "%s", err.Error())
 		}
 	}
 	if n.Dialect == "postgresql" {
-		if err := ValidateIdentifier(n.Name); err != nil {
+		if err := ValidateSimpleIdentifier(n.Name); err != nil {
 			return validationError(path+".name", "%s", err.Error())
 		}
 	}

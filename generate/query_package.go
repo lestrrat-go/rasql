@@ -726,7 +726,11 @@ func (p QueryPackage) planQuery(root, dir string, query Query, tables []schema.T
 	if err != nil {
 		return File{}, fmt.Errorf("generate: compile query %q: %w", query.Function, err)
 	}
-	source, err := querygen.GoSource(compiled.QueryDef(), p.Package, query.Function, tables...)
+	definition, err := compiled.QueryDef().WithBindings(query.Bindings)
+	if err != nil {
+		return File{}, fmt.Errorf("generate: bind query %q: %w", query.Function, err)
+	}
+	source, err := querygen.GoSourceInDir(dir, definition, p.Package, query.Function, tables...)
 	if err != nil {
 		return File{}, fmt.Errorf("generate: render query %q: %w", query.Function, err)
 	}

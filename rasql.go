@@ -4,6 +4,8 @@
 // is the only handle type in this package: DB.Begin starts a transaction and
 // returns another DB, so a transaction is the same type as the database it was
 // started on, and every builder and function that takes one takes either.
+// DB.Atomic composes work across pool and transaction DBs by owning a
+// transaction outside one and a savepoint inside one.
 // Generated table descriptors use MustTableDef, then SelectFrom, Insert,
 // Update, DeleteFrom, and CreateTable execute typed database operations: the
 // builders take the DB at their terminal call, so one builder runs inside a
