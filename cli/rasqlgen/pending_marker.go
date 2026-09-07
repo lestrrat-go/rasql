@@ -78,23 +78,6 @@ func removePending(root string) error {
 	return err
 }
 
-func validatePending(root string) error {
-	marker, err := readPending(root)
-	if err != nil {
-		return err
-	}
-	for _, entry := range marker.Entries {
-		actual, err := stateFor(filepath.Join(root, filepath.FromSlash(entry.Path)))
-		if err != nil {
-			return err
-		}
-		if actual != entry.Old && actual != entry.Desired {
-			return fmt.Errorf("rasql: pending path %q has third state", entry.Path)
-		}
-	}
-	return nil
-}
-
 func readPending(root string) (*pendingMarker, error) {
 	b, err := os.ReadFile(filepath.Join(root, pendingMarkerName))
 	if err != nil {
