@@ -22,7 +22,7 @@ func sqliteProfile(t *testing.T) engineprofile.Profile {
 func TestReadSQLiteScopePoliciesAndVirtualObjects(t *testing.T) {
 	db, err := sql.Open("sqlite", "file:catalogread_scope?mode=memory&cache=shared")
 	require.NoError(t, err)
-	defer db.Close()
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	_, err = db.ExecContext(context.Background(), `
 		CREATE TABLE ordinary (id INTEGER);
 		CREATE TABLE history (id INTEGER);

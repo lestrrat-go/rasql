@@ -26,11 +26,12 @@ func TestObserveExternalRowsAndVersions(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			db, mock, err := sqlmock.New()
 			require.NoError(t, err)
-			defer db.Close()
 			mock.ExpectQuery(tc.query).WillReturnRows(sqlmock.NewRows([]string{"version"}).AddRow(tc.raw))
+			mock.ExpectClose()
 			got, err := engineprofile.Observe(context.Background(), db, tc.engine)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got.Version)
+			require.NoError(t, db.Close())
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 	}
@@ -51,14 +52,15 @@ func TestObserveExternalCardinalityAndQueryErrors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			db, mock, err := sqlmock.New()
 			require.NoError(t, err)
-			defer db.Close()
 			if tc.err != nil {
 				mock.ExpectQuery("SHOW server_version_num").WillReturnError(tc.err)
 			} else {
 				mock.ExpectQuery("SHOW server_version_num").WillReturnRows(tc.rows)
 			}
+			mock.ExpectClose()
 			_, err = engineprofile.Observe(context.Background(), db, engineprofile.PostgreSQL)
 			require.ErrorIs(t, err, engineprofile.ErrVersionObservation)
+			require.NoError(t, db.Close())
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 	}

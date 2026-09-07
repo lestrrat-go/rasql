@@ -265,7 +265,11 @@ func (i Inspector) sqliteObjectNames(ctx context.Context, databaseName string) (
 		if ctx.Err() != nil {
 			return nil, err
 		}
-		return i.sqliteLegacyObjectNames(ctx, databaseName)
+		legacy, legacyErr := i.sqliteLegacyObjectNames(ctx, databaseName)
+		if legacyErr != nil {
+			return nil, errors.Join(err, legacyErr)
+		}
+		return legacy, nil
 	}
 	defer func() { _ = rows.Close() }()
 	var objects []ObjectName
@@ -306,7 +310,7 @@ func (i Inspector) sqliteObjectNames(ctx context.Context, databaseName string) (
 }
 
 func (i Inspector) sqliteLegacyObjectNames(ctx context.Context, databaseName string) ([]ObjectName, error) {
-	databases := []string{databaseName}
+	databases := make([]string, 0, 1)
 	if databaseName == "" {
 		rows, err := i.queryer.QueryContext(ctx, "PRAGMA database_list")
 		if err != nil {
@@ -328,6 +332,8 @@ func (i Inspector) sqliteLegacyObjectNames(ctx context.Context, databaseName str
 		if err := rows.Close(); err != nil {
 			return nil, fmt.Errorf("inspect: close SQLite databases: %w", err)
 		}
+	} else {
+		databases = append(databases, databaseName)
 	}
 	var objects []ObjectName
 	for _, database := range databases {
