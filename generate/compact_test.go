@@ -679,12 +679,12 @@ func TestGeneratedEdgeUsesExactAliasedStage(t *testing.T) {
 	childQuery := rasql.Select(childSource.Source(), childProjection)
 	childPlan, err := rasql.NewGraphPlan(childQuery, func(row generated.UsersRow) userGraph { return userGraph{ID: row.ID} })
 	if err != nil { t.Fatal(err) }
-	edge, err := generated.ProjectsProjectsOwnerFkEdge(parentSource, childSource, childPlan, rasql.EdgeOptions{}, func(graph *projectGraph, value rasql.LoadedOne[userGraph]) { graph.Owner = value })
+	edge, err := generated.ProjectsOwnerEdge(parentSource, childSource, childPlan, rasql.EdgeOptions{}, func(graph *projectGraph, value rasql.LoadedOne[userGraph]) { graph.Owner = value })
 	if err != nil { t.Fatal(err) }
 	if _, err = rasql.NewGraphPlan(parentQuery, func(generated.ProjectsRow) projectGraph { return projectGraph{} }, edge); err != nil { t.Fatal(err) }
 	wrongParent, err := generated.Projects().Source("p2")
 	if err != nil { t.Fatal(err) }
-	wrongEdge, err := generated.ProjectsProjectsOwnerFkEdge(wrongParent, childSource, childPlan, rasql.EdgeOptions{}, func(graph *projectGraph, value rasql.LoadedOne[userGraph]) { graph.Owner = value })
+	wrongEdge, err := generated.ProjectsOwnerEdge(wrongParent, childSource, childPlan, rasql.EdgeOptions{}, func(graph *projectGraph, value rasql.LoadedOne[userGraph]) { graph.Owner = value })
 	if err != nil { t.Fatal(err) }
 	_, err = rasql.NewGraphPlan(parentQuery, func(generated.ProjectsRow) projectGraph { return projectGraph{} }, wrongEdge)
 	if err == nil || !strings.Contains(err.Error(), "graph_key_mismatch") { t.Fatalf("err = %v, want graph_key_mismatch", err) }
