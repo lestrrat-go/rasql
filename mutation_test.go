@@ -94,7 +94,7 @@ func TestMutationReturningAndOutcomes(t *testing.T) {
 	outcome, err := rasql.ExecMutation(t.Context(), executor, create)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), outcome.Affected)
-	require.Equal(t, rasql.DurabilityUnknown, outcome.Durability)
+	require.Equal(t, rasql.DurabilityCommitted, outcome.Durability)
 
 	projection := mutationProjection(t, table)
 	patch, err := rasql.NewPatchPlan(table, query.EqualValue(id, int64(7)), rasql.SetField(value, "after"))
@@ -158,4 +158,46 @@ func TestMutationBatchCancellationBeforeExecution(t *testing.T) {
 	outcome, err := rasql.ExecMutationBatch(ctx, executor, []rasql.MutationPlan{plan}, rasql.MutationBatchOptions{})
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, []rasql.InputOutcome{rasql.InputUnattempted}, outcome.Inputs)
+}
+
+func TestMutationBatchAtomicRollbackStates(t *testing.T) {
+	executor, table, id := mutationFixture(t)
+	value := query.TypedColumnOf[mutationRow, string](table.Column("value"))
+	first, err := rasql.NewCreatePlan(table, rasql.SetField(id, int64(1)), rasql.SetField(value, "one"))
+	require.NoError(t, err)
+	second, err := rasql.NewCreatePlan(table, rasql.SetField(id, int64(1)), rasql.SetField(value, "duplicate"))
+	require.NoError(t, err)
+	outcome, err := rasql.ExecMutationBatch(t.Context(), executor, []rasql.MutationPlan{first, second}, rasql.MutationBatchOptions{
+		MaxRows: 1, Atomic: true, Classifier: mutationRejectClassifier{},
+	})
+	require.Error(t, err)
+	require.Equal(t, []rasql.InputOutcome{rasql.InputRolledBack, rasql.InputRejected}, outcome.Inputs)
+	require.Equal(t, rasql.DurabilityPending, outcome.Durability)
+}
+
+func TestMutationTransactionDurabilityIsPending(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT NOT NULL)`)
+	require.NoError(t, err)
+	tx, err := database.BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tx.Rollback() })
+	db, err := rasql.New(tx, dialect.SQLite())
+	require.NoError(t, err)
+	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 40, 0)
+	require.NoError(t, err)
+	executor, err := rasql.AsExecutor(db, profile)
+	require.NoError(t, err)
+	table, err := rasql.TableOf[mutationRow](schema.TableDef{Name: "items", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "value", Type: schema.TextType{}}}})
+	require.NoError(t, err)
+	id := query.TypedColumnOf[mutationRow, int64](table.Column("id"))
+	value := query.TypedColumnOf[mutationRow, string](table.Column("value"))
+	plan, err := rasql.NewCreatePlan(table, rasql.SetField(id, int64(1)), rasql.SetField(value, "pending"))
+	require.NoError(t, err)
+	outcome, err := rasql.ExecMutation(t.Context(), executor, plan)
+	require.NoError(t, err)
+	require.Equal(t, rasql.DurabilityPending, outcome.Durability)
 }

@@ -2,6 +2,7 @@ package rasql
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/lestrrat-go/rasql/query"
@@ -106,6 +107,9 @@ func ExecMutation(ctx context.Context, executor Executor, plan MutationPlan) (Mu
 	if err != nil {
 		return MutationOutcome{Durability: DurabilityUnknown}, err
 	}
+	if result == nil {
+		return MutationOutcome{Durability: DurabilityUnknown}, fmt.Errorf("rasql: executor returned nil mutation result")
+	}
 	affected, err := result.RowsAffected()
 	if err != nil {
 		return MutationOutcome{Durability: DurabilityUnknown}, err
@@ -137,8 +141,19 @@ func compileMutation(executor Executor, statement query.WriteStatement) (stmt.St
 	return encodeCompiled(compiledQuery, registry)
 }
 
-func executorDurability(_ Executor) Durability {
-	return DurabilityUnknown
+func executorDurability(executor Executor) Durability {
+	provider, ok := executor.(executionDurabilityProvider)
+	if !ok {
+		return DurabilityUnknown
+	}
+	switch provider.executionDurability() {
+	case executionDurabilityCommitted:
+		return DurabilityCommitted
+	case executionDurabilityPending:
+		return DurabilityPending
+	default:
+		return DurabilityUnknown
+	}
 }
 
 // Returning attaches the requested Q1 projection to a mutation.
@@ -222,6 +237,9 @@ func ExecMutationBatch(ctx context.Context, executor Executor, plans []MutationP
 			return outcome, fmt.Errorf("rasql: mutation batch inputs target mixed tables %q and %q", target, identity)
 		}
 	}
+	if options.Atomic {
+		return execAtomicMutationBatch(ctx, executor, plans, options)
+	}
 	for i := 0; i < len(plans); {
 		if err := ctx.Err(); err != nil {
 			return outcome, err
@@ -263,6 +281,9 @@ func ExecMutationBatch(ctx context.Context, executor Executor, plans []MutationP
 				return outcome, compileErr
 			}
 			result, execErr := executor.Exec(ctx, compiled)
+			if execErr == nil && result == nil {
+				execErr = fmt.Errorf("rasql: executor returned nil mutation result")
+			}
 			if execErr == nil {
 				if _, rowsErr := result.RowsAffected(); rowsErr != nil {
 					execErr = rowsErr
@@ -306,6 +327,72 @@ func ExecMutationBatch(ctx context.Context, executor Executor, plans []MutationP
 		return outcome, err
 	}
 	return outcome, nil
+}
+
+func execAtomicMutationBatch(ctx context.Context, executor Executor, plans []MutationPlan, options MutationBatchOptions) (MutationBatchOutcome, error) {
+	var child Executor
+	var finalizer scopeFinalizer
+	var err error
+	if state, ok := executor.(scopeState); ok && state.scopeIsTransaction() {
+		beginner, supported := executor.(savepointBeginner)
+		if !supported {
+			return MutationBatchOutcome{}, planError("savepoint_unsupported", "scope", "executor does not support savepoints")
+		}
+		child, finalizer, err = beginner.beginSavepoint(ctx)
+	} else {
+		beginner, supported := executor.(transactionBeginner)
+		if !supported {
+			return MutationBatchOutcome{}, planError("transaction_scope_unsupported", "scope", "executor does not support transaction scopes")
+		}
+		child, finalizer, err = beginner.beginScope(ctx, nil)
+	}
+	if err != nil {
+		return MutationBatchOutcome{}, err
+	}
+	nonAtomic := options
+	nonAtomic.Atomic = false
+	outcome, executionErr := ExecMutationBatch(ctx, child, plans, nonAtomic)
+	attempted := mutationAttempted(outcome)
+	if executionErr != nil {
+		cleanupCtx, cancel := atomicCleanupContext(ctx)
+		defer cancel()
+		rollbackErr := finalizer.Rollback(cleanupCtx)
+		if rollbackErr != nil {
+			for _, index := range attempted {
+				outcome.Inputs[index] = InputUnknown
+			}
+			outcome.Durability = DurabilityUnknown
+			return outcome, errors.Join(executionErr, rollbackErr)
+		}
+		for _, index := range attempted {
+			if outcome.Inputs[index] == InputApplied {
+				outcome.Inputs[index] = InputRolledBack
+			}
+		}
+		outcome.Durability = DurabilityPending
+		return outcome, executionErr
+	}
+	cleanupCtx, cancel := atomicCleanupContext(ctx)
+	defer cancel()
+	if err := finalizer.Commit(cleanupCtx); err != nil {
+		for _, index := range attempted {
+			outcome.Inputs[index] = InputUnknown
+		}
+		outcome.Durability = DurabilityUnknown
+		return outcome, err
+	}
+	outcome.Durability = executorDurability(executor)
+	return outcome, nil
+}
+
+func mutationAttempted(outcome MutationBatchOutcome) []int {
+	indexes := make([]int, 0, len(outcome.Inputs))
+	for index, state := range outcome.Inputs {
+		if state != InputUnattempted {
+			indexes = append(indexes, index)
+		}
+	}
+	return indexes
 }
 
 func mutationTarget(statement query.WriteStatement) string {

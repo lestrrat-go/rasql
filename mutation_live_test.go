@@ -80,6 +80,7 @@ func runLiveMutation(t *testing.T, database *sql.DB, dialectValue dialect.Dialec
 	outcome, err := rasql.ExecMutation(t.Context(), executor, create)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), outcome.Affected)
+	require.Equal(t, rasql.DurabilityCommitted, outcome.Durability)
 	projection := liveMutationProjection(t, table)
 	returned, err := rasql.Returning(create, projection)
 	require.NoError(t, err)
