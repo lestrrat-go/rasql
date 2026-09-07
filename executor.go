@@ -124,8 +124,6 @@ func (e dbExecutor) beginSavepoint(ctx context.Context) (Executor, scopeFinalize
 	return child, guardedScopeFinalizer{ScopeFinalizer: finalizer, busy: e.busy}, nil
 }
 
-type execScopeFinalizer struct{ exec.ScopeFinalizer }
-
 type guardedScopeFinalizer struct {
 	exec.ScopeFinalizer
 	busy *executorBusy

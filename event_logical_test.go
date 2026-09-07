@@ -70,7 +70,8 @@ func TestLogicalInvocationUsesFreshStatementIndexesAndOneTerminal(t *testing.T) 
 }
 
 func TestLogicalInvocationWithoutProviderIsAllocationFreeNoop(t *testing.T) {
-	ctx := context.WithValue(context.Background(), struct{}{}, true)
+	type contextKey struct{}
+	ctx := context.WithValue(context.Background(), contextKey{}, true)
 	executor := capabilityTestExecutor{}
 	derived, observed, completion := beginLogicalInvocation(ctx, executor, EventGraph)
 	require.Same(t, ctx, derived)

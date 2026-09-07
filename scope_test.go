@@ -167,7 +167,7 @@ func TestSavepointBeginRejectsParentRowsOpenBeforeCallback(t *testing.T) {
 	require.NoError(t, rasql.Within(t.Context(), executor, nil, func(ctx context.Context, tx rasql.Executor) error {
 		rows, err := tx.Query(ctx, stmt.New("SELECT 1"))
 		require.NoError(t, err)
-		defer rows.Finish(nil, true)
+		defer func() { require.NoError(t, rows.Finish(nil, true)) }()
 		called := false
 		err = rasql.Within(ctx, tx, nil, func(context.Context, rasql.Executor) error { called = true; return nil })
 		var planErr *rasql.PlanError

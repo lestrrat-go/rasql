@@ -29,6 +29,8 @@ type logicalInvocationProvider interface {
 	beginLogicalInvocation(context.Context, EventKind) (context.Context, Executor, logicalInvocationCompletion)
 }
 
+var _ logicalInvocationProvider = eventExecutor{}
+
 type logicalInvocationCompletion interface {
 	completeLogicalInvocation(error, int64, bool)
 }
@@ -107,10 +109,6 @@ func (e *EventObserverPanic) Error() string {
 func (e *EventObserverPanic) Unwrap() error {
 	err, _ := e.Value.(error)
 	return err
-}
-
-type eventObserverFunc struct {
-	start func(context.Context, Event) (context.Context, EventCompletion)
 }
 
 type eventCompletionFunc func(context.Context, Event) error
@@ -334,10 +332,6 @@ func (e eventCompilerCodecScopedExecutor) Codecs() CodecRegistry {
 		return nil
 	}
 	return provider.Codecs()
-}
-
-func (e eventExecutor) child(child Executor) Executor {
-	return eventExecutor{Executor: child, handler: e.handler, observers: e.observers, parentID: e.parentID, statement: e.statement, counter: e.counter, scopeCtx: e.scopeCtx}
 }
 
 func (e eventExecutor) childScope(child Executor, ctx context.Context, parentID string, counter *atomic.Int64) Executor {

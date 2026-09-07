@@ -19,7 +19,8 @@ func TestEventObserverGetsOrderedScopeAndStatementEvents(t *testing.T) {
 	executor := sqliteExecutor(t)
 	var mu sync.Mutex
 	var events []rasql.Event
-	var marker = struct{}{}
+	type contextKey struct{}
+	var marker contextKey
 	terminalDerived := false
 	executor, err := rasql.WithEventObservers(executor, rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), rasql.EventObserverFunc(func(ctx context.Context, event rasql.Event) (context.Context, rasql.EventCompletion) {
 		mu.Lock()

@@ -32,14 +32,6 @@ type scopeState interface{ scopeIsTransaction() bool }
 type scopeContextProvider interface{ scopeContext() context.Context }
 type scopeCauseSetter interface{ setCause(error) }
 
-type scopeFinalizerFunc struct {
-	commit   func(context.Context) error
-	rollback func(context.Context) error
-}
-
-func (f scopeFinalizerFunc) Commit(ctx context.Context) error   { return f.commit(ctx) }
-func (f scopeFinalizerFunc) Rollback(ctx context.Context) error { return f.rollback(ctx) }
-
 // executionDurabilityEvidence is deliberately private. Mutation packages can
 // map it to their public outcome without allowing external executors to forge
 // durable evidence.
@@ -54,6 +46,13 @@ const (
 type executionDurabilityProvider interface {
 	executionDurability() executionDurabilityEvidence
 }
+
+var (
+	_ transactionBeginner         = dbExecutor{}
+	_ savepointBeginner           = dbExecutor{}
+	_ scopeFinalizer              = guardedScopeFinalizer{}
+	_ executionDurabilityProvider = dbExecutor{}
+)
 
 type profiledScopedExecutor struct{ profiledExecutor }
 
