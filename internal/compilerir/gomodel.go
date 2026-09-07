@@ -1,5 +1,7 @@
 package compilerir
 
+import "strings"
+
 type GoModel struct {
 	Package string
 	Imports []GoImport
@@ -184,7 +186,7 @@ func BuildGo(model SemanticModel, config GoConfig) (GoModel, []Diagnostic) {
 			if column.Scalar == "time" {
 				needTime = true
 			}
-			if column.Nullable {
+			if strings.HasPrefix(column.GoType, "rasql.Nullable[") {
 				needRasql = true
 			}
 		}
@@ -194,7 +196,7 @@ func BuildGo(model SemanticModel, config GoConfig) (GoModel, []Diagnostic) {
 			if field.Type == "time.Time" || field.Type == "rasql.Nullable[time.Time]" {
 				needTime = true
 			}
-			if field.Nullable {
+			if strings.HasPrefix(field.Type, "rasql.Nullable[") {
 				needRasql = true
 			}
 		}
@@ -203,7 +205,7 @@ func BuildGo(model SemanticModel, config GoConfig) (GoModel, []Diagnostic) {
 				if field.Type == "time.Time" || field.Type == "rasql.Nullable[time.Time]" {
 					needTime = true
 				}
-				if field.Nullable {
+				if strings.HasPrefix(field.Type, "rasql.Nullable[") {
 					needRasql = true
 				}
 			}
@@ -236,7 +238,7 @@ func dedupImports(in []GoImport) []GoImport {
 	return out
 }
 func goType(scalar string, nullable bool) string {
-	base := map[string]string{"boolean": "bool", "integer": "int64", "float": "float64", "text": "string", "bytes": "[]byte", "time": "time.Time", "json": "[]byte", "uuid": "string", "decimal": "string"}[scalar]
+	base := map[string]string{"boolean": "bool", "integer": "int64", "unsigned_integer": "uint64", "float": "float64", "text": "string", "bytes": "[]byte", "time": "time.Time", "json": "[]byte", "uuid": "string", "decimal": "string"}[scalar]
 	if base == "" {
 		return ""
 	}

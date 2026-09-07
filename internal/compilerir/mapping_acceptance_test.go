@@ -1,6 +1,7 @@
 package compilerir_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -61,6 +62,34 @@ func TestMappingAcceptanceUsesCanonicalNullableForPresentZeroAndNULL(t *testing.
 	}
 }
 
+func TestMappingAcceptanceUnsignedFallbackAndQueryAnalysisBoundary(t *testing.T) {
+	catalog := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "mysql"}, Objects: []compilerir.PhysicalObject{{ID: "counters", Kind: "table", Name: "counters", Columns: []compilerir.PhysicalColumn{
+		{Name: "signed", Ordinal: 0, LogicalKind: "integer", Native: &compilerir.NativeType{Dialect: "mysql", Name: "BIGINT", Kind: "builtin"}},
+		{Name: "unsigned", Ordinal: 1, LogicalKind: "integer", Integer: &compilerir.IntegerTypeFacts{Unsigned: true}, Native: &compilerir.NativeType{Dialect: "mysql", Name: "BIGINT", Kind: "builtin"}},
+	}}}}
+	queries := []compilerir.QueryAnalysis{{ID: "q", Name: "Find", Operation: "select", Cardinality: "many", Parameters: []compilerir.SemanticValue{{Name: "limit", Scalar: "unsigned_integer", TypeCertainty: compilerir.CertaintyKnown, NullabilityCertainty: compilerir.CertaintyKnown}}, Results: []compilerir.SemanticValue{{Name: "unsigned", Scalar: "unsigned_integer", TypeCertainty: compilerir.CertaintyKnown, NullabilityCertainty: compilerir.CertaintyKnown}}}}
+	model, diagnostics := compilerir.BuildSemantic(catalog, compilerir.MappingConfig{}, queries)
+	if len(diagnostics) != 0 {
+		t.Fatalf("unsigned boundary failed: %#v", diagnostics)
+	}
+	if model.Objects[0].Columns[0].Scalar != "integer" || model.Objects[0].Columns[1].Scalar != "unsigned_integer" {
+		t.Fatalf("unexpected physical scalar defaults: %#v", model.Objects[0].Columns)
+	}
+	goModel, diagnostics := compilerir.BuildGo(model, compilerir.GoConfig{Package: "store"})
+	if len(diagnostics) != 0 {
+		t.Fatalf("unsigned Go model failed: %#v", diagnostics)
+	}
+	if goModel.Objects[0].Row.Fields[0].Type != "int64" || goModel.Objects[0].Row.Fields[1].Type != "uint64" || goModel.Objects[0].Create.Fields[1].Type != "uint64" || goModel.Objects[0].Patch.Fields[1].Type != "uint64" {
+		t.Fatalf("signed/unsigned object types were not preserved: %#v", goModel.Objects[0])
+	}
+	if goModel.Queries[0].Parameters[0].Type != "uint64" || goModel.Queries[0].Result.Fields[0].Type != "uint64" {
+		t.Fatalf("query analysis unsigned boundary was not preserved: %#v", goModel.Queries[0])
+	}
+	if catalog.Objects[0].Columns[1].Integer == nil || !catalog.Objects[0].Columns[1].Integer.Unsigned || catalog.Objects[0].Columns[1].Native == nil || catalog.Objects[0].Columns[1].Native.Name != "BIGINT" {
+		t.Fatal("physical unsigned/native facts were mutated")
+	}
+}
+
 func TestMappingAcceptanceKeepsIdentityByDefaultWritable(t *testing.T) {
 	catalog := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "postgresql"}, Objects: []compilerir.PhysicalObject{{ID: "events", Kind: "table", Name: "events", Columns: []compilerir.PhysicalColumn{{Name: "id", Ordinal: 0, LogicalKind: "integer", Identity: "BY DEFAULT"}}}}}
 	model, diagnostics := compilerir.BuildSemantic(catalog, compilerir.MappingConfig{}, nil)
@@ -93,9 +122,9 @@ func TestMappingAcceptanceNegativeHarness(t *testing.T) {
 					return &expectedFailure{message: "ambiguous_scalar"}
 				}
 			}
-			return &expectedFailure{message: "ambiguous_scalar"}
+			return errors.New("missing diagnostic")
 		}, want: "ambiguous"},
-		{name: "unknown codec", check: func() error {
+		{name: "missing codec reference", check: func() error {
 			return compilerir.ValidateMappingConfig(compilerir.MappingConfig{Scalars: []compilerir.ScalarMapping{{Name: "status", Match: compilerir.NativeMatch{LogicalKind: "text"}, GoType: "string"}}}, "store")
 		}, want: "codec"},
 		{name: "invalid alias", check: func() error {
@@ -112,6 +141,9 @@ func TestMappingAcceptanceNegativeHarness(t *testing.T) {
 				t.Fatalf("expected %q failure, got %v", check.want, err)
 			}
 		})
+	}
+	if err := compilerir.ValidateMappingConfig(compilerir.MappingConfig{Scalars: []compilerir.ScalarMapping{{Name: "status", Match: compilerir.NativeMatch{LogicalKind: "text"}, GoType: "string", Codec: "installed-at-runtime"}}}, "store"); err != nil {
+		t.Fatalf("valid runtime codec reference was rejected: %v", err)
 	}
 }
 

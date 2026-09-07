@@ -1,6 +1,7 @@
 package compilerir_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/internal/compilerir"
@@ -55,6 +56,42 @@ func TestValidateMappingConfigRejectsInvalidGoAndDuplicateNames(t *testing.T) {
 	config := compilerir.MappingConfig{Scalars: []compilerir.ScalarMapping{{Name: "status", GoType: "domain.Status", Codec: "status", Imports: []compilerir.GoImport{{Path: "example.com/domain", Alias: "bad-alias"}}}, {Name: "status", GoType: "string", Codec: "status"}}}
 	if err := compilerir.ValidateMappingConfig(config, "store"); err == nil {
 		t.Fatal("invalid alias and duplicate mapping were accepted")
+	}
+}
+
+func TestValidateMappingConfigSharesGoTypeContextRules(t *testing.T) {
+	tests := []struct {
+		name     string
+		typeName string
+		imports  []compilerir.GoImport
+		want     string
+	}{
+		{name: "expression", typeName: "1+2", want: "Go type"},
+		{name: "missing selector", typeName: "missing.Type", want: "unresolved import"},
+		{name: "duplicate path", typeName: "a.Type", imports: []compilerir.GoImport{{Path: "example.com/a", Alias: "a"}, {Path: "example.com/a", Alias: "other"}}, want: "duplicate import path"},
+		{name: "duplicate effective name", typeName: "a.Type", imports: []compilerir.GoImport{{Path: "example.com/a", Alias: "a"}, {Path: "example.com/b", Alias: "a"}}, want: "duplicate effective"},
+		{name: "blank alias", typeName: "string", imports: []compilerir.GoImport{{Path: "example.com/a", Alias: "_"}}, want: "alias"},
+		{name: "dot alias", typeName: "string", imports: []compilerir.GoImport{{Path: "example.com/a", Alias: "."}}, want: "alias"},
+		{name: "invalid alias", typeName: "string", imports: []compilerir.GoImport{{Path: "example.com/a", Alias: "bad-alias"}}, want: "alias"},
+		{name: "unused import", typeName: "string", imports: []compilerir.GoImport{{Path: "example.com/a", Alias: "a"}}, want: "unused import"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := compilerir.MappingConfig{Scalars: []compilerir.ScalarMapping{{Name: "custom", Match: compilerir.NativeMatch{LogicalKind: "text"}, GoType: test.typeName, Imports: test.imports, Codec: "installed-at-runtime"}}}
+			err := compilerir.ValidateMappingConfig(config, "store")
+			if err == nil || !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(test.want)) {
+				t.Fatalf("expected %q, got %v", test.want, err)
+			}
+		})
+	}
+	for _, typeName := range []string{"(int64)", "*a.ID", "map[string]a.ID", "[]a.ID", "Box[a.ID]"} {
+		imports := []compilerir.GoImport(nil)
+		if strings.Contains(typeName, "a.") {
+			imports = []compilerir.GoImport{{Path: "example.com/a", Alias: "a"}}
+		}
+		if err := compilerir.ValidateMappingConfig(compilerir.MappingConfig{Scalars: []compilerir.ScalarMapping{{Name: "custom", Match: compilerir.NativeMatch{LogicalKind: "text"}, GoType: typeName, Imports: imports, Codec: "installed-at-runtime"}}}, "store"); err != nil {
+			t.Fatalf("accepted Go type %q was rejected: %v", typeName, err)
+		}
 	}
 }
 

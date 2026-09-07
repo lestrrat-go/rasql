@@ -2,16 +2,17 @@ package compilerir
 
 import (
 	"fmt"
-	"go/parser"
-	"go/token"
-	"strings"
+	"regexp"
 )
+
+var mappingCodecPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]{0,127}$`)
 
 // DefaultScalarMapping returns the canonical mapping for a portable scalar.
 func DefaultScalarMapping(scalar string) (ScalarMapping, bool) {
 	typeName := map[string]string{
 		"boolean": "bool", "integer": "int64", "float": "float64",
-		"text": "string", "bytes": "[]byte", "time": "time.Time",
+		"unsigned_integer": "uint64",
+		"text":             "string", "bytes": "[]byte", "time": "time.Time",
 		"json": "[]byte", "uuid": "string", "decimal": "string",
 	}[scalar]
 	if typeName == "" {
@@ -37,16 +38,18 @@ func ValidateMappingConfig(config MappingConfig, packageName string) error {
 		if mapping.GoType == "" {
 			return fmt.Errorf("%s.go_type: must not be empty", path)
 		}
-		if err := validateGoExpression(mapping.GoType, mapping.Imports, packageName); err != nil {
-			return fmt.Errorf("%s.go_type: %w", path, err)
-		}
+		expressions := []string{mapping.GoType}
 		if mapping.NullableGoType != "" {
-			if err := validateGoExpression(mapping.NullableGoType, mapping.Imports, packageName); err != nil {
-				return fmt.Errorf("%s.nullable_go_type: %w", path, err)
-			}
+			expressions = append(expressions, mapping.NullableGoType)
+		}
+		if err := validateGoExpressions(expressions, mapping.Imports, packageName); err != nil {
+			return fmt.Errorf("%s.go_type: %w", path, err)
 		}
 		if mapping.Codec == "" {
 			return fmt.Errorf("%s.codec: must not be empty", path)
+		}
+		if !mappingCodecPattern.MatchString(mapping.Codec) {
+			return fmt.Errorf("%s.codec: malformed codec identifier", path)
 		}
 		if mapping.Match.Dialect == "" && mapping.Match.Schema == "" && mapping.Match.Name == "" && mapping.Match.Kind == "" && mapping.Match.LogicalKind == "" {
 			return fmt.Errorf("%s.match: must select a native type or logical kind", path)
@@ -57,41 +60,6 @@ func ValidateMappingConfig(config MappingConfig, packageName string) error {
 		if mapping.Match.Schema != "" && mapping.Match.Name == "" {
 			return fmt.Errorf("%s.match.schema: requires name", path)
 		}
-	}
-	return nil
-}
-
-func validateGoExpression(expr string, imports []GoImport, packageName string) error {
-	if packageName == "" {
-		packageName = "generated"
-	}
-	if !token.IsIdentifier(packageName) || packageName == "_" {
-		return fmt.Errorf("invalid package name %q", packageName)
-	}
-	file, err := parser.ParseFile(token.NewFileSet(), "mapping.go", "package "+packageName+"\ntype field "+expr, 0)
-	if err != nil {
-		return fmt.Errorf("invalid Go type %q: %w", expr, err)
-	}
-	if len(file.Decls) != 1 {
-		return fmt.Errorf("invalid Go type %q", expr)
-	}
-	aliases := map[string]struct{}{}
-	for _, imp := range imports {
-		if imp.Path == "" {
-			return fmt.Errorf("import path must not be empty")
-		}
-		alias := imp.Alias
-		if alias == "" {
-			parts := strings.Split(imp.Path, "/")
-			alias = parts[len(parts)-1]
-		}
-		if !token.IsIdentifier(alias) || alias == "_" {
-			return fmt.Errorf("invalid import alias %q", alias)
-		}
-		if _, ok := aliases[alias]; ok {
-			return fmt.Errorf("duplicate import alias %q", alias)
-		}
-		aliases[alias] = struct{}{}
 	}
 	return nil
 }
@@ -121,6 +89,10 @@ func selectMapping(column PhysicalColumn, config MappingConfig) mappingSelection
 		}
 	}
 	if bestRank < 0 {
+		if column.LogicalKind == "integer" && column.Integer != nil && column.Integer.Unsigned {
+			mapping := ScalarMapping{Name: "unsigned_integer", GoType: "uint64"}
+			return mappingSelection{scalar: mapping.Name, mapping: mapping, found: true}
+		}
 		if mapping, ok := DefaultScalarMapping(column.LogicalKind); ok {
 			return mappingSelection{scalar: mapping.Name, mapping: mapping, found: true}
 		}

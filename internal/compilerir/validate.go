@@ -484,7 +484,41 @@ func ValidateGo(m GoModel) error {
 			}
 		}
 	}
+	if err := validateGoExpressions(goModelExpressions(m), m.Imports, m.Package); err != nil {
+		return invalid("types", "%v", err)
+	}
 	return nil
+}
+
+func goModelExpressions(m GoModel) []string {
+	var expressions []string
+	for _, object := range m.Objects {
+		for _, column := range object.Columns {
+			expressions = append(expressions, column.GoType)
+		}
+		for _, field := range object.Row.Fields {
+			expressions = append(expressions, field.Type)
+		}
+		for _, shape := range []*GoShape{object.Create, object.Patch} {
+			if shape == nil {
+				continue
+			}
+			for _, field := range shape.Fields {
+				expressions = append(expressions, field.Type)
+			}
+		}
+	}
+	for _, query := range m.Queries {
+		for _, field := range query.Parameters {
+			expressions = append(expressions, field.Type)
+		}
+		if query.Result != nil {
+			for _, field := range query.Result.Fields {
+				expressions = append(expressions, field.Type)
+			}
+		}
+	}
+	return expressions
 }
 func validateGoField(field GoField, imports map[string]struct{}) error {
 	if field.Name == "" || !token.IsIdentifier(field.Name) || field.Type == "" {
@@ -552,6 +586,103 @@ func parseGoType(s string, imports map[string]struct{}) error {
 		return err
 	}
 	return nil
+}
+
+func validateGoExpressions(expressions []string, imports []GoImport, packageName string) error {
+	if packageName == "" || !token.IsIdentifier(packageName) || packageName == "_" {
+		return fmt.Errorf("invalid package name %q", packageName)
+	}
+	importNames := make(map[string]struct{}, len(imports))
+	paths := make(map[string]struct{}, len(imports))
+	for i, imp := range imports {
+		if imp.Path == "" {
+			return fmt.Errorf("imports[%d]: import path must not be empty", i)
+		}
+		if _, ok := paths[imp.Path]; ok {
+			return fmt.Errorf("imports[%d]: duplicate import path %q", i, imp.Path)
+		}
+		paths[imp.Path] = struct{}{}
+		alias := imp.Alias
+		if alias == "" {
+			alias = path.Base(imp.Path)
+		}
+		if !token.IsIdentifier(alias) || alias == "_" || alias == "." {
+			return fmt.Errorf("imports[%d]: invalid import alias %q", i, alias)
+		}
+		if _, ok := importNames[alias]; ok {
+			return fmt.Errorf("imports[%d]: duplicate effective import name %q", i, alias)
+		}
+		importNames[alias] = struct{}{}
+	}
+	used := make(map[string]struct{}, len(importNames))
+	for _, expression := range expressions {
+		expr, err := parser.ParseExpr(expression)
+		if err != nil {
+			return fmt.Errorf("invalid Go type %q", expression)
+		}
+		if err := validateGoTypeAST(expr, importNames, used); err != nil {
+			return err
+		}
+	}
+	for name := range importNames {
+		if _, ok := used[name]; !ok {
+			return fmt.Errorf("unused import %q", name)
+		}
+	}
+	return nil
+}
+
+func validateGoTypeAST(expr ast.Expr, imports, used map[string]struct{}) error {
+	var check func(ast.Expr) error
+	check = func(node ast.Expr) error {
+		switch n := node.(type) {
+		case *ast.Ident:
+			return nil
+		case *ast.SelectorExpr:
+			x, ok := n.X.(*ast.Ident)
+			if !ok {
+				return fmt.Errorf("invalid selector")
+			}
+			if _, ok := imports[x.Name]; !ok {
+				return fmt.Errorf("unresolved import %q", x.Name)
+			}
+			used[x.Name] = struct{}{}
+		case *ast.ArrayType:
+			if n.Len != nil {
+				if _, ok := n.Len.(*ast.BasicLit); !ok {
+					return fmt.Errorf("invalid array length")
+				}
+			}
+			return check(n.Elt)
+		case *ast.StarExpr:
+			return check(n.X)
+		case *ast.MapType:
+			if err := check(n.Key); err != nil {
+				return err
+			}
+			return check(n.Value)
+		case *ast.ParenExpr:
+			return check(n.X)
+		case *ast.IndexExpr:
+			if err := check(n.X); err != nil {
+				return err
+			}
+			return check(n.Index)
+		case *ast.IndexListExpr:
+			if err := check(n.X); err != nil {
+				return err
+			}
+			for _, index := range n.Indices {
+				if err := check(index); err != nil {
+					return err
+				}
+			}
+		default:
+			return fmt.Errorf("expression is not a Go type")
+		}
+		return nil
+	}
+	return check(expr)
 }
 func sortDiagnostics(d []Diagnostic) []Diagnostic {
 	out := append([]Diagnostic(nil), d...)
