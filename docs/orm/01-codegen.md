@@ -201,3 +201,28 @@ After the lock is checked in, `rasql generate` and `rasql check` read the lock
 and config without opening a database or running a materializer. `check` reports
 drift without changing files. Use `rasql schema verify --dsn <dsn>` when live
 engine evidence must be checked again.
+
+### Typed SQL declarations
+
+Schema lock mode accepts query entries with an `id`, `input`, `engine`,
+`function`, `operation`, and `cardinality`. Parameters and results are ordered
+declarations; each value states `name`, `scalar`, and `nullable`.
+
+```json
+"queries": [{
+  "id": "user_by_id",
+  "input": "queries/user_by_id.sql",
+  "engine": "postgresql",
+  "function": "UserByID",
+  "operation": "select",
+  "cardinality": "maybe",
+  "parameters": [{"name": "id", "scalar": "integer", "nullable": false}],
+  "results": [{"name": "id", "scalar": "integer", "nullable": false}]
+}]
+```
+
+`select` queries generate constructors returning `rasql.Query[R]`; use
+`rasql.All`, `rasql.Maybe`, or `rasql.One` according to the declared
+cardinality. DML with `exec` generates a `(rasql.MutationPlan, error)`
+constructor for `rasql.ExecMutation`. The analyzer records SQL snapshots and
+engine evidence in the lock, and offline generation uses only those records.

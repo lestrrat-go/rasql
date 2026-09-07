@@ -52,9 +52,6 @@ func (in EmitterInput) Validate() error {
 	if err := compilerir.ValidateMappingConfig(compilerir.MappingConfig{Scalars: in.Generation.Scalars}, in.Generation.Package); err != nil {
 		return fmt.Errorf("generate: emitter generation mappings: %w", err)
 	}
-	if len(in.Generation.Queries) != 0 || len(in.Semantic.Queries) != 0 || len(in.Go.Queries) != 0 {
-		return fmt.Errorf("generate: legacy emitter cannot represent queries")
-	}
 	if in.Go.Package != in.Generation.Package {
 		return fmt.Errorf("generate: emitter Go package %q disagrees with generation package %q", in.Go.Package, in.Generation.Package)
 	}
@@ -128,7 +125,39 @@ func (in EmitterInput) Validate() error {
 	if len(goObjects) != len(physical) {
 		return fmt.Errorf("generate: emitter Go model does not cover every catalog object")
 	}
+	if err := validateQueryModel(in.Semantic.Queries, in.Go.Queries, in.Generation.Queries); err != nil {
+		return err
+	}
 	return validateGenerationFiles(in.Go, in.Generation, physical)
+}
+
+func validateQueryModel(semantic []compilerir.SemanticQuery, model []compilerir.GoQuery, configured []compilerir.QueryGoName) error {
+	goByID := make(map[compilerir.QueryID]compilerir.GoQuery, len(model))
+	for _, query := range model {
+		goByID[query.ID] = query
+	}
+	cfgByID := make(map[compilerir.QueryID]compilerir.QueryGoName, len(configured))
+	for _, query := range configured {
+		cfgByID[query.ID] = query
+	}
+	for _, query := range semantic {
+		goQuery, ok := goByID[query.ID]
+		if !ok || goQuery.Cardinality != query.Cardinality || goQuery.Name == "" {
+			return fmt.Errorf("generate: emitter query %q disagrees with semantic model", query.ID)
+		}
+		if query.Cardinality == "exec" && goQuery.Result != nil || query.Cardinality != "exec" && goQuery.Result == nil {
+			return fmt.Errorf("generate: emitter query %q result shape disagrees with cardinality", query.ID)
+		}
+		if cfg, ok := cfgByID[query.ID]; ok {
+			if cfg.Function != "" && cfg.Function != goQuery.Name || cfg.Result != "" && goQuery.Result != nil && cfg.Result != goQuery.Result.Name || cfg.Decoder != "" && goQuery.Result != nil && cfg.Decoder != goQuery.Result.DecoderName {
+				return fmt.Errorf("generate: emitter query %q disagrees with generation names", query.ID)
+			}
+		}
+	}
+	if len(goByID) != len(semantic) {
+		return fmt.Errorf("generate: emitter Go model query coverage disagrees with semantic model")
+	}
+	return nil
 }
 
 func validateGoObject(object compilerir.GoObject, physical compilerir.PhysicalObject, semantic compilerir.SemanticObject, cfg compilerir.ObjectGoName, mappings []compilerir.ScalarMapping) error {
@@ -268,6 +297,14 @@ func validateGenerationFiles(goModel compilerir.GoModel, generation compilerir.G
 		}
 		if physical[cfg.ID].Name == "" {
 			return fmt.Errorf("generate: emitter object %q has no physical name", cfg.ID)
+		}
+	}
+	for _, cfg := range generation.Queries {
+		if cfg.File == "" {
+			continue
+		}
+		if _, ok := files[cfg.File]; !ok {
+			return fmt.Errorf("generate: emitter query %q file %q is absent from Go model", cfg.ID, cfg.File)
 		}
 	}
 	return nil

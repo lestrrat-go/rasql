@@ -13,6 +13,7 @@ import (
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/compilerlock"
+	"github.com/lestrrat-go/rasql/internal/compilerquery"
 )
 
 func (c command) runOfflineGenerate(settings config, configPath string, check bool) error {
@@ -92,6 +93,43 @@ func (c command) runOfflineGenerate(settings config, configPath string, check bo
 	}
 	store.Root = root
 	store.Dir = settings.Output
+	goQueries := make(map[compilerir.QueryID]compilerir.GoQuery, len(goModel.Queries))
+	for _, query := range goModel.Queries {
+		goQueries[query.ID] = query
+	}
+	for _, query := range lock.Queries {
+		goQuery := goQueries[query.ID]
+		typed := generate.TypedQuery{Function: goQuery.Name, Engine: query.Evidence.Dialect, SQL: "", Operation: query.Operation, Cardinality: query.Cardinality, Result: queryResultName(generation, query.ID), Projection: queryProjectionName(generation, query.ID), Decoder: queryDecoderName(generation, query.ID)}
+		if typed.Function == "" {
+			typed.Function = query.Name
+		}
+		typed.Output = queryFileName(generation, query.ID)
+		typed.Parameters = append([]compilerir.GoField(nil), goQuery.Parameters...)
+		if goQuery.Result != nil {
+			typed.Results = append([]compilerir.GoField(nil), goQuery.Result.Fields...)
+		}
+		for _, value := range query.Evidence.Parameters {
+			for i := range typed.Parameters {
+				if typed.Parameters[i].Name == value.Name {
+					typed.Parameters[i].Codec = ""
+				}
+			}
+		}
+		for _, value := range query.Results {
+			for i := range typed.Results {
+				if typed.Results[i].Name == value.Name {
+					typed.Results[i].Nullable = value.Nullable
+				}
+			}
+		}
+		sqlPath := filepath.Join(root, query.SQL.Path)
+		sqlBytes, readErr := os.ReadFile(sqlPath)
+		if readErr != nil {
+			return fmt.Errorf("generate: read query %s: %w", query.SQL.Path, readErr)
+		}
+		typed.SQL = string(sqlBytes)
+		store.TypedQueries = append(store.TypedQueries, typed)
+	}
 	if check {
 		if err := store.Check(); err != nil {
 			return err
@@ -172,7 +210,17 @@ func offlineDigestGroups(root string, settings config, lock compilerlock.File) (
 		if input.SHA256 != query.SQL.SHA256 {
 			queryChanged = true
 		}
-		queries = append(queries, compilerlock.QueryDigestInput{ID: string(query.ID), SQL: input, Operation: query.Operation, Parameters: query.Parameters, Results: query.Results, Cardinality: query.Cardinality})
+		current := query
+		for _, configured := range settings.Queries {
+			if configured.ID != query.ID {
+				continue
+			}
+			current.Operation = configured.Operation
+			current.Cardinality = configured.Cardinality
+			current.Parameters = configValueRecords(configured.Parameters)
+			current.Results = configValueRecords(configured.Results)
+		}
+		queries = append(queries, compilerlock.QueryDigestInput{ID: string(query.ID), SQL: input, Operation: current.Operation, Parameters: current.Parameters, Results: current.Results, Cardinality: current.Cardinality})
 	}
 	generation := compilerir.GoConfig{Package: lock.Generation.Package, Output: lock.Generation.Output, Emitter: lock.Generation.Emitter, Prune: lock.Generation.Prune}
 	if settings.Package != "" {
@@ -215,10 +263,43 @@ func offlineDigestGroups(root string, settings config, lock compilerlock.File) (
 	return groups, nil
 }
 
+func configValueRecords(values []compilerquery.ValueDeclaration) []compilerlock.ValueRecord {
+	if values == nil {
+		return nil
+	}
+	out := make([]compilerlock.ValueRecord, len(values))
+	for i, value := range values {
+		nullable := value.Nullable != nil && *value.Nullable
+		out[i] = compilerlock.ValueRecord{Name: value.Name, Scalar: value.Scalar, Nullable: nullable}
+	}
+	return out
+}
+
 func lockQueryDigests(lock compilerlock.File) []compilerlock.QueryDigestInput {
 	out := make([]compilerlock.QueryDigestInput, 0, len(lock.Queries))
 	for _, query := range lock.Queries {
 		out = append(out, compilerlock.QueryDigestInput{ID: string(query.ID), SQL: query.SQL, Operation: query.Operation, Parameters: query.Parameters, Results: query.Results, Cardinality: query.Cardinality})
 	}
 	return out
+}
+
+func queryNameRecord(config compilerir.GoConfig, id compilerir.QueryID) compilerlock.QueryNameRecord {
+	for _, query := range config.Queries {
+		if query.ID == id {
+			return compilerlock.QueryNameRecord{ID: string(query.ID), Function: query.Function, Result: query.Result, Projection: query.Projection, Decoder: query.Decoder, File: query.File}
+		}
+	}
+	return compilerlock.QueryNameRecord{}
+}
+func queryResultName(config compilerir.GoConfig, id compilerir.QueryID) string {
+	return queryNameRecord(config, id).Result
+}
+func queryProjectionName(config compilerir.GoConfig, id compilerir.QueryID) string {
+	return queryNameRecord(config, id).Projection
+}
+func queryDecoderName(config compilerir.GoConfig, id compilerir.QueryID) string {
+	return queryNameRecord(config, id).Decoder
+}
+func queryFileName(config compilerir.GoConfig, id compilerir.QueryID) string {
+	return queryNameRecord(config, id).File
 }

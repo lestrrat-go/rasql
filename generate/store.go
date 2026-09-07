@@ -89,13 +89,29 @@ type Store struct {
 
 	// Queries are static SQL templates compiled into this package, one
 	// generated function each.
-	Queries []Query
+	Queries      []Query
+	TypedQueries []TypedQuery
 
 	// Prune allows a run to delete a file in Dir that rasqlgen wrote and
 	// this plan does not write -- the per-table file of a table that was
 	// dropped, say. False refuses the run instead, naming every such
 	// file. See Plan.Orphans.
 	Prune bool
+}
+
+// TypedQuery describes lock-backed native SQL for offline generation.
+type TypedQuery struct {
+	Function    string
+	Output      string
+	Engine      string
+	SQL         string
+	Operation   string
+	Cardinality string
+	Result      string
+	Projection  string
+	Decoder     string
+	Parameters  []compilerir.GoField
+	Results     []compilerir.GoField
 }
 
 // TableHint carries a Go-side generation override that no live database can
@@ -316,7 +332,7 @@ func (s Store) PlanContext(ctx context.Context) (Plan, error) {
 	// generated identifiers, which is why this check exists beside
 	// Validate rather than instead of it. It is keyed through filenameKey,
 	// so two names differing only in case are one claim.
-	filenames := make(map[string]string, len(sorted)+1+len(s.Queries))
+	filenames := make(map[string]string, len(sorted)+1+len(s.Queries)+len(s.TypedQueries))
 	filenames[filenameKey(schemaDescriptorFilename)] = "the schema descriptor file " + schemaDescriptorFilename
 	for _, table := range sorted {
 		filename := resolved.Filename(table)
@@ -333,12 +349,12 @@ func (s Store) PlanContext(ctx context.Context) (Plan, error) {
 	// explain, which is why this set is built once here and handed to
 	// planQuery rather than derived per query.
 	declared := resolved.PackageLevelNames()
-	identifiers := make(map[string]string, len(declared)+len(s.Queries))
+	identifiers := make(map[string]string, len(declared)+len(s.Queries)+len(s.TypedQueries))
 	for _, name := range declared {
 		identifiers[name] = "an identifier the generated store already declares"
 	}
 
-	files := make([]File, 0, len(sorted)+2+len(s.Queries))
+	files := make([]File, 0, len(sorted)+2+len(s.Queries)+len(s.TypedQueries))
 	inputs := make(map[string]queryInputData, len(s.Queries))
 	for _, table := range sorted {
 		source, err := schemagen.TableSurfaceSourceWithOptions(s.Package, table, schemagen.SourceOptions{Dir: dir, Names: resolved}, sorted...)
@@ -364,6 +380,13 @@ func (s Store) PlanContext(ctx context.Context) (Plan, error) {
 		file, err := s.planQuery(ctx, root, dir, q, sorted, filenames, identifiers, inputs)
 		if err != nil {
 			return Plan{}, fmt.Errorf("generate: query[%d]: %w", index, err)
+		}
+		files = append(files, file)
+	}
+	for index, q := range s.TypedQueries {
+		file, err := s.planTypedQuery(dir, q, filenames, identifiers)
+		if err != nil {
+			return Plan{}, fmt.Errorf("generate: typed query[%d]: %w", index, err)
 		}
 		files = append(files, file)
 	}
@@ -586,6 +609,52 @@ func (s Store) planQuery(ctx context.Context, root, dir string, q Query, tables 
 	source, err := querygen.GoSourceInDir(dir, definition, s.Package, q.Function, tables...)
 	if err != nil {
 		return File{}, err
+	}
+	return File{Path: filepath.Join(dir, q.Output), Source: source}, nil
+}
+
+func (s Store) planTypedQuery(dir string, q TypedQuery, filenames, identifiers map[string]string) (File, error) {
+	if !isExportedGoIdentifier(q.Function) {
+		return File{}, fmt.Errorf("function %q must be exported", q.Function)
+	}
+	if q.Output == "" || !strings.HasSuffix(q.Output, "_gen.go") {
+		return File{}, fmt.Errorf("query %q output %q must end in _gen.go", q.Function, q.Output)
+	}
+	if err := validateQueryOutputName(q.Output); err != nil {
+		return File{}, err
+	}
+	if owner, exists := identifiers[q.Function]; exists {
+		return File{}, fmt.Errorf("function %q collides with %s", q.Function, owner)
+	}
+	if owner, exists := filenames[filenameKey(q.Output)]; exists {
+		return File{}, fmt.Errorf("query %q output %q collides with %s", q.Function, q.Output, owner)
+	}
+	result := q.Result
+	if result == "" && q.Operation != "exec" {
+		result = q.Function + "Result"
+	}
+	for _, name := range []string{result, q.Projection, q.Decoder} {
+		if name == "" {
+			continue
+		}
+		if owner, exists := identifiers[name]; exists {
+			return File{}, fmt.Errorf("query %q generated identifier %q collides with %s", q.Function, name, owner)
+		}
+	}
+	source, err := querygen.TypedGoSource(querygen.TypedInput{
+		Package: s.Package, Function: q.Function, Engine: q.Engine, SQL: q.SQL,
+		Operation: q.Operation, Cardinality: q.Cardinality, Result: result,
+		Projection: q.Projection, Decoder: q.Decoder, Parameters: q.Parameters, Results: q.Results,
+	})
+	if err != nil {
+		return File{}, err
+	}
+	filenames[filenameKey(q.Output)] = fmt.Sprintf("query %q, which generates %s", q.Function, q.Output)
+	identifiers[q.Function] = fmt.Sprintf("query %q", q.Function)
+	for _, name := range []string{result, q.Projection, q.Decoder} {
+		if name != "" {
+			identifiers[name] = fmt.Sprintf("query %q declaration", q.Function)
+		}
 	}
 	return File{Path: filepath.Join(dir, q.Output), Source: source}, nil
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/compilerconfig"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
+	"github.com/lestrrat-go/rasql/internal/compilerquery"
 	"github.com/lestrrat-go/rasql/internal/modroot"
 	"github.com/lestrrat-go/rasql/namedsql"
 	"github.com/lestrrat-go/rasql/schema"
@@ -158,6 +159,12 @@ func (c config) names() (map[schema.ObjectName]generate.ObjectNames, error) {
 // here keeps a one-line query in one place, at the cost of escaping every
 // quote the {{bind "name"}} action needs.
 type configQuery struct {
+	ID          compilerir.QueryID               `json:"id"`
+	Engine      string                           `json:"engine"`
+	Operation   string                           `json:"operation"`
+	Cardinality string                           `json:"cardinality"`
+	Parameters  []compilerquery.ValueDeclaration `json:"parameters"`
+	Results     []compilerquery.ValueDeclaration `json:"results"`
 	// Bindings configures explicit Go types for static-query parameters.
 	Bindings map[string]namedsql.ParameterBinding `json:"bindings"`
 
@@ -309,6 +316,15 @@ func (c config) queries() ([]generate.Query, error) {
 		queries[index] = generate.Query{Input: query.Input, SQL: query.SQL, Function: query.Function, Output: output, Bindings: bindings}
 	}
 	return queries, nil
+}
+
+func (c config) compilerQueries(root string) compilerquery.Config {
+	queries := make([]compilerquery.QueryConfig, len(c.Queries))
+	for i, query := range c.Queries {
+		queries[i] = compilerquery.QueryConfig{ID: query.ID, Input: query.Input, Engine: query.Engine, Function: query.Function, Output: query.Output, Operation: query.Operation, Cardinality: query.Cardinality, Parameters: query.Parameters, Results: query.Results}
+	}
+	mappings, _ := c.mappings()
+	return compilerquery.Config{ModuleRoot: root, Mappings: mappings, Queries: queries}
 }
 
 // derivedQueryOutput names the generated file for a query that states none:

@@ -14,7 +14,9 @@ import (
 	"github.com/lestrrat-go/rasql/internal/catalogread"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/compilerlock"
+	"github.com/lestrrat-go/rasql/internal/compilerquery"
 	"github.com/lestrrat-go/rasql/internal/schemasource"
+	"github.com/lestrrat-go/rasql/querydescribe"
 	"github.com/lestrrat-go/rasql/schema"
 )
 
@@ -55,7 +57,16 @@ func (c command) runSchemaUpdate(args []string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	result, err := schemasource.Materialize(ctx, request, schemasource.DefaultDependencies())
+	deps := schemasource.DefaultDependencies()
+	if len(cfg.Queries) != 0 {
+		queryConfig := cfg.compilerQueries(root)
+		analyzer, analyzerErr := compilerquery.NewAnalyzer(queryConfig, compilerquery.Describers{PostgreSQL: querydescribe.NewPostgreSQL(), MySQL: querydescribe.NewMySQL(nil), SQLite: querydescribe.NewSQLitePrepare(nil)})
+		if analyzerErr != nil {
+			return analyzerErr
+		}
+		deps.Analyzer = analyzer
+	}
+	result, err := schemasource.Materialize(ctx, request, deps)
 	if err != nil {
 		return fmt.Errorf("schema update: %w", err)
 	}
@@ -112,7 +123,12 @@ func (c command) runSchemaUpdate(args []string) error {
 		}
 	}
 	for _, query := range goModel.Queries {
-		generation.Queries = append(generation.Queries, compilerir.QueryGoName{ID: query.ID, Function: query.Name, Result: resultName(query), Projection: query.ProjectionName})
+		cfg := queryConfigFor(cfg, query.ID)
+		result := resultName(query)
+		if cfg.Output == "" {
+			cfg.Output = derivedQueryOutput(cfg.Input)
+		}
+		generation.Queries = append(generation.Queries, compilerir.QueryGoName{ID: query.ID, Function: query.Name, Result: result, Projection: query.ProjectionName, Decoder: result + "Decoder", File: cfg.Output})
 	}
 	input, err := generate.NewEmitterInput(result.Catalog, semantic, goModel, generation)
 	if err != nil {
@@ -124,6 +140,19 @@ func (c command) runSchemaUpdate(args []string) error {
 	}
 	store.Root = root
 	store.Dir = cfg.Output
+	goQueries := make(map[compilerir.QueryID]compilerir.GoQuery, len(goModel.Queries))
+	for _, query := range goModel.Queries {
+		goQueries[query.ID] = query
+	}
+	for _, query := range result.Queries {
+		goQuery := goQueries[query.ID]
+		name := queryNameRecord(generation, query.ID)
+		sqlBytes, readErr := os.ReadFile(filepath.Join(root, query.SQLPath))
+		if readErr != nil {
+			return fmt.Errorf("schema update: read query %s: %w", query.SQLPath, readErr)
+		}
+		store.TypedQueries = append(store.TypedQueries, generate.TypedQuery{Function: goQuery.Name, Output: name.File, Engine: query.Engine.Dialect, SQL: string(sqlBytes), Operation: query.Operation, Cardinality: query.Cardinality, Result: name.Result, Projection: name.Projection, Decoder: name.Decoder, Parameters: append([]compilerir.GoField(nil), goQuery.Parameters...), Results: queryFields(goQuery)})
+	}
 	plan, err := store.Plan()
 	if err != nil {
 		return err
@@ -180,6 +209,22 @@ func (c command) runSchemaUpdate(args []string) error {
 	}
 	_, _ = fmt.Fprintf(c.output, "updated schema and generated %s\n", cfg.Output)
 	return nil
+}
+
+func queryFields(query compilerir.GoQuery) []compilerir.GoField {
+	if query.Result == nil {
+		return nil
+	}
+	return append([]compilerir.GoField(nil), query.Result.Fields...)
+}
+
+func queryConfigFor(cfg config, id compilerir.QueryID) configQuery {
+	for _, query := range cfg.Queries {
+		if query.ID == id {
+			return query
+		}
+	}
+	return configQuery{}
 }
 
 func resultName(query compilerir.GoQuery) string {
