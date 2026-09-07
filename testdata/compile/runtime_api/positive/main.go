@@ -27,4 +27,7 @@ func use(rasql.DB, rasql.EngineProfile, rasql.Executor, rasql.CodecRegistry) {
 	var _ = rasql.WithEngineProfile
 	var _ = rasql.WithCodecs
 	var _ = rasql.Rows[int]
+	var tx *sql.Tx
+	db, _ := rasql.New(tx, dialect.SQLite())
+	_, _ = rasql.AsExecutor(db, rasql.EngineProfile{})
 }
