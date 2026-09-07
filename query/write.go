@@ -196,6 +196,10 @@ func Set(column ColumnRef, value any) Assignment {
 	return Assignment{column: column, value: operand(value)}
 }
 
+func SetDefault(column ColumnRef) Assignment {
+	return Assignment{column: column, value: SetDefaultExpression()}
+}
+
 // Column returns the assigned column.
 func (a Assignment) Column() ColumnRef {
 	return a.column

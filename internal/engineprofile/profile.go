@@ -43,6 +43,13 @@ const (
 	PerParentLimitLateral
 )
 
+type UpdateDefaultSupport uint8
+
+const (
+	UpdateDefaultUnsupported UpdateDefaultSupport = iota
+	UpdateDefaultExpression
+)
+
 type Capabilities struct {
 	Returning                                                                             ReturningForms
 	Upsert                                                                                UpsertForm
@@ -54,6 +61,7 @@ type Capabilities struct {
 	WindowFunctions, LateralJoins, Savepoints, TransactionalDDL                           bool
 	ExplicitNullOrdering, TupleComparison                                                 bool
 	PerParentLimit                                                                        PerParentLimitStrategy
+	UpdateDefault                                                                         UpdateDefaultSupport
 }
 type Limits struct{ MaxBindParameters int }
 type Profile struct {
@@ -92,6 +100,9 @@ func validEngine(e EngineID) bool { return e >= PostgreSQL && e <= Custom }
 func New(profileID string, engine EngineID, customName string, version Version, caps Capabilities, limits Limits) (Profile, error) {
 	if !validEngine(engine) || strings.TrimSpace(profileID) == "" || limits.MaxBindParameters <= 0 {
 		return Profile{}, &ProfileError{Code: ErrInvalidProfile, Engine: engine, Version: version, Detail: "invalid identity or bind limit"}
+	}
+	if caps.UpdateDefault > UpdateDefaultExpression {
+		return Profile{}, &ProfileError{Code: ErrInvalidProfile, Engine: engine, Version: version, Detail: "invalid UPDATE DEFAULT capability"}
 	}
 	if !version.Known && (version.Major != 0 || version.Minor != 0 || version.Patch != 0) {
 		return Profile{}, &ProfileError{Code: ErrInvalidProfile, Engine: engine, Version: version, Detail: "unknown version has numeric fields"}
@@ -151,8 +162,8 @@ type profileSpec struct {
 }
 
 func specs() []profileSpec {
-	pg := Capabilities{Returning: ReturningInsertUpdateDelete, Upsert: UpsertOnConflict, ConflictTarget: true, DefaultValues: true, DefaultValuesUpsert: true, SubqueryLimit: true, WriteSubqueryTarget: true, QualifiedReference: true, QualifiedIndexTarget: true, PartialIndex: true, AggregateFilter: true, SelectForUpdate: true, SelectForShare: true, SelectLockOf: true, SelectLockNoWait: true, SelectLockSkipLocked: true, UpsertConflictWhere: true, UpsertUpdateWhere: true, WindowFunctions: true, LateralJoins: true, Savepoints: true, TransactionalDDL: true, ExplicitNullOrdering: true, TupleComparison: true, PerParentLimit: PerParentLimitWindow}
-	m := Capabilities{Upsert: UpsertDuplicateKey, EmptyInsert: true, DefaultValuesUpsert: true, QualifiedReference: true, QualifiedIndexTarget: true, SelectForUpdate: true, SelectForShare: true, SelectLockOf: true, SelectLockNoWait: true, SelectLockSkipLocked: true, WindowFunctions: true, LateralJoins: true, Savepoints: true, TupleComparison: true, PerParentLimit: PerParentLimitWindow}
+	pg := Capabilities{Returning: ReturningInsertUpdateDelete, Upsert: UpsertOnConflict, ConflictTarget: true, DefaultValues: true, DefaultValuesUpsert: true, SubqueryLimit: true, WriteSubqueryTarget: true, QualifiedReference: true, QualifiedIndexTarget: true, PartialIndex: true, AggregateFilter: true, SelectForUpdate: true, SelectForShare: true, SelectLockOf: true, SelectLockNoWait: true, SelectLockSkipLocked: true, UpsertConflictWhere: true, UpsertUpdateWhere: true, WindowFunctions: true, LateralJoins: true, Savepoints: true, TransactionalDDL: true, ExplicitNullOrdering: true, TupleComparison: true, PerParentLimit: PerParentLimitWindow, UpdateDefault: UpdateDefaultExpression}
+	m := Capabilities{Upsert: UpsertDuplicateKey, EmptyInsert: true, DefaultValuesUpsert: true, QualifiedReference: true, QualifiedIndexTarget: true, SelectForUpdate: true, SelectForShare: true, SelectLockOf: true, SelectLockNoWait: true, SelectLockSkipLocked: true, WindowFunctions: true, LateralJoins: true, Savepoints: true, TupleComparison: true, PerParentLimit: PerParentLimitWindow, UpdateDefault: UpdateDefaultExpression}
 	s := Capabilities{Returning: ReturningInsertUpdateDelete, Upsert: UpsertOnConflict, ConflictTarget: true, DefaultValues: true, SubqueryLimit: true, WriteSubqueryTarget: true, QualifiedIndexName: true, MatchOperator: true, PartialIndex: true, AggregateFilter: true, UpsertConflictWhere: true, UpsertUpdateWhere: true, WindowFunctions: true, Savepoints: true, TransactionalDDL: true, ExplicitNullOrdering: true, TupleComparison: true, PerParentLimit: PerParentLimitWindow}
 	return []profileSpec{{"postgresql-16", PostgreSQL, 16, 0, 65535, 0, pg, 65535}, {"postgresql-17", PostgreSQL, 17, 0, 65535, 0, pg, 65535}, {"mysql-8.4", MySQL, 8, 4, 4, 65535, m, 65535}, {"sqlite-3.35", SQLite, 3, 35, 65535, 65535, s, 999}}
 }

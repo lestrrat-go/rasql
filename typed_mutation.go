@@ -94,7 +94,7 @@ type CreatePlan[T any] struct {
 type PatchPlan[T any] struct {
 	table   Table[T]
 	fields  []MutationField[T]
-	where   query.Predicate
+	where   query.Expression
 	err     error
 	version *versionMutation
 }
@@ -143,7 +143,7 @@ type normalizedCreate[T any] struct {
 
 func NewCreatePlan[T any](table Table[T], fields ...MutationField[T]) (CreatePlan[T], error) {
 	plan := CreatePlan[T]{table: table, fields: append([]MutationField[T](nil), fields...)}
-	plan.err = validateMutationPlan(table, plan.fields, false, query.Predicate{})
+	plan.err = validateMutationPlan(table, plan.fields, false, nil)
 	if plan.err == nil {
 		plan.err = validateCreateRequired(table, plan.fields)
 	}
@@ -179,13 +179,35 @@ func createColumnOmissible(definition schema.TableDef, column schema.ColumnDef) 
 	return integer
 }
 
-func NewPatchPlan[T any](table Table[T], where query.Predicate, fields ...MutationField[T]) (PatchPlan[T], error) {
-	plan := PatchPlan[T]{table: table, fields: append([]MutationField[T](nil), fields...), where: where}
-	plan.err = validateMutationPlan(table, plan.fields, true, where)
+type patchPredicate interface {
+	query.Predicate | Predicate
+}
+
+func patchWhereExpression[P patchPredicate](value P) (query.Expression, error) {
+	switch predicate := any(value).(type) {
+	case query.Predicate:
+		return predicate.Expression(), nil
+	case Predicate:
+		if predicate.bindErr != nil {
+			return nil, predicate.bindErr
+		}
+		return predicate.node, nil
+	default:
+		return nil, planError("invalid_mutation", "where", "unsupported predicate")
+	}
+}
+
+func NewPatchPlan[T any, P patchPredicate](table Table[T], where P, fields ...MutationField[T]) (PatchPlan[T], error) {
+	expression, err := patchWhereExpression(where)
+	if err != nil {
+		return PatchPlan[T]{table: table, fields: append([]MutationField[T](nil), fields...), err: err}, err
+	}
+	plan := PatchPlan[T]{table: table, fields: append([]MutationField[T](nil), fields...), where: expression}
+	plan.err = validateMutationPlan(table, plan.fields, true, expression)
 	return plan, plan.err
 }
 
-func validateMutationPlan[T any](table Table[T], fields []MutationField[T], patch bool, where query.Predicate) error {
+func validateMutationPlan[T any](table Table[T], fields []MutationField[T], patch bool, where query.Expression) error {
 	if isNilTable(table) {
 		return fmt.Errorf("rasql: mutation plan table must not be nil")
 	}
@@ -194,7 +216,7 @@ func validateMutationPlan[T any](table Table[T], fields []MutationField[T], patc
 	if len(fields) == 0 {
 		return fmt.Errorf("rasql: mutation plan requires at least one field")
 	}
-	if patch && nilcheck.Is(where.Expression()) {
+	if patch && nilcheck.Is(where) {
 		return fmt.Errorf("rasql: patch plan requires a predicate")
 	}
 	seen := make(map[string]struct{}, len(fields))
@@ -213,9 +235,6 @@ func validateMutationPlan[T any](table Table[T], fields []MutationField[T], patc
 			return fmt.Errorf("rasql: mutation plan contains duplicate column %q", column.Name)
 		}
 		seen[column.Name] = struct{}{}
-		if field.state == mutationDefault && patch {
-			return fmt.Errorf("rasql: DEFAULT field %s is not supported in a patch", column.Name)
-		}
 		if column.GeneratedExpression != "" || column.Identity == schema.IdentityAlways {
 			return fmt.Errorf("rasql: mutation field %q is not writable", column.Name)
 		}
@@ -305,7 +324,11 @@ func (p PatchPlan[T]) lower() (query.Update, error) {
 		if field.state == mutationClear {
 			value = query.Bind(nil)
 		}
-		assignments = append(assignments, query.Set(p.table.Ref().Column(column.Name), value))
+		if field.state == mutationDefault {
+			assignments = append(assignments, query.SetDefault(p.table.Ref().Column(column.Name)))
+		} else {
+			assignments = append(assignments, query.Set(p.table.Ref().Column(column.Name), value))
+		}
 	}
 	if p.version != nil {
 		assignments = append(assignments, query.Set(p.version.column, query.Add(p.version.column, 1)))
@@ -314,7 +337,7 @@ func (p PatchPlan[T]) lower() (query.Update, error) {
 	if err != nil {
 		return query.Update{}, err
 	}
-	where := p.where.Expression()
+	where := p.where
 	if p.version != nil {
 		where = query.And(where, query.Equal(p.version.column, p.version.expected))
 	}
