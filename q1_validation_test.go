@@ -36,14 +36,24 @@ func TestQ1SourceIdentityAndDecoderValidation(t *testing.T) {
 	br, _ := rasql.SourceOf(b, "same")
 	p := validationProjection(t)
 	q := rasql.Select(ar.Source(), p).Where(rasql.EqualValue(rasql.Value(int64(1)), int64(1)))
-	_ = br
 	require.NoError(t, q.Validate())
+	ac, err := rasql.BindColumn[int64, int64](ar, "id", "")
+	require.NoError(t, err)
+	columnProjection, err := rasql.Scalar("id", ac.Expr(), schema.IntegerType{}, "")
+	require.NoError(t, err)
+	columnQuery := rasql.Select(ar.Source(), columnProjection).Where(rasql.EqualValue(ac.Expr(), int64(1))).GroupBy(rasql.Group(ac.Expr())).OrderBy(rasql.AscExpr(ac.Expr()))
+	require.NoError(t, columnQuery.Validate())
+	bc, err := rasql.BindColumn[int64, int64](br, "id", "")
+	require.NoError(t, err)
+	outside := rasql.Select(ar.Source(), columnProjection).Where(rasql.EqualValue(bc.Expr(), int64(1)))
+	var pe *rasql.PlanError
+	require.ErrorAs(t, outside.Validate(), &pe)
+	require.Equal(t, "invalid_source", pe.Code)
+	joined := rasql.Select(ar.Source(), p).Join(br.Source(), rasql.EqualExpr(ac.Expr(), bc.Expr()))
+	require.NoError(t, joined.Validate())
 	decoder := &validationDecoder{schema: p.Schema()}
-	_, err := rasql.NewProjection([]rasql.ProjectionItem{rasql.Item("id", rasql.Value(int64(1)), schema.IntegerType{}, "")}, decoder)
+	projection2, err := rasql.NewProjection([]rasql.ProjectionItem{rasql.Item("id", rasql.Value(int64(1)), schema.IntegerType{}, "")}, decoder)
 	require.NoError(t, err)
 	decoder.schema = rasql.ResultSchema{}
-	projection2 := rasql.Projection[int64]{}
-	_ = projection2
-	q2 := rasql.Select(ar.Source(), p)
-	require.NoError(t, q2.Validate())
+	require.Error(t, rasql.Select(ar.Source(), projection2).Validate())
 }

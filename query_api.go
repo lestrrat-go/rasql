@@ -189,13 +189,17 @@ func SourceOf[R any](table ReadTable[R], alias string) (TypedRelation[R], error)
 	if isNilReadTable(table) {
 		return TypedRelation[R]{}, planError("invalid_source", "table", "must not be nil")
 	}
-	definition := table.Ref().Definition()
+	originalRef := table.Ref()
+	definition := originalRef.Definition()
 	detached, detachErr := ReadTableOf[R](definition)
 	if detachErr != nil {
 		return TypedRelation[R]{}, planError("invalid_source", "table", detachErr.Error())
 	}
 	ref := detached.Ref()
 	var err error
+	if alias == "" {
+		alias = originalRef.Alias()
+	}
 	if alias != "" {
 		ref, err = ref.As(alias)
 		if err != nil {
@@ -209,7 +213,7 @@ type TypedRelation[R any] struct{ source Source }
 type OptionalRelation[R any] struct{ source Source }
 
 func Optional[R any](source TypedRelation[R]) OptionalRelation[R] {
-	return OptionalRelation[R]{source: source.source}
+	return OptionalRelation[R](source)
 }
 func (r TypedRelation[R]) Source() Source    { return r.source }
 func (r OptionalRelation[R]) Source() Source { return r.source }
@@ -304,7 +308,7 @@ func (p QueryPlan) Validate() error {
 }
 func q1SourceIdentity(ref query.RelationRef) string {
 	if table, ok := ref.Table(); ok {
-		return fmt.Sprintf("table:%#v|alias:%s", table, ref.Alias())
+		return fmt.Sprintf("table:%s|schema:%s|name:%s|alias:%s", table.QualifierSchema(), table.Schema(), table.Name(), ref.Alias())
 	}
 	return fmt.Sprintf("relation:%s|alias:%s", ref.QualifiedName(), ref.Alias())
 }
