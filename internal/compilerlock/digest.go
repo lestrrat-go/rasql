@@ -121,7 +121,7 @@ func ValidateDigest(s string) error {
 		return fmt.Errorf("compilerlock: invalid digest")
 	}
 	for _, c := range s {
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+		if !isLowerHex(c) {
 			return fmt.Errorf("compilerlock: invalid lowercase digest")
 		}
 	}

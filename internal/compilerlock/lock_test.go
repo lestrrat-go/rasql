@@ -169,36 +169,41 @@ func TestBuildDigestsStableAcrossUnorderedInputs(t *testing.T) {
 	}
 	want, err := compilerlock.BuildDigests(in)
 	require.NoError(t, err)
-	r := rand.New(rand.NewSource(77))
-	shuffle := func(n int, swap func(int, int)) {
-		for i := n - 1; i > 0; i-- {
-			swap(i, r.Intn(i+1))
+	for seed := int64(1); seed <= 100; seed++ {
+		candidate := cloneDigestInputs(in)
+		r := rand.New(rand.NewSource(seed))
+		shuffle := func(n int, swap func(int, int)) {
+			for i := n - 1; i > 0; i-- {
+				swap(i, r.Intn(i+1))
+			}
 		}
-	}
-	shuffle(len(in.Source.Record.Files), func(i, j int) {
-		in.Source.Record.Files[i], in.Source.Record.Files[j] = in.Source.Record.Files[j], in.Source.Record.Files[i]
-	})
-	shuffle(len(in.Source.Materializer), func(i, j int) {
-		in.Source.Materializer[i], in.Source.Materializer[j] = in.Source.Materializer[j], in.Source.Materializer[i]
-	})
-	shuffle(len(in.Mappings.Scalars), func(i, j int) {
-		in.Mappings.Scalars[i], in.Mappings.Scalars[j] = in.Mappings.Scalars[j], in.Mappings.Scalars[i]
-	})
-	for i := range in.Mappings.Scalars {
-		shuffle(len(in.Mappings.Scalars[i].Imports), func(a, b int) {
-			in.Mappings.Scalars[i].Imports[a], in.Mappings.Scalars[i].Imports[b] = in.Mappings.Scalars[i].Imports[b], in.Mappings.Scalars[i].Imports[a]
+		shuffle(len(candidate.Source.Record.Files), func(i, j int) {
+			candidate.Source.Record.Files[i], candidate.Source.Record.Files[j] = candidate.Source.Record.Files[j], candidate.Source.Record.Files[i]
 		})
+		shuffle(len(candidate.Source.Materializer), func(i, j int) {
+			candidate.Source.Materializer[i], candidate.Source.Materializer[j] = candidate.Source.Materializer[j], candidate.Source.Materializer[i]
+		})
+		shuffle(len(candidate.Mappings.Scalars), func(i, j int) {
+			candidate.Mappings.Scalars[i], candidate.Mappings.Scalars[j] = candidate.Mappings.Scalars[j], candidate.Mappings.Scalars[i]
+		})
+		for i := range candidate.Mappings.Scalars {
+			shuffle(len(candidate.Mappings.Scalars[i].Imports), func(a, b int) {
+				candidate.Mappings.Scalars[i].Imports[a], candidate.Mappings.Scalars[i].Imports[b] = candidate.Mappings.Scalars[i].Imports[b], candidate.Mappings.Scalars[i].Imports[a]
+			})
+		}
+		shuffle(len(candidate.Queries), func(i, j int) {
+			candidate.Queries[i], candidate.Queries[j] = candidate.Queries[j], candidate.Queries[i]
+		})
+		shuffle(len(candidate.Generation.Objects), func(i, j int) {
+			candidate.Generation.Objects[i], candidate.Generation.Objects[j] = candidate.Generation.Objects[j], candidate.Generation.Objects[i]
+		})
+		shuffle(len(candidate.Generation.Queries), func(i, j int) {
+			candidate.Generation.Queries[i], candidate.Generation.Queries[j] = candidate.Generation.Queries[j], candidate.Generation.Queries[i]
+		})
+		got, err := compilerlock.BuildDigests(candidate)
+		require.NoError(t, err)
+		require.Equal(t, want, got, "seed %d", seed)
 	}
-	shuffle(len(in.Queries), func(i, j int) { in.Queries[i], in.Queries[j] = in.Queries[j], in.Queries[i] })
-	shuffle(len(in.Generation.Objects), func(i, j int) {
-		in.Generation.Objects[i], in.Generation.Objects[j] = in.Generation.Objects[j], in.Generation.Objects[i]
-	})
-	shuffle(len(in.Generation.Queries), func(i, j int) {
-		in.Generation.Queries[i], in.Generation.Queries[j] = in.Generation.Queries[j], in.Generation.Queries[i]
-	})
-	got, err := compilerlock.BuildDigests(in)
-	require.NoError(t, err)
-	require.Equal(t, want, got)
 }
 
 func TestDecodeRejectsUnknownAndTrailingJSON(t *testing.T) {

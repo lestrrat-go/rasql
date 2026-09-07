@@ -512,13 +512,14 @@ func validateSource(s SourceRecord) error {
 			return fmt.Errorf("compilerlock: invalid sha256 for %q", p)
 		}
 		for _, c := range f.SHA256 {
-			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			if !isLowerHex(c) {
 				return fmt.Errorf("compilerlock: invalid sha256 for %q", p)
 			}
 		}
 	}
 	return nil
 }
+func isLowerHex(c rune) bool { return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' }
 func normalize(f File) File {
 	f = cloneFile(f)
 	sort.Slice(f.Catalog.Objects, func(i, j int) bool {
@@ -667,7 +668,7 @@ func SourceBytes(name string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	r := io.LimitReader(f, MaxSourceFileBytes+1)
 	b, err := io.ReadAll(r)
 	if err != nil {

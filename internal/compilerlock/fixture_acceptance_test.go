@@ -105,6 +105,8 @@ func TestAcceptanceNormalizationPreservesPositionalArrays(t *testing.T) {
 	})
 	base.Catalog.Objects[0].ExclusionConstraints = append(base.Catalog.Objects[0].ExclusionConstraints, compilerlock.ExclusionConstraintRecord{
 		Name: "users_exclusion", Elements: []compilerlock.ExclusionElementRecord{{ExpressionSQL: "id", Operator: "="}},
+	}, compilerlock.ExclusionConstraintRecord{
+		Name: "users_note_exclusion", Elements: []compilerlock.ExclusionElementRecord{{ExpressionSQL: "note", Operator: "="}},
 	})
 	for i := range base.Queries {
 		if base.Queries[i].ID == "q-unknown-postgresql" {
