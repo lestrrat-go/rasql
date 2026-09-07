@@ -2,6 +2,7 @@ package generate
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -10,9 +11,11 @@ import (
 	"go/token"
 	"io"
 	"io/fs"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/lestrrat-go/rasql/internal/genfile"
@@ -286,6 +289,13 @@ func (p Plan) Orphans() []string {
 // because reading its Tables() means compiling it first; recover from the
 // database, or with "git checkout -- <dir>", instead.
 func (p Plan) Commit() error {
+	return p.commit(context.Background(), nil)
+}
+
+func (p Plan) commit(ctx context.Context, publication *Publication) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
 	if p.dir == "" {
 		return errors.New("generate: zero Plan cannot be committed; only Store.Plan builds a Plan that Commit can act on")
 	}
@@ -438,9 +448,43 @@ func (p Plan) Commit() error {
 	if descriptor == nil || descriptorTest == nil {
 		return fmt.Errorf("generate: internal error: plan for %s is missing its own %s or %s", p.dir, schemaDescriptorFilename, schemaDescriptorTestFilename)
 	}
+	var published *preparedPublication
+	if publication != nil {
+		if publication.BeforeWrite == nil || publication.AfterVerify == nil {
+			return errors.New("generate: publication callbacks are required")
+		}
+		published, err = preparePublication(ctx, *publication, p.root, realDir, handles)
+		if err != nil {
+			return err
+		}
+		for i, final := range published.files {
+			for _, other := range published.files[:i] {
+				if matchDestinations(final.destination, other.destination) != distinctDestinations {
+					return fmt.Errorf("generate: final publication files %s and %s resolve to one destination", final.file.Path, other.file.Path)
+				}
+			}
+			for _, write := range writes {
+				if matchDestinations(final.destination, write.destination) != distinctDestinations {
+					return fmt.Errorf("generate: final publication file %s collides with generated destination %s", final.file.Path, write.file.Path)
+				}
+			}
+			for _, deletion := range deletions {
+				if matchDestinations(final.destination, deletion.destination) != distinctDestinations {
+					return fmt.Errorf("generate: final publication file %s collides with generated orphan %s", final.file.Path, deletion.orphan)
+				}
+			}
+		}
+		published.entries = publicationEntries(p, writes, orphans, published, dir)
+		if err := publication.before(ctx, published.entries); err != nil {
+			return err
+		}
+	}
 
 	// Step 2: write every per-table file and every query file.
 	for _, w := range rest {
+		if err := contextError(ctx); err != nil {
+			return err
+		}
 		if err := writeGeneratedFile(w.dir, w.name, w.file.Source); err != nil {
 			return fmt.Errorf("generate: write %s: %w", w.file.Path, err)
 		}
@@ -450,6 +494,9 @@ func (p Plan) Commit() error {
 	// otherwise step 1 already refused the run above.
 	if p.prune {
 		for _, orphan := range orphans {
+			if err := contextError(ctx); err != nil {
+				return err
+			}
 			if err := orphan.confirm(dir); err != nil {
 				return err
 			}
@@ -460,12 +507,479 @@ func (p Plan) Commit() error {
 	}
 
 	// Step 4: write the aggregator last.
+	if err := contextError(ctx); err != nil {
+		return err
+	}
 	if err := writeGeneratedFile(descriptor.dir, descriptor.name, descriptor.file.Source); err != nil {
 		return fmt.Errorf("generate: write %s: %w", descriptor.file.Path, err)
 	}
 	if err := writeGeneratedFile(descriptorTest.dir, descriptorTest.name, descriptorTest.file.Source); err != nil {
 		return fmt.Errorf("generate: write %s: %w", descriptorTest.file.Path, err)
 	}
+	if published != nil {
+		if err := published.write(ctx); err != nil {
+			return err
+		}
+		if err := published.verify(ctx); err != nil {
+			return err
+		}
+		if err := publication.after(ctx, published.entries); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// PublicationState describes one allowed state of a publication path.
+// State is "missing" or "present". A present state must carry SHA256.
+type PublicationState struct {
+	Present bool
+	SHA256  string
+}
+
+// Entry binds a publication path's expected old and desired states.
+type PublicationEntry struct {
+	Path    string
+	Old     PublicationState
+	Desired PublicationState
+}
+
+// FinalFile is an atomically published file.
+type FinalFile struct {
+	Path   string
+	Source []byte
+	Mode   fs.FileMode
+}
+
+// RecoveryDeletion removes a previously generated file after confirming its
+// marker and exact recorded identity. Missing marker-only entries are safe to
+// replay and are treated as already complete.
+type RecoveryDeletion struct {
+	Path      string
+	OldSHA256 string
+}
+
+// Publication describes the extra files and recovery deletions committed with
+// a generated package. The final lock is always published last.
+type Publication struct {
+	FinalFiles        []FinalFile
+	RecoveryDeletions []RecoveryDeletion
+	BeforeWrite       func(context.Context, []PublicationEntry) error
+	AfterVerify       func(context.Context, []PublicationEntry) error
+}
+
+// CommitPublication commits generated files and a lock/recovery publication
+// as one guarded sequence. Variadic arguments accept Publication plus optional
+// callback values so callers can use either callback shape without adapters.
+func (p Plan) CommitPublication(ctx context.Context, publication Publication) error {
+	publication = clonePublication(publication)
+	return p.commit(ctx, &publication)
+}
+
+func contextError(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return nil
+	}
+}
+
+type preparedPublication struct {
+	files     []preparedFinalFile
+	deletions []preparedRecoveryDeletion
+	entries   []PublicationEntry
+	checks    []publicationCheck
+}
+
+type publicationCheck struct {
+	root    *os.Root
+	name    string
+	desired PublicationState
+}
+
+type preparedFinalFile struct {
+	file        *FinalFile
+	root        *os.Root
+	name        string
+	old         PublicationState
+	destination string
+}
+
+type preparedRecoveryDeletion struct {
+	RecoveryDeletion
+	root *os.Root
+	name string
+	info fs.FileInfo
+}
+
+func (p Publication) before(ctx context.Context, entries []PublicationEntry) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if p.BeforeWrite == nil {
+		return errors.New("generate: publication BeforeWrite callback is required")
+	}
+	return p.BeforeWrite(ctx, clonePublicationEntries(entries))
+}
+
+func (p Publication) after(ctx context.Context, entries []PublicationEntry) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if p.AfterVerify == nil {
+		return errors.New("generate: publication AfterVerify callback is required")
+	}
+	return p.AfterVerify(ctx, clonePublicationEntries(entries))
+}
+
+func clonePublication(publication Publication) Publication {
+	publication.FinalFiles = cloneFinalFiles(publication.FinalFiles)
+	publication.RecoveryDeletions = append([]RecoveryDeletion(nil), publication.RecoveryDeletions...)
+	return publication
+}
+
+func clonePublicationEntries(entries []PublicationEntry) []PublicationEntry {
+	cloned := make([]PublicationEntry, len(entries))
+	copy(cloned, entries)
+	return cloned
+}
+
+func cloneFinalFiles(files []FinalFile) []FinalFile {
+	cloned := make([]FinalFile, len(files))
+	for i := range files {
+		cloned[i] = cloneFinalFile(files[i])
+	}
+	return cloned
+}
+
+func cloneFinalFile(file FinalFile) FinalFile {
+	file.Source = append([]byte(nil), file.Source...)
+	return file
+}
+
+func preparePublication(ctx context.Context, publication Publication, rootPath, ownPath string, handles destinationDirectories) (*preparedPublication, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, err
+	}
+	all := append([]FinalFile(nil), publication.FinalFiles...)
+	sort.SliceStable(all, func(i, j int) bool { return all[i].Path < all[j].Path })
+	prepared := &preparedPublication{}
+	for i := range all {
+		if err := contextError(ctx); err != nil {
+			prepared.close()
+			return nil, err
+		}
+		file := &all[i]
+		if err := validatePublicationPath(rootPath, file.Path); err != nil {
+			prepared.close()
+			return nil, err
+		}
+		absolute := filepath.Join(rootPath, filepath.FromSlash(file.Path))
+		resolved, parentInfo, err := resolvePublicationDestination(absolute)
+		if err != nil {
+			prepared.close()
+			return nil, err
+		}
+		root, err := handles.open(filepath.Dir(resolved), parentInfo)
+		if err != nil {
+			prepared.close()
+			return nil, err
+		}
+		if file.Mode&^(fs.ModePerm) != 0 {
+			prepared.close()
+			return nil, fmt.Errorf("generate: final file %s must use regular-file mode bits", file.Path)
+		}
+		old, err := publicationState(root, filepath.Base(resolved))
+		if err != nil {
+			prepared.close()
+			return nil, err
+		}
+		entry := preparedFinalFile{file: file, root: root, name: filepath.Base(resolved), destination: resolved}
+		entry.old = old
+		prepared.files = append(prepared.files, entry)
+	}
+	for _, deletion := range publication.RecoveryDeletions {
+		if err := validatePublicationPath(ownPath, deletion.Path); err != nil {
+			prepared.close()
+			return nil, err
+		}
+		absolute := filepath.Join(ownPath, filepath.FromSlash(deletion.Path))
+		resolved, parentInfo, err := resolvePublicationDestination(absolute)
+		if err != nil {
+			prepared.close()
+			return nil, err
+		}
+		root, err := handles.open(filepath.Dir(resolved), parentInfo)
+		if err != nil {
+			prepared.close()
+			return nil, err
+		}
+		info, err := readRecoveryMarker(root, filepath.Dir(resolved), filepath.Base(resolved), deletion)
+		if err != nil {
+			prepared.close()
+			return nil, err
+		}
+		prepared.deletions = append(prepared.deletions, preparedRecoveryDeletion{RecoveryDeletion: deletion, root: root, name: filepath.Base(resolved), info: info})
+	}
+	return prepared, nil
+}
+
+func validatePublicationPath(root, path string) error {
+	clean := filepath.Clean(filepath.FromSlash(path))
+	if path == "" || filepath.IsAbs(path) || filepath.ToSlash(clean) != path || clean == "." {
+		return fmt.Errorf("generate: publication path %q must be a clean relative path", path)
+	}
+	joined := filepath.Join(root, filepath.FromSlash(path))
+	rel, err := filepath.Rel(root, joined)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("generate: publication path %q escapes plan root", path)
+	}
+	return nil
+}
+
+func publicationEntries(p Plan, writes []commitWrite, orphans []validatedOrphan, final *preparedPublication, dir *os.Root) []PublicationEntry {
+	entries := make([]PublicationEntry, 0, len(writes)+len(orphans)+len(final.files))
+	for _, write := range writes {
+		old, _ := publicationState(write.dir, write.name)
+		desired := sha256.Sum256(write.file.Source)
+		path, _ := filepath.Rel(p.root, write.file.Path)
+		entries = append(entries, PublicationEntry{Path: filepath.ToSlash(path), Old: old, Desired: PublicationState{Present: true, SHA256: fmt.Sprintf("%x", desired[:])}})
+		final.checks = append(final.checks, publicationCheck{root: write.dir, name: write.name, desired: entries[len(entries)-1].Desired})
+	}
+	for _, orphan := range orphans {
+		old, _ := publicationState(dir, orphan.name)
+		path, _ := filepath.Rel(p.root, orphan.orphan)
+		entries = append(entries, PublicationEntry{Path: filepath.ToSlash(path), Old: old, Desired: PublicationState{Present: false}})
+		final.checks = append(final.checks, publicationCheck{root: dir, name: orphan.name, desired: PublicationState{Present: false}})
+	}
+	for _, deletion := range final.deletions {
+		path, _ := filepath.Rel(p.root, filepath.Join(p.dir, deletion.Path))
+		old := PublicationState{Present: deletion.info != nil}
+		if deletion.info != nil {
+			file, err := deletion.root.Open(deletion.name)
+			if err == nil {
+				old.SHA256, _ = hashReader(file)
+				_ = file.Close()
+			}
+		}
+		entries = append(entries, PublicationEntry{Path: filepath.ToSlash(path), Old: old, Desired: PublicationState{Present: false}})
+		final.checks = append(final.checks, publicationCheck{root: deletion.root, name: deletion.name, desired: PublicationState{Present: false}})
+	}
+	for _, file := range final.files {
+		desired := sha256.Sum256(finalBytes(*file.file))
+		entries = append(entries, PublicationEntry{Path: filepath.ToSlash(file.file.Path), Old: file.old, Desired: PublicationState{Present: true, SHA256: fmt.Sprintf("%x", desired[:])}})
+		final.checks = append(final.checks, publicationCheck{root: file.root, name: file.name, desired: entries[len(entries)-1].Desired})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
+	return entries
+}
+
+func publicationState(root *os.Root, name string) (PublicationState, error) {
+	file, err := root.Open(name)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return PublicationState{}, nil
+		}
+		return PublicationState{}, err
+	}
+	defer func() { _ = file.Close() }()
+	digest, err := hashReader(file)
+	if err != nil {
+		return PublicationState{}, err
+	}
+	return PublicationState{Present: true, SHA256: digest}, nil
+}
+
+func (p *preparedPublication) close() {}
+
+func (p *preparedPublication) write(ctx context.Context) error {
+	for _, file := range p.files {
+		if err := contextError(ctx); err != nil {
+			return err
+		}
+		if err := writePublicationFile(file.root, file.name, finalBytes(*file.file), file.file.Mode); err != nil {
+			return fmt.Errorf("generate: write %s: %w", file.file.Path, err)
+		}
+	}
+	for _, deletion := range p.deletions {
+		if err := contextError(ctx); err != nil {
+			return err
+		}
+		if deletion.info == nil {
+			continue
+		}
+		if err := removeGeneratedFile(deletion.root, deletion.name); err != nil {
+			return fmt.Errorf("generate: delete %s: %w", deletion.Path, err)
+		}
+	}
+	return nil
+}
+
+func (p *preparedPublication) verify(ctx context.Context) error {
+	for _, check := range p.checks {
+		if err := contextError(ctx); err != nil {
+			return err
+		}
+		if err := verifyPublicationState(check.root, check.name, check.desired); err != nil {
+			return err
+		}
+	}
+	return contextError(ctx)
+}
+
+func verifyPublicationState(root *os.Root, name string, desired PublicationState) error {
+	file, err := root.Open(name)
+	if err != nil {
+		if !desired.Present && errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	defer func() { _ = file.Close() }()
+	if !desired.Present {
+		return fmt.Errorf("generate: publication destination %s was not removed", name)
+	}
+	digest, err := hashReader(file)
+	if err != nil {
+		return err
+	}
+	if digest != desired.SHA256 {
+		return fmt.Errorf("generate: publication destination %s differs after write", name)
+	}
+	return nil
+}
+
+func finalBytes(file FinalFile) []byte {
+	return append([]byte(nil), file.Source...)
+}
+
+func resolvePublicationDestination(path string) (string, fs.FileInfo, error) {
+	if path == "" || !filepath.IsAbs(path) {
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			return "", nil, err
+		}
+		path = absolute
+	}
+	parent := filepath.Dir(path)
+	resolvedParent, err := filepath.EvalSymlinks(parent)
+	if err != nil {
+		return path, nil, fmt.Errorf("generate: resolve %s: %w", path, err)
+	}
+	info, err := os.Stat(resolvedParent)
+	if err != nil {
+		return path, nil, fmt.Errorf("generate: check %s: %w", resolvedParent, err)
+	}
+	return filepath.Join(resolvedParent, filepath.Base(path)), info, nil
+}
+
+func verifyPublicationDesired(root *os.Root, name string, want []byte) error {
+	file, err := root.Open(name)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = file.Close() }()
+	ok, err := readerHoldsExactly(file, want)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("generate: publication destination %s differs after write", name)
+	}
+	return nil
+}
+
+func hashReader(reader io.Reader) (string, error) {
+	hash := sha256.New()
+	if _, err := io.Copy(hash, reader); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", hash.Sum(nil)), nil
+}
+
+func readRecoveryMarker(root *os.Root, dirPath, name string, deletion RecoveryDeletion) (fs.FileInfo, error) {
+	_, lstatErr := root.Lstat(name)
+	if lstatErr != nil {
+		if errors.Is(lstatErr, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, lstatErr
+	}
+	info, err := readOrphanMarker(root, dirPath, name)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if info == nil {
+		return nil, fmt.Errorf("generate: refusing recovery deletion %s: it is not a generated file", deletion.Path)
+	}
+	expected := deletion.OldSHA256
+	if expected != "" {
+		file, openErr := root.Open(name)
+		if openErr != nil {
+			return nil, openErr
+		}
+		actual, hashErr := hashReader(file)
+		_ = file.Close()
+		if hashErr != nil || actual != expected {
+			if hashErr != nil {
+				return nil, hashErr
+			}
+			return nil, fmt.Errorf("generate: refusing recovery deletion %s: file hash differs", deletion.Path)
+		}
+	}
+	return info, nil
+}
+
+func writePublicationFile(root *os.Root, name string, source []byte, requestedMode fs.FileMode) error {
+	mode := fs.FileMode(0o600)
+	if requestedMode != 0 {
+		mode = requestedMode.Perm()
+	}
+	if info, err := root.Lstat(name); err == nil {
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("destination is not a regular file")
+		}
+		if requestedMode == 0 {
+			mode = info.Mode() & (fs.ModePerm | fs.ModeSticky)
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	temporaryName := "." + name + ".tmp" + strconv.FormatUint(rand.Uint64(), 16)
+	temporary, err := root.OpenFile(temporaryName, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	remove := true
+	defer func() {
+		_ = temporary.Close()
+		if remove {
+			_ = root.Remove(temporaryName)
+		}
+	}()
+	if _, err := temporary.Write(source); err != nil {
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		return err
+	}
+	if err := temporary.Chmod(mode); err != nil {
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := root.Rename(temporaryName, name); err != nil {
+		return err
+	}
+	remove = false
 	return nil
 }
 
