@@ -65,13 +65,19 @@ func BuildSemantic(c PhysicalCatalog, mappings MappingConfig, queries []QueryAna
 		model.Diagnostics = append(model.Diagnostics, Diagnostic{Level: DiagnosticError, Code: "invalid_physical", Path: "physical", Message: err.Error()})
 	}
 	objectIDs := map[QualifiedName]ObjectID{}
+	byName := map[string][]QualifiedName{}
 	for _, object := range c.Objects {
-		objectIDs[QualifiedName{Schema: object.Schema, Name: object.Name}] = object.ID
+		q := QualifiedName{Schema: object.Schema, Name: object.Name}
+		objectIDs[q] = object.ID
+		byName[object.Name] = append(byName[object.Name], q)
 	}
 	for _, object := range c.Objects {
 		so := SemanticObject{ID: object.ID, Kind: object.Kind, PhysicalName: QualifiedName{Schema: object.Schema, Name: object.Name}}
 		for _, column := range object.Columns {
-			scalar, found := scalarFor(column, mappings)
+			scalar, found, ambiguous := scalarFor(column, mappings)
+			if ambiguous {
+				model.Diagnostics = append(model.Diagnostics, Diagnostic{Level: DiagnosticError, Code: "ambiguous_scalar", Path: object.Name + "." + column.Name, Message: "multiple scalar mappings have the same precedence"})
+			}
 			if !found && column.LogicalKind == "native" {
 				model.Diagnostics = append(model.Diagnostics, Diagnostic{Level: DiagnosticError, Code: "opaque_type", Path: object.Name + "." + column.Name, Message: "opaque native type requires an explicit mapping"})
 			}
@@ -104,7 +110,26 @@ func BuildSemantic(c PhysicalCatalog, mappings MappingConfig, queries []QueryAna
 			if constraint.Kind != "foreign_key" || constraint.Reference == nil {
 				continue
 			}
-			relation := SemanticRelation{Name: constraint.Name, Kind: "belongs_to", Target: objectIDs[QualifiedName{Schema: constraint.Reference.Schema, Name: constraint.Reference.Object}], From: append([]string(nil), constraint.Columns...), To: append([]string(nil), constraint.Reference.Columns...), Nullable: false}
+			q := QualifiedName{Schema: constraint.Reference.Schema, Name: constraint.Reference.Object}
+			if q.Schema == "" && c.Engine.Dialect == "sqlite" {
+				q.Schema = "main"
+			}
+			if q.Schema == "" {
+				candidates := byName[q.Name]
+				if len(candidates) == 1 {
+					q = candidates[0]
+				} else if len(candidates) > 1 {
+					model.Diagnostics = append(model.Diagnostics, Diagnostic{Level: DiagnosticError, Code: "ambiguous_relation_target", Path: object.Name + "." + constraint.Name, Message: "foreign key target name is ambiguous"})
+				}
+			}
+			if _, ok := objectIDs[q]; !ok {
+				model.Diagnostics = append(model.Diagnostics, Diagnostic{Level: DiagnosticError, Code: "unresolved_relation_target", Path: object.Name + "." + constraint.Name, Message: "foreign key target does not exist"})
+			}
+			name := constraint.Name
+			if name == "" {
+				name = relationName(object.Name, constraint.Columns, q.Name)
+			}
+			relation := SemanticRelation{Name: name, Kind: "belongs_to", Target: objectIDs[q], From: append([]string(nil), constraint.Columns...), To: append([]string(nil), constraint.Reference.Columns...), Nullable: false}
 			for _, column := range object.Columns {
 				for _, from := range constraint.Columns {
 					if column.Name == from && column.Nullable {
@@ -124,7 +149,7 @@ func BuildSemantic(c PhysicalCatalog, mappings MappingConfig, queries []QueryAna
 	return model, append([]Diagnostic(nil), model.Diagnostics...)
 }
 
-func scalarFor(column PhysicalColumn, config MappingConfig) (string, bool) {
+func scalarFor(column PhysicalColumn, config MappingConfig) (string, bool, bool) {
 	bestRank := -1
 	best := ""
 	matches := 0
@@ -165,7 +190,13 @@ func scalarFor(column PhysicalColumn, config MappingConfig) (string, bool) {
 			matches++
 		}
 	}
-	return best, bestRank >= 0 && matches == 1
+	return best, bestRank >= 0 && matches == 1, bestRank >= 0 && matches > 1
+}
+func relationName(source string, columns []string, target string) string {
+	if len(columns) == 0 {
+		return source + "To" + target
+	}
+	return source + "To" + target + "By" + columns[0]
 }
 func certaintyFor(c PhysicalColumn) Certainty {
 	if c.Native == nil || c.Native.Name == "" {

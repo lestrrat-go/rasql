@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/internal/compilerir"
@@ -69,6 +70,50 @@ func TestCatalogFixturesLoadPhysicalFacts(t *testing.T) {
 			catalog := compilerir.PhysicalCatalog{Engine: fixture.Engine, Objects: fixture.Objects}
 			if err := catalog.Validate(); err != nil {
 				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestCatalogFixturesRoundTripPhysicalBoundary(t *testing.T) {
+	for _, dialect := range []string{"postgresql", "mysql", "sqlite"} {
+		t.Run(dialect, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join("testdata", dialect, "catalog.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var catalog compilerir.PhysicalCatalog
+			if err := json.Unmarshal(data, &catalog); err != nil {
+				t.Fatal(err)
+			}
+			tables, diagnostics := compilerir.TableDefsFromPhysical(catalog)
+			for _, diagnostic := range diagnostics {
+				if diagnostic.Level == compilerir.DiagnosticError {
+					t.Fatal(diagnostic)
+				}
+			}
+			got, diagnostics := compilerir.PhysicalFromTableDefs(catalog.Engine, tables)
+			for _, diagnostic := range diagnostics {
+				if diagnostic.Level == compilerir.DiagnosticError {
+					t.Fatal(diagnostic)
+				}
+			}
+			if len(got.Objects) != len(catalog.Objects) {
+				t.Fatalf("object count changed: got %d want %d", len(got.Objects), len(catalog.Objects))
+			}
+			if dialect == "sqlite" && !got.Objects[0].WithoutRowID {
+				t.Fatal("without-rowid fact was lost")
+			}
+			if dialect == "postgresql" && len(got.Objects[0].Constraints[1].Columns) != 2 {
+				t.Fatal("composite foreign key fact was lost")
+			}
+			want := catalog.Clone()
+			for i := range want.Objects {
+				want.Objects[i].ID = ""
+				got.Objects[i].ID = ""
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("fixture facts changed across conversion: got=%#v want=%#v", got, want)
 			}
 		})
 	}
@@ -152,6 +197,36 @@ func TestIndexKeyFormRoundTripPreservesKeys(t *testing.T) {
 	key := back[0].Indexes[0].Keys[0]
 	if !key.Descending || key.Collation != "C" || key.OperatorClass != "int4_ops" || key.PrefixLength != 2 {
 		t.Fatalf("key modifiers were lost: %#v", key)
+	}
+}
+
+func TestPhysicalReversePreservesExpressionAndPresence(t *testing.T) {
+	catalog := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "sqlite"}, Objects: []compilerir.PhysicalObject{{Kind: "table", Schema: "main", Name: "events", VirtualTableModuleArguments: []string{}, Indexes: []compilerir.PhysicalIndex{{Name: "events_idx", KeyForm: "keys", IncludeColumns: []string{}, Parts: []compilerir.IndexPart{{ExpressionSQL: "abs(id)"}, {Column: "id", Direction: "DESC"}}}}, ExclusionConstraints: []compilerir.PhysicalExclusionConstraint{}, Constraints: []compilerir.PhysicalConstraint{{Kind: "unique", Keys: []compilerir.IndexPart{{ExpressionSQL: "lower(id)"}}}}}}}
+	tables, diagnostics := compilerir.TableDefsFromPhysical(catalog)
+	if len(diagnostics) != 0 {
+		t.Fatal(diagnostics)
+	}
+	if len(tables[0].Indexes) != 1 || len(tables[0].Indexes[0].Keys) != 2 || string(tables[0].Indexes[0].Keys[0].Expression) != "abs(id)" || string(tables[0].Indexes[0].Keys[1].Expression) != "id" {
+		t.Fatalf("index key representations were lost: %#v", tables[0].Indexes)
+	}
+	if tables[0].Indexes[0].IncludeColumns == nil || tables[0].Indexes == nil || tables[0].ExclusionConstraints == nil {
+		t.Fatal("stated empty physical containers were lost")
+	}
+	if got := string(tables[0].UniqueConstraints[0].Keys[0].Expression); got != "lower(id)" {
+		t.Fatalf("unique expression was lost: %q", got)
+	}
+}
+
+func TestAssignObjectIDsReportsFinalCollision(t *testing.T) {
+	users := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "sqlite"}, Objects: []compilerir.PhysicalObject{{Kind: "table", Schema: "main", Name: "users"}, {Kind: "table", Schema: "main", Name: "renamed_users"}}}
+	assigned, diagnostics := compilerir.AssignObjectIDs(users, compilerir.IdentityInput{SourceIdentity: "schema"})
+	if len(diagnostics) != 0 {
+		t.Fatal(diagnostics)
+	}
+	priorID := assigned.Objects[0].ID
+	got, diagnostics := compilerir.AssignObjectIDs(users, compilerir.IdentityInput{SourceIdentity: "schema", Prior: []compilerir.PriorObject{{ID: priorID, Kind: "table", Name: compilerir.QualifiedName{Schema: "main", Name: "users"}}}, Renames: []compilerir.ObjectRename{{ID: priorID, To: compilerir.QualifiedName{Schema: "main", Name: "renamed_users"}}}})
+	if len(got.Objects) != 2 || len(diagnostics) == 0 {
+		t.Fatalf("final identity collision was accepted: %#v", diagnostics)
 	}
 }
 

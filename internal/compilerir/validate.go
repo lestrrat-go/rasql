@@ -2,6 +2,7 @@ package compilerir
 
 import (
 	"fmt"
+	"go/parser"
 	"go/token"
 	"path"
 	"sort"
@@ -23,6 +24,7 @@ func ValidatePhysical(c PhysicalCatalog) error {
 		}
 		objectColumns[q] = columns
 	}
+	primaryCounts := map[QualifiedName]int{}
 	for i, o := range c.Objects {
 		if o.ID == "" {
 			return invalid(fmt.Sprintf("objects[%d].id", i), "must not be empty")
@@ -49,6 +51,11 @@ func ValidatePhysical(c PhysicalCatalog) error {
 			if col.Name == "" {
 				return invalid(fmt.Sprintf("objects[%d].columns[%d].name", i, j), "must not be empty")
 			}
+			switch col.LogicalKind {
+			case "boolean", "integer", "float", "text", "bytes", "time", "json", "uuid", "decimal", "native":
+			default:
+				return invalid(fmt.Sprintf("objects[%d].columns[%d].logical_kind", i, j), "unsupported logical kind")
+			}
 			for k := j + 1; k < len(o.Columns); k++ {
 				if o.Columns[k].Name == col.Name {
 					return invalid(fmt.Sprintf("objects[%d].columns[%d].name", i, k), "duplicate column")
@@ -61,6 +68,24 @@ func ValidatePhysical(c PhysicalCatalog) error {
 				if err := validateNative(col.Native, fmt.Sprintf("objects[%d].columns[%d].native", i, j)); err != nil {
 					return err
 				}
+			}
+			if col.Integer != nil && col.LogicalKind != "integer" {
+				return invalid(fmt.Sprintf("objects[%d].columns[%d].integer", i, j), "facts do not match logical kind")
+			}
+			if col.Text != nil && col.LogicalKind != "text" {
+				return invalid(fmt.Sprintf("objects[%d].columns[%d].text", i, j), "facts do not match logical kind")
+			}
+			if col.Decimal != nil && col.LogicalKind != "decimal" {
+				return invalid(fmt.Sprintf("objects[%d].columns[%d].decimal", i, j), "facts do not match logical kind")
+			}
+			if col.Integer != nil && col.Integer.DisplayWidth.Set && col.Integer.DisplayWidth.Value < 0 {
+				return invalid(fmt.Sprintf("objects[%d].columns[%d].integer.display_width", i, j), "must not be negative")
+			}
+			if col.Text != nil && col.Text.Width.Set && col.Text.Width.Value < 0 {
+				return invalid(fmt.Sprintf("objects[%d].columns[%d].text.width", i, j), "must not be negative")
+			}
+			if col.Decimal != nil && (col.Decimal.Precision <= 0 || (col.Decimal.Scale.Set && (col.Decimal.Scale.Value < 0 || col.Decimal.Scale.Value > col.Decimal.Precision))) {
+				return invalid(fmt.Sprintf("objects[%d].columns[%d].decimal", i, j), "invalid precision or scale")
 			}
 		}
 		columns := map[string]struct{}{}
@@ -77,22 +102,33 @@ func ValidatePhysical(c PhysicalCatalog) error {
 					return invalid(fmt.Sprintf("objects[%d].constraints[%d]", i, j), "references unknown column")
 				}
 			}
+			if constraint.Kind == "primary_key" {
+				primaryCounts[q]++
+			}
 			if constraint.Reference != nil {
 				if constraint.Reference.Object == "" || len(constraint.Reference.Columns) == 0 {
 					return invalid(fmt.Sprintf("objects[%d].constraints[%d].reference", i, j), "incomplete foreign reference")
 				}
-				targetColumns, ok := objectColumns[QualifiedName{Schema: constraint.Reference.Schema, Name: constraint.Reference.Object}]
-				if !ok {
-					for candidate := range names {
-						if candidate.Name == constraint.Reference.Object && (constraint.Reference.Schema == "" || candidate.Schema == constraint.Reference.Schema) {
-							targetColumns = objectColumns[candidate]
-							ok = true
-							break
+				ref := QualifiedName{Schema: constraint.Reference.Schema, Name: constraint.Reference.Object}
+				if ref.Schema == "" && c.Engine.Dialect == "sqlite" {
+					ref.Schema = "main"
+				}
+				targetColumns, ok := objectColumns[ref]
+				if !ok && ref.Schema == "" {
+					for candidate, columns := range objectColumns {
+						if candidate.Name == ref.Name {
+							if targetColumns != nil {
+								return invalid(fmt.Sprintf("objects[%d].constraints[%d].reference", i, j), "ambiguous foreign object")
+							}
+							targetColumns, ok = columns, true
 						}
 					}
 				}
 				if !ok {
 					return invalid(fmt.Sprintf("objects[%d].constraints[%d].reference", i, j), "references unknown object")
+				}
+				if len(constraint.Columns) != len(constraint.Reference.Columns) {
+					return invalid(fmt.Sprintf("objects[%d].constraints[%d].reference.columns", i, j), "column count does not match foreign key")
 				}
 				for _, name := range constraint.Reference.Columns {
 					if _, ok := targetColumns[name]; !ok {
@@ -122,17 +158,51 @@ func ValidatePhysical(c PhysicalCatalog) error {
 				return invalid(fmt.Sprintf("objects[%d].indexes[%d].name", i, j), "duplicate index name")
 			}
 			indexNames[index.Name] = struct{}{}
-			for _, part := range index.Parts {
-				if part.Column == "" && part.ExpressionSQL == "" {
-					return invalid(fmt.Sprintf("objects[%d].indexes[%d]", i, j), "index part must have column or expression")
+			if len(index.Parts) == 0 {
+				return invalid(fmt.Sprintf("objects[%d].indexes[%d].parts", i, j), "must not be empty")
+			}
+			for k, part := range index.Parts {
+				p := fmt.Sprintf("objects[%d].indexes[%d].parts[%d]", i, j, k)
+				if part.Column != "" && part.ExpressionSQL != "" {
+					return invalid(p, "column and expression are mutually exclusive")
 				}
-				if index.KeyForm == "columns" && (part.Column == "" || part.ExpressionSQL != "") {
-					return invalid(fmt.Sprintf("objects[%d].indexes[%d].parts", i, j), "column key form requires column parts")
-				}
-				if index.KeyForm != "columns" && part.ExpressionSQL == "" {
-					return invalid(fmt.Sprintf("objects[%d].indexes[%d].parts", i, j), "expression and key forms require expression parts")
+				switch index.KeyForm {
+				case "columns":
+					if part.Column == "" || part.ExpressionSQL != "" || part.Direction != "" || part.Nulls != "" || part.Collation != "" || part.OperatorClass != "" || part.PrefixLength != 0 {
+						return invalid(p, "columns form requires plain column parts")
+					}
+				case "expressions":
+					if part.ExpressionSQL == "" || part.Direction != "" || part.Nulls != "" || part.Collation != "" || part.OperatorClass != "" || part.PrefixLength != 0 {
+						return invalid(p, "expressions form requires plain expression parts")
+					}
+				case "keys":
+					if part.Column == "" && part.ExpressionSQL == "" {
+						return invalid(p, "key part must have column or expression")
+					}
+					if part.Direction != "" && part.Direction != "ASC" && part.Direction != "DESC" {
+						return invalid(p+".direction", "must be ASC or DESC")
+					}
+					if part.Nulls != "" && part.Nulls != "FIRST" && part.Nulls != "LAST" {
+						return invalid(p+".nulls", "must be FIRST or LAST")
+					}
+					if part.PrefixLength < 0 {
+						return invalid(p+".prefix_length", "must not be negative")
+					}
 				}
 			}
+		}
+		for j, exclusion := range o.ExclusionConstraints {
+			if exclusion.Name == "" {
+				return invalid(fmt.Sprintf("objects[%d].exclusion_constraints[%d].name", i, j), "must not be empty")
+			}
+			if len(exclusion.Elements) == 0 {
+				return invalid(fmt.Sprintf("objects[%d].exclusion_constraints[%d].elements", i, j), "must not be empty")
+			}
+		}
+	}
+	for q, count := range primaryCounts {
+		if count > 1 {
+			return invalid("objects", "multiple primary keys for %s.%s", q.Schema, q.Name)
 		}
 	}
 	return nil
@@ -141,7 +211,19 @@ func validateNative(n *NativeType, p string) error {
 	if n == nil {
 		return nil
 	}
-	if n.Name != "" && n.Dialect == "" {
+	if n.Dialect != "postgresql" && n.Dialect != "mysql" && n.Dialect != "sqlite" {
+		return invalid(p+".dialect", "unsupported dialect")
+	}
+	if n.Name == "" {
+		return invalid(p+".name", "must not be empty")
+	}
+	if n.Kind != "builtin" && n.Kind != "domain" && n.Kind != "enum" && n.Kind != "set" && n.Kind != "array" && n.Kind != "other" {
+		return invalid(p+".kind", "unsupported native kind")
+	}
+	if n.Kind == "array" && n.Element == nil {
+		return invalid(p+".element", "array native type requires an element")
+	}
+	if n.Dialect == "" {
 		return invalid(p+".dialect", "must not be empty")
 	}
 	return validateNative(n.Element, p+".element")
@@ -149,6 +231,10 @@ func validateNative(n *NativeType, p string) error {
 func ValidateSemantic(m SemanticModel) error {
 	ids := map[ObjectID]struct{}{}
 	names := map[QualifiedName]struct{}{}
+	knownIDs := map[ObjectID]struct{}{}
+	for _, o := range m.Objects {
+		knownIDs[o.ID] = struct{}{}
+	}
 	for i, o := range m.Objects {
 		if o.ID == "" {
 			return invalid(fmt.Sprintf("objects[%d].id", i), "must not be empty")
@@ -176,8 +262,11 @@ func ValidateSemantic(m SemanticModel) error {
 			}
 		}
 		for j, relation := range o.Relations {
-			if relation.Name == "" || relation.Target == "" || len(relation.From) == 0 || len(relation.To) == 0 {
+			if relation.Name == "" || !token.IsIdentifier(relation.Name) || relation.Target == "" || len(relation.From) == 0 || len(relation.To) == 0 || len(relation.From) != len(relation.To) {
 				return invalid(fmt.Sprintf("objects[%d].relations[%d]", i, j), "incomplete relation")
+			}
+			if _, ok := knownIDs[relation.Target]; !ok {
+				return invalid(fmt.Sprintf("objects[%d].relations[%d].target", i, j), "unknown target")
 			}
 		}
 	}
@@ -185,6 +274,12 @@ func ValidateSemantic(m SemanticModel) error {
 	for i, q := range m.Queries {
 		if q.ID == "" || q.Name == "" {
 			return invalid(fmt.Sprintf("queries[%d]", i), "ID and name are required")
+		}
+		if !token.IsIdentifier(q.Name) {
+			return invalid(fmt.Sprintf("queries[%d].name", i), "must be a valid identifier")
+		}
+		if q.Cardinality != "" && q.Cardinality != "one" && q.Cardinality != "maybe" && q.Cardinality != "many" && q.Cardinality != "exec" {
+			return invalid(fmt.Sprintf("queries[%d].cardinality", i), "unknown cardinality")
 		}
 		if _, ok := queryIDs[q.ID]; ok {
 			return invalid(fmt.Sprintf("queries[%d].id", i), "duplicate query ID")
@@ -222,9 +317,16 @@ func ValidateGo(m GoModel) error {
 		if _, ok := imports[imp.Path+"\x00"+imp.Alias]; ok {
 			return invalid(fmt.Sprintf("imports[%d]", i), "duplicate import")
 		}
+		if imp.Alias != "" && (!token.IsIdentifier(imp.Alias) || imp.Alias == "_" || imp.Alias == ".") {
+			return invalid(fmt.Sprintf("imports[%d].alias", i), "must be a valid identifier")
+		}
 		imports[imp.Path+"\x00"+imp.Alias] = struct{}{}
 	}
 	objects := map[ObjectID]struct{}{}
+	knownObjects := map[ObjectID]struct{}{}
+	for _, object := range m.Objects {
+		knownObjects[object.ID] = struct{}{}
+	}
 	for i, f := range m.Files {
 		if f.Path == "" || f.Path[0] == '/' || path.Clean(f.Path) != f.Path || strings.HasPrefix(f.Path, "../") || f.Path == ".." {
 			return invalid(fmt.Sprintf("files[%d].path", i), "must be a relative path")
@@ -239,17 +341,39 @@ func ValidateGo(m GoModel) error {
 			return invalid(fmt.Sprintf("objects[%d].id", i), "duplicate object ID")
 		}
 		objects[object.ID] = struct{}{}
-		if object.ID == "" || object.SourceName == "" || object.Row.Name == "" || !token.IsIdentifier(object.Row.Name) {
+		if object.ID == "" || object.SourceName == "" || !token.IsIdentifier(object.SourceName) || object.Row.Name == "" || !token.IsIdentifier(object.Row.Name) {
 			return invalid(fmt.Sprintf("objects[%d]", i), "invalid object or row name")
+		}
+		if object.Row.DecoderName == "" || !token.IsIdentifier(object.Row.DecoderName) {
+			return invalid(fmt.Sprintf("objects[%d].row.decoder_name", i), "invalid decoder name")
+		}
+		if object.Create == nil || object.Patch == nil {
+			return invalid(fmt.Sprintf("objects[%d]", i), "create and patch shapes are required")
+		}
+		for shapeName, shape := range map[string]*GoShape{"create": object.Create, "patch": object.Patch} {
+			if shape.Name == "" || !token.IsIdentifier(shape.Name) || shape.DecoderName != "" && !token.IsIdentifier(shape.DecoderName) {
+				return invalid(fmt.Sprintf("objects[%d].%s", i, shapeName), "invalid shape name")
+			}
+			for j, field := range shape.Fields {
+				if err := validateGoField(field); err != nil {
+					return invalid(fmt.Sprintf("objects[%d].%s.fields[%d]", i, shapeName, j), "%v", err)
+				}
+			}
 		}
 		for j, column := range object.Columns {
 			if column.Name == "" || column.GoType == "" || !token.IsIdentifier(column.Name) {
 				return invalid(fmt.Sprintf("objects[%d].columns[%d]", i, j), "invalid column")
 			}
+			if err := parseGoType(column.GoType); err != nil {
+				return invalid(fmt.Sprintf("objects[%d].columns[%d].go_type", i, j), "%v", err)
+			}
 		}
 		for j, relation := range object.Relations {
 			if relation.Name == "" || relation.Target == "" {
 				return invalid(fmt.Sprintf("objects[%d].relations[%d]", i, j), "invalid relation")
+			}
+			if _, ok := knownObjects[relation.Target]; !ok {
+				return invalid(fmt.Sprintf("objects[%d].relations[%d].target", i, j), "unknown target")
 			}
 		}
 	}
@@ -258,17 +382,46 @@ func ValidateGo(m GoModel) error {
 		if query.ID == "" || query.Name == "" {
 			return invalid(fmt.Sprintf("queries[%d]", i), "invalid query")
 		}
+		if !token.IsIdentifier(query.Name) {
+			return invalid(fmt.Sprintf("queries[%d].name", i), "must be a valid identifier")
+		}
+		if query.Cardinality != "" && query.Cardinality != "one" && query.Cardinality != "maybe" && query.Cardinality != "many" && query.Cardinality != "exec" {
+			return invalid(fmt.Sprintf("queries[%d].cardinality", i), "unknown cardinality")
+		}
+		for j, field := range query.Parameters {
+			if err := validateGoField(field); err != nil {
+				return invalid(fmt.Sprintf("queries[%d].parameters[%d]", i, j), "%v", err)
+			}
+		}
 		if _, ok := queries[query.ID]; ok {
 			return invalid(fmt.Sprintf("queries[%d].id", i), "duplicate query ID")
 		}
 		queries[query.ID] = struct{}{}
 		if query.Result != nil {
+			if query.Result.Name == "" || !token.IsIdentifier(query.Result.Name) {
+				return invalid(fmt.Sprintf("queries[%d].result.name", i), "invalid result name")
+			}
+			if query.Result.DecoderName == "" || !token.IsIdentifier(query.Result.DecoderName) {
+				return invalid(fmt.Sprintf("queries[%d].result.decoder_name", i), "invalid decoder name")
+			}
 			for j, field := range query.Result.Fields {
-				if field.Name == "" || field.Type == "" {
-					return invalid(fmt.Sprintf("queries[%d].result.fields[%d]", i, j), "invalid field")
+				if err := validateGoField(field); err != nil {
+					return invalid(fmt.Sprintf("queries[%d].result.fields[%d]", i, j), "%v", err)
 				}
 			}
 		}
+	}
+	return nil
+}
+func validateGoField(field GoField) error {
+	if field.Name == "" || !token.IsIdentifier(field.Name) || field.Type == "" {
+		return fmt.Errorf("invalid field")
+	}
+	return parseGoType(field.Type)
+}
+func parseGoType(s string) error {
+	if _, err := parser.ParseExpr(s); err != nil {
+		return fmt.Errorf("invalid Go type %q", s)
 	}
 	return nil
 }

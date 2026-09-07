@@ -232,10 +232,11 @@ func (s Store) PlanContext(ctx context.Context) (Plan, error) {
 		return Plan{}, errors.New("generate: store requires Dir")
 	}
 	if len(s.Tables) == 0 && s.CompilerInput != nil {
-		if err := compilerir.ValidatePhysical(s.CompilerInput.Catalog); err != nil {
+		input := s.CompilerInput.Clone()
+		if err := compilerir.ValidatePhysical(input.Catalog); err != nil {
 			return Plan{}, fmt.Errorf("generate: compiler input: %w", err)
 		}
-		tables, diagnostics := compilerir.TableDefsFromPhysical(s.CompilerInput.Catalog)
+		tables, diagnostics := compilerir.TableDefsFromPhysical(input.Catalog)
 		for _, diagnostic := range diagnostics {
 			if diagnostic.Level == compilerir.DiagnosticError {
 				return Plan{}, fmt.Errorf("generate: %s", diagnostic.Message)
@@ -243,7 +244,7 @@ func (s Store) PlanContext(ctx context.Context) (Plan, error) {
 		}
 		s.Tables = tables
 		var restoreErr error
-		s.Tables, restoreErr = restoreLegacy(s.Tables, *s.CompilerInput)
+		s.Tables, restoreErr = restoreLegacy(s.Tables, input)
 		if restoreErr != nil {
 			return Plan{}, restoreErr
 		}

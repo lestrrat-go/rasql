@@ -90,25 +90,32 @@ func BuildGo(model SemanticModel, config GoConfig) (GoModel, []Diagnostic) {
 				}
 			}
 		}
-		goObject := GoObject{ID: object.ID, SourceName: object.PhysicalName.Name, Row: GoShape{Name: name}}
+		sourceName := object.PhysicalName.Name
+		createName, patchName := object.PhysicalName.Name+"Create", object.PhysicalName.Name+"Patch"
 		for _, configured := range config.Objects {
 			if configured.ID == object.ID {
+				if configured.Source != "" {
+					sourceName = configured.Source
+				}
 				if configured.Create != "" {
-					goObject.Create = &GoShape{Name: configured.Create}
+					createName = configured.Create
 				}
 				if configured.Patch != "" {
-					goObject.Patch = &GoShape{Name: configured.Patch}
+					patchName = configured.Patch
 				}
 			}
 		}
+		goObject := GoObject{ID: object.ID, SourceName: sourceName, Row: GoShape{Name: name, DecoderName: name + "Decoder"}, Create: &GoShape{Name: createName}, Patch: &GoShape{Name: patchName}}
 		for _, column := range object.Columns {
 			if !knownScalar(column.Scalar) {
 				diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "unsupported_scalar", Path: object.PhysicalName.Name + "." + column.Name, Message: "scalar has no built-in Go mapping"})
 			}
 			goColumn := GoColumn{Name: column.Name, PhysicalName: column.Name, Scalar: column.Scalar, GoType: goType(column.Scalar, column.Nullable), Nullable: column.Nullable}
 			goObject.Columns = append(goObject.Columns, goColumn)
-			goObject.Row.Fields = append(goObject.Row.Fields, GoField{Name: column.Name, Type: goColumn.GoType, Nullable: column.Nullable})
-			if goObject.Create != nil && column.InsertState != "forbidden" && column.InsertState != "generated" {
+			if column.Readable {
+				goObject.Row.Fields = append(goObject.Row.Fields, GoField{Name: column.Name, Type: goColumn.GoType, Nullable: column.Nullable})
+			}
+			if column.InsertState != "forbidden" && column.InsertState != "generated" {
 				goObject.Create.Fields = append(goObject.Create.Fields, GoField{Name: column.Name, Type: goColumn.GoType, Nullable: column.Nullable})
 			}
 			if goObject.Patch != nil && column.PatchState != "forbidden" {
@@ -143,7 +150,7 @@ func BuildGo(model SemanticModel, config GoConfig) (GoModel, []Diagnostic) {
 			goQuery.Parameters = append(goQuery.Parameters, GoField{Name: value.Name, Type: goType(value.Scalar, value.Nullable), Nullable: value.Nullable})
 		}
 		if len(query.Results) > 0 {
-			shape := &GoShape{Name: query.Name + "Result"}
+			shape := &GoShape{Name: query.Name + "Result", DecoderName: query.Name + "ResultDecoder"}
 			for _, value := range query.Results {
 				if !knownScalar(value.Scalar) {
 					diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "unsupported_scalar", Path: query.Name + ".results." + value.Name, Message: "scalar has no built-in Go mapping"})
@@ -154,42 +161,75 @@ func BuildGo(model SemanticModel, config GoConfig) (GoModel, []Diagnostic) {
 		}
 		if configured.Result != "" {
 			if goQuery.Result == nil {
-				goQuery.Result = &GoShape{}
+				goQuery.Result = &GoShape{Name: configured.Result, DecoderName: query.Name + "ResultDecoder"}
 			}
 			goQuery.Result.Name = configured.Result
 		}
 		if configured.Decoder != "" {
 			if goQuery.Result == nil {
-				goQuery.Result = &GoShape{}
+				goQuery.Result = &GoShape{Name: query.Name + "Result"}
 			}
 			goQuery.Result.DecoderName = configured.Decoder
 		}
 		out.Queries = append(out.Queries, goQuery)
 	}
 	diagnostics = append(diagnostics, model.Diagnostics...)
+	needRasql, needTime := false, false
 	for _, object := range out.Objects {
 		for _, column := range object.Columns {
 			if column.Scalar == "time" {
-				out.Imports = append(out.Imports, GoImport{Path: "time"})
+				needTime = true
+			}
+			if column.Nullable {
+				needRasql = true
 			}
 		}
 	}
 	for _, query := range out.Queries {
 		for _, field := range query.Parameters {
-			if field.Type == "time.Time" {
-				out.Imports = append(out.Imports, GoImport{Path: "time"})
+			if field.Type == "time.Time" || field.Type == "rasql.Nullable[time.Time]" {
+				needTime = true
+			}
+			if field.Nullable {
+				needRasql = true
 			}
 		}
 		if query.Result != nil {
 			for _, field := range query.Result.Fields {
-				if field.Type == "time.Time" {
-					out.Imports = append(out.Imports, GoImport{Path: "time"})
+				if field.Type == "time.Time" || field.Type == "rasql.Nullable[time.Time]" {
+					needTime = true
+				}
+				if field.Nullable {
+					needRasql = true
 				}
 			}
 		}
 	}
+	if needRasql {
+		out.Imports = append(out.Imports, GoImport{Path: "github.com/lestrrat-go/rasql"})
+	}
+	if needTime {
+		out.Imports = append(out.Imports, GoImport{Path: "time"})
+	}
+	out.Imports = dedupImports(out.Imports)
+	if err := ValidateGo(out); err != nil {
+		diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "invalid_go", Path: "go", Message: err.Error()})
+	}
 	diagnostics = sortDiagnostics(diagnostics)
 	return out, append([]Diagnostic(nil), diagnostics...)
+}
+func dedupImports(in []GoImport) []GoImport {
+	out := make([]GoImport, 0, len(in))
+	seen := map[string]struct{}{}
+	for _, imp := range in {
+		key := imp.Path + "\x00" + imp.Alias
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, imp)
+	}
+	return out
 }
 func knownScalar(s string) bool {
 	switch s {
