@@ -9,6 +9,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/nilcheck"
+	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/lestrrat-go/rasql/stmt"
 )
 
@@ -30,6 +31,57 @@ type Handle interface {
 // works with any Handle at all.
 type beginner interface {
 	BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
+}
+
+// ScopeFinalizer completes an owned transaction or savepoint.
+type ScopeFinalizer interface {
+	Commit(context.Context) error
+	Rollback(context.Context) error
+}
+
+type scopeFinalizer struct {
+	commit   func(context.Context) error
+	rollback func(context.Context) error
+}
+
+func (f scopeFinalizer) Commit(ctx context.Context) error   { return f.commit(ctx) }
+func (f scopeFinalizer) Rollback(ctx context.Context) error { return f.rollback(ctx) }
+
+// IsTransaction reports whether db is bound to an open transaction.
+func (db DB) IsTransaction() bool { return db.tx != nil }
+
+// BeginScope starts an owned transaction and returns its child DB and finalizer.
+func (db DB) BeginScope(ctx context.Context, opts *sql.TxOptions) (DB, ScopeFinalizer, error) {
+	child, err := db.Begin(ctx, opts)
+	if err != nil {
+		return DB{}, nil, err
+	}
+	return child, scopeFinalizer{commit: func(context.Context) error { return child.Commit() }, rollback: func(context.Context) error { return child.Rollback() }}, nil
+}
+
+// BeginSavepoint starts an owned savepoint on a transaction DB.
+func (db DB) BeginSavepoint(ctx context.Context) (DB, ScopeFinalizer, error) {
+	if db.tx == nil {
+		return DB{}, nil, fmt.Errorf("rasql: savepoint requires a transaction")
+	}
+	if !db.dialect.Supports(dialect.CapabilitySavepoint) {
+		return DB{}, nil, fmt.Errorf("rasql: savepoint unsupported by dialect %s", db.dialect.Name())
+	}
+	name, err := db.atomicSavepointName()
+	if err != nil {
+		return DB{}, nil, err
+	}
+	if _, err := db.ExecRendered(ctx, stmt.New(sqltext.Text("SAVEPOINT "+name))); err != nil {
+		return DB{}, nil, err
+	}
+	cleanupCtx, cancel := atomicCleanupContext(ctx)
+	return db, scopeFinalizer{
+		commit: func(context.Context) error { defer cancel(); return db.atomicReleaseSavepoint(cleanupCtx, name) },
+		rollback: func(context.Context) error {
+			defer cancel()
+			return errors.Join(db.atomicRollbackSavepoint(cleanupCtx, name), db.atomicReleaseSavepoint(cleanupCtx, name))
+		},
+	}, nil
 }
 
 // DB executes statements against one database/sql handle for one SQL dialect.

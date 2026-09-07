@@ -90,7 +90,10 @@ type codecExec struct {
 }
 
 func (e codecExec) Codecs() CodecRegistry { return e.codecs }
-func (e codecExec) queryCompiler() *querycompile.Compiler {
+
+type codecCompilerExec struct{ codecExec }
+
+func (e codecCompilerExec) queryCompiler() *querycompile.Compiler {
 	provider, _ := e.Executor.(compilerProvider)
 	if provider == nil {
 		return nil
@@ -104,7 +107,30 @@ func WithCodecs(executor Executor, codecs CodecRegistry) (Executor, error) {
 	if isNilRegistry(codecs) {
 		return nil, fmt.Errorf("codec registry must not be nil")
 	}
-	return codecExec{Executor: executor, codecs: codecs}, nil
+	return wrapCodecExecutor(executor, codecs), nil
+}
+
+func wrapCodecExecutor(executor Executor, codecs CodecRegistry) Executor {
+	base := codecExec{Executor: executor, codecs: codecs}
+	_, compiler := executor.(compilerProvider)
+	_, scope := executor.(transactionBeginner)
+	_, evidence := executor.(executionDurabilityProvider)
+	if scope {
+		if compiler {
+			if evidence {
+				return codecCompilerScopedEvidenceExecutor{codecCompilerScopedExecutor: codecCompilerScopedExecutor{codecScopedExecutor: codecScopedExecutor{codecExec: base}}}
+			}
+			return codecCompilerScopedExecutor{codecScopedExecutor: codecScopedExecutor{codecExec: base}}
+		}
+		if evidence {
+			return codecScopedEvidenceExecutor{codecScopedExecutor: codecScopedExecutor{codecExec: base}}
+		}
+		return codecScopedExecutor{codecExec: base}
+	}
+	if compiler {
+		return codecCompilerExec{codecExec: base}
+	}
+	return base
 }
 func isNilRegistry(registry CodecRegistry) bool {
 	if registry == nil {
