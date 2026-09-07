@@ -118,8 +118,6 @@ func TestNativeCompositionRefusesEveryModifier(t *testing.T) {
 		name string
 		call func() error
 	}{
-		{"derive", func() error { _, err := Derive(q, "d"); return err }},
-		{"cte", func() error { _, err := CTEOf("c", q); return err }},
 		{"combine", func() error { _, err := Combine(q, UnionAll, q); return err }},
 		{"with", func() error { _, err := With(q); return err }},
 		{"count", func() error { return CountQuery(q, false).Validate() }},
@@ -131,6 +129,29 @@ func TestNativeCompositionRefusesEveryModifier(t *testing.T) {
 			require.Equal(t, "unsupported_feature", planErr.Code)
 			require.Equal(t, "native", planErr.Path)
 		})
+	}
+}
+
+func TestNativeSelectCompositionSucceedsAndDMLCompositionFails(t *testing.T) {
+	q := nativeRuntimeQuery(t, Many)
+	derived, err := Derive(q, "derived_values")
+	require.NoError(t, err)
+	require.Equal(t, q.Schema().Columns(), derived.Source().ref.Columns())
+	cte, err := CTEOf("native_values", q)
+	require.NoError(t, err)
+	_, err = cte.Source("native_alias")
+	require.NoError(t, err)
+
+	dml, err := Native(NativeStatement{Engine: "sqlite", SQL: "UPDATE values SET value = ? RETURNING value", Args: []NativeArgument{{Value: int64(1)}}}, q.Projection(), Many)
+	require.NoError(t, err)
+	for _, compose := range []func() error{
+		func() error { _, err := Derive(dml, "dml_values"); return err },
+		func() error { _, err := CTEOf("dml_values", dml); return err },
+	} {
+		var planErr *PlanError
+		require.ErrorAs(t, compose(), &planErr)
+		require.Equal(t, "unsupported_feature", planErr.Code)
+		require.Equal(t, "native", planErr.Path)
 	}
 }
 
