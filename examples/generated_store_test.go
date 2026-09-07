@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/examples/store"
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/genfile"
 	"github.com/lestrrat-go/rasql/schema"
@@ -45,6 +46,32 @@ func TestGeneratedStoreIsCurrent(t *testing.T) {
 	requireGeneratedDirectoryIsCurrent(t, exampleStore(t), filepath.Join(repositoryRoot, "examples", "store"))
 }
 
+func TestGeneratedStorePreservesSQLiteIdentityMetadata(t *testing.T) {
+	planned := exampleStore(t)
+	var users schema.TableDef
+	for _, table := range planned.Tables {
+		if table.Name == "users" {
+			users = table
+			break
+		}
+	}
+	require.True(t, users.PrimaryKeyAutoincrement)
+	require.Equal(t, []string{"id"}, users.PrimaryKey)
+	column, ok := users.Column("id")
+	require.True(t, ok)
+	_, ok = column.Type.(schema.IntegerType)
+	require.True(t, ok)
+	require.True(t, store.UsersDef().PrimaryKeyAutoincrement)
+	var ordinary schema.TableDef
+	for _, table := range planned.Tables {
+		if table.Name == "orders" {
+			ordinary = table
+			break
+		}
+	}
+	require.False(t, ordinary.PrimaryKeyAutoincrement)
+}
+
 // exampleStore is the generate.Store that plans the checked-in
 // examples/store package.
 func exampleStore(t *testing.T) generate.Store {
@@ -64,6 +91,7 @@ func exampleStore(t *testing.T) generate.Store {
 		schema.PrimaryKey("id"),
 	)
 	require.NoError(t, err)
+	users.PrimaryKeyAutoincrement = true
 
 	orders, err := schema.NewTableDef("orders",
 		schema.Integer("id"),
