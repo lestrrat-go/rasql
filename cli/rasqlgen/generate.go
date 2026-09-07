@@ -90,6 +90,9 @@ func (c command) runGenerate(args []string) error {
 	if err != nil {
 		return err
 	}
+	if settings.Engine != nil && settings.Schema != nil && *dsn == "" {
+		return c.runOfflineGenerate(settings, *configPath, *check)
+	}
 	if !typed.has("dialect") && settings.Dialect != "" {
 		*dialectName = settings.Dialect
 	}

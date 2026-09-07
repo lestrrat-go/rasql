@@ -41,6 +41,24 @@ func Run(args []string, output, diagnostics io.Writer) error {
 	return err
 }
 
+// RunTopLevel dispatches the schema, generate, and check commands exposed by
+// the unified rasql binary.
+func RunTopLevel(args []string, output, diagnostics io.Writer) error {
+	if output == nil || diagnostics == nil {
+		return errors.New("rasqlgen: command output must not be nil")
+	}
+	var printed bytes.Buffer
+	err := command{program: "rasql", flagSetPrefix: "rasql ", output: output, diagnostics: &printed}.run(args)
+	if printed.Len() > 0 {
+		stream := diagnostics
+		if errors.Is(err, flag.ErrHelp) {
+			stream = output
+		}
+		_, _ = stream.Write(printed.Bytes())
+	}
+	return err
+}
+
 // RunLegacy executes the same commands under the standalone rasqlgen
 // command, which reports its own name and writes everything to writer.
 func RunLegacy(args []string, writer io.Writer) error {
@@ -91,6 +109,25 @@ func (c command) run(args []string) error {
 		return flag.ErrHelp
 	case "generate":
 		return c.runGenerate(args[1:])
+	case "check":
+		return c.runGenerate(append([]string{"-check"}, args[1:]...))
+	case "schema":
+		if c.program != "rasql" {
+			return fmt.Errorf("unknown %s command %q; expected generate", c.program, args[0])
+		}
+		if len(args) < 2 {
+			return fmt.Errorf("usage: %s schema <update|import|verify> [flags]", c.program)
+		}
+		switch args[1] {
+		case "update":
+			return c.runSchemaUpdate(args[2:])
+		case "import":
+			return c.runSchemaImport(args[2:])
+		case "verify":
+			return c.runSchemaVerify(args[2:])
+		default:
+			return fmt.Errorf("unknown %s schema command %q; expected update, import, or verify", c.program, args[1])
+		}
 	default:
 		return fmt.Errorf("unknown %s command %q; expected generate", c.program, args[0])
 	}

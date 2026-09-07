@@ -43,6 +43,10 @@ const maxConfigBytes = 1 << 20
 // what it overrides and a flag may supply the rest. runGenerate reports what
 // is still missing once the two are merged.
 type config struct {
+	// Engine and Schema select the lock-backed schema workflow. They are
+	// optional so the deprecated flag-based route remains compatible.
+	Engine *schemaEngineConfig `json:"engine"`
+	Schema *schemaSourceConfig `json:"schema"`
 	// Package is the generated package name.
 	Package string `json:"package"`
 
@@ -72,6 +76,20 @@ type config struct {
 	// Mappings names explicit semantic, Go, codec, and NULL mappings.
 	// It remains raw until package validation has supplied the generated package name.
 	Mappings json.RawMessage `json:"mappings"`
+}
+
+type schemaEngineConfig struct {
+	Dialect string `json:"dialect"`
+	Profile string `json:"profile"`
+}
+
+type schemaSourceConfig struct {
+	Kind        string            `json:"kind"`
+	Identity    string            `json:"identity"`
+	Paths       []string          `json:"paths"`
+	Inputs      []string          `json:"inputs"`
+	Command     []string          `json:"command"`
+	Environment map[string]string `json:"environment"`
 }
 
 func (c config) mappings() (compilerir.MappingConfig, error) {
