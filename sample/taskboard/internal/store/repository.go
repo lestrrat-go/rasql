@@ -83,7 +83,8 @@ func openProjectsPlan() (rasql.GraphPlan[ProjectsRow, openProjectGraph], rasql.T
 	if err != nil {
 		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.TypedRelation[ProjectsRow]{}, err
 	}
-	tasksQuery := rasql.Select(tasksSource.Source(), tasksProjection)
+	tasksQuery := rasql.Select(tasksSource.Source(), tasksProjection).
+		OrderBy(rasql.AscExpr(tasksExpressions.ID.Expr()))
 
 	membersSource, err := Members().Source("assignee")
 	if err != nil {
@@ -97,7 +98,8 @@ func openProjectsPlan() (rasql.GraphPlan[ProjectsRow, openProjectGraph], rasql.T
 	if err != nil {
 		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.TypedRelation[ProjectsRow]{}, err
 	}
-	membersQuery := rasql.Select(membersSource.Source(), membersProjection)
+	membersQuery := rasql.Select(membersSource.Source(), membersProjection).
+		OrderBy(rasql.AscExpr(membersExpressions.ID.Expr()))
 	membersPlan, err := rasql.NewGraphPlan(membersQuery, func(row MembersRow) MembersRow { return row })
 	if err != nil {
 		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.TypedRelation[ProjectsRow]{}, err

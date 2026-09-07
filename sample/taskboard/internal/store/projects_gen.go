@@ -143,6 +143,26 @@ func ProjectsNamePageKey(source rasql.TypedRelation[ProjectsRow], direction rasq
 	return rasqlgenPageKey(direction, expressions.Name.Expr(), func(row ProjectsRow) string { return row.Name })
 }
 
+func ProjectsTasksEdge[G, CG any](parentSource rasql.TypedRelation[ProjectsRow], childSource rasql.TypedRelation[TasksRow], children rasql.GraphPlan[TasksRow, CG], options rasql.EdgeOptions, attach func(*G, rasql.LoadedMany[CG])) (rasql.GraphEdge[ProjectsRow, G], error) {
+	parentExpressions, err := (ProjectsColumns{}).Bind(parentSource)
+	if err != nil {
+		return nil, err
+	}
+	childExpressions, err := (TasksColumns{}).Bind(childSource)
+	if err != nil {
+		return nil, err
+	}
+	parent, err := rasql.NewGraphKey[ProjectsRow](rasql.KeyPart[ProjectsRow, int64](parentExpressions.ID, func(row ProjectsRow) int64 { return row.ID }))
+	if err != nil {
+		return nil, err
+	}
+	child, err := rasql.NewGraphKey[TasksRow](rasql.KeyPart[TasksRow, int64](childExpressions.ProjectID, func(row TasksRow) int64 { return row.ProjectID }))
+	if err != nil {
+		return nil, err
+	}
+	return rasql.HasMany("Tasks", parent, child, children, options, attach)
+}
+
 var projectsMutationColumns = func() ProjectsExpressions {
 	source, err := Projects().Source("")
 	if err != nil {

@@ -143,6 +143,26 @@ func MembersNamePageKey(source rasql.TypedRelation[MembersRow], direction rasql.
 	return rasqlgenPageKey(direction, expressions.Name.Expr(), func(row MembersRow) string { return row.Name })
 }
 
+func MembersTasksEdge[G, CG any](parentSource rasql.TypedRelation[MembersRow], childSource rasql.TypedRelation[TasksRow], children rasql.GraphPlan[TasksRow, CG], options rasql.EdgeOptions, attach func(*G, rasql.LoadedMany[CG])) (rasql.GraphEdge[MembersRow, G], error) {
+	parentExpressions, err := (MembersColumns{}).Bind(parentSource)
+	if err != nil {
+		return nil, err
+	}
+	childExpressions, err := (TasksColumns{}).Bind(childSource)
+	if err != nil {
+		return nil, err
+	}
+	parent, err := rasql.NewGraphKey[MembersRow](rasql.KeyPart[MembersRow, int64](parentExpressions.ID, func(row MembersRow) int64 { return row.ID }))
+	if err != nil {
+		return nil, err
+	}
+	child, err := rasql.NewGraphKey[TasksRow](rasql.NullKeyPart[TasksRow, int64](childExpressions.AssigneeID, func(row TasksRow) rasql.Nullable[int64] { return row.AssigneeID }))
+	if err != nil {
+		return nil, err
+	}
+	return rasql.HasMany("Tasks", parent, child, children, options, attach)
+}
+
 var membersMutationColumns = func() MembersExpressions {
 	source, err := Members().Source("")
 	if err != nil {

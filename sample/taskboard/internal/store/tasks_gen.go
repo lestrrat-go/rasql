@@ -236,7 +236,7 @@ func TasksDueOnPageKey(source rasql.TypedRelation[TasksRow], direction rasql.Pag
 	return rasqlgenNullablePageKey(direction, expressions.DueOn.NullExpr(), func(row TasksRow) rasql.Nullable[time.Time] { return row.DueOn }, nulls)
 }
 
-func TasksTasksAssigneeIdFkeyEdge[G, CG any](parentSource rasql.TypedRelation[TasksRow], childSource rasql.TypedRelation[MembersRow], children rasql.GraphPlan[MembersRow, CG], options rasql.EdgeOptions, attach func(*G, rasql.LoadedOne[CG])) (rasql.GraphEdge[TasksRow, G], error) {
+func TasksAssigneeEdge[G, CG any](parentSource rasql.TypedRelation[TasksRow], childSource rasql.TypedRelation[MembersRow], children rasql.GraphPlan[MembersRow, CG], options rasql.EdgeOptions, attach func(*G, rasql.LoadedOne[CG])) (rasql.GraphEdge[TasksRow, G], error) {
 	parentExpressions, err := (TasksColumns{}).Bind(parentSource)
 	if err != nil {
 		return nil, err
@@ -253,10 +253,10 @@ func TasksTasksAssigneeIdFkeyEdge[G, CG any](parentSource rasql.TypedRelation[Ta
 	if err != nil {
 		return nil, err
 	}
-	return rasql.HasOne("tasks_assignee_id_fkey", parent, child, children, options, attach)
+	return rasql.HasOne("Assignee", parent, child, children, options, attach)
 }
 
-func TasksTasksProjectIdFkeyEdge[G, CG any](parentSource rasql.TypedRelation[TasksRow], childSource rasql.TypedRelation[ProjectsRow], children rasql.GraphPlan[ProjectsRow, CG], options rasql.EdgeOptions, attach func(*G, rasql.LoadedOne[CG])) (rasql.GraphEdge[TasksRow, G], error) {
+func TasksProjectEdge[G, CG any](parentSource rasql.TypedRelation[TasksRow], childSource rasql.TypedRelation[ProjectsRow], children rasql.GraphPlan[ProjectsRow, CG], options rasql.EdgeOptions, attach func(*G, rasql.LoadedOne[CG])) (rasql.GraphEdge[TasksRow, G], error) {
 	parentExpressions, err := (TasksColumns{}).Bind(parentSource)
 	if err != nil {
 		return nil, err
@@ -273,7 +273,7 @@ func TasksTasksProjectIdFkeyEdge[G, CG any](parentSource rasql.TypedRelation[Tas
 	if err != nil {
 		return nil, err
 	}
-	return rasql.HasOne("tasks_project_id_fkey", parent, child, children, options, attach)
+	return rasql.HasOne("Project", parent, child, children, options, attach)
 }
 
 var tasksMutationColumns = func() TasksExpressions {
