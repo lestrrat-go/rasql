@@ -30,3 +30,27 @@ func TestManyThroughMappingRoundTripPreservesOrderedPaths(t *testing.T) {
 		t.Fatal("mapping lock encoding was empty")
 	}
 }
+
+func TestManyThroughMappingDigestIgnoresOrderAndDetectsPathChanges(t *testing.T) {
+	base := compilerlock.DigestInputs{Source: compilerlock.SourceDigestInput{Record: compilerlock.SourceRecord{Kind: "external", Identity: "x"}, Engine: compilerlock.EngineRecord{Dialect: "sqlite", Profile: "sqlite-3"}}, Mappings: compilerir.MappingConfig{Relations: []compilerir.RelationMapping{{Name: "roles", Source: "users", Target: "roles", From: []string{"id"}, To: []string{"id"}, Through: compilerir.ThroughMapping{Object: "user_roles", SourceFrom: []string{"id"}, SourceTo: []string{"user_id"}, TargetFrom: []string{"id"}, TargetTo: []string{"role_id"}}}}}, Generation: compilerir.GoConfig{Package: "store", Output: "out", Emitter: "compact"}}
+	first, err := compilerlock.BuildDigests(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base.Mappings.Relations = append(base.Mappings.Relations, compilerir.RelationMapping{Name: "groups", Source: "users", Target: "groups", From: []string{"id"}, To: []string{"id"}, Through: compilerir.ThroughMapping{Object: "user_groups", SourceFrom: []string{"id"}, SourceTo: []string{"user_id"}, TargetFrom: []string{"id"}, TargetTo: []string{"group_id"}}})
+	second, err := compilerlock.BuildDigests(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Mappings == second.Mappings {
+		t.Fatal("mapping digest did not change when a relation was added")
+	}
+	base.Mappings.Relations[0].Through.SourceTo[0] = "changed"
+	third, err := compilerlock.BuildDigests(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Mappings == third.Mappings {
+		t.Fatal("mapping digest did not change when a path changed")
+	}
+}
