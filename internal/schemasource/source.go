@@ -277,9 +277,14 @@ func Materialize(ctx context.Context, req Request, deps Dependencies) (Result, e
 				return err
 			}
 		}
-		queries := append([]compilerir.QueryAnalysis(nil), analysis.Queries...)
+		queries := make([]compilerir.QueryAnalysis, len(analysis.Queries))
+		for i := range analysis.Queries {
+			queries[i] = analysis.Queries[i].Clone()
+		}
+		querySnapshots := append([]compilerlock.SourceFileSnapshot(nil), analysis.Snapshots...)
+		sort.SliceStable(querySnapshots, func(i, j int) bool { return querySnapshots[i].Path() < querySnapshots[j].Path() })
 		allSnapshots := append([]compilerlock.SourceFileSnapshot(nil), snaps...)
-		allSnapshots = append(allSnapshots, analysis.Snapshots...)
+		allSnapshots = append(allSnapshots, querySnapshots...)
 		source := compilerlock.SourceDigestInput{Record: compilerlock.SourceRecord{Kind: req.Source.Kind, Identity: req.Source.Identity}, Engine: compilerlock.EngineRecord{Dialect: req.Engine.Dialect, Version: versionString(profile), Profile: profile.ID}, Materializer: materializer(req)}
 		for _, s := range snaps {
 			source.Record.Files = append(source.Record.Files, s.Record())
