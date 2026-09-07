@@ -796,7 +796,8 @@ func TestCompactGeneratedGraphSourceMismatchMatrix(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "generated"), 0o755))
 	require.NoError(t, plan.Commit())
-	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/mismatch\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire modernc.org/sqlite v1.55.0\nreplace github.com/lestrrat-go/rasql => "+repoRoot(t)+"\n"), 0o600))
+	module := "module example.com/mismatch\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire modernc.org/sqlite v1.55.0\nreplace github.com/lestrrat-go/rasql => " + repoRoot(t) + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte(module), 0o600))
 	consumer := `package store_test
 
 import (
@@ -840,7 +841,10 @@ func TestSourceMismatchMatrix(t *testing.T) {
 	if err != nil { t.Fatal(err) }
 	wrongChildEdge, err := store.ProjectOwnerEdge(parentSource, wrongChildSource, childPlan, rasql.EdgeOptions{}, func(*mismatchProjectGraph, rasql.LoadedOne[mismatchAccountGraph]) {})
 	if err != nil { t.Fatal(err) }
-	if _, err = rasql.NewGraphPlan(parentQuery, func(store.ProjectRecord) mismatchProjectGraph { return mismatchProjectGraph{} }, wrongChildEdge); err == nil || !strings.Contains(err.Error(), "graph_key_mismatch") { t.Fatalf("wrong child error = %v", err) }
+	if _, err = rasql.NewGraphPlan(parentQuery, func(store.ProjectRecord) mismatchProjectGraph { return mismatchProjectGraph{} }, wrongChildEdge); err == nil ||
+		!strings.Contains(err.Error(), "graph_key_mismatch") {
+		t.Fatalf("wrong child error = %v", err)
+	}
 
 	rootSource, err := store.Account().Source("u3")
 	if err != nil { t.Fatal(err) }
@@ -873,7 +877,10 @@ func TestSourceMismatchMatrix(t *testing.T) {
 	if err != nil { t.Fatal(err) }
 	wrongThroughEdge, err := store.AccountRolesEdge(rootSource, junctionSource, rolesSource, rolesPlan, rasql.EdgeOptions{Order: []rasql.OrderTerm{rasql.AscExpr(wrongJunctionExpressions.RoleID.Expr())}}, attachRoles)
 	if err != nil { t.Fatal(err) }
-	if _, err = rasql.NewGraphPlan(rootQuery, func(store.AccountRecord) mismatchAccountGraph { return mismatchAccountGraph{} }, wrongThroughEdge); err == nil || !strings.Contains(err.Error(), "order source differs from child source") { t.Fatalf("wrong junction option error = %v", err) }
+	if _, err = rasql.NewGraphPlan(rootQuery, func(store.AccountRecord) mismatchAccountGraph { return mismatchAccountGraph{} }, wrongThroughEdge); err == nil ||
+		!strings.Contains(err.Error(), "order source differs from child source") {
+		t.Fatalf("wrong junction option error = %v", err)
+	}
 
 	sqlDB, err := sql.Open("sqlite", ":memory:")
 	if err != nil { t.Fatal(err) }
@@ -923,17 +930,59 @@ func TestSourceMismatchMatrix(t *testing.T) {
 
 func compactGraphMismatchInput(t *testing.T) generate.EmitterInput {
 	t.Helper()
-	users := compilerir.PhysicalObject{ID: "users", Kind: "table", Name: "users", Columns: []compilerir.PhysicalColumn{{Name: "id", LogicalKind: "integer"}}, Constraints: []compilerir.PhysicalConstraint{{Kind: "primary_key", Columns: []string{"id"}}}}
-	projects := compilerir.PhysicalObject{ID: "projects", Kind: "table", Name: "projects", Columns: []compilerir.PhysicalColumn{{Name: "id", LogicalKind: "integer"}, {Name: "owner_id", Ordinal: 1, LogicalKind: "integer"}}, Constraints: []compilerir.PhysicalConstraint{{Kind: "primary_key", Columns: []string{"id"}}, {Kind: "foreign_key", Name: "projects_owner_fk", Columns: []string{"owner_id"}, Reference: &compilerir.ForeignReference{Object: "users", Columns: []string{"id"}}}}}
-	roles := compilerir.PhysicalObject{ID: "roles", Kind: "table", Name: "roles", Columns: []compilerir.PhysicalColumn{{Name: "id", LogicalKind: "integer"}}, Constraints: []compilerir.PhysicalConstraint{{Kind: "primary_key", Columns: []string{"id"}}}}
-	links := compilerir.PhysicalObject{ID: "user_roles", Kind: "table", Name: "user_roles", Columns: []compilerir.PhysicalColumn{{Name: "user_id", LogicalKind: "integer"}, {Name: "role_id", Ordinal: 1, LogicalKind: "integer"}}, Constraints: []compilerir.PhysicalConstraint{{Kind: "foreign_key", Name: "user_roles_user_fk", Columns: []string{"user_id"}, Reference: &compilerir.ForeignReference{Object: "users", Columns: []string{"id"}}}, {Kind: "foreign_key", Name: "user_roles_role_fk", Columns: []string{"role_id"}, Reference: &compilerir.ForeignReference{Object: "roles", Columns: []string{"id"}}}}}
+	users := compilerir.PhysicalObject{
+		ID: "users", Kind: "table", Name: "users",
+		Columns:     []compilerir.PhysicalColumn{{Name: "id", LogicalKind: "integer"}},
+		Constraints: []compilerir.PhysicalConstraint{{Kind: "primary_key", Columns: []string{"id"}}},
+	}
+	projects := compilerir.PhysicalObject{
+		ID: "projects", Kind: "table", Name: "projects",
+		Columns: []compilerir.PhysicalColumn{
+			{Name: "id", LogicalKind: "integer"},
+			{Name: "owner_id", Ordinal: 1, LogicalKind: "integer"},
+		},
+		Constraints: []compilerir.PhysicalConstraint{
+			{Kind: "primary_key", Columns: []string{"id"}},
+			{Kind: "foreign_key", Name: "projects_owner_fk", Columns: []string{"owner_id"}, Reference: &compilerir.ForeignReference{Object: "users", Columns: []string{"id"}}},
+		},
+	}
+	roles := compilerir.PhysicalObject{
+		ID: "roles", Kind: "table", Name: "roles",
+		Columns:     []compilerir.PhysicalColumn{{Name: "id", LogicalKind: "integer"}},
+		Constraints: []compilerir.PhysicalConstraint{{Kind: "primary_key", Columns: []string{"id"}}},
+	}
+	links := compilerir.PhysicalObject{
+		ID: "user_roles", Kind: "table", Name: "user_roles",
+		Columns: []compilerir.PhysicalColumn{
+			{Name: "user_id", LogicalKind: "integer"},
+			{Name: "role_id", Ordinal: 1, LogicalKind: "integer"},
+		},
+		Constraints: []compilerir.PhysicalConstraint{
+			{Kind: "foreign_key", Name: "user_roles_user_fk", Columns: []string{"user_id"}, Reference: &compilerir.ForeignReference{Object: "users", Columns: []string{"id"}}},
+			{Kind: "foreign_key", Name: "user_roles_role_fk", Columns: []string{"role_id"}, Reference: &compilerir.ForeignReference{Object: "roles", Columns: []string{"id"}}},
+		},
+	}
 	catalog := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "sqlite", Version: "3"}, Objects: []compilerir.PhysicalObject{users, projects, roles, links}}
-	relations := compilerir.MappingConfig{Relations: []compilerir.RelationMapping{{Name: "Roles", Source: "users", From: []string{"id"}, Target: "roles", To: []string{"id"}, Through: compilerir.ThroughMapping{Object: "user_roles", SourceFrom: []string{"user_id"}, SourceTo: []string{"id"}, TargetFrom: []string{"role_id"}, TargetTo: []string{"id"}}}}}
+	relations := compilerir.MappingConfig{Relations: []compilerir.RelationMapping{{
+		Name: "Roles", Source: "users", From: []string{"id"}, Target: "roles", To: []string{"id"},
+		Through: compilerir.ThroughMapping{
+			Object: "user_roles", SourceFrom: []string{"user_id"}, SourceTo: []string{"id"},
+			TargetFrom: []string{"role_id"}, TargetTo: []string{"id"},
+		},
+	}}}
 	semantic, diagnostics := compilerir.BuildSemantic(catalog, relations, nil)
 	for _, diagnostic := range diagnostics {
 		require.NotEqual(t, compilerir.DiagnosticError, diagnostic.Level, diagnostic.Message)
 	}
-	config := compilerir.GoConfig{Package: "store", Output: "generated", Emitter: "compact", Objects: []compilerir.ObjectGoName{{ID: "users", Source: "Account", Row: "AccountRecord", File: "users_gen.go"}, {ID: "projects", Source: "Project", Row: "ProjectRecord", File: "projects_gen.go"}, {ID: "roles", Source: "Role", Row: "RoleRecord", File: "roles_gen.go"}, {ID: "user_roles", Source: "Membership", Row: "MembershipRecord", File: "user_roles_gen.go"}}}
+	config := compilerir.GoConfig{
+		Package: "store", Output: "generated", Emitter: "compact",
+		Objects: []compilerir.ObjectGoName{
+			{ID: "users", Source: "Account", Row: "AccountRecord", File: "users_gen.go"},
+			{ID: "projects", Source: "Project", Row: "ProjectRecord", File: "projects_gen.go"},
+			{ID: "roles", Source: "Role", Row: "RoleRecord", File: "roles_gen.go"},
+			{ID: "user_roles", Source: "Membership", Row: "MembershipRecord", File: "user_roles_gen.go"},
+		},
+	}
 	model, diagnostics := compilerir.BuildGo(semantic, config)
 	for _, diagnostic := range diagnostics {
 		require.NotEqual(t, compilerir.DiagnosticError, diagnostic.Level, diagnostic.Message)
