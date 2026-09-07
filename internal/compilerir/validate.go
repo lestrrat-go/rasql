@@ -14,6 +14,15 @@ func ValidatePhysical(c PhysicalCatalog) error {
 	}
 	seen := map[ObjectID]struct{}{}
 	names := map[QualifiedName]struct{}{}
+	objectColumns := map[QualifiedName]map[string]struct{}{}
+	for _, o := range c.Objects {
+		q := QualifiedName{o.Schema, o.Name}
+		columns := map[string]struct{}{}
+		for _, col := range o.Columns {
+			columns[col.Name] = struct{}{}
+		}
+		objectColumns[q] = columns
+	}
 	for i, o := range c.Objects {
 		if o.ID == "" {
 			return invalid(fmt.Sprintf("objects[%d].id", i), "must not be empty")
@@ -48,11 +57,17 @@ func ValidatePhysical(c PhysicalCatalog) error {
 			if col.Native != nil && col.Native.Name != "" && col.Native.Dialect == "" {
 				return invalid(fmt.Sprintf("objects[%d].columns[%d].native.dialect", i, j), "must not be empty")
 			}
+			if col.Native != nil {
+				if err := validateNative(col.Native, fmt.Sprintf("objects[%d].columns[%d].native", i, j)); err != nil {
+					return err
+				}
+			}
 		}
 		columns := map[string]struct{}{}
 		for _, col := range o.Columns {
 			columns[col.Name] = struct{}{}
 		}
+		objectColumns[q] = columns
 		for j, constraint := range o.Constraints {
 			if constraint.Kind != "primary_key" && constraint.Kind != "unique" && constraint.Kind != "foreign_key" && constraint.Kind != "check" {
 				return invalid(fmt.Sprintf("objects[%d].constraints[%d].kind", i, j), "unsupported constraint kind")
@@ -66,20 +81,70 @@ func ValidatePhysical(c PhysicalCatalog) error {
 				if constraint.Reference.Object == "" || len(constraint.Reference.Columns) == 0 {
 					return invalid(fmt.Sprintf("objects[%d].constraints[%d].reference", i, j), "incomplete foreign reference")
 				}
+				targetColumns, ok := objectColumns[QualifiedName{Schema: constraint.Reference.Schema, Name: constraint.Reference.Object}]
+				if !ok {
+					for candidate := range names {
+						if candidate.Name == constraint.Reference.Object && (constraint.Reference.Schema == "" || candidate.Schema == constraint.Reference.Schema) {
+							targetColumns = objectColumns[candidate]
+							ok = true
+							break
+						}
+					}
+				}
+				if !ok {
+					return invalid(fmt.Sprintf("objects[%d].constraints[%d].reference", i, j), "references unknown object")
+				}
+				for _, name := range constraint.Reference.Columns {
+					if _, ok := targetColumns[name]; !ok {
+						return invalid(fmt.Sprintf("objects[%d].constraints[%d].reference", i, j), "references unknown column")
+					}
+				}
 			}
 		}
+		constraintNames := map[string]struct{}{}
+		for j, constraint := range o.Constraints {
+			if constraint.Name != "" {
+				if _, ok := constraintNames[constraint.Name]; ok {
+					return invalid(fmt.Sprintf("objects[%d].constraints[%d].name", i, j), "duplicate constraint name")
+				}
+				constraintNames[constraint.Name] = struct{}{}
+			}
+		}
+		indexNames := map[string]struct{}{}
 		for j, index := range o.Indexes {
 			if index.Name == "" {
 				return invalid(fmt.Sprintf("objects[%d].indexes[%d].name", i, j), "must not be empty")
 			}
+			if index.KeyForm != "columns" && index.KeyForm != "expressions" && index.KeyForm != "keys" {
+				return invalid(fmt.Sprintf("objects[%d].indexes[%d].key_form", i, j), "must be columns, expressions, or keys")
+			}
+			if _, ok := indexNames[index.Name]; ok {
+				return invalid(fmt.Sprintf("objects[%d].indexes[%d].name", i, j), "duplicate index name")
+			}
+			indexNames[index.Name] = struct{}{}
 			for _, part := range index.Parts {
 				if part.Column == "" && part.ExpressionSQL == "" {
 					return invalid(fmt.Sprintf("objects[%d].indexes[%d]", i, j), "index part must have column or expression")
+				}
+				if index.KeyForm == "columns" && (part.Column == "" || part.ExpressionSQL != "") {
+					return invalid(fmt.Sprintf("objects[%d].indexes[%d].parts", i, j), "column key form requires column parts")
+				}
+				if index.KeyForm != "columns" && part.ExpressionSQL == "" {
+					return invalid(fmt.Sprintf("objects[%d].indexes[%d].parts", i, j), "expression and key forms require expression parts")
 				}
 			}
 		}
 	}
 	return nil
+}
+func validateNative(n *NativeType, p string) error {
+	if n == nil {
+		return nil
+	}
+	if n.Name != "" && n.Dialect == "" {
+		return invalid(p+".dialect", "must not be empty")
+	}
+	return validateNative(n.Element, p+".element")
 }
 func ValidateSemantic(m SemanticModel) error {
 	ids := map[ObjectID]struct{}{}
@@ -149,6 +214,17 @@ func ValidateGo(m GoModel) error {
 		return invalid("package", "must be a valid package identifier")
 	}
 	files := map[string]struct{}{}
+	imports := map[string]struct{}{}
+	for i, imp := range m.Imports {
+		if imp.Path == "" {
+			return invalid(fmt.Sprintf("imports[%d].path", i), "must not be empty")
+		}
+		if _, ok := imports[imp.Path+"\x00"+imp.Alias]; ok {
+			return invalid(fmt.Sprintf("imports[%d]", i), "duplicate import")
+		}
+		imports[imp.Path+"\x00"+imp.Alias] = struct{}{}
+	}
+	objects := map[ObjectID]struct{}{}
 	for i, f := range m.Files {
 		if f.Path == "" || f.Path[0] == '/' || path.Clean(f.Path) != f.Path || strings.HasPrefix(f.Path, "../") || f.Path == ".." {
 			return invalid(fmt.Sprintf("files[%d].path", i), "must be a relative path")
@@ -159,12 +235,38 @@ func ValidateGo(m GoModel) error {
 		files[f.Path] = struct{}{}
 	}
 	for i, object := range m.Objects {
+		if _, ok := objects[object.ID]; ok {
+			return invalid(fmt.Sprintf("objects[%d].id", i), "duplicate object ID")
+		}
+		objects[object.ID] = struct{}{}
 		if object.ID == "" || object.SourceName == "" || object.Row.Name == "" || !token.IsIdentifier(object.Row.Name) {
 			return invalid(fmt.Sprintf("objects[%d]", i), "invalid object or row name")
 		}
 		for j, column := range object.Columns {
 			if column.Name == "" || column.GoType == "" || !token.IsIdentifier(column.Name) {
 				return invalid(fmt.Sprintf("objects[%d].columns[%d]", i, j), "invalid column")
+			}
+		}
+		for j, relation := range object.Relations {
+			if relation.Name == "" || relation.Target == "" {
+				return invalid(fmt.Sprintf("objects[%d].relations[%d]", i, j), "invalid relation")
+			}
+		}
+	}
+	queries := map[QueryID]struct{}{}
+	for i, query := range m.Queries {
+		if query.ID == "" || query.Name == "" {
+			return invalid(fmt.Sprintf("queries[%d]", i), "invalid query")
+		}
+		if _, ok := queries[query.ID]; ok {
+			return invalid(fmt.Sprintf("queries[%d].id", i), "duplicate query ID")
+		}
+		queries[query.ID] = struct{}{}
+		if query.Result != nil {
+			for j, field := range query.Result.Fields {
+				if field.Name == "" || field.Type == "" {
+					return invalid(fmt.Sprintf("queries[%d].result.fields[%d]", i, j), "invalid field")
+				}
 			}
 		}
 	}

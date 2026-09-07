@@ -76,9 +76,7 @@ func BuildGo(model SemanticModel, config GoConfig) (GoModel, []Diagnostic) {
 		if !knownScalar(mapping.Name) {
 			diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "unsupported_scalar", Path: "scalars." + mapping.Name, Message: "custom scalar mappings are owned by G2"})
 		}
-		for _, imp := range mapping.Imports {
-			out.Imports = append(out.Imports, imp)
-		}
+		out.Imports = append(out.Imports, mapping.Imports...)
 	}
 	for _, object := range model.Objects {
 		name := object.PhysicalName.Name + "Row"
@@ -124,34 +122,74 @@ func BuildGo(model SemanticModel, config GoConfig) (GoModel, []Diagnostic) {
 	}
 	for _, query := range model.Queries {
 		goQuery := GoQuery{ID: query.ID, Name: query.Name, Cardinality: query.Cardinality}
-		for _, configured := range config.Queries {
-			if configured.ID == query.ID {
-				if configured.Function != "" {
-					goQuery.Name = configured.Function
-				}
-				if configured.Projection != "" {
-					goQuery.ProjectionName = configured.Projection
-				}
-				if configured.Decoder != "" && goQuery.Result != nil {
-					goQuery.Result.DecoderName = configured.Decoder
-				}
+		var configured QueryGoName
+		for _, cfg := range config.Queries {
+			if cfg.ID == query.ID {
+				configured = cfg
+				break
 			}
 		}
+		if configured.Function != "" {
+			goQuery.Name = configured.Function
+		}
+		goQuery.ProjectionName = configured.Projection
+		if configured.File != "" {
+			out.Files = append(out.Files, GoFile{Path: configured.File})
+		}
 		for _, value := range query.Parameters {
+			if !knownScalar(value.Scalar) {
+				diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "unsupported_scalar", Path: query.Name + ".parameters." + value.Name, Message: "scalar has no built-in Go mapping"})
+			}
 			goQuery.Parameters = append(goQuery.Parameters, GoField{Name: value.Name, Type: goType(value.Scalar, value.Nullable), Nullable: value.Nullable})
 		}
 		if len(query.Results) > 0 {
 			shape := &GoShape{Name: query.Name + "Result"}
 			for _, value := range query.Results {
+				if !knownScalar(value.Scalar) {
+					diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "unsupported_scalar", Path: query.Name + ".results." + value.Name, Message: "scalar has no built-in Go mapping"})
+				}
 				shape.Fields = append(shape.Fields, GoField{Name: value.Name, Type: goType(value.Scalar, value.Nullable), Nullable: value.Nullable})
 			}
 			goQuery.Result = shape
 		}
+		if configured.Result != "" {
+			if goQuery.Result == nil {
+				goQuery.Result = &GoShape{}
+			}
+			goQuery.Result.Name = configured.Result
+		}
+		if configured.Decoder != "" {
+			if goQuery.Result == nil {
+				goQuery.Result = &GoShape{}
+			}
+			goQuery.Result.DecoderName = configured.Decoder
+		}
 		out.Queries = append(out.Queries, goQuery)
 	}
 	diagnostics = append(diagnostics, model.Diagnostics...)
+	for _, object := range out.Objects {
+		for _, column := range object.Columns {
+			if column.Scalar == "time" {
+				out.Imports = append(out.Imports, GoImport{Path: "time"})
+			}
+		}
+	}
+	for _, query := range out.Queries {
+		for _, field := range query.Parameters {
+			if field.Type == "time.Time" {
+				out.Imports = append(out.Imports, GoImport{Path: "time"})
+			}
+		}
+		if query.Result != nil {
+			for _, field := range query.Result.Fields {
+				if field.Type == "time.Time" {
+					out.Imports = append(out.Imports, GoImport{Path: "time"})
+				}
+			}
+		}
+	}
 	diagnostics = sortDiagnostics(diagnostics)
-	return out, diagnostics
+	return out, append([]Diagnostic(nil), diagnostics...)
 }
 func knownScalar(s string) bool {
 	switch s {
@@ -164,7 +202,7 @@ func knownScalar(s string) bool {
 func goType(scalar string, nullable bool) string {
 	base := map[string]string{"boolean": "bool", "integer": "int64", "float": "float64", "text": "string", "bytes": "[]byte", "time": "time.Time", "json": "[]byte", "uuid": "string", "decimal": "string"}[scalar]
 	if base == "" {
-		base = scalar
+		return ""
 	}
 	if nullable {
 		return "rasql.Nullable[" + base + "]"

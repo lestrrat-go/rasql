@@ -1,34 +1,54 @@
 package compilerir
 
-import "maps"
+import (
+	"maps"
+	"slices"
+)
 
 func (c PhysicalCatalog) Clone() PhysicalCatalog {
 	out := c
-	out.Objects = append([]PhysicalObject(nil), c.Objects...)
+	out.Objects = slices.Clone(c.Objects)
 	for i := range out.Objects {
 		o := &out.Objects[i]
-		o.Columns = append([]PhysicalColumn(nil), o.Columns...)
+		o.Columns = slices.Clone(o.Columns)
 		for j := range o.Columns {
 			o.Columns[j].Native = cloneNative(o.Columns[j].Native)
+			if o.Columns[j].Integer != nil {
+				facts := *o.Columns[j].Integer
+				o.Columns[j].Integer = &facts
+			}
+			if o.Columns[j].Text != nil {
+				facts := *o.Columns[j].Text
+				o.Columns[j].Text = &facts
+			}
+			if o.Columns[j].Decimal != nil {
+				facts := *o.Columns[j].Decimal
+				o.Columns[j].Decimal = &facts
+			}
 		}
-		o.Constraints = append([]PhysicalConstraint(nil), o.Constraints...)
+		o.VirtualTableModuleArguments = slices.Clone(o.VirtualTableModuleArguments)
+		o.ExclusionConstraints = slices.Clone(o.ExclusionConstraints)
+		for j := range o.ExclusionConstraints {
+			o.ExclusionConstraints[j].Elements = append([]ExclusionElement(nil), o.ExclusionConstraints[j].Elements...)
+		}
+		o.Constraints = slices.Clone(o.Constraints)
 		for j := range o.Constraints {
-			o.Constraints[j].Columns = append([]string(nil), o.Constraints[j].Columns...)
-			o.Constraints[j].IncludeColumns = append([]string(nil), o.Constraints[j].IncludeColumns...)
-			o.Constraints[j].Keys = append([]IndexPart(nil), o.Constraints[j].Keys...)
-			o.Constraints[j].DeleteSetColumns = append([]string(nil), o.Constraints[j].DeleteSetColumns...)
+			o.Constraints[j].Columns = slices.Clone(o.Constraints[j].Columns)
+			o.Constraints[j].IncludeColumns = slices.Clone(o.Constraints[j].IncludeColumns)
+			o.Constraints[j].Keys = slices.Clone(o.Constraints[j].Keys)
+			o.Constraints[j].DeleteSetColumns = slices.Clone(o.Constraints[j].DeleteSetColumns)
 			o.Constraints[j].StorageParameters = maps.Clone(o.Constraints[j].StorageParameters)
 			o.Constraints[j].Collations = maps.Clone(o.Constraints[j].Collations)
 			if o.Constraints[j].Reference != nil {
 				r := *o.Constraints[j].Reference
-				r.Columns = append([]string(nil), r.Columns...)
+				r.Columns = slices.Clone(r.Columns)
 				o.Constraints[j].Reference = &r
 			}
 		}
-		o.Indexes = append([]PhysicalIndex(nil), o.Indexes...)
+		o.Indexes = slices.Clone(o.Indexes)
 		for j := range o.Indexes {
-			o.Indexes[j].Parts = append([]IndexPart(nil), o.Indexes[j].Parts...)
-			o.Indexes[j].IncludeColumns = append([]string(nil), o.Indexes[j].IncludeColumns...)
+			o.Indexes[j].Parts = slices.Clone(o.Indexes[j].Parts)
+			o.Indexes[j].IncludeColumns = slices.Clone(o.Indexes[j].IncludeColumns)
 			o.Indexes[j].StorageParameters = maps.Clone(o.Indexes[j].StorageParameters)
 		}
 	}
@@ -39,19 +59,19 @@ func cloneNative(n *NativeType) *NativeType {
 		return nil
 	}
 	out := *n
-	out.Arguments = append([]string(nil), n.Arguments...)
+	out.Arguments = slices.Clone(n.Arguments)
 	out.Element = cloneNative(n.Element)
 	return &out
 }
 func (in IdentityInput) Clone() IdentityInput {
 	out := in
-	out.Prior = append([]PriorObject(nil), in.Prior...)
-	out.Renames = append([]ObjectRename(nil), in.Renames...)
+	out.Prior = slices.Clone(in.Prior)
+	out.Renames = slices.Clone(in.Renames)
 	return out
 }
 func (m MappingConfig) Clone() MappingConfig {
 	out := m
-	out.Scalars = append([]ScalarMapping(nil), m.Scalars...)
+	out.Scalars = slices.Clone(m.Scalars)
 	for i := range out.Scalars {
 		out.Scalars[i].Imports = append([]GoImport(nil), m.Scalars[i].Imports...)
 	}
@@ -59,52 +79,53 @@ func (m MappingConfig) Clone() MappingConfig {
 }
 func (m SemanticModel) Clone() SemanticModel {
 	out := m
-	out.Objects = append([]SemanticObject(nil), m.Objects...)
-	out.Queries = append([]SemanticQuery(nil), m.Queries...)
-	out.Diagnostics = append([]Diagnostic(nil), m.Diagnostics...)
+	out.Objects = slices.Clone(m.Objects)
+	out.Queries = slices.Clone(m.Queries)
+	out.Diagnostics = slices.Clone(m.Diagnostics)
 	for i := range out.Objects {
-		out.Objects[i].Columns = append([]SemanticColumn(nil), m.Objects[i].Columns...)
-		out.Objects[i].Relations = append([]SemanticRelation(nil), m.Objects[i].Relations...)
+		out.Objects[i].Columns = slices.Clone(m.Objects[i].Columns)
+		out.Objects[i].Relations = slices.Clone(m.Objects[i].Relations)
 		for j := range out.Objects[i].Relations {
 			out.Objects[i].Relations[j].From = append([]string(nil), m.Objects[i].Relations[j].From...)
 			out.Objects[i].Relations[j].To = append([]string(nil), m.Objects[i].Relations[j].To...)
 		}
 	}
 	for i := range out.Queries {
-		out.Queries[i].Parameters = append([]SemanticValue(nil), m.Queries[i].Parameters...)
-		out.Queries[i].Results = append([]SemanticValue(nil), m.Queries[i].Results...)
+		out.Queries[i].Parameters = slices.Clone(m.Queries[i].Parameters)
+		out.Queries[i].Results = slices.Clone(m.Queries[i].Results)
 	}
 	return out
 }
 
 func (m GoModel) Clone() GoModel {
 	out := m
-	out.Files = append([]GoFile(nil), m.Files...)
+	out.Imports = slices.Clone(m.Imports)
+	out.Files = slices.Clone(m.Files)
 	for i := range out.Files {
-		out.Files[i].Declarations = append([]string(nil), m.Files[i].Declarations...)
+		out.Files[i].Declarations = slices.Clone(m.Files[i].Declarations)
 	}
-	out.Objects = append([]GoObject(nil), m.Objects...)
+	out.Objects = slices.Clone(m.Objects)
 	for i := range out.Objects {
-		out.Objects[i].Row.Fields = append([]GoField(nil), m.Objects[i].Row.Fields...)
-		out.Objects[i].Columns = append([]GoColumn(nil), m.Objects[i].Columns...)
-		out.Objects[i].Relations = append([]GoRelation(nil), m.Objects[i].Relations...)
+		out.Objects[i].Row.Fields = slices.Clone(m.Objects[i].Row.Fields)
+		out.Objects[i].Columns = slices.Clone(m.Objects[i].Columns)
+		out.Objects[i].Relations = slices.Clone(m.Objects[i].Relations)
 		if m.Objects[i].Create != nil {
 			shape := *m.Objects[i].Create
-			shape.Fields = append([]GoField(nil), shape.Fields...)
+			shape.Fields = slices.Clone(shape.Fields)
 			out.Objects[i].Create = &shape
 		}
 		if m.Objects[i].Patch != nil {
 			shape := *m.Objects[i].Patch
-			shape.Fields = append([]GoField(nil), shape.Fields...)
+			shape.Fields = slices.Clone(shape.Fields)
 			out.Objects[i].Patch = &shape
 		}
 	}
-	out.Queries = append([]GoQuery(nil), m.Queries...)
+	out.Queries = slices.Clone(m.Queries)
 	for i := range out.Queries {
-		out.Queries[i].Parameters = append([]GoField(nil), m.Queries[i].Parameters...)
+		out.Queries[i].Parameters = slices.Clone(m.Queries[i].Parameters)
 		if m.Queries[i].Result != nil {
 			shape := *m.Queries[i].Result
-			shape.Fields = append([]GoField(nil), shape.Fields...)
+			shape.Fields = slices.Clone(shape.Fields)
 			out.Queries[i].Result = &shape
 		}
 	}
@@ -113,14 +134,18 @@ func (m GoModel) Clone() GoModel {
 
 func (c GoConfig) Clone() GoConfig {
 	out := c
-	out.Objects = append([]ObjectGoName(nil), c.Objects...)
-	out.Queries = append([]QueryGoName(nil), c.Queries...)
+	out.Objects = slices.Clone(c.Objects)
+	out.Queries = slices.Clone(c.Queries)
+	out.Scalars = slices.Clone(c.Scalars)
+	for i := range out.Scalars {
+		out.Scalars[i].Imports = append([]GoImport(nil), c.Scalars[i].Imports...)
+	}
 	return out
 }
 func (q QueryAnalysis) Clone() QueryAnalysis {
 	out := q
-	out.Parameters = append([]SemanticValue(nil), q.Parameters...)
-	out.Results = append([]SemanticValue(nil), q.Results...)
-	out.Diagnostics = append([]Diagnostic(nil), q.Diagnostics...)
+	out.Parameters = slices.Clone(q.Parameters)
+	out.Results = slices.Clone(q.Results)
+	out.Diagnostics = slices.Clone(q.Diagnostics)
 	return out
 }

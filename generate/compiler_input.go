@@ -38,7 +38,9 @@ func CompilerInputFromTableDefs(engine compilerir.EngineIdentity, tables []schem
 			}
 		}
 		entry := LegacyObjectSidecar{ID: object.ID, Operations: source.Operations, RowName: source.RowName}
-		entry.Relationships = append([]schema.RelationshipDef(nil), source.Relationships...)
+		for _, relation := range source.Relationships {
+			entry.Relationships = append(entry.Relationships, relation.Clone())
+		}
 		for _, column := range source.Columns {
 			entry.Columns = append(entry.Columns, LegacyColumnSidecar{Name: column.Name, GoBinding: column.GoBinding.Clone()})
 		}
@@ -75,7 +77,10 @@ func restoreLegacy(tables []schema.TableDef, input CompilerInput) ([]schema.Tabl
 		}
 		tables[i].Operations = object.Operations
 		tables[i].RowName = object.RowName
-		tables[i].Relationships = append([]schema.RelationshipDef(nil), object.Relationships...)
+		tables[i].Relationships = nil
+		for _, relation := range object.Relationships {
+			tables[i].Relationships = append(tables[i].Relationships, relation.Clone())
+		}
 		bindings := map[string]*schema.GoBinding{}
 		for _, column := range object.Columns {
 			if _, ok := bindings[column.Name]; ok {

@@ -121,6 +121,7 @@ type PhysicalIndex struct {
 	Name                                  string      `json:"name"`
 	Unique                                bool        `json:"unique"`
 	Method                                string      `json:"method"`
+	KeyForm                               string      `json:"key_form"`
 	Parts                                 []IndexPart `json:"parts"`
 	PredicateSQL                          string      `json:"predicate_sql"`
 	IncludeColumns                        []string
@@ -175,7 +176,7 @@ func PhysicalFromTableDefs(engine EngineIdentity, tables []schema.TableDef) (Phy
 			diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "invalid_table", Path: t.QualifiedName(), Message: err.Error()})
 			continue
 		}
-		o := PhysicalObject{Kind: string(t.EffectiveKind()), Schema: t.Schema, Name: t.Name, Strict: t.Strict, WithoutRowID: t.WithoutRowID, PrimaryKeyAutoincrement: t.PrimaryKeyAutoincrement, PrimaryKeyOnConflict: string(t.PrimaryKeyOnConflict), VirtualTableModule: t.VirtualTableModule, VirtualTableModuleArguments: append([]string(nil), t.VirtualTableModuleArguments...)}
+		o := PhysicalObject{Kind: string(t.EffectiveKind()), Schema: t.Schema, Name: t.Name, Strict: t.Strict, WithoutRowID: t.WithoutRowID, PrimaryKeyAutoincrement: t.PrimaryKeyAutoincrement, PrimaryKeyOnConflict: string(t.PrimaryKeyOnConflict), VirtualTableModule: t.VirtualTableModule, VirtualTableModuleArguments: slices.Clone(t.VirtualTableModuleArguments)}
 		for i, col := range t.Columns {
 			pc := PhysicalColumn{Name: col.Name, Ordinal: i, LogicalKind: string(col.Type.Kind()), Nullable: col.Nullable, DefaultSQL: string(col.Default), GeneratedSQL: string(col.GeneratedExpression), GeneratedStorage: string(col.GeneratedStorage), Identity: string(col.Identity), Collation: col.Collation, Hidden: col.Hidden}
 			pc.Native = nativeType(col.NativeType)
@@ -202,7 +203,12 @@ func PhysicalFromTableDefs(engine EngineIdentity, tables []schema.TableDef) (Phy
 			o.Constraints = append(o.Constraints, PhysicalConstraint{Kind: "primary_key", Columns: append([]string(nil), t.PrimaryKey...)})
 		}
 		for _, u := range t.UniqueConstraints {
-			o.Constraints = append(o.Constraints, PhysicalConstraint{Name: u.Name, Kind: "unique", Columns: append([]string(nil), u.Columns...), Deferrability: string(u.Deferrable), NullsNotDistinct: u.NullsNotDistinct, IncludeColumns: append([]string(nil), u.IncludeColumns...), OnConflict: string(u.OnConflict), StorageParameters: maps.Clone(u.StorageParameters), Tablespace: u.Tablespace, ReplicaIdentity: u.ReplicaIdentity, Collations: maps.Clone(u.Collations)})
+			constraint := PhysicalConstraint{Name: u.Name, Kind: "unique", Columns: slices.Clone(u.Columns), Deferrability: string(u.Deferrable), NullsNotDistinct: u.NullsNotDistinct, IncludeColumns: slices.Clone(u.IncludeColumns), OnConflict: string(u.OnConflict), StorageParameters: maps.Clone(u.StorageParameters), Tablespace: u.Tablespace, ReplicaIdentity: u.ReplicaIdentity, Collations: maps.Clone(u.Collations), Temporal: u.Temporal}
+			constraint.Keys = make([]IndexPart, len(u.Keys))
+			for i, key := range u.Keys {
+				constraint.Keys[i] = IndexPart{Column: string(key.Expression), Direction: indexDirection(key.Descending), Collation: key.Collation, OperatorClass: key.OperatorClass, PrefixLength: key.PrefixLength, Nulls: string(key.NullsOrder)}
+			}
+			o.Constraints = append(o.Constraints, constraint)
 		}
 		for _, f := range t.ForeignKeys {
 			o.Constraints = append(o.Constraints, PhysicalConstraint{Name: f.Name, Kind: "foreign_key", Columns: append([]string(nil), f.Columns...), Reference: &ForeignReference{Schema: f.ReferencedSchema, Object: f.ReferencedTable, Columns: append([]string(nil), f.ReferencedColumns...)}, OnDelete: string(f.OnDelete), OnUpdate: string(f.OnUpdate), Deferrability: string(f.Deferrable), Deferrable: f.Deferrable != "", InitiallyDeferred: f.Deferrable == schema.DeferrableInitiallyDeferred, Match: string(f.Match), NotValid: f.NotValid, NotEnforced: f.NotEnforced, Temporal: f.Temporal, DeleteSetColumns: append([]string(nil), f.DeleteSetColumns...)})
@@ -211,12 +217,36 @@ func PhysicalFromTableDefs(engine EngineIdentity, tables []schema.TableDef) (Phy
 			o.Constraints = append(o.Constraints, PhysicalConstraint{Name: check.Name, Kind: "check", ExpressionSQL: string(check.Expression), NoInherit: check.NoInherit, NotValid: check.NotValid, NotEnforced: check.NotEnforced})
 		}
 		for _, index := range t.Indexes {
-			pi := PhysicalIndex{Name: index.Name, Unique: index.Unique, Method: string(index.Method), PredicateSQL: string(index.Predicate), IncludeColumns: append([]string(nil), index.IncludeColumns...), Invisible: index.Invisible, NotValid: index.NotValid, StorageParameters: maps.Clone(index.StorageParameters), Tablespace: index.Tablespace, ReplicaIdentity: index.ReplicaIdentity, NullsNotDistinct: index.NullsNotDistinct}
+			forms := 0
+			if len(index.Columns) > 0 {
+				forms++
+			}
+			if len(index.Expressions) > 0 {
+				forms++
+			}
+			if len(index.Keys) > 0 {
+				forms++
+			}
+			if forms > 1 {
+				diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "index_key_form_conflict", Path: t.QualifiedName() + ".indexes." + index.Name, Message: "index columns, expressions, and keys cannot be combined"})
+				continue
+			}
+			keyForm := "columns"
+			if len(index.Expressions) > 0 {
+				keyForm = "expressions"
+			}
+			if len(index.Keys) > 0 {
+				keyForm = "keys"
+			}
+			pi := PhysicalIndex{Name: index.Name, Unique: index.Unique, Method: string(index.Method), KeyForm: keyForm, PredicateSQL: string(index.Predicate), IncludeColumns: append([]string(nil), index.IncludeColumns...), Invisible: index.Invisible, NotValid: index.NotValid, StorageParameters: maps.Clone(index.StorageParameters), Tablespace: index.Tablespace, ReplicaIdentity: index.ReplicaIdentity, NullsNotDistinct: index.NullsNotDistinct}
 			for _, p := range index.Columns {
 				pi.Parts = append(pi.Parts, IndexPart{Column: p})
 			}
 			for _, p := range index.Expressions {
 				pi.Parts = append(pi.Parts, IndexPart{ExpressionSQL: string(p)})
+			}
+			for _, key := range index.Keys {
+				pi.Parts = append(pi.Parts, IndexPart{ExpressionSQL: string(key.Expression), Direction: indexDirection(key.Descending), Collation: key.Collation, OperatorClass: key.OperatorClass, PrefixLength: key.PrefixLength, Nulls: string(key.NullsOrder)})
 			}
 			o.Indexes = append(o.Indexes, pi)
 		}
@@ -245,11 +275,17 @@ func nativeType(n *schema.NativeTypeDef) *NativeType {
 	if n == nil {
 		return nil
 	}
-	out := NativeType{Dialect: n.Dialect, Schema: n.Schema, Name: n.Name, Kind: string(n.Kind), Arguments: append([]string(nil), n.Arguments...)}
+	out := NativeType{Dialect: n.Dialect, Schema: n.Schema, Name: n.Name, Kind: string(n.Kind), Arguments: slices.Clone(n.Arguments)}
 	if n.Element != nil {
 		out.Element = nativeType(n.Element)
 	}
 	return &out
+}
+func indexDirection(desc bool) string {
+	if desc {
+		return "DESC"
+	}
+	return ""
 }
 
 func AssignObjectIDs(c PhysicalCatalog, in IdentityInput) (PhysicalCatalog, []Diagnostic) {
@@ -274,8 +310,13 @@ func AssignObjectIDs(c PhysicalCatalog, in IdentityInput) (PhysicalCatalog, []Di
 		priorNames[p.Name] = struct{}{}
 	}
 	renameDest := make(map[QualifiedName]struct{}, len(in.Renames))
+	renameIDs := make(map[ObjectID]struct{}, len(in.Renames))
 	renamed := make(map[ObjectID]QualifiedName, len(in.Renames))
 	for i, r := range in.Renames {
+		if _, ok := renameIDs[r.ID]; ok {
+			diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "rename_id_duplicate", Path: fmt.Sprintf("renames[%d].id", i), Message: "rename ID is duplicated"})
+		}
+		renameIDs[r.ID] = struct{}{}
 		if _, ok := priorByID[r.ID]; !ok {
 			diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "rename_id_missing", Path: fmt.Sprintf("renames[%d].id", i), Message: "rename ID is absent from prior objects"})
 		}
@@ -375,7 +416,11 @@ func TableDefsFromPhysical(c PhysicalCatalog) ([]schema.TableDef, []Diagnostic) 
 			case "primary_key":
 				t.PrimaryKey = append([]string(nil), constraint.Columns...)
 			case "unique":
-				t.UniqueConstraints = append(t.UniqueConstraints, schema.UniqueDef{Name: constraint.Name, Columns: append([]string(nil), constraint.Columns...), Deferrable: schema.Deferrability(constraint.Deferrability), NullsNotDistinct: constraint.NullsNotDistinct, IncludeColumns: append([]string(nil), constraint.IncludeColumns...), OnConflict: schema.ConflictResolution(constraint.OnConflict), StorageParameters: maps.Clone(constraint.StorageParameters), Tablespace: constraint.Tablespace, ReplicaIdentity: constraint.ReplicaIdentity, Collations: maps.Clone(constraint.Collations)})
+				u := schema.UniqueDef{Name: constraint.Name, Columns: slices.Clone(constraint.Columns), Deferrable: schema.Deferrability(constraint.Deferrability), NullsNotDistinct: constraint.NullsNotDistinct, IncludeColumns: slices.Clone(constraint.IncludeColumns), OnConflict: schema.ConflictResolution(constraint.OnConflict), StorageParameters: maps.Clone(constraint.StorageParameters), Tablespace: constraint.Tablespace, ReplicaIdentity: constraint.ReplicaIdentity, Collations: maps.Clone(constraint.Collations), Temporal: constraint.Temporal}
+				for _, key := range constraint.Keys {
+					u.Keys = append(u.Keys, schema.IndexKeyDef{Expression: sqltext.Text(key.Column), Descending: key.Direction == "DESC", Collation: key.Collation, OperatorClass: key.OperatorClass, PrefixLength: key.PrefixLength, NullsOrder: schema.NullsOrder(key.Nulls)})
+				}
+				t.UniqueConstraints = append(t.UniqueConstraints, u)
 			case "check":
 				t.Checks = append(t.Checks, schema.CheckDef{Name: constraint.Name, Expression: sqltext.Text(constraint.ExpressionSQL), NoInherit: constraint.NoInherit, NotValid: constraint.NotValid, NotEnforced: constraint.NotEnforced})
 			case "foreign_key":
@@ -386,11 +431,22 @@ func TableDefsFromPhysical(c PhysicalCatalog) ([]schema.TableDef, []Diagnostic) 
 		}
 		for _, index := range object.Indexes {
 			idx := schema.IndexDef{Name: index.Name, Unique: index.Unique, Method: schema.IndexMethod(index.Method), Predicate: sqltext.Text(index.PredicateSQL), IncludeColumns: append([]string(nil), index.IncludeColumns...), Invisible: index.Invisible, NotValid: index.NotValid, StorageParameters: maps.Clone(index.StorageParameters), Tablespace: index.Tablespace, ReplicaIdentity: index.ReplicaIdentity, NullsNotDistinct: index.NullsNotDistinct}
-			for _, part := range index.Parts {
-				if part.ExpressionSQL != "" {
+			switch index.KeyForm {
+			case "keys":
+				for _, part := range index.Parts {
+					idx.Keys = append(idx.Keys, schema.IndexKeyDef{Expression: sqltext.Text(part.ExpressionSQL), Descending: part.Direction == "DESC", Collation: part.Collation, OperatorClass: part.OperatorClass, PrefixLength: part.PrefixLength, NullsOrder: schema.NullsOrder(part.Nulls)})
+				}
+			case "expressions":
+				for _, part := range index.Parts {
 					idx.Expressions = append(idx.Expressions, sqltext.Text(part.ExpressionSQL))
-				} else {
-					idx.Columns = append(idx.Columns, part.Column)
+				}
+			default:
+				for _, part := range index.Parts {
+					if part.ExpressionSQL != "" {
+						idx.Expressions = append(idx.Expressions, sqltext.Text(part.ExpressionSQL))
+					} else {
+						idx.Columns = append(idx.Columns, part.Column)
+					}
 				}
 			}
 			t.Indexes = append(t.Indexes, idx)
