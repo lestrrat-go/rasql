@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/genfile"
 	"github.com/lestrrat-go/rasql/internal/modroot"
 	"github.com/lestrrat-go/rasql/internal/querygen"
@@ -35,6 +36,10 @@ const maxQueryInputBytes = 64 << 20
 // methods mutates it, so two field-wise equal Stores plan byte-identical
 // output.
 type Store struct {
+	// CompilerInput is an optional validated compiler catalog. When set, it
+	// is adapted to legacy descriptors before rendering; Tables remains a
+	// supported compatibility input.
+	CompilerInput *compilerir.PhysicalCatalog
 	// Package is the generated package name. Required, and must be a Go
 	// identifier that is not the blank identifier: "package _" is not a
 	// package clause the compiler accepts.
@@ -225,6 +230,15 @@ func (s Store) PlanContext(ctx context.Context) (Plan, error) {
 	}
 	if s.Dir == "" {
 		return Plan{}, errors.New("generate: store requires Dir")
+	}
+	if len(s.Tables) == 0 && s.CompilerInput != nil {
+		tables, diagnostics := compilerir.TableDefsFromPhysical(*s.CompilerInput)
+		for _, diagnostic := range diagnostics {
+			if diagnostic.Level == compilerir.DiagnosticError {
+				return Plan{}, fmt.Errorf("generate: %s", diagnostic.Message)
+			}
+		}
+		s.Tables = tables
 	}
 	if len(s.Tables) == 0 {
 		return Plan{}, errors.New("generate: store requires at least one table")

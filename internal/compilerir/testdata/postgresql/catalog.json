@@ -1,0 +1,13 @@
+{
+  "engine": {"dialect": "postgresql", "version": "16", "profile": "postgresql-16"},
+  "objects": [{
+    "id": "pg-users", "kind": "table", "schema": "public", "name": "users",
+    "columns": [
+      {"name": "id", "ordinal": 0, "logical_kind": "uuid", "native": {"dialect": "postgresql", "schema": "pg_catalog", "name": "uuid", "kind": "builtin"}, "nullable": false, "identity": "always"},
+      {"name": "parent_id", "ordinal": 1, "logical_kind": "uuid", "native": {"dialect": "postgresql", "schema": "app", "name": "user_id", "kind": "domain", "element": {"dialect": "postgresql", "schema": "pg_catalog", "name": "uuid", "kind": "builtin"}}, "nullable": true},
+      {"name": "note", "ordinal": 2, "logical_kind": "text", "native": {"dialect": "postgresql", "schema": "pg_catalog", "name": "text", "kind": "builtin"}, "nullable": true}
+    ],
+    "constraints": [{"name": "users_pkey", "kind": "primary_key", "columns": ["id"]}, {"name": "users_parent_fk", "kind": "foreign_key", "columns": ["parent_id"], "reference": {"schema": "public", "object": "users", "columns": ["id"]}}],
+    "indexes": [{"name": "users_lower_note", "parts": [{"expression_sql": "lower(note)"}], "predicate_sql": "note IS NOT NULL"}]
+  }, {"id": "pg-active-users", "kind": "view", "schema": "public", "name": "active_users", "columns": [{"name": "note", "ordinal": 0, "logical_kind": "text", "native": {"dialect": "postgresql", "schema": "pg_catalog", "name": "text", "kind": "builtin"}, "nullable": true}] }]
+}

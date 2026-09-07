@@ -1,0 +1,7 @@
+{
+  "engine": {"dialect": "sqlite", "version": "3.45", "profile": "sqlite-3"},
+  "objects": [{"id": "sqlite-events", "kind": "table", "schema": "archive", "name": "events", "columns": [
+    {"name": "id", "ordinal": 0, "logical_kind": "integer", "native": {"dialect": "sqlite", "name": "INTEGER", "kind": "builtin"}, "nullable": false},
+    {"name": "payload", "ordinal": 1, "logical_kind": "native", "native": {"dialect": "sqlite", "name": "BLOBISH", "kind": "other"}, "nullable": true}
+  ], "constraints": [{"name": "events_pkey", "kind": "primary_key", "columns": ["id"]}], "indexes": [] }]
+}
