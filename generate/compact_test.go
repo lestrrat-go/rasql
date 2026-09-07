@@ -331,7 +331,7 @@ func buildSampleAt(t *testing.T, root string, env []string, label, packagePath s
 	t.Helper()
 	output := filepath.Join(root, fmt.Sprintf("%s-%d.test", label, index))
 	stats := filepath.Join(root, fmt.Sprintf("%s-%d.time", label, index))
-	command := exec.Command("/usr/bin/time", "-f", "%e %U %S %M", "-o", stats, "go", "build", "-trimpath", "-o", output, packagePath)
+	command := exec.Command("/usr/bin/time", "-f", "%e %U %S %M", "-o", stats, "go", "build", "-buildvcs=false", "-trimpath", "-o", output, packagePath)
 	command.Dir = root
 	command.Env = env
 	buildOutput, err := command.CombinedOutput()
