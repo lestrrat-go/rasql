@@ -111,7 +111,7 @@ func countOpenTasks(page store.OpenProjectsPage) int {
 
 func TestAddTaskAndCloseTask(t *testing.T) {
 	ctx := t.Context()
-	repository, _ := openTx(t)
+	repository, executor := openTx(t)
 	projectID, memberID := seed(ctx, t, repository)
 	before := openProjects(ctx, t, repository)
 	if err := repository.AddTask(ctx, projectID, &memberID, "Owned task"); err != nil {
@@ -145,8 +145,26 @@ func TestAddTaskAndCloseTask(t *testing.T) {
 	if !unowned.Assignee.Loaded || unowned.Assignee.Present {
 		t.Fatal("the unowned task came back with an assignee")
 	}
+	if !owned.Row.IsOpen || owned.Row.CreatedAt.IsZero() || !unowned.Row.IsOpen || unowned.Row.CreatedAt.IsZero() {
+		t.Fatalf("new task defaults were not stored: owned=%#v unowned=%#v", owned.Row, unowned.Row)
+	}
+	closedCreate := store.NewTasksCreate().ProjectID(projectID).Title("Explicitly closed").IsOpen(false).DefaultCreatedAt()
+	closedPlan, err := closedCreate.Plan()
+	if err != nil {
+		t.Fatalf("plan explicitly closed task: %s", err)
+	}
+	if _, err := rasql.ExecMutation(ctx, executor, closedPlan); err != nil {
+		t.Fatalf("insert explicitly closed task: %s", err)
+	}
+	closedRow := readTaskByTitle(ctx, t, executor, "Explicitly closed")
+	if closedRow.IsOpen || closedRow.CreatedAt.IsZero() || closedRow.AssigneeID.Valid {
+		t.Fatalf("explicit false or nullable omission was not stored: %#v", closedRow)
+	}
 	if err := repository.CloseTask(ctx, unowned.Row.ID); err != nil {
 		t.Fatalf("close the unowned task: %s", err)
+	}
+	if err := repository.CloseTask(ctx, unowned.Row.ID); err != nil {
+		t.Fatalf("close the already closed task: %s", err)
 	}
 	closed := openProjects(ctx, t, repository)
 	for _, project := range closed.Values {
@@ -156,6 +174,27 @@ func TestAddTaskAndCloseTask(t *testing.T) {
 			}
 		}
 	}
+}
+
+func readTaskByTitle(ctx context.Context, t *testing.T, executor rasql.Executor, title string) store.TasksRow {
+	t.Helper()
+	source, err := store.Tasks().Source("tasks")
+	if err != nil {
+		t.Fatalf("create task source: %s", err)
+	}
+	expressions, err := (store.TasksColumns{}).Bind(source)
+	if err != nil {
+		t.Fatalf("bind task columns: %s", err)
+	}
+	projection, err := store.TasksProjection(expressions)
+	if err != nil {
+		t.Fatalf("build task projection: %s", err)
+	}
+	row, err := rasql.One(ctx, executor, rasql.Select(source.Source(), projection).Where(rasql.EqualValue(expressions.Title.Expr(), title)))
+	if err != nil {
+		t.Fatalf("read task %q: %s", title, err)
+	}
+	return row
 }
 
 func TestCloseTaskOnAMissingTaskIsNotAnError(t *testing.T) {

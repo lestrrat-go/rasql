@@ -23,11 +23,12 @@ const samplePath = "../sample/taskboard"
 // differently from the bundle's last commit. CONTRIBUTING.md's "Rebuilding the
 // walkthrough's application" section owns why each one differs.
 var bundleDivergences = map[string]struct{}{
-	"README.md":           {},
-	"go.mod":              {},
-	"scripts/generate.sh": {},
-	"scripts/migrate.sh":  {},
-	"scripts/rasql.sh":    {},
+	"README.md":                 {},
+	"go.mod":                    {},
+	"scripts/generate.sh":       {},
+	"scripts/migrate.sh":        {},
+	"scripts/refresh-schema.sh": {},
+	"scripts/rasql.sh":          {},
 }
 
 // TestWalkthroughBundleMatchesSample holds the checked-in application to the
@@ -51,11 +52,15 @@ func TestWalkthroughBundleMatchesSample(t *testing.T) {
 	goMod, err := os.ReadFile(filepath.Join(clone, "go.mod"))
 	require.NoError(t, err)
 	require.Contains(t, string(goMod), "replace github.com/lestrrat-go/rasql => ../rasql\n")
-	rasqlScript, err := os.ReadFile(filepath.Join(clone, "scripts", "rasql.sh"))
-	require.NoError(t, err)
-	require.Contains(t, string(rasqlScript), "exec rasql \"$@\"")
-	require.NotContains(t, string(rasqlScript), "go build")
-	require.NotContains(t, string(rasqlScript), "../..")
+	_, err = os.Stat(filepath.Join(clone, "scripts", "rasql.sh"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	for _, script := range []string{"generate.sh", "migrate.sh", "refresh-schema.sh"} {
+		source, readErr := os.ReadFile(filepath.Join(clone, "scripts", script))
+		require.NoError(t, readErr)
+		require.Contains(t, string(source), "rasql ", "%s must invoke the installed rasql command", script)
+		require.NotContains(t, string(source), "scripts/rasql.sh", "%s must not use a repository wrapper", script)
+		require.NotContains(t, string(source), "go run github.com/lestrrat-go/rasql/cmd/rasql", "%s must not use a module path command", script)
+	}
 
 	compared := 0
 	err = filepath.WalkDir(clone, func(path string, entry os.DirEntry, err error) error {
