@@ -513,7 +513,7 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 		return nil, err
 	}
 	basePrepared := graphPreparedQuery{}
-	cacheable := graphStageCacheable(probeCompiled, probeLimit)
+	cacheable := graphStageCacheable(probeCompiled)
 	if cacheable {
 		basePrepared, err = probe.prepareCompiledRaw(executor, probeCompiled)
 		if err != nil {
@@ -571,11 +571,7 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 		if err != nil {
 			return nil, err
 		}
-		limit := probeLimit
-		childQuery, err := edge.child.query.with(membership, edge.childKey, edge.options, limit)
-		if err != nil {
-			return nil, err
-		}
+		childQuery := probe.withMembership(membership)
 		compiled, err := childQuery.compile(executor)
 		if err != nil {
 			return nil, err
@@ -624,14 +620,14 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 		if !parentPresent[i] {
 			children = nil
 		}
+		if edge.kind == graphHasOne && len(children) > 1 {
+			return nil, planError("cardinality", "graph."+edge.name, "has-one returned multiple rows")
+		}
 		values := make([]any, len(children))
 		for j := range children {
 			values[j] = edge.child.query.mapRow(graphCloneValue(children[j].row))
 		}
 		if edge.kind == graphHasOne {
-			if len(values) > 1 {
-				return nil, planError("cardinality", "graph."+edge.name, "has-one returned multiple rows")
-			}
 			if len(values) == 0 {
 				_, callback, err := edge.attach.attach(parent.parent, nil, false, false)
 				if err != nil {
@@ -706,7 +702,7 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 	if err != nil {
 		return nil, err
 	}
-	junctionCacheable := graphStageCacheable(compiled, edge.options.PerParentLimit)
+	junctionCacheable := graphStageCacheable(compiled)
 	junctionCache := cache
 	if !junctionCacheable {
 		junctionCache = make(map[graphCacheKey]graphCacheEntry)
@@ -799,10 +795,7 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 			if err != nil {
 				return nil, err
 			}
-			limited, err := junctionPlan.with(membership, edge.junctionParent, edge.options, edge.options.PerParentLimit)
-			if err != nil {
-				return nil, err
-			}
+			limited := junctionBase.withMembership(membership)
 			finalCompiled, err := limited.compile(executor)
 			if err != nil {
 				return nil, err
@@ -875,7 +868,7 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 		if err != nil {
 			return nil, err
 		}
-		targetCacheable := graphStageCacheable(compiled, 0)
+		targetCacheable := graphStageCacheable(compiled)
 		targetCache := cache
 		if !targetCacheable {
 			targetCache = make(map[graphCacheKey]graphCacheEntry)
@@ -931,10 +924,7 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 			if err != nil {
 				return nil, err
 			}
-			childQuery, err := edge.child.query.with(membership, edge.childKey, EdgeOptions{}, 0)
-			if err != nil {
-				return nil, err
-			}
+			childQuery := targetBase.withMembership(membership)
 			finalCompiled, err := childQuery.compile(executor)
 			if err != nil {
 				return nil, err

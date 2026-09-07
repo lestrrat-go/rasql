@@ -253,3 +253,56 @@ func TestGraphDirectChildMapperPanicReportsDecodedRowCount(t *testing.T) {
 	require.Equal(t, EventTerminal, terminal.Phase)
 	require.Equal(t, int64(2), terminal.Rows)
 }
+
+func TestGraphHasOneCardinalityPrecedesMapping(t *testing.T) {
+	base, parentSource, childSource, _, parentQuery, childQuery := graphAcceptanceFixture(t, 1)
+	provider, ok := base.(compilerProvider)
+	require.True(t, ok)
+	executor := &lifecycleExecutor{Executor: base, compiler: provider.queryCompiler(), rows: []*runtimeFakeRows{
+		{columns: []string{"id", "tenant"}, values: [][]any{{int64(1), int64(1)}}},
+		{columns: []string{"id", "parent", "tenant", "rank"}, values: [][]any{
+			{int64(11), int64(1), int64(1), int64(0)}, {int64(12), int64(1), int64(1), int64(1)},
+		}},
+	}}
+	parents := TypedRelation[graphParentRow]{source: parentSource}
+	children := TypedRelation[graphChildRow]{source: childSource}
+	parentID, err := BindColumn[graphParentRow, int64](parents, "id", "")
+	require.NoError(t, err)
+	parentTenant, err := BindNullColumn[graphParentRow, int64](parents, "tenant", "")
+	require.NoError(t, err)
+	childParent, err := BindColumn[graphChildRow, int64](children, "parent", "")
+	require.NoError(t, err)
+	childTenant, err := BindColumn[graphChildRow, int64](children, "tenant", "")
+	require.NoError(t, err)
+	parentKey, err := NewGraphKey(
+		KeyPart(parentID, func(row graphParentRow) int64 { return row.ID }),
+		NullKeyPart(parentTenant, func(row graphParentRow) Nullable[int64] { return row.Tenant }),
+	)
+	require.NoError(t, err)
+	childKey, err := NewGraphKey(
+		KeyPart(childParent, func(row graphChildRow) int64 { return row.Parent }),
+		KeyPart(childTenant, func(row graphChildRow) int64 { return row.Tenant }),
+	)
+	require.NoError(t, err)
+	var mapped, attached atomic.Int64
+	childPlan, err := NewGraphPlan(childQuery, func(graphChildRow) graphChild {
+		mapped.Add(1)
+		panic("has-one mapper must not run")
+	})
+	require.NoError(t, err)
+	edge, err := HasOne("owner", parentKey, childKey, childPlan, EdgeOptions{}, func(*graphParent, LoadedOne[graphChild]) {
+		attached.Add(1)
+	})
+	require.NoError(t, err)
+	limitedParent, err := parentQuery.Limit(1)
+	require.NoError(t, err)
+	plan, err := NewGraphPlan(limitedParent, func(graphParentRow) graphParent { return graphParent{} }, edge)
+	require.NoError(t, err)
+
+	_, err = LoadGraph(t.Context(), executor, plan)
+	var planErr *PlanError
+	require.ErrorAs(t, err, &planErr)
+	require.Equal(t, "cardinality", planErr.Code)
+	require.Zero(t, mapped.Load())
+	require.Zero(t, attached.Load())
+}

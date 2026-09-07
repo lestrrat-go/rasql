@@ -36,8 +36,9 @@ func TestGraphPartitionRenderingAcrossEngineProfiles(t *testing.T) {
 	graphChildQuery := graphQuery[graphChildRow, graphChild]{value: childQuery, mapFn: func(row graphChildRow) graphChild { return graphChild{ID: row.ID} }}
 	membership, err := buildGraphMembership(childKey.key, []keyTuple{{components: []keyComponent{{value: int64(1)}, {value: int64(1)}}}})
 	require.NoError(t, err)
-	limited, err := graphChildQuery.with(membership, childKey.key, EdgeOptions{Where: EqualValue(childTenant.Expr(), int64(1)), PerParentLimit: 5}, 5)
+	limited, err := graphChildQuery.withOptions(EdgeOptions{Where: EqualValue(childTenant.Expr(), int64(1)), PerParentLimit: 5}, childKey.key, 5)
 	require.NoError(t, err)
+	limited = limited.withMembership(membership)
 
 	for _, tc := range []struct {
 		name    string

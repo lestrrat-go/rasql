@@ -72,7 +72,7 @@ type graphQueryOps interface {
 	decoderValue() any
 	schemaValue() ResultSchema
 	withoutPredicates() graphQueryOps
-	with(edge Predicate, key *graphKeySpec, options EdgeOptions, limit int) (graphQueryOps, error)
+	withMembership(Predicate) graphQueryOps
 	withOptions(options EdgeOptions, key *graphKeySpec, limit int) (graphQueryOps, error)
 }
 type graphRow struct {
@@ -176,13 +176,8 @@ func (q graphQuery[R, G]) withoutPredicates() graphQueryOps {
 	value.plan.where = nil
 	return graphQuery[R, G]{value: value, mapFn: q.mapFn}
 }
-func (q graphQuery[R, G]) with(edge Predicate, key *graphKeySpec, options EdgeOptions, limit int) (graphQueryOps, error) {
-	child := q.value.Where(edge)
-	result, err := (graphQuery[R, G]{value: child, mapFn: q.mapFn}).withOptions(options, key, limit)
-	if err != nil {
-		return nil, err
-	}
-	return result, nil
+func (q graphQuery[R, G]) withMembership(membership Predicate) graphQueryOps {
+	return graphQuery[R, G]{value: q.value.Where(membership), mapFn: q.mapFn}
 }
 
 func (q graphQuery[R, G]) withOptions(options EdgeOptions, key *graphKeySpec, limit int) (graphQueryOps, error) {

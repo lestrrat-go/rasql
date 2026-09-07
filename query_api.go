@@ -234,25 +234,26 @@ func (r TypedRelation[R]) Source() Source    { return r.source }
 func (r OptionalRelation[R]) Source() Source { return r.source }
 
 type QueryPlan struct {
-	sources        []Source
-	projection     []ProjectionItem
-	where          []Predicate
-	joins          []query.Join
-	group          []GroupKey
-	having         []Predicate
-	order          []OrderTerm
-	distinct       bool
-	limit, offset  *int
-	ctes           []query.CTE
-	body           query.QueryBody
-	partition      []GroupKey
-	partitionOrder []OrderTerm
-	partitionLimit int
-	err            error
-	projected      bool
-	native         *nativeQueryPlan
-	mutation       query.WriteStatement
-	planErr        error
+	sources             []Source
+	projection          []ProjectionItem
+	where               []Predicate
+	joins               []query.Join
+	group               []GroupKey
+	having              []Predicate
+	order               []OrderTerm
+	distinct            bool
+	limit, offset       *int
+	ctes                []query.CTE
+	body                query.QueryBody
+	partition           []GroupKey
+	partitionOrder      []OrderTerm
+	partitionLimit      int
+	partitionLimitValue Expr[int64]
+	err                 error
+	projected           bool
+	native              *nativeQueryPlan
+	mutation            query.WriteStatement
+	planErr             error
 }
 type Query[R any] struct {
 	plan              QueryPlan
@@ -266,6 +267,11 @@ func (p QueryPlan) Validate() error {
 	}
 	if p.planErr != nil {
 		return p.planErr
+	}
+	if p.partitionLimit > 0 {
+		if err := validatePartitionLimitValue(p.partitionLimitValue, p.partitionLimit); err != nil {
+			return err
+		}
 	}
 	if p.native != nil {
 		if p.native.engine == "" || strings.TrimSpace(p.native.statement.SQL()) == "" {
@@ -659,11 +665,32 @@ func (q Query[R]) withPartitionLimit(partition []GroupKey, order []OrderTerm, li
 	if limit <= 0 {
 		return q, planError("invalid_partition_limit", "limit", "must be positive")
 	}
+	limitValue := Value(int64(limit))
 	q.plan = clonePlan(q.plan)
 	q.plan.partition = append([]GroupKey(nil), partition...)
 	q.plan.partitionOrder = append([]OrderTerm(nil), order...)
 	q.plan.partitionLimit = limit
+	q.plan.partitionLimitValue = limitValue
 	return q, nil
+}
+
+func validatePartitionLimitValue(expression Expr[int64], limit int) error {
+	if expression.bindErr != nil {
+		return planError("unsnapshotable_bind", "plan.partition_limit", expression.bindErr.Error())
+	}
+	node, ok := expression.node.(query.Value)
+	if !ok {
+		return planError("internal_plan", "plan.partition_limit", "partition limit bind is missing")
+	}
+	token, ok := node.Argument().(bindToken)
+	if !ok || token.id == 0 || token.codec != "" || token.preEncoded || token.copy == nil || token.err != nil {
+		return planError("internal_plan", "plan.partition_limit", "partition limit bind is invalid")
+	}
+	value, ok := token.value.(int64)
+	if !ok || value != int64(limit) {
+		return planError("internal_plan", "plan.partition_limit", "partition limit bind value differs")
+	}
+	return nil
 }
 
 type scalarDecoder[T any] struct{ schema ResultSchema }

@@ -14,58 +14,44 @@ import (
 )
 
 func graphPreencodeBaseOccurrences(base compiledQuery, encoded stmt.Statement, final compiledQuery) (compiledQuery, error) {
-	baseIndexes := make([]int, 0, len(base.bindSlots))
-	for index := range base.bindSlots {
-		if graphGeneratedLimitSlot(base, index) {
-			continue
-		}
-		baseIndexes = append(baseIndexes, index)
+	baseArgs := base.statement.Args()
+	encodedArgs := encoded.Args()
+	finalArgs := final.statement.Args()
+	if base.statement.SQL() != encoded.SQL() {
+		return compiledQuery{}, planError("internal_plan", "binds", "base and prepared SQL differ")
 	}
-	matchBase := base
-	matchBase.bindSlots = make([]bindSlot, 0, len(baseIndexes))
-	matchBase.statement = stmt.New(sqltext.Text(base.statement.SQL()))
-	baseArgs := encoded.Args()
-	baseStatementArgs := base.statement.Args()
-	for _, index := range baseIndexes {
-		matchBase.bindSlots = append(matchBase.bindSlots, base.bindSlots[index])
-		matchBase.statement = stmt.New(sqltext.Text(matchBase.statement.SQL()), append(matchBase.statement.Args(), baseStatementArgs[index])...)
+	if len(baseArgs) != len(base.bindSlots) || len(baseArgs) != len(base.copyArgs) ||
+		len(encodedArgs) != len(base.bindSlots) || len(finalArgs) != len(final.bindSlots) ||
+		len(finalArgs) != len(final.copyArgs) {
+		return compiledQuery{}, planError("internal_plan", "binds", "statement arguments and bind metadata differ")
 	}
-	occurrences, err := matchBaseOccurrences(matchBase, final)
+	occurrences, err := matchBaseOccurrences(base, final)
 	if err != nil {
 		return compiledQuery{}, err
 	}
-	args := final.statement.Args()
+	result := final
+	result.bindSlots = append([]bindSlot(nil), final.bindSlots...)
+	result.copyArgs = append([]bindValueCopy(nil), final.copyArgs...)
+	args := append([]any(nil), finalArgs...)
 	for i, position := range occurrences {
-		baseIndex := baseIndexes[i]
-		if position >= len(args) || baseIndex >= len(baseArgs) {
+		if position >= len(args) || i >= len(encodedArgs) {
 			return compiledQuery{}, planError("internal_plan", "binds", "encoded occurrence is out of range")
 		}
-		value := baseArgs[baseIndex]
+		value := encodedArgs[i]
 		args[position] = value
-		final.bindSlots[position].preEncoded = true
-		final.copyArgs[position] = func() (any, error) { return graphCloneEncoded(value), nil }
+		result.bindSlots[position].preEncoded = true
+		result.copyArgs[position] = func() (any, error) { return graphCloneEncoded(value), nil }
 	}
-	final.statement = stmt.New(sqltext.Text(final.statement.SQL()), args...)
-	return final, nil
+	result.statement = stmt.New(sqltext.Text(final.statement.SQL()), args...)
+	return result, nil
 }
 
-func graphGeneratedLimitSlot(compiled compiledQuery, index int) bool {
-	if index != len(compiled.bindSlots)-1 || index >= len(compiled.statement.Args()) {
+func graphStageCacheable(compiled compiledQuery) bool {
+	if len(compiled.bindSlots) != len(compiled.statement.Args()) || len(compiled.bindSlots) != len(compiled.copyArgs) {
 		return false
 	}
-	if !bytes.Contains([]byte(compiled.statement.SQL()), []byte("__rasql_partition_row")) {
-		return false
-	}
-	_, err := normalizeGraphValue(compiled.statement.Args()[index])
-	return err == nil
-}
-
-func graphStageCacheable(compiled compiledQuery, perParentLimit int) bool {
-	if len(compiled.bindSlots) != len(compiled.statement.Args()) {
-		return false
-	}
-	for index, slot := range compiled.bindSlots {
-		if slot.id == 0 && (perParentLimit <= 0 || !graphGeneratedLimitSlot(compiled, index)) {
+	for _, slot := range compiled.bindSlots {
+		if slot.id == 0 {
 			return false
 		}
 	}

@@ -379,7 +379,7 @@ func queryBody(plan QueryPlan) (query.QueryBody, error) {
 		if err != nil {
 			return nil, err
 		}
-		outer, err = outer.WithWhere(query.LessThanOrEqual(ref.Column(partitionAlias), plan.partitionLimit))
+		outer, err = outer.WithWhere(query.LessThanOrEqual(ref.Column(partitionAlias), plan.partitionLimitValue.node))
 		if err != nil {
 			return nil, err
 		}
