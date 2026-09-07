@@ -33,7 +33,7 @@ func (e *lifecycleExecutor) Query(ctx context.Context, statement stmt.Statement)
 	return e.rows[index], nil
 }
 
-func lifecycleGraphPlan(t *testing.T, base Executor, attach func(*graphParent, LoadedMany[graphChild])) GraphPlan[graphParentRow, graphParent] {
+func lifecycleGraphPlan(t *testing.T, base Executor, one bool, attach func(*graphParent, LoadedMany[graphChild])) GraphPlan[graphParentRow, graphParent] {
 	t.Helper()
 	_, parentSource, childSource, _, parentQuery, childQuery := graphAcceptanceFixture(t, 1)
 	parents := TypedRelation[graphParentRow]{source: parentSource}
@@ -53,6 +53,15 @@ func lifecycleGraphPlan(t *testing.T, base Executor, attach func(*graphParent, L
 	childPlan, err := NewGraphPlan(childQuery, func(row graphChildRow) graphChild { return graphChild{ID: row.ID, Rank: row.Rank} })
 	require.NoError(t, err)
 	edge, err := HasMany("children", parentKey, childKey, childPlan, EdgeOptions{}, attach)
+	if one {
+		edge, err = HasOne("child", parentKey, childKey, childPlan, EdgeOptions{}, func(parent *graphParent, loaded LoadedOne[graphChild]) {
+			if loaded.Present {
+				attach(parent, LoadedMany[graphChild]{Loaded: loaded.Loaded, Values: []graphChild{*loaded.Value}})
+				return
+			}
+			attach(parent, LoadedMany[graphChild]{Loaded: loaded.Loaded})
+		})
+	}
 	require.NoError(t, err)
 	limitedParent, err := parentQuery.Limit(1)
 	require.NoError(t, err)
@@ -147,7 +156,7 @@ func TestGraphLifecycleDecodeFailureStopsLaterQueriesAndJoinsCleanup(t *testing.
 	executor := &lifecycleExecutor{Executor: base, compiler: provider.queryCompiler(), rows: []*runtimeFakeRows{
 		{values: [][]any{{int64(1), nil}}}, childRows,
 	}}
-	plan := lifecycleGraphPlan(t, base, func(*graphParent, LoadedMany[graphChild]) {})
+	plan := lifecycleGraphPlan(t, base, false, func(*graphParent, LoadedMany[graphChild]) {})
 	_, err := LoadGraph(t.Context(), executor, plan)
 	require.Error(t, err)
 	require.ErrorIs(t, err, sql.ErrNoRows)
@@ -172,10 +181,26 @@ func TestGraphLifecycleCancellationStopsLaterBreadthLevels(t *testing.T) {
 			cancel()
 		}
 	}
-	plan := lifecycleGraphPlan(t, base, func(*graphParent, LoadedMany[graphChild]) {})
+	plan := lifecycleGraphPlan(t, base, false, func(*graphParent, LoadedMany[graphChild]) {})
 	_, err := LoadGraph(cancelCtx, executor, plan)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, int64(2), executor.calls.Load())
+}
+
+func TestGraphLifecycleHasOneSecondRowStopsAttachment(t *testing.T) {
+	base, _, _, _, _, _ := graphAcceptanceFixture(t, 1)
+	provider, ok := base.(compilerProvider)
+	require.True(t, ok)
+	childRows := &runtimeFakeRows{values: [][]any{{int64(11), int64(1), int64(1), int64(0)}, {int64(12), int64(1), int64(1), int64(1)}}}
+	executor := &lifecycleExecutor{Executor: base, compiler: provider.queryCompiler(), rows: []*runtimeFakeRows{
+		{values: [][]any{{int64(1), nil}}}, childRows,
+	}}
+	plan := lifecycleGraphPlan(t, base, true, func(*graphParent, LoadedMany[graphChild]) {})
+	_, err := LoadGraph(t.Context(), executor, plan)
+	require.ErrorIs(t, err, ErrMultipleRows)
+	require.Equal(t, int64(2), executor.calls.Load())
+	require.Equal(t, 1, childRows.closed)
+	require.Equal(t, 1, childRows.finished)
 }
 
 func TestGraphLifecycleMapperAndAttachmentPanicsPropagate(t *testing.T) {
@@ -191,6 +216,6 @@ func TestGraphLifecycleMapperAndAttachmentPanicsPropagate(t *testing.T) {
 	mapperPlan, err := NewGraphPlan(limitedParents, func(graphParentRow) graphParent { panic("mapper panic") })
 	require.NoError(t, err)
 	require.Panics(t, func() { _, _ = LoadGraph(t.Context(), newExecutor(), mapperPlan) })
-	plan := lifecycleGraphPlan(t, base, func(*graphParent, LoadedMany[graphChild]) { panic("attachment panic") })
+	plan := lifecycleGraphPlan(t, base, false, func(*graphParent, LoadedMany[graphChild]) { panic("attachment panic") })
 	require.Panics(t, func() { _, _ = LoadGraph(t.Context(), newExecutor(), plan) })
 }
