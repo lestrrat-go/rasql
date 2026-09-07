@@ -142,6 +142,9 @@ func NewProjection[R any](items []ProjectionItem, decoder RowDecoder[R]) (Projec
 	if !reflect.DeepEqual(schemaValue.Columns(), decoder.ResultSchema().Columns()) {
 		return Projection[R]{}, planError("invalid_projection", "decoder", "schema does not match projection")
 	}
+	if err := validateQ1DecoderMetadata(schemaValue, decoder); err != nil {
+		return Projection[R]{}, err
+	}
 	seenComponents := make(map[string]struct{})
 	seenColumns := make(map[string]struct{})
 	for i, presence := range decoder.Presence() {
@@ -382,6 +385,43 @@ func (q Query[R]) Validate() error {
 	decoderSchema := q.projection.decoder.ResultSchema()
 	if !reflect.DeepEqual(decoderSchema.Columns(), q.projection.schema.Columns()) {
 		return planError("invalid_projection", "decoder", "schema changed after projection construction")
+	}
+	if err := validateQ1DecoderMetadata(q.projection.schema, q.projection.decoder); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateQ1DecoderMetadata(resultSchema ResultSchema, decoder interface{ Presence() []Presence }) error {
+	seenComponents := map[string]struct{}{}
+	seenColumns := map[string]struct{}{}
+	for i, presence := range decoder.Presence() {
+		if presence.component == "" || len(presence.columns) == 0 {
+			return planError("invalid_projection", fmt.Sprintf("decoder.presence[%d]", i), "presence metadata is incomplete")
+		}
+		if _, ok := seenComponents[presence.component]; ok {
+			return planError("invalid_projection", fmt.Sprintf("decoder.presence[%d]", i), "duplicate component")
+		}
+		seenComponents[presence.component] = struct{}{}
+		for _, name := range presence.columns {
+			if _, ok := seenColumns[name]; ok {
+				return planError("invalid_projection", fmt.Sprintf("decoder.presence[%d]", i), "duplicate presence column")
+			}
+			seenColumns[name] = struct{}{}
+			found := false
+			for _, column := range resultSchema.columns {
+				if column.Name == name {
+					found = true
+					if !column.Nullable {
+						return planError("invalid_projection", fmt.Sprintf("decoder.presence[%d]", i), "presence column must be nullable")
+					}
+					break
+				}
+			}
+			if !found {
+				return planError("invalid_projection", fmt.Sprintf("decoder.presence[%d]", i), "presence column is not projected")
+			}
+		}
 	}
 	return nil
 }
