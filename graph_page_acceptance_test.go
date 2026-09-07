@@ -191,20 +191,68 @@ func TestPageGraphAfterEmitsOneLogicalGraphEventWithLookaheadRows(t *testing.T) 
 
 	mu.Lock()
 	defer mu.Unlock()
-	var graphStarts, graphTerminals int
+	var graphStarts, graphTerminals, rootStatementTerminals int
 	for _, event := range events {
-		if event.Kind != EventGraph {
-			continue
-		}
-		if event.Phase == EventStart {
+		switch {
+		case event.Kind == EventGraph && event.Phase == EventStart:
 			graphStarts++
-		}
-		if event.Phase == EventTerminal {
+		case event.Kind == EventGraph && event.Phase == EventTerminal:
 			graphTerminals++
 			require.Equal(t, int64(7), event.Rows)
+			require.True(t, event.EarlyClose)
+		case event.Kind == EventStatement && event.Phase == EventTerminal && event.StatementIndex == 0:
+			rootStatementTerminals++
+			require.Equal(t, int64(3), event.Rows)
+			require.True(t, event.EarlyClose)
 		}
 	}
 	require.Equal(t, 1, graphStarts)
+	require.Equal(t, 1, graphTerminals)
+	require.Equal(t, 1, rootStatementTerminals)
+}
+
+func TestPageGraphAfterMapperPanicReportsLogicalEarlyClose(t *testing.T) {
+	base, rootQuery, _, _, _, _, _, _, _, _, _, _, _, _ := pageFixture(t)
+	provider, ok := base.(compilerProvider)
+	require.True(t, ok)
+	counting := &pageCountingExecutor{Executor: base, compiler: provider.queryCompiler()}
+	plan, err := NewGraphPlan(rootQuery, func(pageParentRow) pageRootGraph {
+		panic("mapper panic")
+	})
+	require.NoError(t, err)
+	rootExpr := Expr[int64]{node: rootQuery.plan.projection[0].expression, source: rootQuery.plan.projection[0].source}
+	pageKey := AscKey(rootExpr, func(row pageParentRow) int64 { return row.ID })
+	spec, err := NewPageSpec([]PageKey[pageParentRow]{pageKey}, pageKey)
+	require.NoError(t, err)
+
+	var mu sync.Mutex
+	var events []Event
+	observed, err := WithEventObservers(counting, ExtensionErrorHandlerFunc(func(context.Context, ExtensionError) {}), EventObserverFunc(func(ctx context.Context, event Event) (context.Context, EventCompletion) {
+		mu.Lock()
+		events = append(events, event)
+		mu.Unlock()
+		return ctx, EventCompletionFunc(func(_ context.Context, terminal Event) error {
+			mu.Lock()
+			events = append(events, terminal)
+			mu.Unlock()
+			return nil
+		})
+	}))
+	require.NoError(t, err)
+	require.Panics(t, func() {
+		_, _ = PageGraphAfter(t.Context(), observed, plan, spec, PagePolicy{DefaultLimit: 2, MaxLimit: 2}, PageRequest{Limit: 2})
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	var graphTerminals int
+	for _, event := range events {
+		if event.Kind == EventGraph && event.Phase == EventTerminal {
+			graphTerminals++
+			require.Equal(t, int64(1), event.Rows)
+			require.True(t, event.EarlyClose)
+		}
+	}
 	require.Equal(t, 1, graphTerminals)
 }
 

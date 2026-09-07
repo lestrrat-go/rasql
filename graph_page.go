@@ -40,9 +40,13 @@ func PageGraphAfter[R, G any](ctx context.Context, executor Executor, plan Graph
 	page, err := consumePreparedPage(callCtx, observed, prepared, func(row R, kept bool) error {
 		observedRows++
 		if !kept {
+			early = true
 			return nil
 		}
-		rootRows = append(rootRows, graphRow{row: row, graph: root.mapRow(row)})
+		early = true
+		mapped := root.mapRow(row)
+		rootRows = append(rootRows, graphRow{row: row, graph: mapped})
+		early = false
 		return nil
 	})
 	if err != nil {
