@@ -15,7 +15,8 @@ import (
 	"github.com/lestrrat-go/rasql/internal/compilerir"
 )
 
-const FormatVersion = 1
+const FormatVersion = 2
+const legacyFormatVersion = 1
 const MaxSourceFileBytes int64 = 64 << 20
 
 type File struct {
@@ -27,7 +28,7 @@ type File struct {
 	Queries    []QueryRecord    `json:"queries"`
 	Generation GenerationRecord `json:"generation"`
 	Digests    Digests          `json:"digests"`
-	Mappings   MappingRecord    `json:"mappings,omitempty"`
+	Mappings   MappingRecord    `json:"mappings"`
 }
 type MappingRecord struct {
 	Scalars   []ScalarMappingRecord   `json:"scalars,omitempty"`
@@ -55,19 +56,6 @@ type ThroughMappingRecord struct {
 	SourceTo   []string `json:"source_to"`
 	TargetFrom []string `json:"target_from"`
 	TargetTo   []string `json:"target_to"`
-}
-
-func (f File) MarshalJSON() ([]byte, error) {
-	type fileAlias File
-	var mappings *MappingRecord
-	if len(f.Mappings.Scalars) != 0 || len(f.Mappings.Relations) != 0 {
-		m := f.Mappings
-		mappings = &m
-	}
-	return json.Marshal(struct {
-		fileAlias
-		Mappings *MappingRecord `json:"mappings,omitempty"`
-	}{fileAlias: fileAlias(f), Mappings: mappings})
 }
 
 type GenerationRecord struct {
@@ -306,6 +294,9 @@ func Decode(b []byte) (File, error) {
 	if err := d.Decode(&extra); err != io.EOF {
 		return f, errors.New("compilerlock: trailing JSON")
 	}
+	if f.Format == legacyFormatVersion {
+		return upgradeLegacyV1(f)
+	}
 	if f.Format != FormatVersion {
 		return f, fmt.Errorf("compilerlock: unsupported format %d", f.Format)
 	}
@@ -342,7 +333,7 @@ func Upgrade(b []byte) ([]byte, error) {
 	if h.Format > FormatVersion {
 		return nil, fmt.Errorf("compilerlock: newer format %d", h.Format)
 	}
-	if h.Format < FormatVersion {
+	if h.Format < legacyFormatVersion {
 		return nil, fmt.Errorf("compilerlock: no upgrade from format %d", h.Format)
 	}
 	f, err := Decode(b)
@@ -350,6 +341,33 @@ func Upgrade(b []byte) ([]byte, error) {
 		return nil, err
 	}
 	return Encode(f)
+}
+
+func upgradeLegacyV1(f File) (File, error) {
+	if f.Mappings.Scalars != nil || f.Mappings.Relations != nil {
+		return f, errors.New("compilerlock: invalid v1 mapping records")
+	}
+	queries := make([]QueryDigestInput, 0, len(f.Queries))
+	for _, query := range f.Queries {
+		queries = append(queries, QueryDigestInput{ID: string(query.ID), SQL: query.SQL, Operation: query.Operation, Parameters: query.Parameters, Results: query.Results, Cardinality: query.Cardinality})
+	}
+	generation := compilerir.GoConfig{Package: f.Generation.Package, Output: f.Generation.Output, Emitter: f.Generation.Emitter, Prune: f.Generation.Prune}
+	for _, object := range f.Generation.Objects {
+		generation.Objects = append(generation.Objects, compilerir.ObjectGoName{ID: compilerir.ObjectID(object.ID), Source: object.Source, Row: object.Row, Create: object.Create, Patch: object.Patch, File: object.File})
+	}
+	for _, query := range f.Generation.Queries {
+		generation.Queries = append(generation.Queries, compilerir.QueryGoName{ID: compilerir.QueryID(query.ID), Function: query.Function, Result: query.Result, Projection: query.Projection, Decoder: query.Decoder, File: query.File})
+	}
+	digests, err := BuildDigests(DigestInputs{Source: SourceDigestInput{Record: f.Source, Engine: f.Engine}, Queries: queries, Generation: generation})
+	if err != nil {
+		return f, fmt.Errorf("compilerlock: cannot validate v1 mapping digest: %w", err)
+	}
+	if digests.Mappings != f.Digests.Mappings {
+		return f, errors.New("compilerlock: v1 lock lacks mapping records for a non-empty mapping digest")
+	}
+	f.Format = FormatVersion
+	f.Mappings = MappingRecord{Scalars: []ScalarMappingRecord{}, Relations: []RelationMappingRecord{}}
+	return f, nil
 }
 
 func validateFile(f File) error {

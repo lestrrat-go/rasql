@@ -68,7 +68,6 @@ type GoConfig struct {
 	Objects         []ObjectGoName
 	Queries         []QueryGoName
 	Scalars         []ScalarMapping
-	Relations       []RelationMapping
 	Emitter         string
 	Prune           bool
 }
@@ -82,7 +81,7 @@ func BuildGo(model SemanticModel, config GoConfig) (GoModel, []Diagnostic) {
 	if config.Emitter != "" && config.Emitter != "compact" && config.Emitter != "legacy" {
 		diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "invalid_emitter", Path: "emitter", Message: "emitter must be compact or legacy"})
 	}
-	if err := ValidateMappingConfig(MappingConfig{Scalars: config.Scalars, Relations: config.Relations}, config.Package); err != nil {
+	if err := ValidateMappingConfig(MappingConfig{Scalars: config.Scalars}, config.Package); err != nil {
 		diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "invalid_mapping", Path: "mappings", Message: err.Error()})
 	}
 	for _, object := range model.Objects {

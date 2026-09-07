@@ -22,7 +22,7 @@ func TestManyThroughMappingRoundTripPreservesOrderedPaths(t *testing.T) {
 		t.Fatalf("mapping changed during round trip: %#v", got)
 	}
 	hash := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	encoded, err := compilerlock.Encode(compilerlock.File{Format: 1, Compiler: "test", Source: compilerlock.SourceRecord{Kind: "external", Identity: "x"}, Engine: compilerlock.EngineRecord{Dialect: "sqlite", Profile: "sqlite-3"}, Catalog: compilerlock.CatalogRecord{Objects: []compilerlock.ObjectRecord{}}, Mappings: record, Queries: []compilerlock.QueryRecord{}, Generation: compilerlock.GenerationRecord{Package: "p", Output: "out", Emitter: "compact", Objects: []compilerlock.ObjectNameRecord{}}, Digests: compilerlock.Digests{Source: hash, Mappings: hash, Queries: hash, Generation: hash}})
+	encoded, err := compilerlock.Encode(compilerlock.File{Format: compilerlock.FormatVersion, Compiler: "test", Source: compilerlock.SourceRecord{Kind: "external", Identity: "x"}, Engine: compilerlock.EngineRecord{Dialect: "sqlite", Profile: "sqlite-3"}, Catalog: compilerlock.CatalogRecord{Objects: []compilerlock.ObjectRecord{}}, Mappings: record, Queries: []compilerlock.QueryRecord{}, Generation: compilerlock.GenerationRecord{Package: "p", Output: "out", Emitter: "compact", Objects: []compilerlock.ObjectNameRecord{}}, Digests: compilerlock.Digests{Source: hash, Mappings: hash, Queries: hash, Generation: hash}})
 	if err != nil {
 		t.Fatal(err)
 	}

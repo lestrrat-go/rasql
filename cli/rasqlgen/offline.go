@@ -77,7 +77,7 @@ func (c command) runOfflineGenerate(settings config, configPath string, check bo
 	if settings.Output == "" {
 		settings.Output = lock.Generation.Output
 	}
-	generation := compilerir.GoConfig{Package: settings.Package, Output: settings.Output, Emitter: lock.Generation.Emitter, Prune: prune, Scalars: mappings.Scalars, Relations: mappings.Relations}
+	generation := compilerir.GoConfig{Package: settings.Package, Output: settings.Output, Emitter: lock.Generation.Emitter, Prune: prune, Scalars: mappings.Scalars}
 	if generation.Emitter == "" {
 		generation.Emitter = "legacy"
 	}
@@ -276,7 +276,7 @@ func offlineDigestGroups(root string, settings config, lock compilerlock.File) (
 		}
 		queries = append(queries, compilerlock.QueryDigestInput{ID: string(query.ID), SQL: input, Operation: query.Operation, Parameters: query.Parameters, Results: query.Results, Cardinality: query.Cardinality})
 	}
-	generation := compilerir.GoConfig{Package: lock.Generation.Package, Output: lock.Generation.Output, Emitter: lock.Generation.Emitter, Prune: lock.Generation.Prune, Relations: mappings.Relations, Scalars: mappings.Scalars}
+	generation := compilerir.GoConfig{Package: lock.Generation.Package, Output: lock.Generation.Output, Emitter: lock.Generation.Emitter, Prune: lock.Generation.Prune, Scalars: mappings.Scalars}
 	if settings.Package != "" {
 		generation.Package = settings.Package
 	}

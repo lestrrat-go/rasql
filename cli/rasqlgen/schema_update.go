@@ -95,7 +95,7 @@ func (c command) runSchemaUpdate(args []string) error {
 	if emitter == "" {
 		emitter = "legacy"
 	}
-	generation := compilerir.GoConfig{Package: cfg.Package, Output: cfg.Output, Emitter: emitter, Prune: prune, Scalars: mappings.Scalars, Relations: mappings.Relations}
+	generation := compilerir.GoConfig{Package: cfg.Package, Output: cfg.Output, Emitter: emitter, Prune: prune, Scalars: mappings.Scalars}
 	rowNames := cfg.Tables.RowNames
 	configuredNames, err := cfg.names()
 	if err != nil {
