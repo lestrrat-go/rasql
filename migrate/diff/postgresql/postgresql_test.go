@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/lestrrat-go/rasql/internal/migrationdir"
+	"github.com/lestrrat-go/rasql/migrate"
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/migrate/diff/postgresql"
 	"github.com/lestrrat-go/rasql/schema"
@@ -1047,7 +1048,7 @@ func TestParseRejectsIndexOnlySourceForMissingTable(t *testing.T) {
 	require.EqualError(t, err, `postgresql schema source "indexes.sql" defines index orphan_idx on missing table missing`)
 }
 
-func TestDiffRejectsConcurrentIndex(t *testing.T) {
+func TestDiffPlansConcurrentIndexAsNonTransactional(t *testing.T) {
 	analyzer := postgresql.New()
 	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY);")
 	target := parseSnapshot(t, analyzer, `
@@ -1055,8 +1056,33 @@ func TestDiffRejectsConcurrentIndex(t *testing.T) {
 		CREATE INDEX CONCURRENTLY members_id_idx ON members (id);
 	`)
 
-	_, err := analyzer.Diff(baseline, target)
-	require.ErrorContains(t, err, "uses CONCURRENTLY")
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Equal(t, migrate.ExecutionModeNonTransactional, plan.Mode)
+	require.Len(t, plan.Statements, 1)
+	require.Contains(t, plan.Statements[0].SQL, "CREATE INDEX CONCURRENTLY")
+	require.Contains(t, plan.Statements[0].ReverseSQL, "DROP INDEX CONCURRENTLY")
+}
+
+func TestResolvedPlanPreservesNonTransactionalMode(t *testing.T) {
+	analyzer := postgresql.New()
+	baseline := parseSnapshot(t, analyzer, "CREATE TABLE tasks (id bigint PRIMARY KEY);")
+	target := parseSnapshot(t, analyzer, `
+		CREATE TABLE tasks (id bigint PRIMARY KEY, owner_label text NOT NULL);
+		CREATE INDEX CONCURRENTLY tasks_owner_label_idx ON tasks (owner_label);
+	`)
+
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Len(t, plan.Decisions, 1)
+	resolved, err := plan.Resolve(diff.Resolution{
+		DecisionID:  plan.Decisions[0].ID,
+		BackfillSQL: "UPDATE tasks SET owner_label = 'owner';",
+	})
+	require.NoError(t, err)
+	require.Equal(t, migrate.ExecutionModeNonTransactional, resolved.Mode)
+	require.Contains(t, resolved.Statements[len(resolved.Statements)-1].SQL, "CREATE INDEX CONCURRENTLY")
+	require.Contains(t, resolved.Statements[len(resolved.Statements)-1].ReverseSQL, "DROP INDEX CONCURRENTLY")
 }
 
 func parseSnapshot(t *testing.T, analyzer postgresql.Analyzer, source string) diff.Snapshot {

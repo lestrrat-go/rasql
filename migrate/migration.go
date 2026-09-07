@@ -21,6 +21,15 @@ const (
 	DirectionDown Direction = "down"
 )
 
+// ExecutionMode selects the execution policy for a migration. The zero value
+// preserves the historical transactional behavior.
+type ExecutionMode string
+
+const (
+	ExecutionModeAtomic           ExecutionMode = ""
+	ExecutionModeNonTransactional ExecutionMode = "nontransactional"
+)
+
 type IncompleteMigration struct {
 	ID          string
 	Checksum    string
@@ -71,7 +80,8 @@ func executionResult(completed []Migration, err error) (ExecutionResult, error) 
 // Every Statement contains native SQL. The runner sends the source unchanged
 // to the database driver and does not parse, split, or render it.
 type Migration struct {
-	ID string
+	ID   string
+	Mode ExecutionMode
 
 	// Statements are the forward sources, in the order they are applied.
 	// They alone form the recorded checksum.
@@ -102,6 +112,9 @@ func (m Migration) Validate() error {
 }
 
 func (m Migration) validate() error {
+	if m.Mode != ExecutionModeAtomic && m.Mode != ExecutionModeNonTransactional {
+		return fmt.Errorf("migrate: migration %q has invalid execution mode %q", m.ID, m.Mode)
+	}
 	if err := validateMigrationID(m.ID); err != nil {
 		return err
 	}
@@ -148,7 +161,14 @@ func validateMigrationID(id string) error {
 }
 
 func checksum(statements []Statement) string {
+	return checksumMode(ExecutionModeAtomic, statements)
+}
+
+func checksumMode(mode ExecutionMode, statements []Statement) string {
 	hash := sha256.New()
+	if mode == ExecutionModeNonTransactional {
+		hash.Write([]byte("rasql-execution-mode\x00nontransactional\x00"))
+	}
 	for _, statement := range statements {
 		hash.Write([]byte(statement.Source))
 		hash.Write([]byte{0})

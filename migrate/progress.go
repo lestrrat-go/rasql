@@ -62,7 +62,7 @@ func (r Runner) progress(ctx context.Context, queries queryer) (*progressEntry, 
 }
 
 // Reconcile resolves a retained migration intent after an interrupted
-// non-transactional migration. The check runs while the migration lock is held
+// nontransactional migration. The check runs while the migration lock is held
 // and must report whether the source took effect.
 func (r Runner) Reconcile(ctx context.Context, check ReconcileCheck, migrations ...Migration) error {
 	if check == nil {
@@ -71,8 +71,8 @@ func (r Runner) Reconcile(ctx context.Context, check ReconcileCheck, migrations 
 	if err := r.validate(); err != nil {
 		return err
 	}
-	if r.dialect.Name() != "mysql" {
-		return fmt.Errorf("migrate: reconcile is supported only for MySQL")
+	if r.dialect.Name() != "mysql" && r.dialect.Name() != "postgresql" {
+		return fmt.Errorf("migrate: reconcile is supported only for MySQL and PostgreSQL")
 	}
 	prepared, err := prepareMigrations(migrations)
 	if err != nil {
@@ -127,7 +127,11 @@ func (r Runner) Reconcile(ctx context.Context, check ReconcileCheck, migrations 
 			return nil, fmt.Errorf("migrate: invalid reconcile decision %q", decision)
 		}
 	}
-	_, err = r.withMySQLLock(ctx, connection, run)
+	if r.dialect.Name() == "postgresql" {
+		_, err = r.withPostgreSQLLock(ctx, connection, run)
+	} else {
+		_, err = r.withMySQLLock(ctx, connection, run)
+	}
 	return err
 }
 
@@ -192,6 +196,8 @@ func (r Runner) upsertProgress(ctx context.Context, connection executor, migrati
 	statement := "INSERT INTO " + r.progressSQL + " (" + r.idSQL + ", " + r.checksumSQL + ", " + r.progressColumn("direction") + ", " + r.progressColumn("source_index") + ", " + r.progressColumn("source") + ", " + r.progressColumn("next_index") + ") VALUES (" + first + ", " + second + ", " + third + ", " + fourth + ", " + fifth + ", " + sixth + ")"
 	if r.dialect.Name() == "mysql" {
 		statement += " ON DUPLICATE KEY UPDATE " + r.checksumSQL + "=VALUES(" + r.checksumSQL + "), " + r.progressColumn("direction") + "=VALUES(" + r.progressColumn("direction") + "), " + r.progressColumn("source_index") + "=VALUES(" + r.progressColumn("source_index") + "), " + r.progressColumn("source") + "=VALUES(" + r.progressColumn("source") + "), " + r.progressColumn("next_index") + "=VALUES(" + r.progressColumn("next_index") + ")"
+	} else if r.dialect.Name() == "postgresql" {
+		statement += " ON CONFLICT (" + r.idSQL + ") DO UPDATE SET " + r.checksumSQL + "=EXCLUDED." + r.checksumSQL + ", " + r.progressColumn("direction") + "=EXCLUDED." + r.progressColumn("direction") + ", " + r.progressColumn("source_index") + "=EXCLUDED." + r.progressColumn("source_index") + ", " + r.progressColumn("source") + "=EXCLUDED." + r.progressColumn("source") + ", " + r.progressColumn("next_index") + "=EXCLUDED." + r.progressColumn("next_index")
 	}
 	if _, err := connection.ExecContext(ctx, statement, migration.id, migration.checksum, direction, index, migrationSource(migration, direction, index), index); err != nil {
 		return err
@@ -398,7 +404,7 @@ func (r Runner) applyPreparedMySQL(ctx context.Context, connection *sql.Conn, ta
 		if err := r.finalizeProgress(ctx, connection, terminal, migration); err != nil {
 			return exportMigrationsForResult(completed), incompleteError(terminal, fmt.Errorf("finalize progress: %w", err))
 		}
-		completed = append(completed, Migration{ID: migration.id, Statements: append([]Statement(nil), migration.statements...), Down: append([]Statement(nil), migration.down...)})
+		completed = append(completed, Migration{ID: migration.id, Mode: migration.mode, Statements: append([]Statement(nil), migration.statements...), Down: append([]Statement(nil), migration.down...)})
 	}
 	return exportMigrationsForResult(completed), nil
 }
@@ -462,7 +468,7 @@ func (r Runner) revertPreparedMySQL(ctx context.Context, connection *sql.Conn, t
 		if err := r.finalizeProgress(ctx, connection, terminal, migration); err != nil {
 			return exportMigrationsForResult(completed), incompleteError(terminal, fmt.Errorf("finalize progress: %w", err))
 		}
-		completed = append(completed, Migration{ID: migration.id, Statements: append([]Statement(nil), migration.statements...), Down: append([]Statement(nil), migration.down...)})
+		completed = append(completed, Migration{ID: migration.id, Mode: migration.mode, Statements: append([]Statement(nil), migration.statements...), Down: append([]Statement(nil), migration.down...)})
 	}
 	return exportMigrationsForResult(completed), nil
 }

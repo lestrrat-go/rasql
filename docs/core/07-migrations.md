@@ -309,7 +309,7 @@ rasql migrate diff \
   -output db/migrations/sqlite/002_add_member_email
 ```
 
-The first PostgreSQL, MySQL, and SQLite slices generate new tables, new nullable columns, new required columns with defaults, and ordinary named indexes. They refuse to infer renames, removals, changed columns or constraints, and required columns without a backfill. The PostgreSQL adapter also refuses `CREATE INDEX CONCURRENTLY`. The SQLite adapter requires every added default to be literal and refuses added primary-key, unique, generated, and foreign-key-default columns. Write those migrations by hand.
+The first PostgreSQL, MySQL, and SQLite slices generate new tables, new nullable columns, new required columns with defaults, and ordinary named indexes. They refuse to infer renames, removals, changed columns or constraints, and required columns without a backfill. PostgreSQL `CREATE INDEX CONCURRENTLY` generates an explicit nontransactional migration. The SQLite adapter requires every added default to be literal and refuses added primary-key, unique, generated, and foreign-key-default columns. Write those migrations by hand.
 
 The generated files use the normal migration format. Review them, then apply them with `rasql migrate apply`. Do not edit a generated migration after it has been applied.
 

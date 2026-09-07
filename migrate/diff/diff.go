@@ -10,6 +10,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/lestrrat-go/rasql/migrate"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/sqltext"
 )
@@ -128,6 +129,7 @@ type Plan struct {
 	Dialect            string
 	Operations         []ProposedOperation
 	Decisions          []RequiredDecision
+	Mode               migrate.ExecutionMode
 	Statements         []PlannedStatement
 	IrreversibleReason string
 	lowerer            Lowerer
@@ -194,6 +196,7 @@ func DecisionID(kind DecisionKind, dialect, table, column string) string {
 // required decisions have been supplied.
 type LoweringResult struct {
 	Operations         []ProposedOperation
+	Mode               migrate.ExecutionMode
 	Statements         []PlannedStatement
 	IrreversibleReason string
 }
@@ -218,6 +221,7 @@ func NewPlan(dialect string, operations []ProposedOperation, decisions []Require
 			return Plan{}, fmt.Errorf("migrate diff: lower plan: %w", err)
 		}
 		plan.Operations = cloneOperations(lowered.Operations)
+		plan.Mode = lowered.Mode
 		plan.Statements = cloneStatements(lowered.Statements)
 		plan.IrreversibleReason = lowered.IrreversibleReason
 		if err := plan.Validate(); err != nil {
@@ -290,6 +294,7 @@ func (p Plan) Resolve(resolutions ...Resolution) (Plan, error) {
 			return Plan{}, fmt.Errorf("migrate diff: lower resolved plan: %w", err)
 		}
 		copyPlan.Operations = cloneOperations(lowered.Operations)
+		copyPlan.Mode = lowered.Mode
 		copyPlan.Statements = cloneStatements(lowered.Statements)
 		copyPlan.IrreversibleReason = lowered.IrreversibleReason
 	} else {
@@ -436,6 +441,9 @@ func (p Plan) Validate() error {
 			}
 		}
 	}
+	if p.Mode != migrate.ExecutionModeAtomic && p.Mode != migrate.ExecutionModeNonTransactional {
+		return fmt.Errorf("migrate diff: invalid execution mode %q", p.Mode)
+	}
 	sources := make(map[string]int, len(p.Statements))
 	for index, statement := range p.Statements {
 		if statement.Source == "" || filepath.Base(statement.Source) != statement.Source || strings.HasPrefix(statement.Source, ".") || filepath.Ext(statement.Source) != ".sql" {
@@ -503,6 +511,11 @@ func WriteMigration(directory string, p Plan) error {
 		path := filepath.Join(temporary, strings.TrimSuffix(statement.Source, ".sql")+".up.sql")
 		if err := os.WriteFile(path, []byte(statement.SQL), 0o600); err != nil {
 			return fmt.Errorf("migrate diff: write generated SQL source %q: %w", statement.Source, err)
+		}
+	}
+	if p.Mode == migrate.ExecutionModeNonTransactional {
+		if err := os.WriteFile(filepath.Join(temporary, ".rasql-mode"), []byte("nontransactional\n"), 0o600); err != nil {
+			return fmt.Errorf("migrate diff: write execution mode: %w", err)
 		}
 	}
 	if strings.TrimSpace(p.IrreversibleReason) != "" {

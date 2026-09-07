@@ -12,6 +12,7 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/ast"
 	"github.com/lestrrat-go/rasql/internal/migrationorder"
+	"github.com/lestrrat-go/rasql/migrate"
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/schema"
 )
@@ -169,10 +170,6 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 	}
 
 	for _, entry := range comparison.Indexes.Added {
-		if entry.Value.statement.Concurrently {
-			diagnostics = append(diagnostics, fmt.Sprintf("index %s uses CONCURRENTLY, which needs non-transactional migration support", displayName(*entry.Value.statement.Name)))
-			continue
-		}
 		created, err := createIndexEntry(entry.Value)
 		if err != nil {
 			return diff.Plan{}, err
@@ -251,6 +248,7 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 			}
 		}
 		operations := make([]diff.ProposedOperation, 0, len(run))
+		mode := migrate.ExecutionModeAtomic
 		var statements []diff.PlannedStatement
 		for index := range run {
 			operation, err := lowerPostgreSQLEntry(run[index], resolutions)
@@ -258,13 +256,16 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 				return diff.LoweringResult{}, err
 			}
 			operations = append(operations, operation)
+			if run[index].action == lowerCreateIndex && run[index].targetIndex != nil && run[index].targetIndex.Concurrently {
+				mode = migrate.ExecutionModeNonTransactional
+			}
 		}
 		actions := make([]loweringAction, len(run))
 		for index := range run {
 			actions[index] = run[index].action
 		}
 		statements = scheduleLoweredOperations(operations, actions)
-		return diff.LoweringResult{Operations: operations, Statements: statements, IrreversibleReason: irreversible}, nil
+		return diff.LoweringResult{Operations: operations, Mode: mode, Statements: statements, IrreversibleReason: irreversible}, nil
 	})
 }
 
@@ -543,7 +544,11 @@ func lowerPostgreSQLEntry(entry loweringEntry, resolutions map[string]diff.Resol
 		if err != nil {
 			return op, err
 		}
-		forward = []diff.PlannedStatement{{Source: "create_index_" + filenamePart(entry.operation.Constraint) + ".sql", SQL: sql, ReverseSQL: fmt.Sprintf("DROP INDEX %s;\n", reverseName(*copy.Name)), Summary: name}}
+		reverse := fmt.Sprintf("DROP INDEX %s;\n", reverseName(*copy.Name))
+		if copy.Concurrently {
+			reverse = fmt.Sprintf("DROP INDEX CONCURRENTLY %s;\n", reverseName(*copy.Name))
+		}
+		forward = []diff.PlannedStatement{{Source: "create_index_" + filenamePart(entry.operation.Constraint) + ".sql", SQL: sql, ReverseSQL: reverse, Summary: name}}
 	case lowerAlterNullability:
 		if entry.baselineColumn == nil || entry.targetColumn == nil {
 			return op, fmt.Errorf("postgresql schema diff: nullability columns are missing")

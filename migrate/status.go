@@ -51,7 +51,7 @@ func (r Runner) Status(ctx context.Context, migrations ...Migration) ([]StatusEn
 			return err
 		}
 		var progress *progressEntry
-		if r.dialect.Name() == "mysql" {
+		if r.dialect.Name() == "mysql" || (r.dialect.Name() == "postgresql" && needsProgress(prepared)) {
 			if err := r.ensureProgress(ctx, connection); err != nil {
 				return err
 			}
@@ -86,6 +86,10 @@ func (r Runner) Status(ctx context.Context, migrations ...Migration) ([]StatusEn
 	}
 	if r.dialect.Name() == "mysql" {
 		if err := r.withMySQLReadLock(ctx, connection, observe); err != nil {
+			return nil, err
+		}
+	} else if r.dialect.Name() == "postgresql" {
+		if err := r.withPostgreSQLReadLock(ctx, connection, observe); err != nil {
 			return nil, err
 		}
 	} else if err := observe(); err != nil {

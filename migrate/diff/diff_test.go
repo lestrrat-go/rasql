@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lestrrat-go/rasql/internal/migrationdir"
+	"github.com/lestrrat-go/rasql/migrate"
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/stretchr/testify/require"
 )
@@ -129,4 +131,39 @@ func TestWriteMigrationWritesIrreversibleMarker(t *testing.T) {
 	contents, err = os.ReadFile(filepath.Join(directory, "001_transform.up.sql"))
 	require.NoError(t, err)
 	require.Equal(t, "UPDATE users SET name = upper(name);\n", string(contents))
+}
+
+func TestWriteMigrationRoundTripsExecutionModesAndIrreversibility(t *testing.T) {
+	statement := diff.PlannedStatement{Source: "001_change.sql", SQL: "SELECT 1;\n", ReverseSQL: "SELECT 0;\n"}
+	for _, test := range []struct {
+		name         string
+		mode         migrate.ExecutionMode
+		irreversible string
+		wantModeFile bool
+	}{
+		{name: "atomic", mode: migrate.ExecutionModeAtomic},
+		{name: "nontransactional", mode: migrate.ExecutionModeNonTransactional, wantModeFile: true},
+		{name: "nontransactional irreversible", mode: migrate.ExecutionModeNonTransactional, irreversible: "manual rollback", wantModeFile: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			directory := filepath.Join(root, "001_change")
+			require.NoError(t, diff.WriteMigration(directory, diff.Plan{Dialect: "postgresql", Mode: test.mode, IrreversibleReason: test.irreversible, Statements: []diff.PlannedStatement{statement}}))
+			loaded, err := migrationdir.Load(root)
+			require.NoError(t, err)
+			require.Len(t, loaded, 1)
+			require.Equal(t, test.mode, loaded[0].Mode)
+			_, err = os.Stat(filepath.Join(directory, ".rasql-mode"))
+			if test.wantModeFile {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, os.ErrNotExist)
+			}
+		})
+	}
+}
+
+func TestPlanRejectsInvalidExecutionMode(t *testing.T) {
+	plan := diff.Plan{Dialect: "postgresql", Mode: migrate.ExecutionMode("invalid"), Statements: []diff.PlannedStatement{{Source: "001_change.sql", SQL: "SELECT 1", ReverseSQL: "SELECT 0"}}}
+	require.ErrorContains(t, plan.Validate(), "invalid execution mode")
 }
