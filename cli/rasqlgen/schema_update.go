@@ -112,6 +112,15 @@ func (c command) runSchemaUpdate(args []string) error {
 		name = exportGoName(name)
 		generation.Objects = append(generation.Objects, compilerir.ObjectGoName{ID: object.ID, Source: name, Row: name + "Row", Create: name + "Create", Patch: name + "Patch", File: object.Name + "_gen.go"})
 	}
+	for _, query := range result.Queries {
+		configured := queryConfigFor(cfg, query.ID)
+		file := configured.Output
+		if file == "" {
+			file = derivedQueryOutput(configured.Input)
+		}
+		function := configured.Function
+		generation.Queries = append(generation.Queries, compilerir.QueryGoName{ID: query.ID, Function: function, Result: string(query.ID) + "Result", Projection: string(query.ID) + "Projection", Decoder: string(query.ID) + "Decoder", File: file})
+	}
 	goModel, diagnostics := compilerir.BuildGo(semantic, generation)
 	if hasErrors(diagnostics) {
 		return fmt.Errorf("schema update: Go model failed")
@@ -125,14 +134,6 @@ func (c command) runSchemaUpdate(args []string) error {
 		if object.Patch != nil {
 			generation.Objects[i].Patch = exportGoName(object.Patch.Name)
 		}
-	}
-	for _, query := range goModel.Queries {
-		cfg := queryConfigFor(cfg, query.ID)
-		result := resultName(query)
-		if cfg.Output == "" {
-			cfg.Output = derivedQueryOutput(cfg.Input)
-		}
-		generation.Queries = append(generation.Queries, compilerir.QueryGoName{ID: query.ID, Function: query.Name, Result: result, Projection: query.ProjectionName, Decoder: result + "Decoder", File: cfg.Output})
 	}
 	input, err := generate.NewEmitterInput(result.Catalog, semantic, goModel, generation)
 	if err != nil {
