@@ -204,7 +204,14 @@ func LoadGraph[R, G any](ctx context.Context, executor Executor, plan GraphPlan[
 	var finalErr error
 	var early bool
 	observedRows := int64(0)
-	defer func() { completion.completeLogicalInvocation(finalErr, observedRows, early) }()
+	defer func() {
+		if value := recover(); value != nil {
+			finalErr = fmt.Errorf("graph load panicked: %v", value)
+			completion.completeLogicalInvocation(finalErr, observedRows, early)
+			panic(value)
+		}
+		completion.completeLogicalInvocation(finalErr, observedRows, early)
+	}()
 	rootRows, err := rootPrepared.run(callCtx, observed, func() (int64, error) { observedRows++; return observedRows, nil })
 	if err != nil {
 		finalErr = err
