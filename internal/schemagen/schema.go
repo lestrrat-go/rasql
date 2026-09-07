@@ -3808,6 +3808,18 @@ func writeColumnTypeLiteral(source *bytes.Buffer, columnType schema.ColumnType) 
 	}
 }
 
+// TableDefinitionLiteral returns the canonical Go expression for a validated
+// table descriptor. Compact generation uses the same descriptor spelling as
+// the legacy renderer while keeping the generated API declarations separate.
+func TableDefinitionLiteral(table schema.TableDef) (string, error) {
+	if err := table.Validate(); err != nil {
+		return "", err
+	}
+	var source bytes.Buffer
+	writeTableDefLiteral(&source, table)
+	return source.String(), nil
+}
+
 func writeForeignKeyDefLiteral(source *bytes.Buffer, key schema.ForeignKeyDef) {
 	source.WriteString("{")
 	if key.Name != "" {

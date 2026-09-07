@@ -36,6 +36,7 @@ const maxQueryInputBytes = 64 << 20
 // methods mutates it, so two field-wise equal Stores plan byte-identical
 // output.
 type Store struct {
+	compact *compactStoreInput
 	// CompilerInput is an optional validated compiler catalog. When set, it
 	// is adapted to legacy descriptors before rendering; Tables remains a
 	// supported compatibility input.
@@ -248,6 +249,9 @@ func (s Store) PlanContext(ctx context.Context) (Plan, error) {
 	}
 	if s.Dir == "" {
 		return Plan{}, errors.New("generate: store requires Dir")
+	}
+	if s.compact != nil {
+		return s.planCompactContext(ctx)
 	}
 	if len(s.Tables) == 0 && s.CompilerInput != nil {
 		input := s.CompilerInput.Clone()

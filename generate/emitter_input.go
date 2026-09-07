@@ -2,7 +2,6 @@ package generate
 
 import (
 	"fmt"
-	"reflect"
 	"slices"
 	"strings"
 
@@ -43,23 +42,24 @@ func (in EmitterInput) Validate() error {
 	if err := validateGoModel(in.Go, in.Catalog); err != nil {
 		return fmt.Errorf("generate: emitter Go model: %w", err)
 	}
-	if in.Generation.Emitter != "legacy" {
-		return fmt.Errorf("generate: emitter generation.emitter must be legacy")
+	if in.Generation.Emitter != "legacy" && in.Generation.Emitter != "compact" {
+		return fmt.Errorf("generate: emitter generation.emitter must be compact or legacy")
 	}
 	if in.Generation.Package == "" || in.Generation.Output == "" {
 		return fmt.Errorf("generate: emitter generation package and output are required")
 	}
-	if err := compilerir.ValidateMappingConfig(compilerir.MappingConfig{Scalars: in.Generation.Scalars}, in.Generation.Package); err != nil {
+	mappingConfig := compilerir.MappingConfig{Scalars: in.Generation.Scalars}
+	if err := compilerir.ValidateMappingConfig(mappingConfig, in.Generation.Package); err != nil {
 		return fmt.Errorf("generate: emitter generation mappings: %w", err)
 	}
 	if in.Go.Package != in.Generation.Package {
 		return fmt.Errorf("generate: emitter Go package %q disagrees with generation package %q", in.Go.Package, in.Generation.Package)
 	}
-	canonicalSemantic, diagnostics := compilerir.BuildSemantic(in.Catalog, compilerir.MappingConfig{Scalars: in.Generation.Scalars}, nil)
+	canonicalSemantic, diagnostics := compilerir.BuildSemantic(in.Catalog, mappingConfig, nil)
 	if len(diagnostics) != 0 {
 		return fmt.Errorf("generate: emitter canonical semantic diagnostics: %v", diagnostics)
 	}
-	if !reflect.DeepEqual(canonicalSemantic.Objects, in.Semantic.Objects) {
+	if !canonicalSemanticMatches(in.Semantic, canonicalSemantic) {
 		return fmt.Errorf("generate: emitter semantic model disagrees with catalog-derived policy")
 	}
 
@@ -129,6 +129,25 @@ func (in EmitterInput) Validate() error {
 		return err
 	}
 	return validateGenerationFiles(in.Go, in.Generation, physical)
+}
+
+func canonicalSemanticMatches(got, want compilerir.SemanticModel) bool {
+	if len(got.Objects) != len(want.Objects) {
+		return false
+	}
+	for index, object := range got.Objects {
+		canonical := want.Objects[index]
+		if object.ID != canonical.ID || object.Kind != canonical.Kind || object.PhysicalName != canonical.PhysicalName || len(object.Columns) != len(canonical.Columns) {
+			return false
+		}
+		for columnIndex, column := range object.Columns {
+			other := canonical.Columns[columnIndex]
+			if column != other {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func validateQueryModel(semantic []compilerir.SemanticQuery, model []compilerir.GoQuery, configured []compilerir.QueryGoName) error {
@@ -314,6 +333,9 @@ func validateGenerationFiles(goModel compilerir.GoModel, generation compilerir.G
 func LegacyStore(in EmitterInput) (Store, error) {
 	if err := in.Validate(); err != nil {
 		return Store{}, err
+	}
+	if in.Generation.Emitter != "legacy" {
+		return Store{}, fmt.Errorf("generate: legacy renderer requires generation.emitter legacy")
 	}
 	tables, diagnostics := compilerir.TableDefsFromPhysical(in.Catalog)
 	for _, diagnostic := range diagnostics {
