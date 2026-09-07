@@ -1,0 +1,2 @@
+// expected diagnostic: NULL is not assignable to a non-null mapping
+type RequiredID AccountID

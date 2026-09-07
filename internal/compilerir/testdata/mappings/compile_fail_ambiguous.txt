@@ -1,0 +1,1 @@
+// expected diagnostic: ambiguous_scalar

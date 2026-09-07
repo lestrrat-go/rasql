@@ -13,6 +13,8 @@ import (
 	"unicode"
 
 	"github.com/lestrrat-go/rasql/generate"
+	"github.com/lestrrat-go/rasql/internal/compilerconfig"
+	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/modroot"
 	"github.com/lestrrat-go/rasql/namedsql"
 	"github.com/lestrrat-go/rasql/schema"
@@ -66,6 +68,17 @@ type config struct {
 
 	// Queries are static SQL templates compiled into the generated package.
 	Queries []configQuery `json:"queries"`
+
+	// Mappings names explicit semantic, Go, codec, and NULL mappings.
+	// It remains raw until package validation has supplied the generated package name.
+	Mappings json.RawMessage `json:"mappings"`
+}
+
+func (c config) mappings() (compilerir.MappingConfig, error) {
+	if len(c.Mappings) == 0 {
+		return compilerir.MappingConfig{}, nil
+	}
+	return compilerconfig.DecodeMappings(c.Mappings, c.Package)
 }
 
 // configTables is the table selection and the Go-side names no database can
@@ -203,8 +216,15 @@ func loadConfig(path string) (config, error) {
 	if err := decoder.Decode(&loaded); err != nil {
 		return config{}, fmt.Errorf("generate: parse config %s: %w", path, err)
 	}
-	if decoder.More() {
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return config{}, fmt.Errorf("generate: parse config %s: unexpected value after the settings object", path)
+		}
 		return config{}, fmt.Errorf("generate: parse config %s: unexpected value after the settings object", path)
+	}
+	if _, err := loaded.mappings(); err != nil {
+		return config{}, fmt.Errorf("generate: parse config %s mappings: %w", path, err)
 	}
 	return loaded, nil
 }

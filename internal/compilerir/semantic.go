@@ -150,47 +150,8 @@ func BuildSemantic(c PhysicalCatalog, mappings MappingConfig, queries []QueryAna
 }
 
 func scalarFor(column PhysicalColumn, config MappingConfig) (string, bool, bool) {
-	bestRank := -1
-	best := ""
-	matches := 0
-	for _, mapping := range config.Scalars {
-		m := mapping.Match
-		nativeDialect, nativeSchema, nativeName, nativeKind := "", "", "", ""
-		if column.Native != nil {
-			nativeDialect, nativeSchema, nativeName, nativeKind = column.Native.Dialect, column.Native.Schema, column.Native.Name, column.Native.Kind
-		}
-		if m.Dialect != "" && m.Dialect != nativeDialect {
-			continue
-		}
-		if m.Schema != "" && m.Schema != nativeSchema {
-			continue
-		}
-		if m.Name != "" && m.Name != nativeName {
-			continue
-		}
-		if m.Kind != "" && m.Kind != nativeKind {
-			continue
-		}
-		if m.LogicalKind != "" && m.LogicalKind != column.LogicalKind {
-			continue
-		}
-		rank := 0
-		if m.LogicalKind != "" {
-			rank = 1
-		}
-		if m.Name != "" {
-			rank = 2
-		}
-		if m.Schema != "" && m.Name != "" {
-			rank = 3
-		}
-		if rank > bestRank {
-			bestRank, best, matches = rank, mapping.Name, 1
-		} else if rank == bestRank {
-			matches++
-		}
-	}
-	return best, bestRank >= 0 && matches == 1, bestRank >= 0 && matches > 1
+	selection := selectMapping(column, config)
+	return selection.scalar, selection.found, selection.ambiguous
 }
 func relationName(source string, columns []string, target string) string {
 	if len(columns) == 0 {

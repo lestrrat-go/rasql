@@ -72,10 +72,10 @@ func BuildGo(model SemanticModel, config GoConfig) (GoModel, []Diagnostic) {
 	if config.Emitter != "" && config.Emitter != "compact" && config.Emitter != "legacy" {
 		diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "invalid_emitter", Path: "emitter", Message: "emitter must be compact or legacy"})
 	}
+	if err := ValidateMappingConfig(MappingConfig{Scalars: config.Scalars}, config.Package); err != nil {
+		diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "invalid_mapping", Path: "mappings", Message: err.Error()})
+	}
 	for _, mapping := range config.Scalars {
-		if !knownScalar(mapping.Name) {
-			diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "unsupported_scalar", Path: "scalars." + mapping.Name, Message: "custom scalar mappings are owned by G2"})
-		}
 		out.Imports = append(out.Imports, mapping.Imports...)
 	}
 	for _, object := range model.Objects {
@@ -107,19 +107,20 @@ func BuildGo(model SemanticModel, config GoConfig) (GoModel, []Diagnostic) {
 		}
 		goObject := GoObject{ID: object.ID, SourceName: sourceName, Row: GoShape{Name: name, DecoderName: name + "Decoder"}, Create: &GoShape{Name: createName}, Patch: &GoShape{Name: patchName}}
 		for _, column := range object.Columns {
-			if !knownScalar(column.Scalar) {
-				diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "unsupported_scalar", Path: object.PhysicalName.Name + "." + column.Name, Message: "scalar has no built-in Go mapping"})
+			binding, ok := scalarBinding(column.Scalar, column.Nullable, config.Scalars)
+			if !ok {
+				diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "unsupported_scalar", Path: object.PhysicalName.Name + "." + column.Name, Message: "scalar has no Go mapping"})
 			}
-			goColumn := GoColumn{Name: column.Name, PhysicalName: column.Name, Scalar: column.Scalar, GoType: goType(column.Scalar, column.Nullable), Nullable: column.Nullable}
+			goColumn := GoColumn{Name: column.Name, PhysicalName: column.Name, Scalar: column.Scalar, GoType: binding.Type, Codec: binding.Codec, Nullable: column.Nullable}
 			goObject.Columns = append(goObject.Columns, goColumn)
 			if column.Readable {
-				goObject.Row.Fields = append(goObject.Row.Fields, GoField{Name: column.Name, Type: goColumn.GoType, Nullable: column.Nullable})
+				goObject.Row.Fields = append(goObject.Row.Fields, GoField{Name: column.Name, Type: goColumn.GoType, Codec: goColumn.Codec, Nullable: column.Nullable})
 			}
 			if column.InsertState != "forbidden" && column.InsertState != "generated" {
-				goObject.Create.Fields = append(goObject.Create.Fields, GoField{Name: column.Name, Type: goColumn.GoType, Nullable: column.Nullable})
+				goObject.Create.Fields = append(goObject.Create.Fields, GoField{Name: column.Name, Type: goColumn.GoType, Codec: goColumn.Codec, Nullable: column.Nullable})
 			}
 			if goObject.Patch != nil && column.PatchState != "forbidden" {
-				goObject.Patch.Fields = append(goObject.Patch.Fields, GoField{Name: column.Name, Type: goColumn.GoType, Nullable: column.Nullable})
+				goObject.Patch.Fields = append(goObject.Patch.Fields, GoField{Name: column.Name, Type: goColumn.GoType, Codec: goColumn.Codec, Nullable: column.Nullable})
 			}
 		}
 		for _, relation := range object.Relations {
@@ -144,18 +145,20 @@ func BuildGo(model SemanticModel, config GoConfig) (GoModel, []Diagnostic) {
 			out.Files = append(out.Files, GoFile{Path: configured.File})
 		}
 		for _, value := range query.Parameters {
-			if !knownScalar(value.Scalar) {
-				diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "unsupported_scalar", Path: query.Name + ".parameters." + value.Name, Message: "scalar has no built-in Go mapping"})
+			binding, ok := scalarBinding(value.Scalar, value.Nullable, config.Scalars)
+			if !ok {
+				diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "unsupported_scalar", Path: query.Name + ".parameters." + value.Name, Message: "scalar has no Go mapping"})
 			}
-			goQuery.Parameters = append(goQuery.Parameters, GoField{Name: value.Name, Type: goType(value.Scalar, value.Nullable), Nullable: value.Nullable})
+			goQuery.Parameters = append(goQuery.Parameters, GoField{Name: value.Name, Type: binding.Type, Codec: binding.Codec, Nullable: value.Nullable})
 		}
 		if len(query.Results) > 0 {
 			shape := &GoShape{Name: query.Name + "Result", DecoderName: query.Name + "ResultDecoder"}
 			for _, value := range query.Results {
-				if !knownScalar(value.Scalar) {
-					diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "unsupported_scalar", Path: query.Name + ".results." + value.Name, Message: "scalar has no built-in Go mapping"})
+				binding, ok := scalarBinding(value.Scalar, value.Nullable, config.Scalars)
+				if !ok {
+					diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "unsupported_scalar", Path: query.Name + ".results." + value.Name, Message: "scalar has no Go mapping"})
 				}
-				shape.Fields = append(shape.Fields, GoField{Name: value.Name, Type: goType(value.Scalar, value.Nullable), Nullable: value.Nullable})
+				shape.Fields = append(shape.Fields, GoField{Name: value.Name, Type: binding.Type, Codec: binding.Codec, Nullable: value.Nullable})
 			}
 			goQuery.Result = shape
 		}
@@ -231,14 +234,6 @@ func dedupImports(in []GoImport) []GoImport {
 	}
 	return out
 }
-func knownScalar(s string) bool {
-	switch s {
-	case "boolean", "integer", "float", "text", "bytes", "time", "json", "uuid", "decimal":
-		return true
-	default:
-		return false
-	}
-}
 func goType(scalar string, nullable bool) string {
 	base := map[string]string{"boolean": "bool", "integer": "int64", "float": "float64", "text": "string", "bytes": "[]byte", "time": "time.Time", "json": "[]byte", "uuid": "string", "decimal": "string"}[scalar]
 	if base == "" {
@@ -248,5 +243,25 @@ func goType(scalar string, nullable bool) string {
 		return "rasql.Nullable[" + base + "]"
 	}
 	return base
+}
+
+type scalarBindingResult struct{ Type, Codec string }
+
+func scalarBinding(scalar string, nullable bool, mappings []ScalarMapping) (scalarBindingResult, bool) {
+	for _, mapping := range mappings {
+		if mapping.Name != scalar {
+			continue
+		}
+		typeName := mapping.GoType
+		if nullable {
+			typeName = mapping.NullableGoType
+			if typeName == "" {
+				typeName = "rasql.Nullable[" + mapping.GoType + "]"
+			}
+		}
+		return scalarBindingResult{Type: typeName, Codec: mapping.Codec}, true
+	}
+	typeName := goType(scalar, nullable)
+	return scalarBindingResult{Type: typeName}, typeName != ""
 }
 func (m GoModel) Validate() error { return ValidateGo(m) }
