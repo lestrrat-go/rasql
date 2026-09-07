@@ -33,18 +33,23 @@ func TestTypedNativeSQLiteTwoColumnConsumer(t *testing.T) {
 	codecInput := querygen.TypedInput{Package: "queries", Function: "FindMoney", Engine: "sqlite", SQL: "SELECT amount, note FROM payments WHERE amount > ?", Operation: "select", Cardinality: "many", Result: "MoneyResult", Decoder: "MoneyDecoder", Parameters: []querygen.TypedValue{{Go: compilerir.GoField{Name: "threshold", Type: "Money", Codec: "money"}, Semantic: compilerir.SemanticValue{Name: "threshold", LogicalKind: "integer"}}}, ArgumentNames: []string{"threshold"}, Results: []querygen.TypedValue{{Go: compilerir.GoField{Name: "amount", Type: "Money", Codec: "money"}, Semantic: compilerir.SemanticValue{Name: "amount", LogicalKind: "integer"}}, {Go: compilerir.GoField{Name: "note", Type: "rasql.Nullable[string]", Nullable: true, Codec: "money"}, Semantic: compilerir.SemanticValue{Name: "note", LogicalKind: "text", Nullable: true}}}}
 	codecGenerated, err := querygen.TypedGoSource(codecInput)
 	require.NoError(t, err)
+	timeInput := querygen.TypedInput{Package: "queries", Function: "EchoTime", Engine: "sqlite", SQL: "SELECT ? AS occurred_at", Operation: "select", Cardinality: "one", Result: "EchoTimeResult", Decoder: "EchoTimeDecoder", Imports: []compilerir.GoImport{{Path: "time"}}, Parameters: []querygen.TypedValue{{Go: compilerir.GoField{Name: "at", Type: "time.Time"}, Semantic: compilerir.SemanticValue{Name: "at", Scalar: "time", LogicalKind: "time"}}}, ArgumentNames: []string{"at"}, Results: []querygen.TypedValue{{Go: compilerir.GoField{Name: "occurred_at", Type: "time.Time"}, Semantic: compilerir.SemanticValue{Name: "occurred_at", Scalar: "time", LogicalKind: "time"}}}}
+	timeGenerated, err := querygen.TypedGoSource(timeInput)
+	require.NoError(t, err)
 	require.NoError(t, os.Mkdir(filepath.Join(dir, "queries"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "queries", "find_gen.go"), generated, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "queries", "find_one_gen.go"), oneGenerated, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "queries", "find_maybe_gen.go"), maybeGenerated, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "queries", "update_gen.go"), execGenerated, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "queries", "money_gen.go"), codecGenerated, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "queries", "time_gen.go"), timeGenerated, 0o600))
 	consumer := `package queries
 
 import (
   "context"
   "database/sql/driver"
   "errors"
+	"time"
   "testing"
   "github.com/lestrrat-go/rasql"
   "github.com/lestrrat-go/rasql/dialect"
@@ -81,6 +86,7 @@ func TestConsumer(t *testing.T) {
   cancelled, cancel := context.WithCancel(t.Context()); cancel(); update, err = Update(0); if err != nil { t.Fatal(err) }; _, err = rasql.ExecMutation(cancelled, executor, update); if !errors.Is(err, context.Canceled) { t.Fatalf("cancel: %v", err) }
   if err = rasql.Within(t.Context(), executor, nil, func(ctx context.Context, tx rasql.Executor) error { plan, e := Update(2); if e != nil { return e }; _, e = rasql.ExecMutation(ctx, tx, plan); return e }); err != nil { t.Fatalf("transaction: %v", err) }
   moneyQuery, err := FindMoney(0); if err != nil { t.Fatal(err) }; moneyRows, err := rasql.All(t.Context(), executor, moneyQuery); if err != nil || len(moneyRows) != 2 || moneyRows[0].Amount != 1 || moneyRows[0].Note.Valid { t.Fatalf("money: %#v %v", moneyRows, err) }; if enc != 1 || dec != 3 { t.Fatalf("codec counts encode=%d decode=%d", enc, dec) }
+  expected := time.Date(2024, 1, 2, 3, 4, 5, 678901234, time.UTC); echo, err := EchoTime(expected); if err != nil { t.Fatal(err) }; echoed, err := rasql.One(t.Context(), executor, echo); if err != nil || !echoed.OccurredAt.Equal(expected) { t.Fatalf("time: %#v %v", echoed, err) }
   _ = query.Bind
 }
 `

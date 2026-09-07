@@ -99,6 +99,7 @@ func (c command) runOfflineGenerate(settings config, configPath string, check bo
 	for _, query := range goModel.Queries {
 		goQueries[query.ID] = query
 	}
+	querySnapshots := make([]compilerlock.SourceFileSnapshot, 0, len(lock.Queries))
 	for _, query := range lock.Queries {
 		goQuery := goQueries[query.ID]
 		analysis := compilerlock.AnalysisFromQuery(query)
@@ -118,12 +119,15 @@ func (c command) runOfflineGenerate(settings config, configPath string, check bo
 			}
 		}
 		typed.Imports = goModel.Imports
-		sqlPath := filepath.Join(root, query.SQL.Path)
-		sqlBytes, readErr := os.ReadFile(sqlPath)
+		snapshot, readErr := compilerlock.SnapshotSourceFile(root, query.SQL.Path)
 		if readErr != nil {
 			return fmt.Errorf("generate: read query %s: %w", query.SQL.Path, readErr)
 		}
-		typed.SQL, typed.ArgumentNames, readErr = lowerTypedSQL(string(sqlBytes), string(query.ID), query.Evidence.Dialect)
+		if snapshot.Record() != query.SQL {
+			return fmt.Errorf("generate: query %s changed after lock", query.SQL.Path)
+		}
+		querySnapshots = append(querySnapshots, snapshot)
+		typed.SQL, typed.ArgumentNames, readErr = lowerTypedSQL(string(snapshot.Bytes()), string(query.ID), query.Evidence.Dialect)
 		if readErr != nil {
 			return readErr
 		}
@@ -167,9 +171,15 @@ func (c command) runOfflineGenerate(settings config, configPath string, check bo
 	publication := generate.Publication{
 		FinalFiles: []generate.FinalFile{{Path: "rasql.lock.json", Source: encodedLock, Mode: 0o600}},
 		BeforeWrite: func(_ context.Context, entries []generate.PublicationEntry) error {
+			if err := compilerlock.RevalidateSourceFiles(root, querySnapshots); err != nil {
+				return err
+			}
 			return writePending(root, oldLock.SHA256, lockSum, pendingEntries(entries))
 		},
 		AfterVerify: func(context.Context, []generate.PublicationEntry) error { return removePending(root) },
+	}
+	if c.beforePublication != nil {
+		c.beforePublication()
 	}
 	if err := plan.CommitPublication(ctx, publication); err != nil {
 		return err

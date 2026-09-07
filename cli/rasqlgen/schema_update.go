@@ -59,6 +59,9 @@ func (c command) runSchemaUpdate(args []string) error {
 		ctx = context.Background()
 	}
 	deps := schemasource.DefaultDependencies()
+	if c.schemaDependencies != nil {
+		deps = c.schemaDependencies()
+	}
 	if len(cfg.Queries) != 0 {
 		queryConfig := cfg.compilerQueries(root)
 		analyzer, analyzerErr := compilerquery.NewAnalyzer(queryConfig, compilerquery.Describers{PostgreSQL: querydescribe.NewPostgreSQL(), MySQL: querydescribe.NewMySQL(nil), SQLite: querydescribe.NewSQLitePrepare(nil)})
@@ -216,6 +219,9 @@ func (c command) runSchemaUpdate(args []string) error {
 			return writePending(root, oldLock.SHA256, hex.EncodeToString(lockHash[:]), entries)
 		},
 		AfterVerify: func(context.Context, []generate.PublicationEntry) error { return removePending(root) },
+	}
+	if c.beforePublication != nil {
+		c.beforePublication()
 	}
 	if err := plan.CommitPublication(ctx, publication); err != nil {
 		return err
