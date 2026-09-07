@@ -17,6 +17,7 @@ import (
 	querypkg "github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/stmt"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
@@ -397,7 +398,7 @@ func TestGraphSQLiteManyThroughSharedTargetClonesDirectBytesPerAttachment(t *tes
 	require.NoError(t, err)
 	require.Len(t, values, 2)
 	require.Equal(t, int64(1), fixture.executor.statements.Load())
-	require.Equal(t, int64(2), mapped.Load())
+	assert.Equal(t, int64(2), mapped.Load(), "each shared target attachment gets a fresh mapper input")
 	for _, value := range values {
 		require.Len(t, value.Children.Values, 1)
 		require.Equal(t, int64(11), value.Children.Values[0].ID)
