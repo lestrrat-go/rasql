@@ -15,6 +15,7 @@ type CompilerInput struct {
 type LegacyGenerationSidecar struct{ Objects []LegacyObjectSidecar }
 type LegacyObjectSidecar struct {
 	ID            compilerir.ObjectID
+	Kind          schema.ObjectKind
 	Operations    schema.Operation
 	Relationships []schema.RelationshipDef
 	RowName       string
@@ -47,7 +48,7 @@ func CompilerInputFromTableDefs(engine compilerir.EngineIdentity, tables []schem
 				break
 			}
 		}
-		entry := LegacyObjectSidecar{ID: object.ID, Operations: source.Operations, RowName: source.RowName}
+		entry := LegacyObjectSidecar{ID: object.ID, Kind: source.Kind, Operations: source.Operations, RowName: source.RowName}
 		if source.Relationships != nil {
 			entry.Relationships = make([]schema.RelationshipDef, len(source.Relationships))
 			for i, relation := range source.Relationships {
@@ -83,14 +84,13 @@ func restoreLegacy(tables []schema.TableDef, input CompilerInput) ([]schema.Tabl
 		}
 		objects[object.ID] = object
 	}
-	if len(objects) != len(tables) {
-		return nil, fmt.Errorf("generate: legacy.objects coverage mismatch: got %d entries for %d objects", len(objects), len(tables))
-	}
 	for i := range tables {
 		id := compilerir.ObjectID("")
+		var physical compilerir.PhysicalObject
 		for _, object := range input.Catalog.Objects {
 			if object.Schema == tables[i].Schema && object.Name == tables[i].Name {
 				id = object.ID
+				physical = object
 				break
 			}
 		}
@@ -98,6 +98,10 @@ func restoreLegacy(tables []schema.TableDef, input CompilerInput) ([]schema.Tabl
 		if !ok {
 			return nil, fmt.Errorf("generate: legacy.objects[%d].id missing object %q", i, id)
 		}
+		if string(tables[i].EffectiveKind()) != physical.Kind {
+			return nil, fmt.Errorf("generate: legacy.objects[%d].kind does not match physical kind %q", i, physical.Kind)
+		}
+		tables[i].Kind = object.Kind
 		tables[i].Operations = object.Operations
 		tables[i].RowName = object.RowName
 		tables[i].Relationships = nil
@@ -120,9 +124,6 @@ func restoreLegacy(tables []schema.TableDef, input CompilerInput) ([]schema.Tabl
 				return nil, fmt.Errorf("generate: legacy.objects[%d].columns[%d].name unknown %q", i, j, column.Name)
 			}
 			bindings[column.Name] = column.GoBinding.Clone()
-		}
-		if len(bindings) != len(tables[i].Columns) {
-			return nil, fmt.Errorf("generate: legacy.objects[%d].columns coverage mismatch for %q", i, tables[i].Name)
 		}
 		for j := range tables[i].Columns {
 			binding, ok := bindings[tables[i].Columns[j].Name]

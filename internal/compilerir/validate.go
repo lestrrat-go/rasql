@@ -2,6 +2,7 @@ package compilerir
 
 import (
 	"fmt"
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"path"
@@ -87,6 +88,12 @@ func ValidatePhysical(c PhysicalCatalog) error {
 			if col.Decimal != nil && (col.Decimal.Precision <= 0 || (col.Decimal.Scale.Set && (col.Decimal.Scale.Value < 0 || col.Decimal.Scale.Value > col.Decimal.Precision))) {
 				return invalid(fmt.Sprintf("objects[%d].columns[%d].decimal", i, j), "invalid precision or scale")
 			}
+			if col.Identity != "" && col.Identity != "ALWAYS" && col.Identity != "BY DEFAULT" {
+				return invalid(fmt.Sprintf("objects[%d].columns[%d].identity", i, j), "unsupported identity generation")
+			}
+			if col.GeneratedStorage != "" && col.GeneratedStorage != "STORED" && col.GeneratedStorage != "VIRTUAL" {
+				return invalid(fmt.Sprintf("objects[%d].columns[%d].generated_storage", i, j), "unsupported generated storage")
+			}
 		}
 		columns := map[string]struct{}{}
 		for _, col := range o.Columns {
@@ -105,25 +112,15 @@ func ValidatePhysical(c PhysicalCatalog) error {
 			if constraint.Kind == "primary_key" {
 				primaryCounts[q]++
 			}
+			if constraint.Kind == "foreign_key" && constraint.Reference == nil {
+				return invalid(fmt.Sprintf("objects[%d].constraints[%d].reference", i, j), "foreign key reference is required")
+			}
 			if constraint.Reference != nil {
 				if constraint.Reference.Object == "" || len(constraint.Reference.Columns) == 0 {
 					return invalid(fmt.Sprintf("objects[%d].constraints[%d].reference", i, j), "incomplete foreign reference")
 				}
-				ref := QualifiedName{Schema: constraint.Reference.Schema, Name: constraint.Reference.Object}
-				if ref.Schema == "" && c.Engine.Dialect == "sqlite" {
-					ref.Schema = "main"
-				}
-				targetColumns, ok := objectColumns[ref]
-				if !ok && ref.Schema == "" {
-					for candidate, columns := range objectColumns {
-						if candidate.Name == ref.Name {
-							if targetColumns != nil {
-								return invalid(fmt.Sprintf("objects[%d].constraints[%d].reference", i, j), "ambiguous foreign object")
-							}
-							targetColumns, ok = columns, true
-						}
-					}
-				}
+				ref, targetColumns, ok := resolveForeignReference(c.Engine, o.Schema, *constraint.Reference, objectColumns)
+				_ = ref
 				if !ok {
 					return invalid(fmt.Sprintf("objects[%d].constraints[%d].reference", i, j), "references unknown object")
 				}
@@ -171,6 +168,9 @@ func ValidatePhysical(c PhysicalCatalog) error {
 					if part.Column == "" || part.ExpressionSQL != "" || part.Direction != "" || part.Nulls != "" || part.Collation != "" || part.OperatorClass != "" || part.PrefixLength != 0 {
 						return invalid(p, "columns form requires plain column parts")
 					}
+					if _, ok := columns[part.Column]; !ok {
+						return invalid(p+".column", "references unknown column")
+					}
 				case "expressions":
 					if part.ExpressionSQL == "" || part.Direction != "" || part.Nulls != "" || part.Collation != "" || part.OperatorClass != "" || part.PrefixLength != 0 {
 						return invalid(p, "expressions form requires plain expression parts")
@@ -188,6 +188,11 @@ func ValidatePhysical(c PhysicalCatalog) error {
 					if part.PrefixLength < 0 {
 						return invalid(p+".prefix_length", "must not be negative")
 					}
+					if part.Column != "" {
+						if _, ok := columns[part.Column]; !ok {
+							return invalid(p+".column", "references unknown column")
+						}
+					}
 				}
 			}
 		}
@@ -197,6 +202,11 @@ func ValidatePhysical(c PhysicalCatalog) error {
 			}
 			if len(exclusion.Elements) == 0 {
 				return invalid(fmt.Sprintf("objects[%d].exclusion_constraints[%d].elements", i, j), "must not be empty")
+			}
+			for k, element := range exclusion.Elements {
+				if element.ExpressionSQL == "" {
+					return invalid(fmt.Sprintf("objects[%d].exclusion_constraints[%d].elements[%d].expression_sql", i, j, k), "must not be empty")
+				}
 			}
 		}
 	}
@@ -227,6 +237,36 @@ func validateNative(n *NativeType, p string) error {
 		return invalid(p+".dialect", "must not be empty")
 	}
 	return validateNative(n.Element, p+".element")
+}
+func resolveForeignReference(engine EngineIdentity, sourceSchema string, ref ForeignReference, objects map[QualifiedName]map[string]struct{}) (QualifiedName, map[string]struct{}, bool) {
+	q := QualifiedName{Schema: ref.Schema, Name: ref.Object}
+	if q.Schema == "" && engine.Dialect == "sqlite" {
+		q.Schema = sourceSchema
+		if q.Schema == "" {
+			q.Schema = "main"
+		}
+	}
+	if columns, ok := objects[q]; ok {
+		return q, columns, true
+	}
+	if ref.Schema != "" {
+		return q, nil, false
+	}
+	var found QualifiedName
+	var columns map[string]struct{}
+	for candidate, candidateColumns := range objects {
+		if candidate.Name != ref.Object {
+			continue
+		}
+		if columns != nil {
+			return q, nil, false
+		}
+		found, columns = candidate, candidateColumns
+	}
+	if columns == nil {
+		return q, nil, false
+	}
+	return found, columns, true
 }
 func ValidateSemantic(m SemanticModel) error {
 	ids := map[ObjectID]struct{}{}
@@ -262,7 +302,7 @@ func ValidateSemantic(m SemanticModel) error {
 			}
 		}
 		for j, relation := range o.Relations {
-			if relation.Name == "" || !token.IsIdentifier(relation.Name) || relation.Target == "" || len(relation.From) == 0 || len(relation.To) == 0 || len(relation.From) != len(relation.To) {
+			if relation.Name == "" || relation.Target == "" || len(relation.From) == 0 || len(relation.To) == 0 || len(relation.From) != len(relation.To) {
 				return invalid(fmt.Sprintf("objects[%d].relations[%d]", i, j), "incomplete relation")
 			}
 			if _, ok := knownIDs[relation.Target]; !ok {
@@ -278,7 +318,7 @@ func ValidateSemantic(m SemanticModel) error {
 		if !token.IsIdentifier(q.Name) {
 			return invalid(fmt.Sprintf("queries[%d].name", i), "must be a valid identifier")
 		}
-		if q.Cardinality != "" && q.Cardinality != "one" && q.Cardinality != "maybe" && q.Cardinality != "many" && q.Cardinality != "exec" {
+		if q.Cardinality != "one" && q.Cardinality != "maybe" && q.Cardinality != "many" && q.Cardinality != "exec" {
 			return invalid(fmt.Sprintf("queries[%d].cardinality", i), "unknown cardinality")
 		}
 		if _, ok := queryIDs[q.ID]; ok {
@@ -310,6 +350,7 @@ func ValidateGo(m GoModel) error {
 	}
 	files := map[string]struct{}{}
 	imports := map[string]struct{}{}
+	importNames := map[string]struct{}{}
 	for i, imp := range m.Imports {
 		if imp.Path == "" {
 			return invalid(fmt.Sprintf("imports[%d].path", i), "must not be empty")
@@ -321,6 +362,11 @@ func ValidateGo(m GoModel) error {
 			return invalid(fmt.Sprintf("imports[%d].alias", i), "must be a valid identifier")
 		}
 		imports[imp.Path+"\x00"+imp.Alias] = struct{}{}
+		alias := imp.Alias
+		if alias == "" {
+			alias = path.Base(imp.Path)
+		}
+		importNames[alias] = struct{}{}
 	}
 	objects := map[ObjectID]struct{}{}
 	knownObjects := map[ObjectID]struct{}{}
@@ -350,12 +396,17 @@ func ValidateGo(m GoModel) error {
 		if object.Create == nil || object.Patch == nil {
 			return invalid(fmt.Sprintf("objects[%d]", i), "create and patch shapes are required")
 		}
+		for j, field := range object.Row.Fields {
+			if err := validateGoField(field, importNames); err != nil {
+				return invalid(fmt.Sprintf("objects[%d].row.fields[%d]", i, j), "%v", err)
+			}
+		}
 		for shapeName, shape := range map[string]*GoShape{"create": object.Create, "patch": object.Patch} {
 			if shape.Name == "" || !token.IsIdentifier(shape.Name) || shape.DecoderName != "" && !token.IsIdentifier(shape.DecoderName) {
 				return invalid(fmt.Sprintf("objects[%d].%s", i, shapeName), "invalid shape name")
 			}
 			for j, field := range shape.Fields {
-				if err := validateGoField(field); err != nil {
+				if err := validateGoField(field, importNames); err != nil {
 					return invalid(fmt.Sprintf("objects[%d].%s.fields[%d]", i, shapeName, j), "%v", err)
 				}
 			}
@@ -364,7 +415,7 @@ func ValidateGo(m GoModel) error {
 			if column.Name == "" || column.GoType == "" || !token.IsIdentifier(column.Name) {
 				return invalid(fmt.Sprintf("objects[%d].columns[%d]", i, j), "invalid column")
 			}
-			if err := parseGoType(column.GoType); err != nil {
+			if err := parseGoType(column.GoType, importNames); err != nil {
 				return invalid(fmt.Sprintf("objects[%d].columns[%d].go_type", i, j), "%v", err)
 			}
 		}
@@ -385,11 +436,11 @@ func ValidateGo(m GoModel) error {
 		if !token.IsIdentifier(query.Name) {
 			return invalid(fmt.Sprintf("queries[%d].name", i), "must be a valid identifier")
 		}
-		if query.Cardinality != "" && query.Cardinality != "one" && query.Cardinality != "maybe" && query.Cardinality != "many" && query.Cardinality != "exec" {
+		if query.Cardinality != "one" && query.Cardinality != "maybe" && query.Cardinality != "many" && query.Cardinality != "exec" {
 			return invalid(fmt.Sprintf("queries[%d].cardinality", i), "unknown cardinality")
 		}
 		for j, field := range query.Parameters {
-			if err := validateGoField(field); err != nil {
+			if err := validateGoField(field, importNames); err != nil {
 				return invalid(fmt.Sprintf("queries[%d].parameters[%d]", i, j), "%v", err)
 			}
 		}
@@ -405,7 +456,7 @@ func ValidateGo(m GoModel) error {
 				return invalid(fmt.Sprintf("queries[%d].result.decoder_name", i), "invalid decoder name")
 			}
 			for j, field := range query.Result.Fields {
-				if err := validateGoField(field); err != nil {
+				if err := validateGoField(field, importNames); err != nil {
 					return invalid(fmt.Sprintf("queries[%d].result.fields[%d]", i, j), "%v", err)
 				}
 			}
@@ -413,15 +464,62 @@ func ValidateGo(m GoModel) error {
 	}
 	return nil
 }
-func validateGoField(field GoField) error {
+func validateGoField(field GoField, imports map[string]struct{}) error {
 	if field.Name == "" || !token.IsIdentifier(field.Name) || field.Type == "" {
 		return fmt.Errorf("invalid field")
 	}
-	return parseGoType(field.Type)
+	return parseGoType(field.Type, imports)
 }
-func parseGoType(s string) error {
-	if _, err := parser.ParseExpr(s); err != nil {
+func parseGoType(s string, imports map[string]struct{}) error {
+	expr, err := parser.ParseExpr(s)
+	if err != nil {
 		return fmt.Errorf("invalid Go type %q", s)
+	}
+	var check func(ast.Expr) error
+	check = func(node ast.Expr) error {
+		switch n := node.(type) {
+		case *ast.Ident:
+			return nil
+		case *ast.SelectorExpr:
+			x, ok := n.X.(*ast.Ident)
+			if !ok {
+				return fmt.Errorf("invalid selector")
+			}
+			if _, ok := imports[x.Name]; !ok {
+				return fmt.Errorf("unresolved import %q", x.Name)
+			}
+		case *ast.ArrayType:
+			if n.Len != nil {
+				if _, ok := n.Len.(*ast.BasicLit); !ok {
+					return fmt.Errorf("invalid array length")
+				}
+			}
+			return check(n.Elt)
+		case *ast.StarExpr:
+			return check(n.X)
+		case *ast.MapType:
+			return check(n.Key)
+		case *ast.IndexExpr:
+			if err := check(n.X); err != nil {
+				return err
+			}
+			return check(n.Index)
+		case *ast.IndexListExpr:
+			if err := check(n.X); err != nil {
+				return err
+			}
+			for _, index := range n.Indices {
+				if err := check(index); err != nil {
+					return err
+				}
+			}
+		default:
+			return fmt.Errorf("expression is not a Go type")
+		}
+		return nil
+	}
+	if err := check(expr); err != nil {
+		return err
 	}
 	return nil
 }

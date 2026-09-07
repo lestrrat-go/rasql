@@ -65,11 +65,15 @@ func BuildSemantic(c PhysicalCatalog, mappings MappingConfig, queries []QueryAna
 		model.Diagnostics = append(model.Diagnostics, Diagnostic{Level: DiagnosticError, Code: "invalid_physical", Path: "physical", Message: err.Error()})
 	}
 	objectIDs := map[QualifiedName]ObjectID{}
-	byName := map[string][]QualifiedName{}
+	objectColumns := map[QualifiedName]map[string]struct{}{}
 	for _, object := range c.Objects {
 		q := QualifiedName{Schema: object.Schema, Name: object.Name}
 		objectIDs[q] = object.ID
-		byName[object.Name] = append(byName[object.Name], q)
+		columns := map[string]struct{}{}
+		for _, column := range object.Columns {
+			columns[column.Name] = struct{}{}
+		}
+		objectColumns[q] = columns
 	}
 	for _, object := range c.Objects {
 		so := SemanticObject{ID: object.ID, Kind: object.Kind, PhysicalName: QualifiedName{Schema: object.Schema, Name: object.Name}}
@@ -110,17 +114,9 @@ func BuildSemantic(c PhysicalCatalog, mappings MappingConfig, queries []QueryAna
 			if constraint.Kind != "foreign_key" || constraint.Reference == nil {
 				continue
 			}
-			q := QualifiedName{Schema: constraint.Reference.Schema, Name: constraint.Reference.Object}
-			if q.Schema == "" && c.Engine.Dialect == "sqlite" {
-				q.Schema = "main"
-			}
-			if q.Schema == "" {
-				candidates := byName[q.Name]
-				if len(candidates) == 1 {
-					q = candidates[0]
-				} else if len(candidates) > 1 {
-					model.Diagnostics = append(model.Diagnostics, Diagnostic{Level: DiagnosticError, Code: "ambiguous_relation_target", Path: object.Name + "." + constraint.Name, Message: "foreign key target name is ambiguous"})
-				}
+			q, _, resolved := resolveForeignReference(c.Engine, object.Schema, *constraint.Reference, objectColumns)
+			if !resolved {
+				model.Diagnostics = append(model.Diagnostics, Diagnostic{Level: DiagnosticError, Code: "ambiguous_relation_target", Path: object.Name + "." + constraint.Name, Message: "foreign key target is unresolved or ambiguous"})
 			}
 			if _, ok := objectIDs[q]; !ok {
 				model.Diagnostics = append(model.Diagnostics, Diagnostic{Level: DiagnosticError, Code: "unresolved_relation_target", Path: object.Name + "." + constraint.Name, Message: "foreign key target does not exist"})
@@ -146,6 +142,10 @@ func BuildSemantic(c PhysicalCatalog, mappings MappingConfig, queries []QueryAna
 		model.Diagnostics = append(model.Diagnostics, query.Diagnostics...)
 	}
 	model.Diagnostics = sortDiagnostics(model.Diagnostics)
+	if err := ValidateSemantic(model); err != nil {
+		model.Diagnostics = append(model.Diagnostics, Diagnostic{Level: DiagnosticError, Code: "invalid_semantic", Path: "semantic", Message: err.Error()})
+		model.Diagnostics = sortDiagnostics(model.Diagnostics)
+	}
 	return model, append([]Diagnostic(nil), model.Diagnostics...)
 }
 
