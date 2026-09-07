@@ -49,11 +49,6 @@ func graphCloneEncoded(value any) any {
 	}
 }
 
-type graphInvocation struct {
-	codecs CodecRegistry
-	rows   int64
-}
-
 func graphCodecs(executor Executor) CodecRegistry {
 	if provider, ok := executor.(CodecProvider); ok && provider.Codecs() != nil {
 		return provider.Codecs()
@@ -398,7 +393,9 @@ func graphInvocationFingerprint(edge *graphEdgeSpec, stage string, compiled comp
 
 func writeGraphFingerprintValue(key *strings.Builder, value any) error {
 	if named, ok := value.(sql.NamedArg); ok {
-		writeGraphFingerprintValue(key, named.Name)
+		if err := writeGraphFingerprintValue(key, named.Name); err != nil {
+			return err
+		}
 		value = named.Value
 	}
 	normalized, err := normalizeGraphValue(value)
@@ -717,7 +714,7 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 				return nil, planError("foreign_key_result", "graph."+edge.name, "child key is absent")
 			}
 			entry := edgeCache[graphCacheKeyFor(fingerprint, tuple)]
-			entry.rows = append(entry.rows, row)
+			entry.rows = append(entry.rows, graphRow{row: row.row})
 			entry.decoder = edge.child.query.decoderValue()
 			edgeCache[graphCacheKeyFor(fingerprint, tuple)] = entry
 		}
@@ -733,7 +730,7 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 				if _, ok := groups[tuple.identity]; !ok {
 					return nil, planError("foreign_key_result", "graph."+edge.name, "child key was not requested")
 				}
-				loaded[tuple.identity] = append(loaded[tuple.identity], row)
+				loaded[tuple.identity] = append(loaded[tuple.identity], graphRow{row: row.row, graph: edge.child.query.mapRow(row.row)})
 			}
 		}
 	}
@@ -961,7 +958,7 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 					return nil, planError("foreign_key_result", "graph."+edge.name, "junction parent was not requested")
 				}
 				entry := cache[graphCacheKeyFor(junctionFingerprint, parentTuple)]
-				entry.rows = append(entry.rows, row)
+				entry.rows = append(entry.rows, graphRow{row: row.row})
 				cache[graphCacheKeyFor(junctionFingerprint, parentTuple)] = entry
 				entry.decoder = junctionPlan.decoderValue()
 				cache[graphCacheKeyFor(junctionFingerprint, parentTuple)] = entry
@@ -1077,7 +1074,7 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 					return nil, planError("foreign_key_result", "graph."+edge.name, "target key was not requested")
 				}
 				entry := cache[graphCacheKeyFor(targetFingerprint, tuple)]
-				entry.rows = append(entry.rows, row)
+				entry.rows = append(entry.rows, graphRow{row: row.row})
 				cache[graphCacheKeyFor(targetFingerprint, tuple)] = entry
 				entry.decoder = edge.child.query.decoderValue()
 				cache[graphCacheKeyFor(targetFingerprint, tuple)] = entry
@@ -1097,7 +1094,7 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 				if _, duplicate := targets[tuple.identity]; duplicate {
 					return nil, planError("cardinality", "graph."+edge.name, "target returned duplicate rows")
 				}
-				targets[tuple.identity] = row
+				targets[tuple.identity] = graphRow{row: row.row, graph: edge.child.query.mapRow(row.row)}
 			}
 		}
 	}

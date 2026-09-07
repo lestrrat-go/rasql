@@ -189,23 +189,3 @@ func (k *graphKeySpec) tuple(row any, codecs CodecRegistry) (keyTuple, bool, err
 	result.identity = identity.String()
 	return result, true, nil
 }
-
-func graphKeyPredicate(key *graphKeySpec, tuple keyTuple) (Predicate, error) {
-	if key == nil || len(key.parts) != len(tuple.components) {
-		return Predicate{}, planError("internal_plan", "graph.key", "tuple width mismatch")
-	}
-	branches := make([]query.Expression, len(key.parts))
-	_ = branches
-	parts := make([]Predicate, len(key.parts))
-	for i, part := range key.parts {
-		expression, err := graphEncodedBind(tuple.components[i].value, part.codec)
-		if err != nil {
-			return Predicate{}, err
-		}
-		parts[i] = Predicate{node: query.Equal(part.column, expression)}
-	}
-	if len(parts) == 1 {
-		return parts[0], nil
-	}
-	return And(parts...), nil
-}
