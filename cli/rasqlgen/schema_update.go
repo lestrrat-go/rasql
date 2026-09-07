@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/lestrrat-go/rasql/generate"
+	"github.com/lestrrat-go/rasql/internal/catalogread"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/compilerlock"
 	"github.com/lestrrat-go/rasql/internal/schemasource"
@@ -43,7 +45,7 @@ func (c command) runSchemaUpdate(args []string) error {
 	if markerErr != nil && !errors.Is(markerErr, os.ErrNotExist) {
 		return markerErr
 	}
-	request := schemasource.Request{ModuleRoot: root, Engine: schemasource.EngineConfig{Dialect: cfg.Engine.Dialect, Profile: cfg.Engine.Profile}, Source: schemasource.SchemaSourceConfig{Kind: cfg.Schema.Kind, Identity: cfg.Schema.Identity, Paths: cfg.Schema.Paths, Inputs: cfg.Schema.Inputs, Command: cfg.Schema.Command, Environment: cfg.Schema.Environment}, TempRoot: filepath.Join(root, ".tmp")}
+	request := schemasource.Request{ModuleRoot: root, Engine: schemasource.EngineConfig{Dialect: cfg.Engine.Dialect, Profile: cfg.Engine.Profile}, Source: schemasource.SchemaSourceConfig{Kind: cfg.Schema.Kind, Identity: cfg.Schema.Identity, Paths: cfg.Schema.Paths, Inputs: cfg.Schema.Inputs, Command: cfg.Schema.Command, Environment: cfg.Schema.Environment}, TempRoot: filepath.Join(root, ".tmp"), Scope: catalogScope(cfg)}
 	if cfg.Schema.Kind == "live" {
 		request.LiveDSN = *dsn
 	} else {
@@ -92,15 +94,22 @@ func (c command) runSchemaUpdate(args []string) error {
 		if override, ok := configuredNames[schemaObjectName(object.Schema, object.Name)]; ok && override.RowType != "" {
 			name = override.RowType
 		}
-		generation.Objects = append(generation.Objects, compilerir.ObjectGoName{ID: object.ID, Source: object.Name, Row: name + "Row", Create: name + "Create", Patch: name + "Patch", File: object.Name + "_gen.go"})
+		name = exportGoName(name)
+		generation.Objects = append(generation.Objects, compilerir.ObjectGoName{ID: object.ID, Source: name, Row: name + "Row", Create: name + "Create", Patch: name + "Patch", File: object.Name + "_gen.go"})
 	}
 	goModel, diagnostics := compilerir.BuildGo(semantic, generation)
 	if hasErrors(diagnostics) {
 		return fmt.Errorf("schema update: Go model failed")
 	}
 	for i, object := range goModel.Objects {
-		generation.Objects[i].Source = object.SourceName
-		generation.Objects[i].Row = object.Row.Name
+		generation.Objects[i].Source = exportGoName(object.SourceName)
+		generation.Objects[i].Row = exportGoName(object.Row.Name)
+		if object.Create != nil {
+			generation.Objects[i].Create = exportGoName(object.Create.Name)
+		}
+		if object.Patch != nil {
+			generation.Objects[i].Patch = exportGoName(object.Patch.Name)
+		}
 	}
 	for _, query := range goModel.Queries {
 		generation.Queries = append(generation.Queries, compilerir.QueryGoName{ID: query.ID, Function: query.Name, Result: resultName(query), Projection: query.ProjectionName})
@@ -183,6 +192,31 @@ func resultName(query compilerir.GoQuery) string {
 func schemaObjectName(namespace, name string) schema.ObjectName {
 	return schema.ObjectName{Schema: namespace, Name: name}
 }
+
+func exportGoName(name string) string {
+	if name == "" {
+		return name
+	}
+	return strings.ToUpper(name[:1]) + name[1:]
+}
+
+func catalogScope(cfg config) catalogread.Scope {
+	scope := catalogread.Scope{IncludeViews: cfg.Tables.IncludeViews}
+	for _, name := range cfg.Tables.Include {
+		scope.Include = append(scope.Include, schema.ObjectName{Name: name})
+	}
+	for _, name := range cfg.Tables.Exclude {
+		scope.Exclude = append(scope.Exclude, schema.ObjectName{Name: name})
+	}
+	scope.Include = append(scope.Include, cfg.Tables.IncludeObjects...)
+	scope.Exclude = append(scope.Exclude, cfg.Tables.ExcludeObjects...)
+	history := cfg.Tables.HistoryTable
+	if history == "" {
+		history = "rasql_schema_migrations"
+	}
+	scope.HistoryTable = schema.ObjectName{Name: history}
+	return scope
+}
 func queryInputs(queries []compilerir.QueryAnalysis) []compilerlock.QueryDigestInput {
 	out := make([]compilerlock.QueryDigestInput, 0, len(queries))
 	for _, q := range queries {
@@ -250,7 +284,7 @@ func (c command) runSchemaVerify(args []string) error {
 	if err != nil {
 		return err
 	}
-	request := schemasource.Request{ModuleRoot: root, Engine: schemasource.EngineConfig{Dialect: cfg.Engine.Dialect, Profile: cfg.Engine.Profile}, Source: schemasource.SchemaSourceConfig{Kind: cfg.Schema.Kind, Identity: cfg.Schema.Identity, Paths: cfg.Schema.Paths, Inputs: cfg.Schema.Inputs, Command: cfg.Schema.Command, Environment: cfg.Schema.Environment}, LiveDSN: *dsn, BootstrapDSN: *dsn, TempRoot: filepath.Join(root, ".tmp")}
+	request := schemasource.Request{ModuleRoot: root, Engine: schemasource.EngineConfig{Dialect: cfg.Engine.Dialect, Profile: cfg.Engine.Profile}, Source: schemasource.SchemaSourceConfig{Kind: cfg.Schema.Kind, Identity: cfg.Schema.Identity, Paths: cfg.Schema.Paths, Inputs: cfg.Schema.Inputs, Command: cfg.Schema.Command, Environment: cfg.Schema.Environment}, LiveDSN: *dsn, BootstrapDSN: *dsn, TempRoot: filepath.Join(root, ".tmp"), Scope: catalogScope(cfg)}
 	ctx := c.ctx
 	if ctx == nil {
 		ctx = context.Background()

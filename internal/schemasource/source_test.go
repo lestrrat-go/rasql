@@ -188,8 +188,7 @@ func TestMaterializeJoinsPrimaryAndDetachedCleanupErrors(t *testing.T) {
 	cleanupErr := errors.New("cleanup")
 	factory := &fakeFactory{db: db, dsn: "owned", cleanupErr: cleanupErr}
 	r := schemasource.Request{ModuleRoot: root, Engine: schemasource.EngineConfig{Dialect: "sqlite", Profile: "sqlite-3.35"}, Source: schemasource.SchemaSourceConfig{Kind: "external", Identity: "x", Inputs: []string{"schema.sql"}, Command: []string{"tool"}}}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	ctx := context.Background()
 	_, err = schemasource.Materialize(ctx, r, schemasource.Dependencies{Factory: factory, Profiles: &fakeProfile{p: p}, Catalogs: &fakeCatalog{err: primaryErr}, Processes: &fakeProcess{}})
 	if !errors.Is(err, primaryErr) || !errors.Is(err, cleanupErr) {
 		t.Fatalf("error=%v, want both primary and cleanup causes", err)

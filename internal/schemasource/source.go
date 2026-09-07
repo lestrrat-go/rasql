@@ -195,6 +195,9 @@ func Materialize(ctx context.Context, req Request, deps Dependencies) (Result, e
 	if err := validateDeps(req, deps); err != nil {
 		return Result{}, err
 	}
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
+	}
 	paths, snaps, err := sourceSnapshots(req)
 	if err != nil {
 		return Result{}, err
@@ -207,6 +210,9 @@ func Materialize(ctx context.Context, req Request, deps Dependencies) (Result, e
 	var returnResult Result
 	created := false
 	primary := func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if req.Source.Kind == "live" {
 			db, err = deps.Opener.Open(req.Engine.Dialect, req.LiveDSN)
 			if err != nil {
@@ -226,6 +232,9 @@ func Materialize(ctx context.Context, req Request, deps Dependencies) (Result, e
 			if db == nil || strings.TrimSpace(ownedConnection) == "" || cleanup == nil {
 				return fmt.Errorf("schema source: disposable factory returned incomplete database")
 			}
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		profile, err = deps.Profiles.Resolve(ctx, db, req.Engine)
 		if err != nil {
@@ -284,6 +293,9 @@ func Materialize(ctx context.Context, req Request, deps Dependencies) (Result, e
 		}
 	}
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			err = errors.Join(err, ctxErr)
+		}
 		return Result{}, err
 	}
 	return returnResult.Clone(), nil

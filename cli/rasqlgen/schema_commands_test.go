@@ -84,7 +84,7 @@ func TestSchemaUpdatePropagatesCancellationBeforePublication(t *testing.T) {
 	cancel()
 	var output, diagnostics bytes.Buffer
 	err := rasqlgen.RunTopLevelContext(ctx, []string{"schema", "update", "-config", configPath}, &output, &diagnostics)
-	require.ErrorContains(t, err, context.Canceled.Error())
+	require.ErrorIs(t, err, context.Canceled)
 	require.NoFileExists(t, filepath.Join(root, ".rasql-update.pending.json"))
 	require.NoFileExists(t, filepath.Join(root, "rasql.lock.json"))
 }

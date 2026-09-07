@@ -9,7 +9,9 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
+	"github.com/lestrrat-go/rasql/internal/compilerlock"
 	"github.com/lestrrat-go/rasql/schema"
+	"github.com/stretchr/testify/require"
 )
 
 func plainEmitterFixture(t *testing.T) generate.EmitterInput {
@@ -197,4 +199,51 @@ func TestLegacyStoreRejectsIndependentMutationNames(t *testing.T) {
 	if _, err := generate.LegacyStore(in); err == nil {
 		t.Fatal("legacy store accepted independent mutation naming")
 	}
+}
+
+func TestLockRoundTripRebuildsIdenticalLegacyPlan(t *testing.T) {
+	in := plainEmitterFixture(t)
+	gen := in.Generation.Clone()
+	for i := range gen.Objects {
+		gen.Objects[i].Source = "Users"
+		gen.Objects[i].Row = "UsersRow"
+		gen.Objects[i].Create = "UsersCreate"
+		gen.Objects[i].Patch = "UsersPatch"
+	}
+	lock := compilerlock.File{Format: compilerlock.FormatVersion, Compiler: "rasql", Engine: compilerlock.EngineRecord{Dialect: "sqlite", Version: "3", Profile: "sqlite-3.35"}, Catalog: compilerlock.FromPhysical(in.Catalog), Generation: compilerlock.GenerationRecord{Package: gen.Package, Output: gen.Output, Emitter: gen.Emitter, Prune: gen.Prune}}
+	for _, object := range gen.Objects {
+		lock.Generation.Objects = append(lock.Generation.Objects, compilerlock.ObjectNameRecord{ID: string(object.ID), Source: object.Source, Row: object.Row, Create: object.Create, Patch: object.Patch, File: object.File})
+	}
+	lock.Source = compilerlock.SourceRecord{Kind: "live", Identity: "fixture"}
+	var err error
+	lock.Digests, err = compilerlock.BuildDigests(compilerlock.DigestInputs{Source: compilerlock.SourceDigestInput{Record: lock.Source, Engine: lock.Engine}, Generation: gen})
+	require.NoError(t, err)
+	encoded, err := compilerlock.Encode(lock)
+	require.NoError(t, err)
+	decoded, err := compilerlock.Decode(encoded)
+	require.NoError(t, err)
+	catalog := compilerlock.PhysicalFromCatalog(decoded)
+	semantic, diagnostics := compilerir.BuildSemantic(catalog, compilerir.MappingConfig{}, nil)
+	require.Empty(t, diagnostics)
+	rebuiltConfig := compilerir.GoConfig{Package: decoded.Generation.Package, Output: decoded.Generation.Output, Emitter: decoded.Generation.Emitter, Prune: decoded.Generation.Prune}
+	for _, object := range decoded.Generation.Objects {
+		rebuiltConfig.Objects = append(rebuiltConfig.Objects, compilerir.ObjectGoName{ID: compilerir.ObjectID(object.ID), Source: object.Source, Row: object.Row, Create: object.Create, Patch: object.Patch, File: object.File})
+	}
+	model, diagnostics := compilerir.BuildGo(semantic, rebuiltConfig)
+	require.Empty(t, diagnostics)
+	model.Objects[0].SourceName = "Users"
+	model.Objects[0].Row.Name = "UsersRow"
+	model.Objects[0].Create.Name = "UsersCreate"
+	model.Objects[0].Patch.Name = "UsersPatch"
+	rebuilt, err := generate.NewEmitterInput(catalog, semantic, model, rebuiltConfig)
+	require.NoError(t, err)
+	originalStore, err := generate.LegacyStore(in)
+	require.NoError(t, err)
+	rebuiltStore, err := generate.LegacyStore(rebuilt)
+	require.NoError(t, err)
+	originalPlan, err := originalStore.Plan()
+	require.NoError(t, err)
+	rebuiltPlan, err := rebuiltStore.Plan()
+	require.NoError(t, err)
+	require.Equal(t, originalPlan.Files(), rebuiltPlan.Files())
 }
