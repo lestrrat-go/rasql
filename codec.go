@@ -130,8 +130,14 @@ func codecFor(reg CodecRegistry, id string) (ValueCodec, error) {
 }
 
 func encodeCompiled(compiled compiledQuery, reg CodecRegistry) (stmt.Statement, error) {
-	args := compiled.statementCopy().BoundArgs()
-	slots := compiled.BindSlots()
+	statement, err := compiled.statementCopy()
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	return encodeStatement(statement, compiled.BindSlots(), reg)
+}
+func encodeStatement(statement stmt.Statement, slots []bindSlot, reg CodecRegistry) (stmt.Statement, error) {
+	args := statement.BoundArgs()
 	if len(args) != len(slots) {
 		return stmt.Statement{}, &PlanError{Code: "bind_mismatch", Detail: "statement arguments and bind slots differ"}
 	}
@@ -158,5 +164,5 @@ func encodeCompiled(compiled compiledQuery, reg CodecRegistry) (stmt.Statement, 
 			args[i] = encoded
 		}
 	}
-	return stmt.New(sqltext.Text(compiled.statement.SQL()), args...), nil
+	return stmt.New(sqltext.Text(statement.SQL()), args...), nil
 }

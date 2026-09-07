@@ -128,8 +128,11 @@ func prepareRows[R any](executor Executor, q Query[R], compiled compiledQuery) (
 	}
 	columns := q.Schema().Columns()
 	slots := compiled.BindSlots()
-	args := compiled.statementCopy().BoundArgs()
-	if len(slots) != len(args) {
+	statementCopy, err := compiled.statementCopy()
+	if err != nil {
+		return result, err
+	}
+	if len(slots) != len(statementCopy.BoundArgs()) {
 		return result, &PlanError{Code: "bind_mismatch", Detail: "statement arguments and bind slots differ"}
 	}
 	for i, column := range columns {
@@ -150,7 +153,7 @@ func prepareRows[R any](executor Executor, q Query[R], compiled compiledQuery) (
 		}
 		_ = i
 	}
-	statement, err := encodeCompiled(compiled, registry)
+	statement, err := encodeStatement(statementCopy, slots, registry)
 	if err != nil {
 		return result, err
 	}

@@ -306,6 +306,24 @@ func TestPreparedRowsCodecCountsAndNullBypass(t *testing.T) {
 	require.Equal(t, int64(1), dec.Load())
 }
 
+func TestPreparedRowsCopiesAndEncodesOneDetachedStatement(t *testing.T) {
+	var copies, encodes atomic.Int64
+	var decodes atomic.Int64
+	codec := countingRuntimeCodec{encode: &encodes, decode: &decodes}
+	registry, err := NewCodecRegistry(map[CodecID]ValueCodec{"count": codec})
+	require.NoError(t, err)
+	inner, err := WithCodecs(runtimeExecutor(t, nil), registry)
+	require.NoError(t, err)
+	compiled := compiledQuery{statement: stmt.New(sqltext.Text("SELECT ?"), []byte("x")), bindSlots: []bindSlot{{id: 1, codec: "count"}}, copyArgs: []bindValueCopy{func() (any, error) { copies.Add(1); return []byte("x"), nil }}}
+	prepared, err := prepareRows(inner, runtimeQuery(t), compiled)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), copies.Load())
+	require.Equal(t, int64(1), encodes.Load())
+	args := prepared.statement.Args()
+	args[0].([]byte)[0] = 'z'
+	require.Equal(t, []byte("x"), compiled.statement.Args()[0].([]byte))
+}
+
 type countingRuntimeCodec struct{ encode, decode *atomic.Int64 }
 
 func (c countingRuntimeCodec) Encode(v any) (driver.Value, error) { c.encode.Add(1); return v, nil }
