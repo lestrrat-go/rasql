@@ -222,6 +222,14 @@ func encodeStatement(statement stmt.Statement, slots []bindSlot, reg CodecRegist
 		if codec == nil {
 			continue
 		}
+		if value == nil {
+			if name != "" {
+				args[i] = sql.Named(name, nil)
+			} else {
+				args[i] = nil
+			}
+			continue
+		}
 		encoded, err := codec.Encode(value)
 		if err != nil {
 			return stmt.Statement{}, &EncodeError{Index: i, Codec: CodecID(slot.codec), Err: err}

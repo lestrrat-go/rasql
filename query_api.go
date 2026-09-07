@@ -16,6 +16,17 @@ type Nullable[T any] struct {
 	Valid bool
 }
 
+type NullableBindValue interface {
+	NullableBind() (value any, valid bool)
+}
+
+func (n Nullable[T]) NullableBind() (any, bool) {
+	if !n.Valid {
+		return nil, false
+	}
+	return n.Value, true
+}
+
 type nullableScanDestination interface {
 	nullableValue() any
 	nullableClear()
@@ -134,10 +145,39 @@ type Projection[R any] struct {
 	items   []ProjectionItem
 	schema  ResultSchema
 	decoder RowDecoder[R]
+	native  bool
+}
+
+func NativeProjection[R any](decoder RowDecoder[R]) (Projection[R], error) {
+	if decoder == nil || isNilRowDecoder(decoder) {
+		return Projection[R]{}, planError("invalid_projection", "decoder", "must not be zero")
+	}
+	schemaValue, err := NewResultSchema(decoder.ResultSchema().Columns()...)
+	if err != nil {
+		return Projection[R]{}, err
+	}
+	if err := validateQ1DecoderMetadata(schemaValue, decoder); err != nil {
+		return Projection[R]{}, err
+	}
+	items := make([]ProjectionItem, len(schemaValue.columns))
+	for i, column := range schemaValue.columns {
+		items[i] = ProjectionItem{column: column}
+	}
+	return Projection[R]{items: items, schema: schemaValue, decoder: decoder, native: true}, nil
+}
+
+func isNilRowDecoder[R any](decoder RowDecoder[R]) bool {
+	value := reflect.ValueOf(decoder)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 func NewProjection[R any](items []ProjectionItem, decoder RowDecoder[R]) (Projection[R], error) {
-	if decoder == nil || (reflect.ValueOf(decoder).Kind() == reflect.Pointer && reflect.ValueOf(decoder).IsNil()) {
+	if decoder == nil || isNilRowDecoder(decoder) {
 		return Projection[R]{}, planError("invalid_projection", "decoder", "must not be zero")
 	}
 	if len(items) == 0 {
@@ -487,7 +527,11 @@ func validateQ1DecoderMetadata(resultSchema ResultSchema, decoder interface{ Pre
 }
 
 func Select[R any](from Source, projection Projection[R]) Query[R] {
-	return Query[R]{plan: QueryPlan{sources: []Source{from}, projection: cloneItems(projection.items)}, projection: projection}
+	plan := QueryPlan{sources: []Source{from}, projection: cloneItems(projection.items)}
+	if projection.native {
+		plan.planErr = planError("unsupported_feature", "projection", "native projections require Native")
+	}
+	return Query[R]{plan: plan, projection: projection}
 }
 func Project[R any](base QueryPlan, projection Projection[R]) Query[R] {
 	base.projection = cloneItems(projection.items)

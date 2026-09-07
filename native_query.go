@@ -83,7 +83,16 @@ func newNativeQueryPlan(statement NativeStatement) (*nativeQueryPlan, error) {
 		if arg.Codec != "" && !codecPattern.MatchString(arg.Codec) {
 			return nil, planError("invalid_schema", fmt.Sprintf("native.args[%d].codec", i), "malformed codec identifier")
 		}
-		snapshot, copier, err := adoptBind(arg.Value, true)
+		value := arg.Value
+		if nullable, ok := value.(NullableBindValue); ok {
+			logical, valid := nullable.NullableBind()
+			if !valid {
+				value = nil
+			} else {
+				value = logical
+			}
+		}
+		snapshot, copier, err := adoptBind(value, true)
 		if err != nil {
 			result := planError("unsnapshotable_bind", fmt.Sprintf("native.args[%d]", i), err.Error())
 			result.cause = err
