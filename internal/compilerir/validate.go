@@ -427,6 +427,20 @@ func ValidateGo(m GoModel) error {
 				return invalid(fmt.Sprintf("objects[%d].columns[%d].go_type", i, j), "%v", err)
 			}
 		}
+		states := make(map[string]struct{ insert, patch string }, len(object.Columns))
+		for _, column := range object.Columns {
+			states[column.Name] = struct{ insert, patch string }{insert: column.InsertState, patch: column.PatchState}
+		}
+		for _, field := range object.Create.Fields {
+			if state, ok := states[field.Name]; ok && (state.insert == "generated" || state.insert == "forbidden") {
+				return invalid(fmt.Sprintf("objects[%d].create.%s", i, field.Name), "generated or forbidden column is caller-writable")
+			}
+		}
+		for _, field := range object.Patch.Fields {
+			if state, ok := states[field.Name]; ok && state.patch == "forbidden" {
+				return invalid(fmt.Sprintf("objects[%d].patch.%s", i, field.Name), "forbidden column is caller-writable")
+			}
+		}
 		for j, relation := range object.Relations {
 			if relation.Name == "" || relation.Target == "" {
 				return invalid(fmt.Sprintf("objects[%d].relations[%d]", i, j), "invalid relation")
@@ -475,6 +489,9 @@ func ValidateGo(m GoModel) error {
 func validateGoField(field GoField, imports map[string]struct{}) error {
 	if field.Name == "" || !token.IsIdentifier(field.Name) || field.Type == "" {
 		return fmt.Errorf("invalid field")
+	}
+	if !field.Nullable && strings.HasPrefix(field.Type, "rasql.Nullable[") {
+		return fmt.Errorf("non-null field cannot use nullable type")
 	}
 	return parseGoType(field.Type, imports)
 }

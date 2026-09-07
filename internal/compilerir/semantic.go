@@ -92,13 +92,16 @@ func BuildSemantic(c PhysicalCatalog, mappings MappingConfig, queries []QueryAna
 				model.Diagnostics = append(model.Diagnostics, Diagnostic{Level: DiagnosticError, Code: "scalar_missing", Path: object.Name + "." + column.Name, Message: "logical scalar is missing"})
 			}
 			state := "optional"
-			if column.GeneratedSQL != "" || column.Identity != "" {
+			if column.GeneratedSQL != "" || column.Identity == "ALWAYS" {
 				state = "generated"
+			}
+			if column.Identity == "BY DEFAULT" {
+				state = "optional"
 			}
 			if column.DefaultSQL != "" && state == "optional" {
 				state = "optional"
 			}
-			if !column.Nullable && state == "optional" && column.DefaultSQL == "" {
+			if !column.Nullable && state == "optional" && column.DefaultSQL == "" && column.Identity != "BY DEFAULT" {
 				state = "required"
 			}
 			patchState := "settable"

@@ -31,6 +31,7 @@ type GoObject struct {
 }
 type GoColumn struct {
 	Name, PhysicalName, Scalar, GoType, Codec string
+	InsertState, PatchState                   string
 	Nullable                                  bool
 }
 type GoRelation struct {
@@ -111,7 +112,7 @@ func BuildGo(model SemanticModel, config GoConfig) (GoModel, []Diagnostic) {
 			if !ok {
 				diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "unsupported_scalar", Path: object.PhysicalName.Name + "." + column.Name, Message: "scalar has no Go mapping"})
 			}
-			goColumn := GoColumn{Name: column.Name, PhysicalName: column.Name, Scalar: column.Scalar, GoType: binding.Type, Codec: binding.Codec, Nullable: column.Nullable}
+			goColumn := GoColumn{Name: column.Name, PhysicalName: column.Name, Scalar: column.Scalar, GoType: binding.Type, Codec: binding.Codec, InsertState: column.InsertState, PatchState: column.PatchState, Nullable: column.Nullable}
 			goObject.Columns = append(goObject.Columns, goColumn)
 			if column.Readable {
 				goObject.Row.Fields = append(goObject.Row.Fields, GoField{Name: column.Name, Type: goColumn.GoType, Codec: goColumn.Codec, Nullable: column.Nullable})
