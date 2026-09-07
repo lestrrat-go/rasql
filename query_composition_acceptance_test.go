@@ -49,14 +49,6 @@ func (q2AcceptanceGroupDecoder) DecodeRow(source ScanSource, row *q2AcceptanceGr
 	return nil
 }
 
-type q2AcceptanceCountDecoder struct{ resultSchema ResultSchema }
-
-func (d q2AcceptanceCountDecoder) ResultSchema() ResultSchema { return d.resultSchema }
-func (q2AcceptanceCountDecoder) Presence() []Presence         { return nil }
-func (q2AcceptanceCountDecoder) DecodeRow(source ScanSource, value *int64) error {
-	return source.Scan(value)
-}
-
 func TestQ2CompositionExecutesCompoundOuterOperationsAndCounts(t *testing.T) {
 	db := q2AcceptanceSQLite(t)
 	base := q2AcceptanceQuery(t)
@@ -234,12 +226,6 @@ func TestQ2CompositionRejectsInvalidCTEPlansWithoutPanic(t *testing.T) {
 type q2AcceptanceBindCause struct{}
 
 func (q2AcceptanceBindCause) Error() string { return "q2 bind cause" }
-
-type q2AcceptanceBadBind string
-
-func (q2AcceptanceBadBind) SnapshotBind() (q2AcceptanceBadBind, error) {
-	return q2AcceptanceBadBind("bad"), q2AcceptanceBindCause{}
-}
 
 func TestQ2CompositionCountPreservesBadBindCause(t *testing.T) {
 	base := q2AcceptanceQuery(t)

@@ -414,7 +414,7 @@ func (c compiledQuery) statementCopy() (stmt.Statement, error) {
 		}
 		copy, err := copier()
 		if err != nil {
-			return stmt.Statement{}, err
+			return stmt.Statement{}, bindCopyError(i, err)
 		}
 		args[i] = copy
 	}
@@ -441,11 +441,30 @@ func mapCompileError(err error) error {
 	if errors.As(err, &planErr) {
 		return err
 	}
+	var validationErr *query.ValidationError
+	if errors.As(err, &validationErr) {
+		return &PlanError{Code: "invalid_query", Path: validationErr.Path, Detail: validationErr.Message, cause: err}
+	}
 	var profileErr *engineprofile.ProfileError
-	if errors.As(err, &profileErr) && !errors.Is(err, engineprofile.ErrUnsupportedFeature) {
-		return err
+	if errors.As(err, &profileErr) {
+		code, path := "invalid_compiler", "compiler"
+		if errors.Is(err, engineprofile.ErrUnsupportedFeature) {
+			code = "unsupported_feature"
+		}
+		if errors.Is(err, engineprofile.ErrBindLimit) {
+			code, path = "bind_limit", "args"
+		}
+		return &PlanError{Code: code, Path: path, Detail: err.Error(), cause: err}
 	}
 	return &PlanError{Code: "unsupported_feature", Path: "compiler", Detail: err.Error(), cause: err}
+}
+
+func bindCopyError(index int, err error) error {
+	var planErr *PlanError
+	if errors.As(err, &planErr) && planErr.Code == "unsnapshotable_bind" {
+		return err
+	}
+	return &PlanError{Code: "unsnapshotable_bind", Path: fmt.Sprintf("args[%d]", index), Detail: err.Error(), cause: err}
 }
 
 func unwrapBindTokens(statement stmt.Statement) (compiledQuery, error) {
@@ -465,7 +484,7 @@ func unwrapBindTokens(statement stmt.Statement) (compiledQuery, error) {
 			copyArgs[i] = token.copy
 			value, err := token.copy()
 			if err != nil {
-				return compiledQuery{}, err
+				return compiledQuery{}, bindCopyError(i, err)
 			}
 			args[i] = value
 			continue
@@ -489,7 +508,7 @@ func unwrapBindTokens(statement stmt.Statement) (compiledQuery, error) {
 				}
 				value, err := copyArgs[i]()
 				if err != nil {
-					return compiledQuery{}, err
+					return compiledQuery{}, bindCopyError(i, err)
 				}
 				args[i] = value
 				continue

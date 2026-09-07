@@ -72,14 +72,14 @@ func TestQ2PartitionLimitLowersToRowNumber(t *testing.T) {
 	require.Contains(t, statement.SQL(), "<= ?")
 	db, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { require.NoError(t, db.Close()) }()
 	_, err = db.ExecContext(t.Context(), `CREATE TABLE items (id INTEGER)`)
 	require.NoError(t, err)
 	_, err = db.ExecContext(t.Context(), `INSERT INTO items (id) VALUES (1), (1), (1), (1), (2), (2), (2), (2)`)
 	require.NoError(t, err)
 	rows, err := db.QueryContext(t.Context(), statement.SQL(), statement.Args()...)
 	require.NoError(t, err)
-	defer rows.Close()
+	defer func() { require.NoError(t, rows.Close()) }()
 	count := 0
 	ids := make([]int64, 0, 4)
 	for rows.Next() {
@@ -158,14 +158,14 @@ func TestQ2NullOrderSQLiteAndRenderProfiles(t *testing.T) {
 			require.NoError(t, err)
 			db, err := sql.Open("sqlite", ":memory:")
 			require.NoError(t, err)
-			defer db.Close()
+			defer func() { require.NoError(t, db.Close()) }()
 			_, err = db.ExecContext(t.Context(), `CREATE TABLE nullable_items (id INTEGER)`)
 			require.NoError(t, err)
 			_, err = db.ExecContext(t.Context(), `INSERT INTO nullable_items (id) VALUES (NULL), (1), (2)`)
 			require.NoError(t, err)
 			rows, err := db.QueryContext(t.Context(), compiled.statement.SQL(), compiled.statement.Args()...)
 			require.NoError(t, err)
-			defer rows.Close()
+			defer func() { require.NoError(t, rows.Close()) }()
 			got := make([]any, 0, 3)
 			for rows.Next() {
 				var value any
