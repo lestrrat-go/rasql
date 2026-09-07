@@ -23,6 +23,7 @@ import (
 // Repository reads and writes Taskboard's tables through rasql.
 type Repository struct {
 	executor rasql.Executor
+	hooks    *openProjectsHooks
 }
 
 // New creates a repository over executor.
@@ -31,6 +32,14 @@ func New(executor rasql.Executor) Repository {
 }
 
 // END(repository)
+
+// openProjectsHooks is a private test seam for the bounded graph's mapping
+// and attachment points. Production repositories leave it nil.
+type openProjectsHooks struct {
+	rootMapped       func()
+	tasksAttached    func()
+	assigneeAttached func()
+}
 
 // BEGIN(opentask)
 
@@ -55,7 +64,7 @@ type OpenProjectsPage struct {
 
 // END(opentask)
 
-func openProjectsPlan() (rasql.GraphPlan[ProjectsRow, openProjectGraph], rasql.TypedRelation[ProjectsRow], error) {
+func openProjectsPlan(hooks *openProjectsHooks) (rasql.GraphPlan[ProjectsRow, openProjectGraph], rasql.TypedRelation[ProjectsRow], error) {
 	projectsSource, err := Projects().Source("project")
 	if err != nil {
 		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.TypedRelation[ProjectsRow]{}, err
@@ -109,7 +118,12 @@ func openProjectsPlan() (rasql.GraphPlan[ProjectsRow, openProjectGraph], rasql.T
 		membersSource,
 		membersPlan,
 		rasql.EdgeOptions{},
-		func(graph *openTaskGraph, loaded rasql.LoadedOne[MembersRow]) { graph.Assignee = loaded },
+		func(graph *openTaskGraph, loaded rasql.LoadedOne[MembersRow]) {
+			if hooks != nil && hooks.assigneeAttached != nil {
+				hooks.assigneeAttached()
+			}
+			graph.Assignee = loaded
+		},
 	)
 	if err != nil {
 		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.TypedRelation[ProjectsRow]{}, err
@@ -131,14 +145,24 @@ func openProjectsPlan() (rasql.GraphPlan[ProjectsRow, openProjectGraph], rasql.T
 			Order:          []rasql.OrderTerm{rasql.AscExpr(tasksExpressions.ID.Expr())},
 			PerParentLimit: 5,
 		},
-		func(graph *openProjectGraph, loaded rasql.LoadedMany[openTaskGraph]) { graph.Tasks = loaded },
+		func(graph *openProjectGraph, loaded rasql.LoadedMany[openTaskGraph]) {
+			if hooks != nil && hooks.tasksAttached != nil {
+				hooks.tasksAttached()
+			}
+			graph.Tasks = loaded
+		},
 	)
 	if err != nil {
 		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.TypedRelation[ProjectsRow]{}, err
 	}
 	projectsPlan, err := rasql.NewGraphPlan(
 		projectsQuery,
-		func(row ProjectsRow) openProjectGraph { return openProjectGraph{Row: row} },
+		func(row ProjectsRow) openProjectGraph {
+			if hooks != nil && hooks.rootMapped != nil {
+				hooks.rootMapped()
+			}
+			return openProjectGraph{Row: row}
+		},
 		tasksEdge,
 	)
 	if err != nil {
@@ -159,7 +183,7 @@ type openProjectGraph struct {
 
 // OpenProjects returns one page of open projects and their bounded task graph.
 func (repository Repository) OpenProjects(ctx context.Context, request rasql.PageRequest) (OpenProjectsPage, error) {
-	plan, projectsSource, err := openProjectsPlan()
+	plan, projectsSource, err := openProjectsPlan(repository.hooks)
 	if err != nil {
 		return OpenProjectsPage{}, fmt.Errorf("build open project graph: %w", err)
 	}

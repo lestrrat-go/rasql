@@ -1,14 +1,14 @@
-package store_test
+package store
 
 import (
 	"context"
 	"database/sql"
 	"errors"
 	"os"
+	"slices"
 	"sync"
 	"testing"
 
-	"example.com/taskboard/internal/store"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/lestrrat-go/rasql"
@@ -94,7 +94,7 @@ func (observer *statementObserver) snapshotInvocations() []invocationEvidence {
 	return append([]invocationEvidence(nil), observer.invocations...)
 }
 
-func openFixture(t *testing.T, cancelStatement int) (store.Repository, rasql.Executor, *statementObserver) {
+func openFixture(t *testing.T, cancelStatement int) (Repository, rasql.Executor, *statementObserver) {
 	t.Helper()
 	dsn := os.Getenv("TASKBOARD_TEST_DSN")
 	if dsn == "" {
@@ -167,7 +167,7 @@ func openFixture(t *testing.T, cancelStatement int) (store.Repository, rasql.Exe
 	if err != nil {
 		t.Fatalf("observe fixture executor: %s", err)
 	}
-	return store.New(observed), observed, observer
+	return New(observed), observed, observer
 }
 
 func seedFixture(t *testing.T, tx *sql.Tx) {
@@ -202,16 +202,26 @@ func seedFixture(t *testing.T, tx *sql.Tx) {
 
 func TestOpenProjectsBoundedGraphFixture(t *testing.T) {
 	repository, _, observer := openFixture(t, -1)
+	rootMapped, tasksAttached, assigneeAttached := 0, 0, 0
+	repository.hooks = &openProjectsHooks{
+		rootMapped:       func() { rootMapped++ },
+		tasksAttached:    func() { tasksAttached++ },
+		assigneeAttached: func() { assigneeAttached++ },
+	}
 	ctx := t.Context()
 	seen := make(map[int64]struct{}, 50)
 	var after rasql.Cursor
 	pages := 0
 	for {
+		mappedBeforePage := rootMapped
 		page, err := repository.OpenProjects(ctx, rasql.PageRequest{After: after, Limit: 10})
 		if err != nil {
 			t.Fatalf("read fixture page: %s", err)
 		}
 		pages++
+		if got, want := rootMapped-mappedBeforePage, len(page.Values); got != want {
+			t.Fatalf("page %d mapped %d roots for %d returned projects", pages, got, want)
+		}
 		for projectIndex, project := range page.Values {
 			wantProjectID := int64((pages-1)*10 + projectIndex + 1)
 			if project.Row.ID != wantProjectID {
@@ -245,10 +255,20 @@ func TestOpenProjectsBoundedGraphFixture(t *testing.T) {
 				if !task.Assignee.Loaded {
 					t.Fatalf("task %d has an unloaded assignee", task.Row.ID)
 				}
-				if task.Assignee.Present && task.Assignee.Value == nil {
-					t.Fatalf("task %d has a present nil assignee", task.Row.ID)
+				if task.Row.AssigneeID.Valid != task.Assignee.Present {
+					t.Fatalf("task %d nullable assignee valid=%t, attached present=%t", task.Row.ID, task.Row.AssigneeID.Valid, task.Assignee.Present)
 				}
 				if task.Assignee.Present {
+					if task.Assignee.Value == nil {
+						t.Fatalf("task %d has a present nil assignee", task.Row.ID)
+					}
+					if task.Assignee.Value.ID != task.Row.AssigneeID.Value {
+						t.Fatalf("task %d attached assignee %d, want nullable value %d", task.Row.ID, task.Assignee.Value.ID, task.Row.AssigneeID.Value)
+					}
+					wantAssigneeID := int64(taskIndex%2 + 1)
+					if task.Assignee.Value.ID != wantAssigneeID {
+						t.Fatalf("task %d attached assignee %d, want seeded assignee %d", task.Row.ID, task.Assignee.Value.ID, wantAssigneeID)
+					}
 					presentAssignees++
 				}
 			}
@@ -269,6 +289,15 @@ func TestOpenProjectsBoundedGraphFixture(t *testing.T) {
 	}
 	if got, want := len(seen), 50; got != want {
 		t.Fatalf("visited %d projects, want %d", got, want)
+	}
+	if rootMapped != 50 {
+		t.Fatalf("mapped %d roots, want exactly 50 returned roots without lookahead mapping", rootMapped)
+	}
+	if tasksAttached != 50 {
+		t.Fatalf("attached tasks for %d projects, want 50", tasksAttached)
+	}
+	if assigneeAttached != 245 {
+		t.Fatalf("attached %d assignees, want 245 retained tasks", assigneeAttached)
 	}
 	events := observer.snapshot()
 	if got, want := pages, 5; got != want {
@@ -302,23 +331,23 @@ func TestOpenProjectsBoundedGraphFixture(t *testing.T) {
 
 func TestOpenProjectsCancellationBeforeEachStage(t *testing.T) {
 	tests := []struct {
-		name            string
-		statement       int
-		cancelBeforeRun bool
+		name      string
+		statement int
 	}{
-		{name: "root", cancelBeforeRun: true},
+		{name: "root", statement: 0},
 		{name: "tasks", statement: 1},
 		{name: "assignee", statement: 2},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			if test.cancelBeforeRun {
-				cancel()
-			}
 			repository, _, observer := openFixture(t, test.statement)
-			page, err := repository.OpenProjects(ctx, rasql.PageRequest{Limit: 10})
+			rootMapped, tasksAttached, assigneeAttached := 0, 0, 0
+			repository.hooks = &openProjectsHooks{
+				rootMapped:       func() { rootMapped++ },
+				tasksAttached:    func() { tasksAttached++ },
+				assigneeAttached: func() { assigneeAttached++ },
+			}
+			page, err := repository.OpenProjects(t.Context(), rasql.PageRequest{Limit: 10})
 			if !errors.Is(err, context.Canceled) {
 				t.Fatalf("OpenProjects returned %v, want context.Canceled", err)
 			}
@@ -330,22 +359,29 @@ func TestOpenProjectsCancellationBeforeEachStage(t *testing.T) {
 				t.Fatalf("observer recorded logical errors %v, want context.Canceled", logicalErrors)
 			}
 			starts := observer.snapshotStarts()
-			for _, statement := range starts {
-				if statement > test.statement {
-					t.Fatalf("cancellation at statement %d allowed later statement %d", test.statement, statement)
-				}
+			wantStarts := make([]int, test.statement+1)
+			for index := range wantStarts {
+				wantStarts[index] = index
+			}
+			if !slices.Equal(starts, wantStarts) {
+				t.Fatalf("cancellation at statement %d started statements %v, want %v", test.statement, starts, wantStarts)
+			}
+			wantRoots := 0
+			if test.statement > 0 {
+				wantRoots = 10
+			}
+			if rootMapped != wantRoots || tasksAttached != 0 || assigneeAttached != 0 {
+				t.Fatalf("cancellation at statement %d attached graph callbacks root=%d want %d tasks=%d assignees=%d", test.statement, rootMapped, wantRoots, tasksAttached, assigneeAttached)
 			}
 			terminals := observer.snapshotTerminals()
-			if !test.cancelBeforeRun {
-				foundCanceled := false
-				for _, terminal := range terminals {
-					if terminal.StatementIndex == test.statement && errors.Is(terminal.Err, context.Canceled) {
-						foundCanceled = true
-					}
+			foundCanceled := 0
+			for _, terminal := range terminals {
+				if terminal.StatementIndex == test.statement && errors.Is(terminal.Err, context.Canceled) {
+					foundCanceled++
 				}
-				if !foundCanceled {
-					t.Fatalf("target statement %d had no canceled terminal: %#v", test.statement, terminals)
-				}
+			}
+			if foundCanceled != 1 {
+				t.Fatalf("target statement %d had %d canceled terminals: %#v", test.statement, foundCanceled, terminals)
 			}
 			invocations := observer.snapshotInvocations()
 			foundInvocationCancel := false

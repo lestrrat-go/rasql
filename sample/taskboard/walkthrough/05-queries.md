@@ -21,6 +21,7 @@ source: [sample/taskboard/internal/store/repository.go](https://github.com/lestr
 // Repository reads and writes Taskboard's tables through rasql.
 type Repository struct {
 	executor rasql.Executor
+	hooks    *openProjectsHooks
 }
 
 // New creates a repository over executor.
