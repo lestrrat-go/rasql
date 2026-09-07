@@ -7,8 +7,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/go-sql-driver/mysql"
@@ -125,12 +127,34 @@ func derivedDSN(d, s, n string) (string, error) {
 		c.DBName = n
 		return c.FormatDSN(), nil
 	}
-	c, e := pgx.ParseConfig(s)
-	if e != nil {
+	if _, e := pgx.ParseConfig(s); e != nil {
 		return "", e
 	}
-	c.Database = n
-	return c.ConnString(), nil
+	if strings.HasPrefix(s, "postgres://") || strings.HasPrefix(s, "postgresql://") {
+		u, e := url.Parse(s)
+		if e != nil {
+			return "", e
+		}
+		u.Path = "/" + url.PathEscape(n)
+		q := u.Query()
+		q.Set("dbname", n)
+		u.RawQuery = q.Encode()
+		return u.String(), nil
+	}
+	return replaceKeywordDatabase(s, n), nil
+}
+
+var keywordDatabase = regexp.MustCompile(`(?i)(^|[[:space:]])dbname[[:space:]]*=[[:space:]]*('[^']*(?:''[^']*)*'|[^[:space:]]+)`)
+
+func replaceKeywordDatabase(s, name string) string {
+	quoted := "'" + strings.ReplaceAll(name, "'", "\\'") + "'"
+	if keywordDatabase.MatchString(s) {
+		return keywordDatabase.ReplaceAllString(s, `${1}dbname=`+quoted)
+	}
+	if strings.TrimSpace(s) == "" {
+		return "dbname=" + quoted
+	}
+	return s + " dbname=" + quoted
 }
 
 type defaultProfiles struct{}

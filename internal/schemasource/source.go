@@ -129,8 +129,8 @@ func ValidateRequest(r Request) error {
 		if r.BootstrapDSN == "" && r.Engine.Dialect != "sqlite" {
 			return fmt.Errorf("schema source: bootstrap DSN is required")
 		}
-		if r.Source.Kind == "migrations" && (len(r.Source.Paths) == 0 || len(r.Source.Command) != 0 || len(r.Source.Inputs) != 0 || r.LiveDSN != "") {
-			return fmt.Errorf("schema source: migrations require paths and forbid command and inputs")
+		if r.Source.Kind == "migrations" && (len(r.Source.Paths) == 0 || len(r.Source.Command) != 0 || len(r.Source.Inputs) != 0 || len(r.Source.Environment) != 0 || r.LiveDSN != "") {
+			return fmt.Errorf("schema source: migrations require paths and forbid command, inputs, and environment")
 		}
 		if r.Source.Kind == "external" && (len(r.Source.Command) == 0 || strings.TrimSpace(r.Source.Command[0]) == "" || len(r.Source.Inputs) == 0 || len(r.Source.Paths) != 0 || r.LiveDSN != "") {
 			return fmt.Errorf("schema source: external requires command and inputs and forbids paths")
@@ -158,6 +158,16 @@ func ValidateRequest(r Request) error {
 	for k := range r.Source.Environment {
 		if !validEnvKey(k) || k == "RASQL_SCHEMA_DSN" {
 			return fmt.Errorf("schema source: invalid environment key %q", k)
+		}
+	}
+	for k, v := range r.Source.Environment {
+		if strings.ContainsRune(k, '\x00') || strings.ContainsRune(v, '\x00') {
+			return fmt.Errorf("schema source: environment contains NUL")
+		}
+	}
+	for _, arg := range r.Source.Command {
+		if strings.ContainsRune(arg, '\x00') {
+			return fmt.Errorf("schema source: command argument contains NUL")
 		}
 	}
 	return nil
@@ -208,9 +218,9 @@ func Materialize(ctx context.Context, req Request, deps Dependencies) (Result, e
 			if e != nil {
 				return e
 			}
-			db, cleanup, ownedConnection = owned.DB, owned.CloseAndDrop, owned.DSN
 			created = true
-			if db == nil {
+			db, cleanup, ownedConnection = owned.DB, owned.CloseAndDrop, owned.DSN
+			if db == nil || strings.TrimSpace(ownedConnection) == "" || cleanup == nil {
 				return fmt.Errorf("schema source: disposable factory returned incomplete database")
 			}
 		}
@@ -246,7 +256,7 @@ func Materialize(ctx context.Context, req Request, deps Dependencies) (Result, e
 			if req.Source.Kind == "live" {
 				analysisDSN = req.LiveDSN
 			}
-			queries, err = deps.Analyzer.Analyze(ctx, AnalysisRequest{DB: db, DSN: analysisDSN, Profile: profile, Catalog: catalog})
+			queries, err = deps.Analyzer.Analyze(ctx, AnalysisRequest{DB: db, DSN: analysisDSN, Profile: profile, Catalog: catalog.Clone()})
 			if err != nil {
 				return err
 			}
@@ -277,6 +287,9 @@ func Materialize(ctx context.Context, req Request, deps Dependencies) (Result, e
 }
 
 func validateDeps(r Request, d Dependencies) error {
+	if d.Analyzer != nil && isNil(d.Analyzer) {
+		return fmt.Errorf("schema source: analyzer is typed nil")
+	}
 	if r.Source.Kind == "live" {
 		if isNil(d.Opener) || isNil(d.Profiles) || isNil(d.Catalogs) {
 			return fmt.Errorf("schema source: live dependencies are incomplete")
@@ -322,8 +335,16 @@ func redactError(err error, secrets ...string) error {
 	if err == nil {
 		return err
 	}
-	return fmt.Errorf("%s", redactMany(err.Error(), secrets...))
+	return &redactedError{message: redactMany(err.Error(), secrets...), cause: err}
 }
+
+type redactedError struct {
+	message string
+	cause   error
+}
+
+func (e *redactedError) Error() string { return e.message }
+func (e *redactedError) Unwrap() error { return e.cause }
 func sourceSnapshots(r Request) ([]string, []compilerlock.SourceFileSnapshot, error) {
 	var paths []string
 	if r.Source.Kind == "migrations" {

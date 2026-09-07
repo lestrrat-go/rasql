@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
+	"github.com/jackc/pgx/v5"
 	_ "modernc.org/sqlite"
 
 	"github.com/lestrrat-go/rasql/internal/catalogread"
@@ -93,6 +95,7 @@ func runDefaultServerMaterializeVerify(t *testing.T, dialect, profile, envName s
 	if bootstrap == "" {
 		t.Skipf("%s is not set; export the repository service DSN to run this live acceptance test", envName)
 	}
+	assertDisposableTarget(t, dialect, bootstrap, profile)
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "migrations"), 0700); err != nil {
 		t.Fatal(err)
@@ -116,6 +119,53 @@ func runDefaultServerMaterializeVerify(t *testing.T, dialect, profile, envName s
 	}
 	if len(verified.Differences) != 0 {
 		t.Fatalf("verification differences=%#v", verified.Differences)
+	}
+}
+
+func assertDisposableTarget(t *testing.T, dialect, bootstrap, profile string) {
+	t.Helper()
+	deps := schemasource.DefaultDependencies()
+	owned, err := deps.Factory.Create(t.Context(), schemasource.FactoryRequest{Dialect: dialect, ProfileID: profile, BootstrapDSN: bootstrap, TempRoot: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := owned.CloseAndDrop(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	var got string
+	query := "SELECT DATABASE()"
+	if dialect == "postgresql" {
+		query = "SELECT current_database()"
+	}
+	if err := owned.DB.QueryRowContext(t.Context(), query).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	var want, bootstrapDB string
+	if dialect == "postgresql" {
+		ownedConfig, err := pgx.ParseConfig(owned.DSN)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bootstrapConfig, err := pgx.ParseConfig(bootstrap)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, bootstrapDB = ownedConfig.Database, bootstrapConfig.Database
+	} else {
+		ownedConfig, err := mysql.ParseDSN(owned.DSN)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bootstrapConfig, err := mysql.ParseDSN(bootstrap)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, bootstrapDB = ownedConfig.DBName, bootstrapConfig.DBName
+	}
+	if got != want || got == bootstrapDB {
+		t.Fatalf("disposable target=%q, want generated %q distinct from bootstrap %q", got, want, bootstrapDB)
 	}
 }
 
