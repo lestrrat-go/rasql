@@ -3,77 +3,69 @@
 package store
 
 import (
+	"fmt"
+
 	"github.com/lestrrat-go/rasql"
-	"github.com/lestrrat-go/rasql/schema"
 )
 
-var membersDef = schema.TableDef{
-	Kind: schema.ObjectKind("table"),
-	Name: "members",
-	Columns: []schema.ColumnDef{
-		{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityAlways},
-		{Name: "name", Type: schema.TextType{}},
-	},
-	PrimaryKey: []string{"id"},
+func rasqlgenBind[S, C any](sticky *error, source S, name, codec string, bind func(S, string, string) (C, error)) C {
+	if *sticky != nil {
+		var zero C
+		return zero
+	}
+	value, err := bind(source, name, codec)
+	if err != nil {
+		*sticky = err
+	}
+	return value
 }
 
-var membersTable = MembersTable{rasql.TableFrom[MembersRow](membersDef)}
-
-// MembersDef returns a copy of the descriptor for the "members" table.
-func MembersDef() schema.TableDef { return membersDef.Clone() }
-
-var projectsDef = schema.TableDef{
-	Kind: schema.ObjectKind("table"),
-	Name: "projects",
-	Columns: []schema.ColumnDef{
-		{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityAlways},
-		{Name: "name", Type: schema.TextType{}},
-	},
-	PrimaryKey: []string{"id"},
+func rasqlgenAppendMutationField[R any](fields []rasql.MutationField[R], field rasql.MutationField[R]) []rasql.MutationField[R] {
+	return append(append([]rasql.MutationField[R](nil), fields...), field)
 }
 
-var projectsTable = ProjectsTable{rasql.TableFrom[ProjectsRow](projectsDef)}
-
-// ProjectsDef returns a copy of the descriptor for the "projects" table.
-func ProjectsDef() schema.TableDef { return projectsDef.Clone() }
-
-var tasksDef = schema.TableDef{
-	Kind: schema.ObjectKind("table"),
-	Name: "tasks",
-	Columns: []schema.ColumnDef{
-		{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityAlways},
-		{Name: "project_id", Type: schema.IntegerType{}},
-		{Name: "assignee_id", Type: schema.IntegerType{}, Nullable: true},
-		{Name: "title", Type: schema.TextType{}},
-		{Name: "is_open", Type: schema.BooleanType{}, Default: "true"},
-		{Name: "created_at", Type: schema.TimeType{}, Default: "now()", NativeType: &schema.NativeTypeDef{Dialect: "postgresql", Schema: "pg_catalog", Name: "timestamptz", Kind: schema.NativeTypeKind("builtin"), Arguments: []string{"6"}}},
-		{Name: "due_on", Type: schema.TimeType{}, Nullable: true, NativeType: &schema.NativeTypeDef{Dialect: "postgresql", Schema: "pg_catalog", Name: "date", Kind: schema.NativeTypeKind("builtin")}},
-	},
-	PrimaryKey: []string{"id"},
-	Indexes: []schema.IndexDef{
-		{Name: "tasks_open_by_project", Columns: []string{"project_id", "id"}, Predicate: "is_open"},
-	},
-	ForeignKeys: []schema.ForeignKeyDef{
-		{Name: "tasks_assignee_id_fkey", Columns: []string{"assignee_id"}, ReferencedTable: "members", ReferencedColumns: []string{"id"}, OnDelete: schema.SetNull, OnUpdate: schema.NoAction},
-		{Name: "tasks_project_id_fkey", Columns: []string{"project_id"}, ReferencedTable: "projects", ReferencedColumns: []string{"id"}, OnDelete: schema.Cascade, OnUpdate: schema.NoAction},
-	},
-	Relationships: []schema.RelationshipDef{
-		{Name: "Assignee", Kind: schema.RelationshipBelongsTo, Optionality: schema.RelationshipOptionality("optional"), Columns: []string{"assignee_id"}, ReferencedTable: "members", ReferencedColumns: []string{"id"}},
-		{Name: "Project", Kind: schema.RelationshipBelongsTo, Optionality: schema.RelationshipOptionality("required"), Columns: []string{"project_id"}, ReferencedTable: "projects", ReferencedColumns: []string{"id"}},
-	},
+func rasqlgenResultSchema(columns []rasql.ResultColumn) rasql.ResultSchema {
+	value, err := rasql.NewResultSchema(columns...)
+	if err != nil {
+		panic(err)
+	}
+	return value
 }
 
-var tasksTable = TasksTable{rasql.TableFrom[TasksRow](tasksDef)}
+func rasqlgenOptionalResultSchema(columns []rasql.ResultColumn) rasql.ResultSchema {
+	for i := range columns {
+		columns[i].Nullable = true
+	}
+	return rasqlgenResultSchema(columns)
+}
 
-// TasksDef returns a copy of the descriptor for the "tasks" table.
-func TasksDef() schema.TableDef { return tasksDef.Clone() }
+func rasqlgenAssignNullable[T any](source rasql.Nullable[T], target *T) {
+	if source.Valid {
+		*target = source.Value
+	}
+}
 
-// Tables returns a clone of every table's descriptor, in the order this
-// file declares them.
-func Tables() []schema.TableDef {
-	return []schema.TableDef{
-		membersDef.Clone(),
-		projectsDef.Clone(),
-		tasksDef.Clone(),
+func rasqlgenPageKey[R, T comparable](direction rasql.PageDirection, value rasql.Expr[T], extract func(R) T) (rasql.PageKey[R], error) {
+	switch direction {
+	case rasql.PageAscending:
+		return rasql.AscKey(value, extract), nil
+	case rasql.PageDescending:
+		return rasql.DescKey(value, extract), nil
+	default:
+		return nil, fmt.Errorf("invalid page direction %d", direction)
+	}
+}
+
+func rasqlgenNullablePageKey[R, T comparable](direction rasql.PageDirection, value rasql.NullExpr[T], extract func(R) rasql.Nullable[T], nulls rasql.NullOrder) (rasql.PageKey[R], error) {
+	if nulls == rasql.NullOrderDefault {
+		return nil, fmt.Errorf("nullable page keys require explicit NULL order")
+	}
+	switch direction {
+	case rasql.PageAscending:
+		return rasql.AscNullKey(value, extract, nulls), nil
+	case rasql.PageDescending:
+		return rasql.DescNullKey(value, extract, nulls), nil
+	default:
+		return nil, fmt.Errorf("invalid page direction %d", direction)
 	}
 }

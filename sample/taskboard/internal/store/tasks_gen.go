@@ -3,247 +3,338 @@
 package store
 
 import (
-	"context"
-	"fmt"
-	"time"
-
 	"github.com/lestrrat-go/rasql"
-	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/schema"
+	"time"
 )
 
-// TasksRow is one row of the "tasks" table.
 type TasksRow struct {
-	ID         int64
-	ProjectID  int64
-	AssigneeID *int64
-	Title      string
-	IsOpen     bool
-	CreatedAt  time.Time
-	DueOn      *time.Time
+	ID, ProjectID int64
+	AssigneeID    rasql.Nullable[int64]
+	Title         string
+	IsOpen        bool
+	CreatedAt     time.Time
+	DueOn         rasql.Nullable[time.Time]
 }
 
-type tasksTimeScanner func(any) error
-
-func (s tasksTimeScanner) Scan(value any) error {
-	return s(value)
+var tasksDefinition = schema.TableDef{
+	Kind: schema.ObjectKind("table"),
+	Name: "tasks",
+	Columns: []schema.ColumnDef{
+		{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityAlways},
+		{Name: "project_id", Type: schema.IntegerType{}},
+		{Name: "assignee_id", Type: schema.IntegerType{}, Nullable: true},
+		{Name: "title", Type: schema.TextType{}},
+		{Name: "is_open", Type: schema.BooleanType{}, Default: "true"},
+		{Name: "created_at", Type: schema.TimeType{}, Default: "now()", NativeType: &schema.NativeTypeDef{Dialect: "postgresql", Schema: "pg_catalog", Name: "timestamptz", Kind: schema.NativeTypeKind("builtin"), Arguments: []string{"6"}}},
+		{Name: "due_on", Type: schema.TimeType{}, Nullable: true, NativeType: &schema.NativeTypeDef{Dialect: "postgresql", Schema: "pg_catalog", Name: "date", Kind: schema.NativeTypeKind("builtin")}},
+	},
+	PrimaryKey: []string{"id"},
+	Indexes: []schema.IndexDef{
+		{Name: "tasks_open_by_project", Columns: []string{"project_id", "id"}, Predicate: "is_open"},
+	},
+	ForeignKeys: []schema.ForeignKeyDef{
+		{Name: "tasks_assignee_id_fkey", Columns: []string{"assignee_id"}, ReferencedTable: "members", ReferencedColumns: []string{"id"}, OnDelete: schema.SetNull, OnUpdate: schema.NoAction},
+		{Name: "tasks_project_id_fkey", Columns: []string{"project_id"}, ReferencedTable: "projects", ReferencedColumns: []string{"id"}, OnDelete: schema.Cascade, OnUpdate: schema.NoAction},
+	},
 }
 
-// ScanRow scans each result column directly into its field.
-func (r *TasksRow) ScanRow(src rasql.ScanSource) error {
-	timeScanner5 := tasksTimeScanner(func(value any) error {
-		return rasql.ScanValue(&r.CreatedAt, value)
-	})
-	timeScanner6 := tasksTimeScanner(func(value any) error {
-		return rasql.ScanValue(&r.DueOn, value)
-	})
-	return src.Scan(&r.ID, &r.ProjectID, &r.AssigneeID, &r.Title, &r.IsOpen, &timeScanner5, &timeScanner6)
+var tasksTable = rasql.MustTableOf[TasksRow](tasksDefinition)
+
+type TasksTable struct{ rasql.Table[TasksRow] }
+
+func Tasks() TasksTable { return TasksTable{Table: tasksTable} }
+
+func (t TasksTable) Source(alias string) (rasql.TypedRelation[TasksRow], error) {
+	return rasql.SourceOf[TasksRow](t.Table, alias)
 }
 
-// ScanDestinations maps result-column names to fields on r.
-func (r *TasksRow) ScanDestinations(columns []string) ([]any, error) {
-	const (
-		scanIndexID = iota
-		scanIndexProjectID
-		scanIndexAssigneeID
-		scanIndexTitle
-		scanIndexIsOpen
-		scanIndexCreatedAt
-		scanIndexDueOn
-	)
-	timeScanner5 := tasksTimeScanner(func(value any) error {
-		return rasql.ScanValue(&r.CreatedAt, value)
-	})
-	timeScanner6 := tasksTimeScanner(func(value any) error {
-		return rasql.ScanValue(&r.DueOn, value)
-	})
-	destinations := make([]any, len(columns))
-	scanned := rasql.NewScanMask(7)
-	var discard any
-	for index, column := range columns {
-		switch column {
-		case "id":
-			if !scanned.Mark(scanIndexID) {
-				return nil, fmt.Errorf("duplicate result column %q", column)
-			}
-			destinations[index] = &r.ID
-		case "project_id":
-			if !scanned.Mark(scanIndexProjectID) {
-				return nil, fmt.Errorf("duplicate result column %q", column)
-			}
-			destinations[index] = &r.ProjectID
-		case "assignee_id":
-			if !scanned.Mark(scanIndexAssigneeID) {
-				return nil, fmt.Errorf("duplicate result column %q", column)
-			}
-			destinations[index] = &r.AssigneeID
-		case "title":
-			if !scanned.Mark(scanIndexTitle) {
-				return nil, fmt.Errorf("duplicate result column %q", column)
-			}
-			destinations[index] = &r.Title
-		case "is_open":
-			if !scanned.Mark(scanIndexIsOpen) {
-				return nil, fmt.Errorf("duplicate result column %q", column)
-			}
-			destinations[index] = &r.IsOpen
-		case "created_at":
-			if !scanned.Mark(scanIndexCreatedAt) {
-				return nil, fmt.Errorf("duplicate result column %q", column)
-			}
-			destinations[index] = &timeScanner5
-		case "due_on":
-			if !scanned.Mark(scanIndexDueOn) {
-				return nil, fmt.Errorf("duplicate result column %q", column)
-			}
-			destinations[index] = &timeScanner6
-		default:
-			destinations[index] = &discard
-		}
+type TasksColumns struct{}
+
+type TasksExpressions struct {
+	ID, ProjectID rasql.Column[TasksRow, int64]
+	AssigneeID    rasql.NullColumn[TasksRow, int64]
+	Title         rasql.Column[TasksRow, string]
+	IsOpen        rasql.Column[TasksRow, bool]
+	CreatedAt     rasql.Column[TasksRow, time.Time]
+	DueOn         rasql.NullColumn[TasksRow, time.Time]
+}
+
+type OptionalTasksExpressions struct {
+	ID, ProjectID, AssigneeID rasql.NullColumn[TasksRow, int64]
+	Title                     rasql.NullColumn[TasksRow, string]
+	IsOpen                    rasql.NullColumn[TasksRow, bool]
+	CreatedAt, DueOn          rasql.NullColumn[TasksRow, time.Time]
+}
+
+func (TasksColumns) Bind(source rasql.TypedRelation[TasksRow]) (TasksExpressions, error) {
+	var err error
+	result := TasksExpressions{
+		ID:         rasqlgenBind(&err, source, "id", "", rasql.BindColumn[TasksRow, int64]),
+		ProjectID:  rasqlgenBind(&err, source, "project_id", "", rasql.BindColumn[TasksRow, int64]),
+		AssigneeID: rasqlgenBind(&err, source, "assignee_id", "", rasql.BindNullColumn[TasksRow, int64]),
+		Title:      rasqlgenBind(&err, source, "title", "", rasql.BindColumn[TasksRow, string]),
+		IsOpen:     rasqlgenBind(&err, source, "is_open", "", rasql.BindColumn[TasksRow, bool]),
+		CreatedAt:  rasqlgenBind(&err, source, "created_at", "", rasql.BindColumn[TasksRow, time.Time]),
+		DueOn:      rasqlgenBind(&err, source, "due_on", "", rasql.BindNullColumn[TasksRow, time.Time]),
 	}
-	return destinations, nil
+	return result, err
 }
 
-// ColumnValue returns the value of the named column.
-func (r TasksRow) ColumnValue(name string) (any, bool) {
-	switch name {
-	case "id":
-		return r.ID, true
-	case "project_id":
-		return r.ProjectID, true
-	case "assignee_id":
-		return r.AssigneeID, true
-	case "title":
-		return r.Title, true
-	case "is_open":
-		return r.IsOpen, true
-	case "created_at":
-		return r.CreatedAt, true
-	case "due_on":
-		return r.DueOn, true
+func (TasksColumns) BindOptional(source rasql.OptionalRelation[TasksRow]) (OptionalTasksExpressions, error) {
+	var err error
+	result := OptionalTasksExpressions{
+		ID:         rasqlgenBind(&err, source, "id", "", rasql.BindOptionalColumn[TasksRow, int64]),
+		ProjectID:  rasqlgenBind(&err, source, "project_id", "", rasql.BindOptionalColumn[TasksRow, int64]),
+		AssigneeID: rasqlgenBind(&err, source, "assignee_id", "", rasql.BindOptionalColumn[TasksRow, int64]),
+		Title:      rasqlgenBind(&err, source, "title", "", rasql.BindOptionalColumn[TasksRow, string]),
+		IsOpen:     rasqlgenBind(&err, source, "is_open", "", rasql.BindOptionalColumn[TasksRow, bool]),
+		CreatedAt:  rasqlgenBind(&err, source, "created_at", "", rasql.BindOptionalColumn[TasksRow, time.Time]),
+		DueOn:      rasqlgenBind(&err, source, "due_on", "", rasql.BindOptionalColumn[TasksRow, time.Time]),
 	}
-	return nil, false
+	return result, err
 }
 
-// TasksTable is the generated table type for the "tasks" table.
-type TasksTable struct {
-	rasql.Table[TasksRow]
+var tasksResultColumns = []rasql.ResultColumn{
+	{Name: "id", Type: schema.IntegerType{}, Codec: ""},
+	{Name: "project_id", Type: schema.IntegerType{}, Codec: ""},
+	{Name: "assignee_id", Type: schema.IntegerType{}, Nullable: true, Codec: ""},
+	{Name: "title", Type: schema.TextType{}, Codec: ""},
+	{Name: "is_open", Type: schema.BooleanType{}, Codec: ""},
+	{Name: "created_at", Type: schema.TimeType{}, Codec: ""},
+	{Name: "due_on", Type: schema.TimeType{}, Nullable: true, Codec: ""},
+}
+var tasksResultSchema = rasqlgenResultSchema(tasksResultColumns)
+
+type tasksDecoder struct{}
+
+func (tasksDecoder) ResultSchema() rasql.ResultSchema { return tasksResultSchema }
+func (tasksDecoder) Presence() []rasql.Presence       { return nil }
+func (tasksDecoder) DecodeRow(source rasql.ScanSource, row *TasksRow) error {
+	return source.Scan(&row.ID, &row.ProjectID, &row.AssigneeID, &row.Title, &row.IsOpen, &row.CreatedAt, &row.DueOn)
 }
 
-// ID returns a reference to the "id" column.
-func (t TasksTable) ID() query.TypedColumn[TasksRow, int64] {
-	return query.TypedColumnOf[TasksRow, int64](rasql.ColumnOf(t.Table, "id"))
-}
-func (t TasksTable) IDRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
-
-// ProjectID returns a reference to the "project_id" column.
-func (t TasksTable) ProjectID() query.TypedColumn[TasksRow, int64] {
-	return query.TypedColumnOf[TasksRow, int64](rasql.ColumnOf(t.Table, "project_id"))
-}
-func (t TasksTable) ProjectIDRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "project_id") }
-
-// AssigneeID returns a reference to the "assignee_id" column.
-func (t TasksTable) AssigneeID() query.NullableColumn[TasksRow, *int64] {
-	return query.NullableColumnOf[TasksRow, *int64](rasql.ColumnOf(t.Table, "assignee_id"))
-}
-func (t TasksTable) AssigneeIDRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "assignee_id") }
-
-// Title returns a reference to the "title" column.
-func (t TasksTable) Title() query.TypedColumn[TasksRow, string] {
-	return query.TypedColumnOf[TasksRow, string](rasql.ColumnOf(t.Table, "title"))
-}
-func (t TasksTable) TitleRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "title") }
-
-// IsOpen returns a reference to the "is_open" column.
-func (t TasksTable) IsOpen() query.TypedColumn[TasksRow, bool] {
-	return query.TypedColumnOf[TasksRow, bool](rasql.ColumnOf(t.Table, "is_open"))
-}
-func (t TasksTable) IsOpenRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "is_open") }
-
-// CreatedAt returns a reference to the "created_at" column.
-func (t TasksTable) CreatedAt() query.TypedColumn[TasksRow, time.Time] {
-	return query.TypedColumnOf[TasksRow, time.Time](rasql.ColumnOf(t.Table, "created_at"))
-}
-func (t TasksTable) CreatedAtRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "created_at") }
-
-// DueOn returns a reference to the "due_on" column.
-func (t TasksTable) DueOn() query.NullableColumn[TasksRow, *time.Time] {
-	return query.NullableColumnOf[TasksRow, *time.Time](rasql.ColumnOf(t.Table, "due_on"))
-}
-func (t TasksTable) DueOnRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "due_on") }
-
-// Tasks returns the descriptor for the "tasks" table.
-func Tasks() TasksTable {
-	return tasksTable
+func (row *TasksRow) ScanRow(source rasql.ScanSource) error {
+	return tasksDecoder{}.DecodeRow(source, row)
 }
 
-// As returns the table under alias.
-func (t TasksTable) As(alias string) (TasksTable, error) {
-	aliased, err := rasql.As(t.Table, alias)
+var tasksOptionalResultSchema = rasqlgenOptionalResultSchema(tasksResultColumns)
+
+type tasksOptionalDecoder struct{}
+
+func (tasksOptionalDecoder) ResultSchema() rasql.ResultSchema { return tasksOptionalResultSchema }
+func (tasksOptionalDecoder) Presence() []rasql.Presence {
+	p, err := rasql.NewPresence("Tasks", "id")
 	if err != nil {
-		return TasksTable{}, err
+		panic(err)
 	}
-	return TasksTable{Table: aliased}, nil
+	return []rasql.Presence{p}
 }
+func (tasksOptionalDecoder) DecodeRow(source rasql.ScanSource, row *TasksRow) error {
+	var IDValue, ProjectIDValue rasql.Nullable[int64]
+	var TitleValue rasql.Nullable[string]
+	var IsOpenValue rasql.Nullable[bool]
+	var CreatedAtValue rasql.Nullable[time.Time]
+	if err := source.Scan(&IDValue, &ProjectIDValue, &row.AssigneeID, &TitleValue, &IsOpenValue, &CreatedAtValue, &row.DueOn); err != nil {
+		return err
+	}
+	rasqlgenAssignNullable(IDValue, &row.ID)
+	rasqlgenAssignNullable(ProjectIDValue, &row.ProjectID)
+	rasqlgenAssignNullable(TitleValue, &row.Title)
+	rasqlgenAssignNullable(IsOpenValue, &row.IsOpen)
+	rasqlgenAssignNullable(CreatedAtValue, &row.CreatedAt)
+	return nil
+}
+
+func TasksProjection(expressions TasksExpressions) (rasql.Projection[TasksRow], error) {
+	items := []rasql.ProjectionItem{
+		rasql.Item("id", expressions.ID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("project_id", expressions.ProjectID.Expr(), schema.IntegerType{}, ""),
+		rasql.NullItem("assignee_id", expressions.AssigneeID.NullExpr(), schema.IntegerType{}, ""),
+		rasql.Item("title", expressions.Title.Expr(), schema.TextType{}, ""),
+		rasql.Item("is_open", expressions.IsOpen.Expr(), schema.BooleanType{}, ""),
+		rasql.Item("created_at", expressions.CreatedAt.Expr(), schema.TimeType{}, ""),
+		rasql.NullItem("due_on", expressions.DueOn.NullExpr(), schema.TimeType{}, ""),
+	}
+	return rasql.NewProjection(items, tasksDecoder{})
+}
+
+func OptionalTasksProjection(expressions OptionalTasksExpressions) (rasql.Projection[TasksRow], error) {
+	items := []rasql.ProjectionItem{
+		rasql.NullItem("id", expressions.ID.NullExpr(), schema.IntegerType{}, ""),
+		rasql.NullItem("project_id", expressions.ProjectID.NullExpr(), schema.IntegerType{}, ""),
+		rasql.NullItem("assignee_id", expressions.AssigneeID.NullExpr(), schema.IntegerType{}, ""),
+		rasql.NullItem("title", expressions.Title.NullExpr(), schema.TextType{}, ""),
+		rasql.NullItem("is_open", expressions.IsOpen.NullExpr(), schema.BooleanType{}, ""),
+		rasql.NullItem("created_at", expressions.CreatedAt.NullExpr(), schema.TimeType{}, ""),
+		rasql.NullItem("due_on", expressions.DueOn.NullExpr(), schema.TimeType{}, ""),
+	}
+	return rasql.NewProjection(items, tasksOptionalDecoder{})
+}
+
+func TasksGraphKey(source rasql.TypedRelation[TasksRow]) (rasql.GraphKey[TasksRow], error) {
+	expressions, err := (TasksColumns{}).Bind(source)
+	if err != nil {
+		return rasql.GraphKey[TasksRow]{}, err
+	}
+	return rasql.NewGraphKey[TasksRow](rasql.KeyPart[TasksRow, int64](expressions.ID, func(row TasksRow) int64 { return row.ID }))
+}
+
+func TasksIDPageKey(source rasql.TypedRelation[TasksRow], direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
+	expressions, err := (TasksColumns{}).Bind(source)
+	if err != nil {
+		return nil, err
+	}
+	return rasqlgenPageKey(direction, expressions.ID.Expr(), func(row TasksRow) int64 { return row.ID })
+}
+
+func TasksProjectIDPageKey(source rasql.TypedRelation[TasksRow], direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
+	expressions, err := (TasksColumns{}).Bind(source)
+	if err != nil {
+		return nil, err
+	}
+	return rasqlgenPageKey(direction, expressions.ProjectID.Expr(), func(row TasksRow) int64 { return row.ProjectID })
+}
+
+func TasksAssigneeIDPageKey(source rasql.TypedRelation[TasksRow], direction rasql.PageDirection, nulls rasql.NullOrder) (rasql.PageKey[TasksRow], error) {
+	expressions, err := (TasksColumns{}).Bind(source)
+	if err != nil {
+		return nil, err
+	}
+	return rasqlgenNullablePageKey(direction, expressions.AssigneeID.NullExpr(), func(row TasksRow) rasql.Nullable[int64] { return row.AssigneeID }, nulls)
+}
+
+func TasksTitlePageKey(source rasql.TypedRelation[TasksRow], direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
+	expressions, err := (TasksColumns{}).Bind(source)
+	if err != nil {
+		return nil, err
+	}
+	return rasqlgenPageKey(direction, expressions.Title.Expr(), func(row TasksRow) string { return row.Title })
+}
+
+func TasksIsOpenPageKey(source rasql.TypedRelation[TasksRow], direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
+	expressions, err := (TasksColumns{}).Bind(source)
+	if err != nil {
+		return nil, err
+	}
+	return rasqlgenPageKey(direction, expressions.IsOpen.Expr(), func(row TasksRow) bool { return row.IsOpen })
+}
+
+func TasksCreatedAtPageKey(source rasql.TypedRelation[TasksRow], direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
+	expressions, err := (TasksColumns{}).Bind(source)
+	if err != nil {
+		return nil, err
+	}
+	return rasqlgenPageKey(direction, expressions.CreatedAt.Expr(), func(row TasksRow) time.Time { return row.CreatedAt })
+}
+
+func TasksDueOnPageKey(source rasql.TypedRelation[TasksRow], direction rasql.PageDirection, nulls rasql.NullOrder) (rasql.PageKey[TasksRow], error) {
+	expressions, err := (TasksColumns{}).Bind(source)
+	if err != nil {
+		return nil, err
+	}
+	return rasqlgenNullablePageKey(direction, expressions.DueOn.NullExpr(), func(row TasksRow) rasql.Nullable[time.Time] { return row.DueOn }, nulls)
+}
+
+func TasksTasksAssigneeIdFkeyEdge[G, CG any](parentSource rasql.TypedRelation[TasksRow], childSource rasql.TypedRelation[MembersRow], children rasql.GraphPlan[MembersRow, CG], options rasql.EdgeOptions, attach func(*G, rasql.LoadedOne[CG])) (rasql.GraphEdge[TasksRow, G], error) {
+	parentExpressions, err := (TasksColumns{}).Bind(parentSource)
+	if err != nil {
+		return nil, err
+	}
+	childExpressions, err := (MembersColumns{}).Bind(childSource)
+	if err != nil {
+		return nil, err
+	}
+	parent, err := rasql.NewGraphKey[TasksRow](rasql.NullKeyPart[TasksRow, int64](parentExpressions.AssigneeID, func(row TasksRow) rasql.Nullable[int64] { return row.AssigneeID }))
+	if err != nil {
+		return nil, err
+	}
+	child, err := rasql.NewGraphKey[MembersRow](rasql.KeyPart[MembersRow, int64](childExpressions.ID, func(row MembersRow) int64 { return row.ID }))
+	if err != nil {
+		return nil, err
+	}
+	return rasql.HasOne("tasks_assignee_id_fkey", parent, child, children, options, attach)
+}
+
+func TasksTasksProjectIdFkeyEdge[G, CG any](parentSource rasql.TypedRelation[TasksRow], childSource rasql.TypedRelation[ProjectsRow], children rasql.GraphPlan[ProjectsRow, CG], options rasql.EdgeOptions, attach func(*G, rasql.LoadedOne[CG])) (rasql.GraphEdge[TasksRow, G], error) {
+	parentExpressions, err := (TasksColumns{}).Bind(parentSource)
+	if err != nil {
+		return nil, err
+	}
+	childExpressions, err := (ProjectsColumns{}).Bind(childSource)
+	if err != nil {
+		return nil, err
+	}
+	parent, err := rasql.NewGraphKey[TasksRow](rasql.KeyPart[TasksRow, int64](parentExpressions.ProjectID, func(row TasksRow) int64 { return row.ProjectID }))
+	if err != nil {
+		return nil, err
+	}
+	child, err := rasql.NewGraphKey[ProjectsRow](rasql.KeyPart[ProjectsRow, int64](childExpressions.ID, func(row ProjectsRow) int64 { return row.ID }))
+	if err != nil {
+		return nil, err
+	}
+	return rasql.HasOne("tasks_project_id_fkey", parent, child, children, options, attach)
+}
+
+var tasksMutationColumns = func() TasksExpressions {
+	source, err := Tasks().Source("")
+	if err != nil {
+		panic(err)
+	}
+	value, err := (TasksColumns{}).Bind(source)
+	if err != nil {
+		panic(err)
+	}
+	return value
+}()
 
 type TasksCreate struct {
 	fields []rasql.MutationField[TasksRow]
 }
 
 func NewTasksCreate() TasksCreate { return TasksCreate{} }
-
-func (p TasksCreate) ProjectID(value int64) TasksCreate {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[TasksRow](Tasks().ProjectID(), value))
-	return TasksCreate{fields: fields}
+func (v TasksCreate) ProjectID(value int64) TasksCreate {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(tasksMutationColumns.ProjectID, value))
+	return v
 }
-func (p TasksCreate) AssigneeID(value *int64) TasksCreate {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.SetNullableField[TasksRow](Tasks().AssigneeID(), value))
-	return TasksCreate{fields: fields}
+func (v TasksCreate) AssigneeID(value int64) TasksCreate {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetNullableField(tasksMutationColumns.AssigneeID, value))
+	return v
 }
-func (p TasksCreate) ClearAssigneeID() TasksCreate {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.ClearField[TasksRow](Tasks().AssigneeID()))
-	return TasksCreate{fields: fields}
+func (v TasksCreate) ClearAssigneeID() TasksCreate {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.ClearField(tasksMutationColumns.AssigneeID))
+	return v
 }
-func (p TasksCreate) Title(value string) TasksCreate {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[TasksRow](Tasks().Title(), value))
-	return TasksCreate{fields: fields}
+func (v TasksCreate) Title(value string) TasksCreate {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(tasksMutationColumns.Title, value))
+	return v
 }
-func (p TasksCreate) IsOpen(value bool) TasksCreate {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[TasksRow](Tasks().IsOpen(), value))
-	return TasksCreate{fields: fields}
+func (v TasksCreate) IsOpen(value bool) TasksCreate {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(tasksMutationColumns.IsOpen, value))
+	return v
 }
-func (p TasksCreate) DefaultIsOpen() TasksCreate {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.DefaultField[TasksRow](Tasks().IsOpen()))
-	return TasksCreate{fields: fields}
+func (v TasksCreate) DefaultIsOpen() TasksCreate {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.DefaultField(tasksMutationColumns.IsOpen))
+	return v
 }
-func (p TasksCreate) CreatedAt(value time.Time) TasksCreate {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[TasksRow](Tasks().CreatedAt(), value))
-	return TasksCreate{fields: fields}
+func (v TasksCreate) CreatedAt(value time.Time) TasksCreate {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(tasksMutationColumns.CreatedAt, value))
+	return v
 }
-func (p TasksCreate) DefaultCreatedAt() TasksCreate {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.DefaultField[TasksRow](Tasks().CreatedAt()))
-	return TasksCreate{fields: fields}
+func (v TasksCreate) DefaultCreatedAt() TasksCreate {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.DefaultField(tasksMutationColumns.CreatedAt))
+	return v
 }
-func (p TasksCreate) DueOn(value *time.Time) TasksCreate {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.SetNullableField[TasksRow](Tasks().DueOn(), value))
-	return TasksCreate{fields: fields}
+func (v TasksCreate) DueOn(value time.Time) TasksCreate {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetNullableField(tasksMutationColumns.DueOn, value))
+	return v
 }
-func (p TasksCreate) ClearDueOn() TasksCreate {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.ClearField[TasksRow](Tasks().DueOn()))
-	return TasksCreate{fields: fields}
+func (v TasksCreate) ClearDueOn() TasksCreate {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.ClearField(tasksMutationColumns.DueOn))
+	return v
 }
-func (p TasksCreate) Plan() rasql.CreatePlan[TasksRow] {
-	plan, _ := rasql.NewCreatePlan[TasksRow](Tasks(), p.fields...)
-	return plan
+func (v TasksCreate) Plan() (rasql.CreatePlan[TasksRow], error) {
+	return rasql.NewCreatePlan(Tasks().Table, v.fields...)
 }
 
 type TasksPatch struct {
@@ -251,234 +342,46 @@ type TasksPatch struct {
 }
 
 func NewTasksPatch() TasksPatch { return TasksPatch{} }
-
-func (p TasksPatch) ProjectID(value int64) TasksPatch {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[TasksRow](Tasks().ProjectID(), value))
-	return TasksPatch{fields: fields}
+func (v TasksPatch) ProjectID(value int64) TasksPatch {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(tasksMutationColumns.ProjectID, value))
+	return v
 }
-func (p TasksPatch) AssigneeID(value *int64) TasksPatch {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.SetNullableField[TasksRow](Tasks().AssigneeID(), value))
-	return TasksPatch{fields: fields}
+func (v TasksPatch) AssigneeID(value int64) TasksPatch {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetNullableField(tasksMutationColumns.AssigneeID, value))
+	return v
 }
-func (p TasksPatch) ClearAssigneeID() TasksPatch {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.ClearField[TasksRow](Tasks().AssigneeID()))
-	return TasksPatch{fields: fields}
+func (v TasksPatch) ClearAssigneeID() TasksPatch {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.ClearField(tasksMutationColumns.AssigneeID))
+	return v
 }
-func (p TasksPatch) Title(value string) TasksPatch {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[TasksRow](Tasks().Title(), value))
-	return TasksPatch{fields: fields}
+func (v TasksPatch) Title(value string) TasksPatch {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(tasksMutationColumns.Title, value))
+	return v
 }
-func (p TasksPatch) IsOpen(value bool) TasksPatch {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[TasksRow](Tasks().IsOpen(), value))
-	return TasksPatch{fields: fields}
+func (v TasksPatch) IsOpen(value bool) TasksPatch {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(tasksMutationColumns.IsOpen, value))
+	return v
 }
-func (p TasksPatch) DefaultIsOpen() TasksPatch {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.DefaultField[TasksRow](Tasks().IsOpen()))
-	return TasksPatch{fields: fields}
+func (v TasksPatch) DefaultIsOpen() TasksPatch {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.DefaultField(tasksMutationColumns.IsOpen))
+	return v
 }
-func (p TasksPatch) CreatedAt(value time.Time) TasksPatch {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[TasksRow](Tasks().CreatedAt(), value))
-	return TasksPatch{fields: fields}
+func (v TasksPatch) CreatedAt(value time.Time) TasksPatch {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(tasksMutationColumns.CreatedAt, value))
+	return v
 }
-func (p TasksPatch) DefaultCreatedAt() TasksPatch {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.DefaultField[TasksRow](Tasks().CreatedAt()))
-	return TasksPatch{fields: fields}
+func (v TasksPatch) DefaultCreatedAt() TasksPatch {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.DefaultField(tasksMutationColumns.CreatedAt))
+	return v
 }
-func (p TasksPatch) DueOn(value *time.Time) TasksPatch {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.SetNullableField[TasksRow](Tasks().DueOn(), value))
-	return TasksPatch{fields: fields}
+func (v TasksPatch) DueOn(value time.Time) TasksPatch {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetNullableField(tasksMutationColumns.DueOn, value))
+	return v
 }
-func (p TasksPatch) ClearDueOn() TasksPatch {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.ClearField[TasksRow](Tasks().DueOn()))
-	return TasksPatch{fields: fields}
+func (v TasksPatch) ClearDueOn() TasksPatch {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.ClearField(tasksMutationColumns.DueOn))
+	return v
 }
-func (p TasksPatch) Where(predicate query.Predicate) (rasql.PatchPlan[TasksRow], error) {
-	return rasql.NewPatchPlan[TasksRow](Tasks(), predicate, p.fields...)
+func (v TasksPatch) Where(value rasql.Predicate) (rasql.PatchPlan[TasksRow], error) {
+	return rasql.NewPatchPlan(Tasks().Table, value, v.fields...)
 }
-
-// TasksTableAssigneeRelation describes the Assignee relationship from TasksTable.
-type TasksTableAssigneeRelation struct {
-	Parent    MembersTable
-	Child     TasksTable
-	ParentKey rasql.ColumnRef
-	ChildKey  rasql.ColumnRef
-}
-
-// Assignee returns the generated relationship descriptor.
-func (t TasksTable) Assignee() TasksTableAssigneeRelation {
-	child := t
-	parent := Members()
-	return TasksTableAssigneeRelation{Parent: parent, Child: child, ParentKey: parent.IDRef(), ChildKey: child.AssigneeIDRef()}
-}
-
-// Join returns an INNER JOIN for the relationship.
-func (r TasksTableAssigneeRelation) Join() rasql.Join {
-	return rasql.InnerJoin(r.Parent, rasql.Equal(r.ParentKey, r.ChildKey))
-}
-
-// LoadThen loads a scalar relationship and invokes next once.
-func (r TasksTableAssigneeRelation) LoadThen(ctx context.Context, db rasql.DB, sources []TasksRow, options rasql.RelationshipLoadOptions, next func([]MembersRow) error) (map[*int64]MembersRow, error) {
-	loaded, err := r.LoadWith(ctx, db, sources, options)
-	if err != nil || next == nil {
-		return loaded, err
-	}
-	rows := make([]MembersRow, 0)
-	seen := make(map[int64]struct{})
-	for _, source := range sources {
-		key := r.SourceKey(source)
-		if row, ok := loaded[key]; ok {
-			if _, ok := seen[row.ID]; ok {
-				continue
-			}
-			seen[row.ID] = struct{}{}
-			rows = append(rows, row)
-		}
-	}
-	if err := next(rows); err != nil {
-		return loaded, err
-	}
-	return loaded, nil
-}
-
-// LoadWith fetches related parents with filtering, ordering, and bind batching.
-func (r TasksTableAssigneeRelation) LoadWith(ctx context.Context, db rasql.DB, children []TasksRow, options rasql.RelationshipLoadOptions) (map[*int64]MembersRow, error) {
-	return rasql.LoadBelongsToPlan[TasksRow, MembersRow, *int64](ctx, db, r.Parent, []query.ColumnRef{r.ParentKey}, children, func(row TasksRow) *int64 {
-		return func() *int64 {
-			nullable, ok := any(row.AssigneeID).(rasql.NullableBindValue)
-			if !ok {
-				nullable, ok = any(&row.AssigneeID).(rasql.NullableBindValue)
-			}
-			if ok {
-				value, valid := nullable.NullableBind()
-				if !valid {
-					return nil
-				}
-				typed, ok := value.(int64)
-				if ok {
-					return &typed
-				}
-				return nil
-			}
-			if value, ok := any(row.AssigneeID).(*int64); ok {
-				return value
-			}
-			if value, ok := any(row.AssigneeID).(int64); ok {
-				return &value
-			}
-			return nil
-		}()
-	}, func(row MembersRow) *int64 { value := row.ID; return &value }, func(key *int64) ([]any, bool) {
-		if key == nil {
-			return nil, false
-		}
-		return []any{*key}, true
-	}, options)
-}
-
-// Load fetches all related parents for children in one query.
-func (r TasksTableAssigneeRelation) Load(ctx context.Context, db rasql.DB, children []TasksRow) (map[*int64]MembersRow, error) {
-	return r.LoadWith(ctx, db, children, rasql.RelationshipLoadOptions{})
-}
-
-// SourceKey returns the ordered source relationship key.
-func (r TasksTableAssigneeRelation) SourceKey(row TasksRow) *int64 {
-	return func() *int64 {
-		nullable, ok := any(row.AssigneeID).(rasql.NullableBindValue)
-		if !ok {
-			nullable, ok = any(&row.AssigneeID).(rasql.NullableBindValue)
-		}
-		if ok {
-			value, valid := nullable.NullableBind()
-			if !valid {
-				return nil
-			}
-			typed, ok := value.(int64)
-			if ok {
-				return &typed
-			}
-			return nil
-		}
-		if value, ok := any(row.AssigneeID).(*int64); ok {
-			return value
-		}
-		if value, ok := any(row.AssigneeID).(int64); ok {
-			return &value
-		}
-		return nil
-	}()
-}
-
-// TargetKey returns the ordered target relationship key.
-func (r TasksTableAssigneeRelation) TargetKey(row MembersRow) *int64 {
-	return func() *int64 { value := row.ID; return &value }()
-}
-
-// TasksTableProjectRelation describes the Project relationship from TasksTable.
-type TasksTableProjectRelation struct {
-	Parent    ProjectsTable
-	Child     TasksTable
-	ParentKey rasql.ColumnRef
-	ChildKey  rasql.ColumnRef
-}
-
-// Project returns the generated relationship descriptor.
-func (t TasksTable) Project() TasksTableProjectRelation {
-	child := t
-	parent := Projects()
-	return TasksTableProjectRelation{Parent: parent, Child: child, ParentKey: parent.IDRef(), ChildKey: child.ProjectIDRef()}
-}
-
-// Join returns an INNER JOIN for the relationship.
-func (r TasksTableProjectRelation) Join() rasql.Join {
-	return rasql.InnerJoin(r.Parent, rasql.Equal(r.ParentKey, r.ChildKey))
-}
-
-// LoadThen loads a scalar relationship and invokes next once.
-func (r TasksTableProjectRelation) LoadThen(ctx context.Context, db rasql.DB, sources []TasksRow, options rasql.RelationshipLoadOptions, next func([]ProjectsRow) error) (map[int64]ProjectsRow, error) {
-	loaded, err := r.LoadWith(ctx, db, sources, options)
-	if err != nil || next == nil {
-		return loaded, err
-	}
-	rows := make([]ProjectsRow, 0)
-	seen := make(map[int64]struct{})
-	for _, source := range sources {
-		key := r.SourceKey(source)
-		if row, ok := loaded[key]; ok {
-			if _, ok := seen[row.ID]; ok {
-				continue
-			}
-			seen[row.ID] = struct{}{}
-			rows = append(rows, row)
-		}
-	}
-	if err := next(rows); err != nil {
-		return loaded, err
-	}
-	return loaded, nil
-}
-
-// LoadWith fetches related parents with filtering, ordering, and bind batching.
-func (r TasksTableProjectRelation) LoadWith(ctx context.Context, db rasql.DB, children []TasksRow, options rasql.RelationshipLoadOptions) (map[int64]ProjectsRow, error) {
-	return rasql.LoadBelongsToPlan[TasksRow, ProjectsRow, int64](ctx, db, r.Parent, []query.ColumnRef{r.ParentKey}, children, func(row TasksRow) int64 { return row.ProjectID }, func(row ProjectsRow) int64 { return row.ID }, func(key int64) ([]any, bool) { return []any{key}, true }, options)
-}
-
-// Load fetches all related parents for children in one query.
-func (r TasksTableProjectRelation) Load(ctx context.Context, db rasql.DB, children []TasksRow) (map[int64]ProjectsRow, error) {
-	return r.LoadWith(ctx, db, children, rasql.RelationshipLoadOptions{})
-}
-
-// SourceKey returns the ordered source relationship key.
-func (r TasksTableProjectRelation) SourceKey(row TasksRow) int64 { return row.ProjectID }
-
-// TargetKey returns the ordered target relationship key.
-func (r TasksTableProjectRelation) TargetKey(row ProjectsRow) int64 { return row.ID }

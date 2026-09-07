@@ -3,108 +3,169 @@
 package store
 
 import (
-	"context"
-	"fmt"
-
 	"github.com/lestrrat-go/rasql"
-	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/schema"
 )
 
-// MembersRow is one row of the "members" table.
 type MembersRow struct {
 	ID   int64
 	Name string
 }
 
-// ScanRow scans each result column directly into its field.
-func (r *MembersRow) ScanRow(src rasql.ScanSource) error {
-	return src.Scan(&r.ID, &r.Name)
+var membersDefinition = schema.TableDef{
+	Kind: schema.ObjectKind("table"),
+	Name: "members",
+	Columns: []schema.ColumnDef{
+		{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityAlways},
+		{Name: "name", Type: schema.TextType{}},
+	},
+	PrimaryKey: []string{"id"},
 }
 
-// ScanDestinations maps result-column names to fields on r.
-func (r *MembersRow) ScanDestinations(columns []string) ([]any, error) {
-	const (
-		scanIndexID = iota
-		scanIndexName
-	)
-	destinations := make([]any, len(columns))
-	scanned := rasql.NewScanMask(2)
-	var discard any
-	for index, column := range columns {
-		switch column {
-		case "id":
-			if !scanned.Mark(scanIndexID) {
-				return nil, fmt.Errorf("duplicate result column %q", column)
-			}
-			destinations[index] = &r.ID
-		case "name":
-			if !scanned.Mark(scanIndexName) {
-				return nil, fmt.Errorf("duplicate result column %q", column)
-			}
-			destinations[index] = &r.Name
-		default:
-			destinations[index] = &discard
-		}
+var membersTable = rasql.MustTableOf[MembersRow](membersDefinition)
+
+type MembersTable struct{ rasql.Table[MembersRow] }
+
+func Members() MembersTable { return MembersTable{Table: membersTable} }
+
+func (t MembersTable) Source(alias string) (rasql.TypedRelation[MembersRow], error) {
+	return rasql.SourceOf[MembersRow](t.Table, alias)
+}
+
+type MembersColumns struct{}
+
+type MembersExpressions struct {
+	ID   rasql.Column[MembersRow, int64]
+	Name rasql.Column[MembersRow, string]
+}
+
+type OptionalMembersExpressions struct {
+	ID   rasql.NullColumn[MembersRow, int64]
+	Name rasql.NullColumn[MembersRow, string]
+}
+
+func (MembersColumns) Bind(source rasql.TypedRelation[MembersRow]) (MembersExpressions, error) {
+	var err error
+	result := MembersExpressions{
+		ID:   rasqlgenBind(&err, source, "id", "", rasql.BindColumn[MembersRow, int64]),
+		Name: rasqlgenBind(&err, source, "name", "", rasql.BindColumn[MembersRow, string]),
 	}
-	return destinations, nil
+	return result, err
 }
 
-// ColumnValue returns the value of the named column.
-func (r MembersRow) ColumnValue(name string) (any, bool) {
-	switch name {
-	case "id":
-		return r.ID, true
-	case "name":
-		return r.Name, true
+func (MembersColumns) BindOptional(source rasql.OptionalRelation[MembersRow]) (OptionalMembersExpressions, error) {
+	var err error
+	result := OptionalMembersExpressions{
+		ID:   rasqlgenBind(&err, source, "id", "", rasql.BindOptionalColumn[MembersRow, int64]),
+		Name: rasqlgenBind(&err, source, "name", "", rasql.BindOptionalColumn[MembersRow, string]),
 	}
-	return nil, false
+	return result, err
 }
 
-// MembersTable is the generated table type for the "members" table.
-type MembersTable struct {
-	rasql.Table[MembersRow]
+var membersResultColumns = []rasql.ResultColumn{
+	{Name: "id", Type: schema.IntegerType{}, Codec: ""},
+	{Name: "name", Type: schema.TextType{}, Codec: ""},
+}
+var membersResultSchema = rasqlgenResultSchema(membersResultColumns)
+
+type membersDecoder struct{}
+
+func (membersDecoder) ResultSchema() rasql.ResultSchema { return membersResultSchema }
+func (membersDecoder) Presence() []rasql.Presence       { return nil }
+func (membersDecoder) DecodeRow(source rasql.ScanSource, row *MembersRow) error {
+	return source.Scan(&row.ID, &row.Name)
 }
 
-// ID returns a reference to the "id" column.
-func (t MembersTable) ID() query.TypedColumn[MembersRow, int64] {
-	return query.TypedColumnOf[MembersRow, int64](rasql.ColumnOf(t.Table, "id"))
-}
-func (t MembersTable) IDRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
-
-// Name returns a reference to the "name" column.
-func (t MembersTable) Name() query.TypedColumn[MembersRow, string] {
-	return query.TypedColumnOf[MembersRow, string](rasql.ColumnOf(t.Table, "name"))
-}
-func (t MembersTable) NameRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "name") }
-
-// Members returns the descriptor for the "members" table.
-func Members() MembersTable {
-	return membersTable
+func (row *MembersRow) ScanRow(source rasql.ScanSource) error {
+	return membersDecoder{}.DecodeRow(source, row)
 }
 
-// As returns the table under alias.
-func (t MembersTable) As(alias string) (MembersTable, error) {
-	aliased, err := rasql.As(t.Table, alias)
+var membersOptionalResultSchema = rasqlgenOptionalResultSchema(membersResultColumns)
+
+type membersOptionalDecoder struct{}
+
+func (membersOptionalDecoder) ResultSchema() rasql.ResultSchema { return membersOptionalResultSchema }
+func (membersOptionalDecoder) Presence() []rasql.Presence {
+	p, err := rasql.NewPresence("Members", "id")
 	if err != nil {
-		return MembersTable{}, err
+		panic(err)
 	}
-	return MembersTable{Table: aliased}, nil
+	return []rasql.Presence{p}
 }
+func (membersOptionalDecoder) DecodeRow(source rasql.ScanSource, row *MembersRow) error {
+	var IDValue rasql.Nullable[int64]
+	var NameValue rasql.Nullable[string]
+	if err := source.Scan(&IDValue, &NameValue); err != nil {
+		return err
+	}
+	rasqlgenAssignNullable(IDValue, &row.ID)
+	rasqlgenAssignNullable(NameValue, &row.Name)
+	return nil
+}
+
+func MembersProjection(expressions MembersExpressions) (rasql.Projection[MembersRow], error) {
+	items := []rasql.ProjectionItem{
+		rasql.Item("id", expressions.ID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("name", expressions.Name.Expr(), schema.TextType{}, ""),
+	}
+	return rasql.NewProjection(items, membersDecoder{})
+}
+
+func OptionalMembersProjection(expressions OptionalMembersExpressions) (rasql.Projection[MembersRow], error) {
+	items := []rasql.ProjectionItem{
+		rasql.NullItem("id", expressions.ID.NullExpr(), schema.IntegerType{}, ""),
+		rasql.NullItem("name", expressions.Name.NullExpr(), schema.TextType{}, ""),
+	}
+	return rasql.NewProjection(items, membersOptionalDecoder{})
+}
+
+func MembersGraphKey(source rasql.TypedRelation[MembersRow]) (rasql.GraphKey[MembersRow], error) {
+	expressions, err := (MembersColumns{}).Bind(source)
+	if err != nil {
+		return rasql.GraphKey[MembersRow]{}, err
+	}
+	return rasql.NewGraphKey[MembersRow](rasql.KeyPart[MembersRow, int64](expressions.ID, func(row MembersRow) int64 { return row.ID }))
+}
+
+func MembersIDPageKey(source rasql.TypedRelation[MembersRow], direction rasql.PageDirection) (rasql.PageKey[MembersRow], error) {
+	expressions, err := (MembersColumns{}).Bind(source)
+	if err != nil {
+		return nil, err
+	}
+	return rasqlgenPageKey(direction, expressions.ID.Expr(), func(row MembersRow) int64 { return row.ID })
+}
+
+func MembersNamePageKey(source rasql.TypedRelation[MembersRow], direction rasql.PageDirection) (rasql.PageKey[MembersRow], error) {
+	expressions, err := (MembersColumns{}).Bind(source)
+	if err != nil {
+		return nil, err
+	}
+	return rasqlgenPageKey(direction, expressions.Name.Expr(), func(row MembersRow) string { return row.Name })
+}
+
+var membersMutationColumns = func() MembersExpressions {
+	source, err := Members().Source("")
+	if err != nil {
+		panic(err)
+	}
+	value, err := (MembersColumns{}).Bind(source)
+	if err != nil {
+		panic(err)
+	}
+	return value
+}()
 
 type MembersCreate struct {
 	fields []rasql.MutationField[MembersRow]
 }
 
 func NewMembersCreate() MembersCreate { return MembersCreate{} }
-
-func (p MembersCreate) Name(value string) MembersCreate {
-	fields := append([]rasql.MutationField[MembersRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[MembersRow](Members().Name(), value))
-	return MembersCreate{fields: fields}
+func (v MembersCreate) Name(value string) MembersCreate {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(membersMutationColumns.Name, value))
+	return v
 }
-func (p MembersCreate) Plan() rasql.CreatePlan[MembersRow] {
-	plan, _ := rasql.NewCreatePlan[MembersRow](Members(), p.fields...)
-	return plan
+func (v MembersCreate) Plan() (rasql.CreatePlan[MembersRow], error) {
+	return rasql.NewCreatePlan(Members().Table, v.fields...)
 }
 
 type MembersPatch struct {
@@ -112,106 +173,10 @@ type MembersPatch struct {
 }
 
 func NewMembersPatch() MembersPatch { return MembersPatch{} }
-
-func (p MembersPatch) Name(value string) MembersPatch {
-	fields := append([]rasql.MutationField[MembersRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[MembersRow](Members().Name(), value))
-	return MembersPatch{fields: fields}
+func (v MembersPatch) Name(value string) MembersPatch {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(membersMutationColumns.Name, value))
+	return v
 }
-func (p MembersPatch) Where(predicate query.Predicate) (rasql.PatchPlan[MembersRow], error) {
-	return rasql.NewPatchPlan[MembersRow](Members(), predicate, p.fields...)
-}
-
-// MembersTableTasksRelation describes the Tasks relationship from MembersTable.
-type MembersTableTasksRelation struct {
-	Parent    MembersTable
-	Child     TasksTable
-	ParentKey rasql.ColumnRef
-	ChildKey  rasql.ColumnRef
-}
-
-// Tasks returns the generated relationship descriptor.
-func (t MembersTable) Tasks() MembersTableTasksRelation {
-	child := Tasks()
-	parent := t
-	return MembersTableTasksRelation{Parent: parent, Child: child, ParentKey: parent.IDRef(), ChildKey: child.AssigneeIDRef()}
-}
-
-// Join returns an INNER JOIN for the relationship.
-func (r MembersTableTasksRelation) Join() rasql.Join {
-	return rasql.InnerJoin(r.Child, rasql.Equal(r.ParentKey, r.ChildKey))
-}
-
-// LoadWith fetches children with filtering, ordering, caps, and bind batching.
-func (r MembersTableTasksRelation) LoadWith(ctx context.Context, db rasql.DB, parents []MembersRow, options rasql.RelationshipLoadOptions) (map[int64][]TasksRow, error) {
-	return rasql.LoadHasManyPlan[MembersRow, TasksRow, int64](ctx, db, r.Child, []query.ColumnRef{r.ChildKey}, parents, func(row MembersRow) int64 { return row.ID }, func(row TasksRow) int64 {
-		return func() int64 {
-			var zero int64
-			nullable, ok := any(row.AssigneeID).(rasql.NullableBindValue)
-			if !ok {
-				nullable, ok = any(&row.AssigneeID).(rasql.NullableBindValue)
-			}
-			if ok {
-				value, valid := nullable.NullableBind()
-				if !valid {
-					return zero
-				}
-				typed, ok := value.(int64)
-				if ok {
-					return typed
-				}
-				return zero
-			}
-			if value, ok := any(row.AssigneeID).(*int64); ok {
-				if value == nil {
-					return zero
-				}
-				return *value
-			}
-			if value, ok := any(row.AssigneeID).(int64); ok {
-				return value
-			}
-			return zero
-		}()
-	}, func(key int64) ([]any, bool) { return []any{key}, true }, options)
-}
-
-// Load fetches all children for parents in one query.
-func (r MembersTableTasksRelation) Load(ctx context.Context, db rasql.DB, parents []MembersRow) (map[int64][]TasksRow, error) {
-	return r.LoadWith(ctx, db, parents, rasql.RelationshipLoadOptions{})
-}
-
-// SourceKey returns the ordered source relationship key.
-func (r MembersTableTasksRelation) SourceKey(row MembersRow) int64 { return row.ID }
-
-// TargetKey returns the ordered target relationship key.
-func (r MembersTableTasksRelation) TargetKey(row TasksRow) int64 {
-	return func() int64 {
-		var zero int64
-		nullable, ok := any(row.AssigneeID).(rasql.NullableBindValue)
-		if !ok {
-			nullable, ok = any(&row.AssigneeID).(rasql.NullableBindValue)
-		}
-		if ok {
-			value, valid := nullable.NullableBind()
-			if !valid {
-				return zero
-			}
-			typed, ok := value.(int64)
-			if ok {
-				return typed
-			}
-			return zero
-		}
-		if value, ok := any(row.AssigneeID).(*int64); ok {
-			if value == nil {
-				return zero
-			}
-			return *value
-		}
-		if value, ok := any(row.AssigneeID).(int64); ok {
-			return value
-		}
-		return zero
-	}()
+func (v MembersPatch) Where(value rasql.Predicate) (rasql.PatchPlan[MembersRow], error) {
+	return rasql.NewPatchPlan(Members().Table, value, v.fields...)
 }
