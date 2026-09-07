@@ -161,13 +161,46 @@ func TestLegacyStorePlanMatchesCanonicalBaseline(t *testing.T) {
 }
 
 func TestLegacyStoreCanonicalSelfForeignKeyRelations(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		nullable bool
+	}{
+		{name: "required", nullable: false},
+		{name: "nullable", nullable: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			in := canonicalSelfForeignKeyEmitterInput(t, test.nullable)
+			store, err := generate.LegacyStore(in)
+			require.NoError(t, err)
+			plan, err := store.Plan()
+			require.NoError(t, err)
+			var source string
+			for _, file := range plan.Files() {
+				if filepath.Base(file.Path) == "employees_gen.go" {
+					source = string(file.Source)
+					break
+				}
+			}
+			require.NotEmpty(t, source)
+			require.Contains(t, source, "func (t EmployeesTable) Manager()")
+			require.Contains(t, source, "func (t EmployeesTable) Employees()")
+			require.Contains(t, source, "func (r EmployeesTableManagerRelation) Join()")
+			require.Contains(t, source, "func (r EmployeesTableManagerRelation) Load(")
+			require.NotContains(t, source, "EmployeesEmployees")
+			require.NotContains(t, source, "ManagerEmployees")
+		})
+	}
+}
+
+func canonicalSelfForeignKeyEmitterInput(t *testing.T, nullable bool) generate.EmitterInput {
+	t.Helper()
 	catalog := compilerir.PhysicalCatalog{
 		Engine: compilerir.EngineIdentity{Dialect: "sqlite", Version: "3"},
 		Objects: []compilerir.PhysicalObject{{
 			ID: "employees", Kind: "table", Name: "employees",
 			Columns: []compilerir.PhysicalColumn{
 				{Name: "id", Ordinal: 0, LogicalKind: "integer"},
-				{Name: "manager_id", Ordinal: 1, LogicalKind: "integer"},
+				{Name: "manager_id", Ordinal: 1, LogicalKind: "integer", Nullable: nullable},
 			},
 			Constraints: []compilerir.PhysicalConstraint{
 				{Kind: "primary_key", Name: "employees_pk", Columns: []string{"id"}},
@@ -185,22 +218,7 @@ func TestLegacyStoreCanonicalSelfForeignKeyRelations(t *testing.T) {
 	require.Empty(t, diagnostics)
 	in, err := generate.NewEmitterInput(catalog, semantic, model, config, compilerir.MappingConfig{})
 	require.NoError(t, err)
-	store, err := generate.LegacyStore(in)
-	require.NoError(t, err)
-	plan, err := store.Plan()
-	require.NoError(t, err)
-	var source string
-	for _, file := range plan.Files() {
-		if filepath.Base(file.Path) == "employees_gen.go" {
-			source = string(file.Source)
-			break
-		}
-	}
-	require.NotEmpty(t, source)
-	require.Contains(t, source, "func (t EmployeesTable) Manager()")
-	require.Contains(t, source, "func (t EmployeesTable) Employees()")
-	require.NotContains(t, source, "EmployeesEmployees")
-	require.NotContains(t, source, "ManagerEmployees")
+	return in
 }
 
 func TestEmitterInputAcceptsCanonicalViewWithoutWriteShapes(t *testing.T) {

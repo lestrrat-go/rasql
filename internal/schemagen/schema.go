@@ -1061,7 +1061,13 @@ func relationshipColumnsSupported(child, parent schema.TableDef, relationship sc
 			return nil, nil, "", BindingRef{}, false
 		}
 		parentColumn, ok := parent.Column(relationship.ReferencedColumns[index])
-		if !ok || parentColumn.Nullable {
+		if !ok {
+			return nil, nil, "", BindingRef{}, false
+		}
+		if relationship.Kind == schema.RelationshipBelongsTo && parentColumn.Nullable {
+			return nil, nil, "", BindingRef{}, false
+		}
+		if relationship.Kind != schema.RelationshipBelongsTo && childColumn.Nullable {
 			return nil, nil, "", BindingRef{}, false
 		}
 		if bindings != nil {
