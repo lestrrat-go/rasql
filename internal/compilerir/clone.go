@@ -147,5 +147,19 @@ func (q QueryAnalysis) Clone() QueryAnalysis {
 	out.Parameters = slices.Clone(q.Parameters)
 	out.Results = slices.Clone(q.Results)
 	out.Diagnostics = slices.Clone(q.Diagnostics)
+	for i := range out.Parameters {
+		out.Parameters[i].Native = cloneNative(q.Parameters[i].Native)
+		if q.Parameters[i].Integer != nil {
+			x := *q.Parameters[i].Integer
+			out.Parameters[i].Integer = &x
+		}
+	}
+	for i := range out.Results {
+		out.Results[i].Native = cloneNative(q.Results[i].Native)
+		if q.Results[i].Integer != nil {
+			x := *q.Results[i].Integer
+			out.Results[i].Integer = &x
+		}
+	}
 	return out
 }

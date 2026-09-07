@@ -39,6 +39,9 @@ type SemanticValue struct {
 	Name, Scalar                        string
 	Nullable                            bool
 	TypeCertainty, NullabilityCertainty Certainty
+	LogicalKind                         string
+	Native                              *NativeType
+	Integer                             *IntegerTypeFacts
 }
 type NativeMatch struct{ Dialect, Schema, Name, Kind, LogicalKind string }
 type MappingConfig struct{ Scalars []ScalarMapping }

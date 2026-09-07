@@ -9,6 +9,7 @@ import (
 	"go/token"
 	"io"
 	"os"
+	"reflect"
 	"sort"
 
 	"github.com/lestrrat-go/rasql/internal/compilerir"
@@ -209,11 +210,14 @@ type QueryRecord struct {
 	Evidence    EngineEvidence     `json:"evidence"`
 }
 type ValueRecord struct {
-	Name                 string               `json:"name"`
-	Scalar               string               `json:"scalar"`
-	Nullable             bool                 `json:"nullable"`
-	TypeCertainty        compilerir.Certainty `json:"type_certainty"`
-	NullabilityCertainty compilerir.Certainty `json:"nullability_certainty"`
+	Name                 string                  `json:"name"`
+	Scalar               string                  `json:"scalar"`
+	Nullable             bool                    `json:"nullable"`
+	TypeCertainty        compilerir.Certainty    `json:"type_certainty"`
+	NullabilityCertainty compilerir.Certainty    `json:"nullability_certainty"`
+	LogicalKind          string                  `json:"logical_kind,omitempty"`
+	Native               *NativeTypeRecord       `json:"native,omitempty"`
+	Integer              *IntegerTypeFactsRecord `json:"integer,omitempty"`
 }
 type EngineEvidence struct {
 	Dialect     string        `json:"dialect"`
@@ -388,6 +392,32 @@ func validateValues(v []ValueRecord) error {
 		if x.NullabilityCertainty != "known" && x.NullabilityCertainty != "declared" && x.NullabilityCertainty != "unknown" {
 			return fmt.Errorf("compilerlock: unknown certainty %q", x.NullabilityCertainty)
 		}
+		if x.Native != nil {
+			if err := validateNativeRecord(x.Native); err != nil {
+				return fmt.Errorf("compilerlock: query value %q native: %w", x.Name, err)
+			}
+		}
+		if x.Integer != nil && x.LogicalKind != "integer" {
+			return fmt.Errorf("compilerlock: query value %q has integer facts for %q", x.Name, x.LogicalKind)
+		}
+	}
+	return nil
+}
+func validateNativeRecord(n *NativeTypeRecord) error {
+	if n.Dialect != "postgresql" && n.Dialect != "mysql" && n.Dialect != "sqlite" {
+		return errors.New("unsupported dialect")
+	}
+	if n.Name == "" {
+		return errors.New("name is required")
+	}
+	if n.Kind != "builtin" && n.Kind != "domain" && n.Kind != "enum" && n.Kind != "set" && n.Kind != "array" && n.Kind != "other" {
+		return errors.New("unsupported kind")
+	}
+	if n.Kind == "array" && n.Element == nil {
+		return errors.New("array requires element")
+	}
+	if n.Element != nil {
+		return validateNativeRecord(n.Element)
 	}
 	return nil
 }
@@ -396,12 +426,12 @@ func validateEvidence(q QueryRecord) error {
 		return fmt.Errorf("compilerlock: query %s evidence differs", q.ID)
 	}
 	for i, v := range q.Parameters {
-		if v != q.Evidence.Parameters[i] {
+		if !reflect.DeepEqual(v, q.Evidence.Parameters[i]) {
 			return fmt.Errorf("compilerlock: query %s parameter evidence differs", q.ID)
 		}
 	}
 	for i, v := range q.Results {
-		if v != q.Evidence.Results[i] {
+		if !reflect.DeepEqual(v, q.Evidence.Results[i]) {
 			return fmt.Errorf("compilerlock: query %s result evidence differs", q.ID)
 		}
 	}
@@ -579,12 +609,33 @@ func cloneFile(f File) File {
 	for i := range o.Queries {
 		o.Queries[i].Parameters = cloneSlice(f.Queries[i].Parameters)
 		o.Queries[i].Results = cloneSlice(f.Queries[i].Results)
+		for j := range o.Queries[i].Parameters {
+			o.Queries[i].Parameters[j] = cloneValueRecord(f.Queries[i].Parameters[j])
+		}
+		for j := range o.Queries[i].Results {
+			o.Queries[i].Results[j] = cloneValueRecord(f.Queries[i].Results[j])
+		}
 		o.Queries[i].Evidence.Parameters = cloneSlice(f.Queries[i].Evidence.Parameters)
 		o.Queries[i].Evidence.Results = cloneSlice(f.Queries[i].Evidence.Results)
+		for j := range o.Queries[i].Evidence.Parameters {
+			o.Queries[i].Evidence.Parameters[j] = cloneValueRecord(f.Queries[i].Evidence.Parameters[j])
+		}
+		for j := range o.Queries[i].Evidence.Results {
+			o.Queries[i].Evidence.Results[j] = cloneValueRecord(f.Queries[i].Evidence.Results[j])
+		}
 		o.Queries[i].Evidence.Diagnostics = cloneSlice(f.Queries[i].Evidence.Diagnostics)
 	}
 	o.Generation.Objects = cloneSlice(f.Generation.Objects)
 	o.Generation.Queries = cloneSlice(f.Generation.Queries)
+	return o
+}
+func cloneValueRecord(v ValueRecord) ValueRecord {
+	o := v
+	o.Native = cloneNativeRecord(v.Native)
+	if v.Integer != nil {
+		x := *v.Integer
+		o.Integer = &x
+	}
 	return o
 }
 func cloneSlice[T any](v []T) []T {

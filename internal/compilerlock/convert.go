@@ -50,10 +50,24 @@ func AnalysisFromQuery(q QueryRecord) compilerir.QueryAnalysis {
 }
 
 func value(v compilerir.SemanticValue) ValueRecord {
-	return ValueRecord{Name: v.Name, Scalar: v.Scalar, Nullable: v.Nullable, TypeCertainty: v.TypeCertainty, NullabilityCertainty: v.NullabilityCertainty}
+	r := ValueRecord{Name: v.Name, Scalar: v.Scalar, Nullable: v.Nullable, TypeCertainty: v.TypeCertainty, NullabilityCertainty: v.NullabilityCertainty, LogicalKind: v.LogicalKind}
+	if v.Native != nil {
+		r.Native = native(v.Native)
+	}
+	if v.Integer != nil {
+		r.Integer = &IntegerTypeFactsRecord{Unsigned: v.Integer.Unsigned, DisplayWidth: oi(v.Integer.DisplayWidth), ZeroFill: v.Integer.ZeroFill}
+	}
+	return r
 }
 func toValue(v ValueRecord) compilerir.SemanticValue {
-	return compilerir.SemanticValue{Name: v.Name, Scalar: v.Scalar, Nullable: v.Nullable, TypeCertainty: v.TypeCertainty, NullabilityCertainty: v.NullabilityCertainty}
+	r := compilerir.SemanticValue{Name: v.Name, Scalar: v.Scalar, Nullable: v.Nullable, TypeCertainty: v.TypeCertainty, NullabilityCertainty: v.NullabilityCertainty, LogicalKind: v.LogicalKind}
+	if v.Native != nil {
+		r.Native = toNative(v.Native)
+	}
+	if v.Integer != nil {
+		r.Integer = &compilerir.IntegerTypeFacts{Unsigned: v.Integer.Unsigned, DisplayWidth: toOI(v.Integer.DisplayWidth), ZeroFill: v.Integer.ZeroFill}
+	}
+	return r
 }
 
 func FromPhysical(c compilerir.PhysicalCatalog) CatalogRecord {

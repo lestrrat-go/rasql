@@ -88,11 +88,11 @@ func (a analyzer) Analyze(ctx context.Context, request schemasource.AnalysisRequ
 		if err := compareParameterNames(query.Parameters, parameterNames); err != nil {
 			return schemasource.AnalysisResult{}, fmt.Errorf("query %q parameters: %w", query.ID, err)
 		}
-		parameters, err := mergeValues(query.Parameters, description.Parameters, parameterNames)
+		parameters, err := mergeValues(query.Parameters, description.Parameters, parameterNames, a.config.Mappings)
 		if err != nil {
 			return schemasource.AnalysisResult{}, fmt.Errorf("query %q parameters: %w", query.ID, err)
 		}
-		results, err := mergeValues(query.Results, description.Results, nil)
+		results, err := mergeValues(query.Results, description.Results, nil, a.config.Mappings)
 		if err != nil {
 			return schemasource.AnalysisResult{}, fmt.Errorf("query %q results: %w", query.ID, err)
 		}
@@ -179,7 +179,7 @@ func validateCardinality(q QueryConfig, c Classification, p engineprofile.Profil
 	return nil
 }
 
-func mergeValues(declarations []ValueDeclaration, observed []ValueEvidence, names []string) ([]compilerir.SemanticValue, error) {
+func mergeValues(declarations []ValueDeclaration, observed []ValueEvidence, names []string, mappings compilerir.MappingConfig) ([]compilerir.SemanticValue, error) {
 	if len(names) != 0 {
 		collapsed := make([]ValueEvidence, 0, len(declarations))
 		seen := map[string]struct{}{}
@@ -217,8 +217,9 @@ func mergeValues(declarations []ValueDeclaration, observed []ValueEvidence, name
 		if declaration.Name != fact.Name && fact.Name != "" {
 			return nil, fmt.Errorf("value %d name %q differs from %q", i, fact.Name, declaration.Name)
 		}
-		if declaration.Scalar != "" && fact.Type.LogicalKind != "" && declaration.Scalar != fact.Type.LogicalKind {
-			return nil, fmt.Errorf("value %q type %q conflicts with %q", declaration.Name, fact.Type.LogicalKind, declaration.Scalar)
+		mappedScalar, mapped := compilerir.ResolveQueryScalar(fact.Type.LogicalKind, fact.Type.Native, fact.Type.Integer, mappings)
+		if declaration.Scalar != "" && mapped && declaration.Scalar != mappedScalar {
+			return nil, fmt.Errorf("value %q type %q conflicts with %q", declaration.Name, mappedScalar, declaration.Scalar)
 		}
 		nullable := false
 		if declaration.Nullable != nil {
@@ -229,9 +230,15 @@ func mergeValues(declarations []ValueDeclaration, observed []ValueEvidence, name
 		}
 		scalar := declaration.Scalar
 		if scalar == "" {
-			scalar = fact.Type.LogicalKind
+			scalar = mappedScalar
+			if scalar == "" {
+				scalar = fact.Type.LogicalKind
+			}
 		}
-		values[i] = compilerir.SemanticValue{Name: declaration.Name, Scalar: scalar, Nullable: nullable, TypeCertainty: fact.Type.Certainty, NullabilityCertainty: compilerir.CertaintyDeclared}
+		if scalar == "" {
+			return nil, fmt.Errorf("value %q has no scalar", declaration.Name)
+		}
+		values[i] = compilerir.SemanticValue{Name: declaration.Name, Scalar: scalar, Nullable: nullable, TypeCertainty: fact.Type.Certainty, NullabilityCertainty: compilerir.CertaintyDeclared, LogicalKind: fact.Type.LogicalKind, Native: cloneNative(fact.Type.Native), Integer: cloneInteger(fact.Type.Integer)}
 	}
 	return values, nil
 }
@@ -241,6 +248,23 @@ func sameNullable(a, b *bool) bool {
 		return a == nil && b == nil
 	}
 	return *a == *b
+}
+
+func cloneNative(in *compilerir.NativeType) *compilerir.NativeType {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.Arguments = append([]string(nil), in.Arguments...)
+	out.Element = cloneNative(in.Element)
+	return &out
+}
+func cloneInteger(in *compilerir.IntegerTypeFacts) *compilerir.IntegerTypeFacts {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	return &out
 }
 
 func compareParameterNames(declarations []ValueDeclaration, names []string) error {

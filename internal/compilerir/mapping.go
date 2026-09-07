@@ -134,6 +134,12 @@ func selectMapping(column PhysicalColumn, config MappingConfig) mappingSelection
 	return mappingSelection{scalar: selected.Name, mapping: selected, found: matches == 1, ambiguous: matches > 1}
 }
 
+// ResolveQueryScalar applies the same mapping precedence used for catalog columns.
+func ResolveQueryScalar(logicalKind string, native *NativeType, integer *IntegerTypeFacts, config MappingConfig) (string, bool) {
+	selection := selectMapping(PhysicalColumn{LogicalKind: logicalKind, Native: native, Integer: integer}, config)
+	return selection.scalar, selection.found
+}
+
 func mappingRank(column PhysicalColumn, match NativeMatch) (int, bool) {
 	if match.LogicalKind != "" && match.LogicalKind != column.LogicalKind {
 		return 0, false
