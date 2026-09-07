@@ -14,6 +14,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
+	"github.com/lestrrat-go/rasql/internal/querygen"
 	"github.com/stretchr/testify/require"
 )
 
@@ -86,9 +87,9 @@ func BenchmarkCompactScan(b *testing.B) {
 	if _, err := db.ExecContext(b.Context(), "INSERT INTO users (id) VALUES (7)"); err != nil { b.Fatal(err) }
 	rdb, err := rasql.New(db, dialect.SQLite())
 	if err != nil { b.Fatal(err) }
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		rows, err := rasql.SelectFrom(generated.Users()).All(b.Context(), rdb)
+ b.ResetTimer()
+ for i := 0; i < b.N; i++ {
+  rows, err := rasql.SelectFrom(generated.Users()).All(b.Context(), rdb)
 		if err != nil || len(rows) != 1 { b.Fatalf("rows=%v err=%v", rows, err) }
 	}
 }
@@ -160,38 +161,56 @@ func benchmarkAllocs(output, name string) (int, bool) {
 	return 0, false
 }
 
-func buildSamples(t *testing.T, root string, env []string, label, packagePath string) []time.Duration {
+type buildSample struct {
+	wall   time.Duration
+	cpu    time.Duration
+	rssKB  int64
+	binary int64
+}
+
+func buildSamples(t *testing.T, root string, env []string, label, packagePath string) []buildSample {
 	t.Helper()
 	const samples = 5
-	result := make([]time.Duration, 0, samples)
+	result := make([]buildSample, 0, samples)
 	for index := 0; index < samples; index++ {
 		output := filepath.Join(root, fmt.Sprintf("%s-%d.test", label, index))
-		started := time.Now()
-		command := exec.Command("go", "test", "-mod=mod", "-count=1", "-run", "^$", "-c", "-o", output, packagePath)
+		stats := filepath.Join(root, fmt.Sprintf("%s-%d.time", label, index))
+		command := exec.Command("/usr/bin/time", "-f", "%e %U %M", "-o", stats, "go", "test", "-mod=mod", "-count=1", "-run", "^$", "-c", "-o", output, packagePath)
 		command.Dir = root
 		command.Env = env
 		buildOutput, err := command.CombinedOutput()
 		require.NoError(t, err, "%s", buildOutput)
-		elapsed := time.Since(started)
-		result = append(result, elapsed)
+		measurement, err := os.ReadFile(stats)
+		require.NoError(t, err)
+		fields := strings.Fields(string(measurement))
+		require.Len(t, fields, 3)
+		wallSeconds, err := strconv.ParseFloat(fields[0], 64)
+		require.NoError(t, err)
+		cpuSeconds, err := strconv.ParseFloat(fields[1], 64)
+		require.NoError(t, err)
+		rssKB, err := strconv.ParseInt(fields[2], 10, 64)
+		require.NoError(t, err)
 		binary, err := os.Stat(output)
 		require.NoError(t, err)
-		t.Logf("%s build sample=%d wall=%s binary=%d bytes", label, index+1, elapsed.Round(time.Millisecond), binary.Size())
+		sample := buildSample{wall: time.Duration(wallSeconds * float64(time.Second)), cpu: time.Duration(cpuSeconds * float64(time.Second)), rssKB: rssKB, binary: binary.Size()}
+		result = append(result, sample)
+		t.Logf("%s build sample=%d wall=%s cpu=%s rss=%dKB binary=%d bytes", label, index+1, sample.wall.Round(time.Millisecond), sample.cpu.Round(time.Millisecond), sample.rssKB, sample.binary)
 		require.NoError(t, os.Remove(output))
+		require.NoError(t, os.Remove(stats))
 	}
 	return result
 }
 
-func medianDuration(values []time.Duration) time.Duration {
-	ordered := append([]time.Duration(nil), values...)
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
-	return ordered[len(ordered)/2]
+func medianDuration(values []buildSample) time.Duration {
+	ordered := append([]buildSample(nil), values...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].wall < ordered[j].wall })
+	return ordered[len(ordered)/2].wall
 }
 
-func formatDurations(values []time.Duration) string {
+func formatDurations(values []buildSample) string {
 	result := make([]string, len(values))
 	for i, value := range values {
-		result[i] = value.Round(time.Millisecond).String()
+		result[i] = value.wall.Round(time.Millisecond).String()
 	}
 	return strings.Join(result, ",")
 }
@@ -240,6 +259,88 @@ func TestRenderCompactConcurrent(t *testing.T) {
 	}
 	for i := 1; i < len(outputs); i++ {
 		require.Equal(t, outputs[0], outputs[i])
+	}
+}
+
+func TestCompactPlanIncludesTypedQueries(t *testing.T) {
+	in := plainEmitterFixture(t)
+	in.Generation.Emitter = "compact"
+	store, err := generate.RenderCompact(in)
+	require.NoError(t, err)
+	store.Root, store.Dir = t.TempDir(), "generated"
+	parameter := []querygen.TypedValue{{Go: compilerir.GoField{Name: "id", Type: "int64"}, Semantic: compilerir.SemanticValue{Name: "id", LogicalKind: "integer"}}}
+	result := []querygen.TypedValue{{Go: compilerir.GoField{Name: "id", Type: "int64"}, Semantic: compilerir.SemanticValue{Name: "id", LogicalKind: "integer"}}}
+	store.TypedQueries = []generate.TypedQuery{
+		{Function: "FindUsers", Output: "find_users_gen.go", Engine: "sqlite", SQL: "SELECT id FROM users WHERE id = ?", Operation: "select", Cardinality: "many", Result: "FindUsersResult", Decoder: "FindUsersDecoder", Parameters: parameter, Results: result, ArgumentNames: []string{"id"}},
+		{Function: "FindUser", Output: "find_user_gen.go", Engine: "sqlite", SQL: "SELECT id FROM users WHERE id = ?", Operation: "select", Cardinality: "one", Result: "FindUserResult", Decoder: "FindUserDecoder", Parameters: parameter, Results: result, ArgumentNames: []string{"id"}},
+		{Function: "MaybeUser", Output: "maybe_user_gen.go", Engine: "sqlite", SQL: "SELECT id FROM users WHERE id = ?", Operation: "select", Cardinality: "maybe", Result: "MaybeUserResult", Decoder: "MaybeUserDecoder", Parameters: parameter, Results: result, ArgumentNames: []string{"id"}},
+		{Function: "UpdateUser", Output: "update_user_gen.go", Engine: "sqlite", SQL: "UPDATE users SET id = id WHERE id = ?", Operation: "exec", Parameters: parameter, ArgumentNames: []string{"id"}},
+	}
+	plan, err := store.Plan()
+	require.NoError(t, err)
+	found := make(map[string]bool)
+	for _, file := range plan.Files() {
+		name := filepath.Base(file.Path)
+		if name == "find_users_gen.go" || name == "find_user_gen.go" || name == "maybe_user_gen.go" || name == "update_user_gen.go" {
+			found[name] = true
+		}
+		if name == "find_user_gen.go" {
+			require.Contains(t, string(file.Source), "func FindUser")
+		}
+	}
+	require.Len(t, found, 4)
+}
+
+func TestCompactManifestMapsRenamedMutationSymbols(t *testing.T) {
+	in := plainEmitterFixture(t)
+	in.Generation.Emitter = "compact"
+	in.Generation.Objects[0].Source = "Account"
+	in.Generation.Objects[0].Row = "AccountRecord"
+	in.Generation.Objects[0].Create = "AccountInsert"
+	in.Generation.Objects[0].Patch = "AccountChange"
+	model, diagnostics := compilerir.BuildGo(in.Semantic, in.Generation)
+	require.Empty(t, diagnostics)
+	in.Go = model
+	store, err := generate.RenderCompact(in)
+	require.NoError(t, err)
+	manifest := store.APIManifest()
+	find := func(legacy string) generate.APIMapping {
+		for _, mapping := range manifest {
+			if mapping.Legacy == legacy {
+				return mapping
+			}
+		}
+		return generate.APIMapping{}
+	}
+	require.Equal(t, generate.APIMapping{Legacy: "AccountCreate", Compact: "store.AccountInsert", Status: "replacement"}, find("AccountCreate"))
+	require.Equal(t, generate.APIMapping{Legacy: "AccountPatch", Compact: "store.AccountChange", Status: "replacement"}, find("AccountPatch"))
+}
+
+func TestCompactRejectsGeneratedSymbolCollisions(t *testing.T) {
+	cases := []struct {
+		name, column, want string
+	}{
+		{name: "scan row", column: "scan_row", want: "ScanRow"},
+		{name: "create plan", column: "plan", want: "Plan"},
+		{name: "patch where", column: "where", want: "Where"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			catalog := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "sqlite", Version: "3"}, Objects: []compilerir.PhysicalObject{{
+				ID: "users", Kind: "table", Name: "users", Columns: []compilerir.PhysicalColumn{{Name: "id", LogicalKind: "integer"}, {Name: test.column, Ordinal: 1, LogicalKind: "text"}},
+				Constraints: []compilerir.PhysicalConstraint{{Kind: "primary_key", Columns: []string{"id"}}},
+			}}}
+			semantic, diagnostics := compilerir.BuildSemantic(catalog, compilerir.MappingConfig{}, nil)
+			require.Empty(t, diagnostics)
+			config := compilerir.GoConfig{Package: "store", Output: "generated", Emitter: "compact", Objects: []compilerir.ObjectGoName{{ID: "users", File: "users_gen.go"}}}
+			model, diagnostics := compilerir.BuildGo(semantic, config)
+			require.Empty(t, diagnostics)
+			input, err := generate.NewEmitterInput(catalog, semantic, model, config, compilerir.MappingConfig{})
+			require.NoError(t, err)
+			_, err = generate.RenderCompact(input)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), test.want)
+		})
 	}
 }
 
@@ -292,9 +393,9 @@ func TestCompactEmitsGraphAndPageFactories(t *testing.T) {
 			source = string(file.Source)
 		}
 	}
-	require.Contains(t, source, "func UsersGraphKey()")
-	require.Contains(t, source, "func UsersIDPageKey(direction rasql.PageDirection)")
-	require.Contains(t, source, "func UsersDeletedAtPageKey(direction rasql.PageDirection, nulls rasql.NullOrder)")
+	require.Contains(t, source, "func UsersGraphKey(source rasql.TypedRelation[UsersRow])")
+	require.Contains(t, source, "func UsersIDPageKey(source rasql.TypedRelation[UsersRow], direction rasql.PageDirection)")
+	require.Contains(t, source, "func UsersDeletedAtPageKey(source rasql.TypedRelation[UsersRow], direction rasql.PageDirection, nulls rasql.NullOrder)")
 	require.Contains(t, source, "rasqlgenNullablePageKey")
 }
 
@@ -332,7 +433,7 @@ import (
 type projectGraph struct { Owner rasql.LoadedOne[userGraph] }
 type userGraph struct { ID int64 }
 
-func TestGeneratedEdgeRejectsAliasedStage(t *testing.T) {
+func TestGeneratedEdgeUsesExactAliasedStage(t *testing.T) {
 	parentSource, err := generated.Projects().Source("p")
 	if err != nil { t.Fatal(err) }
 	parentExpressions, err := (generated.ProjectsColumns{}).Bind(parentSource)
@@ -349,9 +450,14 @@ func TestGeneratedEdgeRejectsAliasedStage(t *testing.T) {
 	childQuery := rasql.Select(childSource.Source(), childProjection)
 	childPlan, err := rasql.NewGraphPlan(childQuery, func(row generated.UsersRow) userGraph { return userGraph{ID: row.ID} })
 	if err != nil { t.Fatal(err) }
-	edge, err := generated.ProjectsProjectsOwnerFkEdge(childPlan, rasql.EdgeOptions{}, func(graph *projectGraph, value rasql.LoadedOne[userGraph]) { graph.Owner = value })
+	edge, err := generated.ProjectsProjectsOwnerFkEdge(parentSource, childSource, childPlan, rasql.EdgeOptions{}, func(graph *projectGraph, value rasql.LoadedOne[userGraph]) { graph.Owner = value })
 	if err != nil { t.Fatal(err) }
-	_, err = rasql.NewGraphPlan(parentQuery, func(generated.ProjectsRow) projectGraph { return projectGraph{} }, edge)
+	if _, err = rasql.NewGraphPlan(parentQuery, func(generated.ProjectsRow) projectGraph { return projectGraph{} }, edge); err != nil { t.Fatal(err) }
+	wrongParent, err := generated.Projects().Source("p2")
+	if err != nil { t.Fatal(err) }
+	wrongEdge, err := generated.ProjectsProjectsOwnerFkEdge(wrongParent, childSource, childPlan, rasql.EdgeOptions{}, func(graph *projectGraph, value rasql.LoadedOne[userGraph]) { graph.Owner = value })
+	if err != nil { t.Fatal(err) }
+	_, err = rasql.NewGraphPlan(parentQuery, func(generated.ProjectsRow) projectGraph { return projectGraph{} }, wrongEdge)
 	if err == nil || !strings.Contains(err.Error(), "graph_key_mismatch") { t.Fatalf("err = %v, want graph_key_mismatch", err) }
 }
 `

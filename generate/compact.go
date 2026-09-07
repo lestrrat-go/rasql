@@ -58,6 +58,18 @@ func RenderCompact(in EmitterInput) (Store, error) {
 	if copy.Generation.Emitter != "compact" {
 		return Store{}, errors.New("generate: compact renderer requires generation.emitter compact")
 	}
+	for _, object := range copy.Go.Objects {
+		for _, column := range object.Columns {
+			if !column.Nullable {
+				continue
+			}
+			for _, mapping := range copy.Mappings.Scalars {
+				if mapping.Name == column.Scalar && mapping.NullableGoType != "" && !strings.HasPrefix(mapping.NullableGoType, "rasql.Nullable[") {
+					return Store{}, fmt.Errorf("generate: compact %s.%s uses unsupported distinct nullable Go type %q", object.ID, column.Name, mapping.NullableGoType)
+				}
+			}
+		}
+	}
 	tables, diagnostics := compilerir.TableDefsFromPhysical(copy.Catalog)
 	for _, diagnostic := range diagnostics {
 		if diagnostic.Level == compilerir.DiagnosticError {
@@ -153,6 +165,9 @@ func RenderCompact(in EmitterInput) (Store, error) {
 		Dir:     copy.Generation.Output,
 		Prune:   copy.Generation.Prune,
 		Dialect: compactDialect(copy.Catalog.Engine.Dialect),
+		// RenderCompact owns schema declarations from EmitterInput. PlanContext
+		// appends configured SQL from Store.TypedQueries and checks it with the
+		// same file and identifier ledgers.
 		compact: &compactStoreInput{input: copy, files: cloneCompactFiles(files), manifest: append([]APIMapping(nil), manifest...)},
 	}, nil
 }
@@ -179,8 +194,7 @@ func rasqlgenBind[S, C any](sticky *error, source S, name, codec string, bind fu
 }
 
 func rasqlgenAppendMutationField[R any](fields []rasql.MutationField[R], field rasql.MutationField[R]) []rasql.MutationField[R] {
-	result := append([]rasql.MutationField[R](nil), fields...)
-	return append(result, field)
+	return append(append([]rasql.MutationField[R](nil), fields...), field)
 }
 
 func rasqlgenResultSchema(columns []rasql.ResultColumn) rasql.ResultSchema {
@@ -192,11 +206,10 @@ func rasqlgenResultSchema(columns []rasql.ResultColumn) rasql.ResultSchema {
 }
 
 func rasqlgenOptionalResultSchema(columns []rasql.ResultColumn) rasql.ResultSchema {
-	copy := append([]rasql.ResultColumn(nil), columns...)
-	for i := range copy {
-		copy[i].Nullable = true
+	for i := range columns {
+		columns[i].Nullable = true
 	}
-	return rasqlgenResultSchema(copy)
+	return rasqlgenResultSchema(columns)
 }
 
 func rasqlgenAssignNullable[T any](source rasql.Nullable[T], target *T) {
@@ -312,7 +325,20 @@ func compactManifest(in EmitterInput, tables []schema.TableDef, declarations map
 		return nil, fmt.Errorf("generate: compact manifest: %w", err)
 	}
 	legacy := resolved.PackageLevelNames()
+	for _, object := range in.Catalog.Objects {
+		if object.Kind == "view" {
+			continue
+		}
+		config := configsForObject(in.Generation.Objects, object.ID)
+		accessor := config.Source
+		if accessor == "" {
+			accessor = schemagenObjectName(object.Name)
+		}
+		legacy = append(legacy, accessor+"Create", "New"+accessor+"Create", accessor+"Patch", "New"+accessor+"Patch")
+	}
+	sort.Strings(legacy)
 	compactNames := make(map[string]struct{}, len(in.Generation.Objects)*8)
+	legacyReplacement := make(map[string]string, len(in.Generation.Objects)*4)
 	for _, object := range in.Catalog.Objects {
 		config := configsForObject(in.Generation.Objects, object.ID)
 		accessor := config.Source
@@ -335,6 +361,10 @@ func compactManifest(in EmitterInput, tables []schema.TableDef, declarations map
 				compactNames[name] = struct{}{}
 			}
 		}
+		legacyReplacement[accessor+"Create"] = create
+		legacyReplacement["New"+accessor+"Create"] = "New" + create
+		legacyReplacement[accessor+"Patch"] = patch
+		legacyReplacement["New"+accessor+"Patch"] = "New" + patch
 	}
 	result := make([]APIMapping, 0, len(legacy))
 	seenLegacy := make(map[string]struct{}, len(legacy))
@@ -343,11 +373,15 @@ func compactManifest(in EmitterInput, tables []schema.TableDef, declarations map
 			return nil, fmt.Errorf("generate: compact manifest duplicate legacy symbol %q", name)
 		}
 		seenLegacy[name] = struct{}{}
-		if _, intended := compactNames[name]; intended {
-			if _, exists := declarations[name]; !exists {
-				return nil, fmt.Errorf("generate: compact manifest replacement %q is not emitted", name)
+		replacement := name
+		if value, ok := legacyReplacement[name]; ok {
+			replacement = value
+		}
+		if _, intended := compactNames[replacement]; intended {
+			if _, exists := declarations[replacement]; !exists {
+				return nil, fmt.Errorf("generate: compact manifest replacement %q is not emitted", replacement)
 			}
-			result = append(result, APIMapping{Legacy: name, Compact: in.Generation.Package + "." + name, Status: "replacement"})
+			result = append(result, APIMapping{Legacy: name, Compact: in.Generation.Package + "." + replacement, Status: "replacement"})
 			continue
 		}
 		result = append(result, APIMapping{Legacy: name, Status: "removed"})
@@ -430,6 +464,27 @@ func (s Store) planCompactContext(ctx context.Context) (Plan, error) {
 			identifiers[declaration] = compact.name
 		}
 		files = append(files, File{Path: filepath.Join(dir, compact.name), Source: append([]byte(nil), compact.source...)})
+	}
+	for index, query := range s.TypedQueries {
+		file, err := s.planTypedQuery(dir, query, filenames, identifiers)
+		if err != nil {
+			return Plan{}, fmt.Errorf("generate: compact typed query[%d]: %w", index, err)
+		}
+		declarations, err := compactDeclarations(file.Source)
+		if err != nil {
+			return Plan{}, fmt.Errorf("generate: compact typed query[%d]: parse declarations: %w", index, err)
+		}
+		owner := fmt.Sprintf("query %q", query.Function)
+		for _, declaration := range declarations {
+			if existing, exists := identifiers[declaration]; exists {
+				if !strings.Contains(existing, owner) {
+					return Plan{}, fmt.Errorf("generate: compact typed query[%d] declaration %q collides with %s", index, declaration, existing)
+				}
+				continue
+			}
+			identifiers[declaration] = owner + " declaration"
+		}
+		files = append(files, file)
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	return finishRenderedPlan(ctx, root, checkRoot, dir, s.Package, s.Prune, files)
