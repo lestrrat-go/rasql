@@ -69,6 +69,7 @@ type graphQueryOps interface {
 	sourceName() string
 	hasPredicates() bool
 	decoderValue() any
+	schemaValue() ResultSchema
 	withoutPredicates() graphQueryOps
 	with(edge Predicate, key *graphKeySpec, options EdgeOptions, limit int) (graphQueryOps, error)
 	withOptions(options EdgeOptions, key *graphKeySpec, limit int) (graphQueryOps, error)
@@ -152,8 +153,9 @@ func (q graphQuery[R, G]) sourceName() string {
 	}
 	return q.value.plan.sources[0].ref.QualifiedName()
 }
-func (q graphQuery[R, G]) hasPredicates() bool { return len(q.value.plan.where) > 0 }
-func (q graphQuery[R, G]) decoderValue() any   { return q.value.Projection().Decoder() }
+func (q graphQuery[R, G]) hasPredicates() bool       { return len(q.value.plan.where) > 0 }
+func (q graphQuery[R, G]) decoderValue() any         { return q.value.Projection().Decoder() }
+func (q graphQuery[R, G]) schemaValue() ResultSchema { return q.value.Schema() }
 func (q graphQuery[R, G]) withoutPredicates() graphQueryOps {
 	value := q.value
 	value.plan = clonePlan(value.plan)

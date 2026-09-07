@@ -244,10 +244,15 @@ func executorCompilerProfile(executor Executor) engineProfileSnapshot {
 		return engineProfileSnapshot{}
 	}
 	p := provider.queryCompiler().EngineProfile()
-	return engineProfileSnapshot{Capabilities: p.Capabilities, MaxBind: p.Limits.MaxBindParameters}
+	return engineProfileSnapshot{ID: p.ID, Engine: uint8(p.Engine), Capabilities: p.Capabilities, MaxBind: p.Limits.MaxBindParameters}
 }
 
 type engineProfileSnapshot struct {
+	ID           string
+	Engine       uint8
+	VersionMajor int
+	VersionMinor int
+	VersionPatch int
 	Capabilities EngineCapabilities
 	MaxBind      int
 }
@@ -357,6 +362,14 @@ func graphInvocationFingerprint(edge *graphEdgeSpec, stage string, compiled comp
 	writeGraphFingerprintPart(compiled.statement.SQL())
 	writeGraphFingerprintPart(strconv.FormatInt(int64(edge.options.PerParentLimit), 10))
 	writeGraphFingerprintPart(strconv.FormatInt(int64(edge.options.BindLimit), 10))
+	for _, column := range edge.child.query.schemaValue().Columns() {
+		writeGraphFingerprintPart(column.Name)
+		if column.Type != nil {
+			writeGraphFingerprintPart(string(column.Type.Kind()))
+		}
+		writeGraphFingerprintPart(strconv.FormatBool(column.Nullable))
+		writeGraphFingerprintPart(column.Codec)
+	}
 	keySpec := edge.childKey
 	if stage == "junction" {
 		keySpec = edge.junctionParent
@@ -364,6 +377,10 @@ func graphInvocationFingerprint(edge *graphEdgeSpec, stage string, compiled comp
 	for _, part := range keySpec.parts {
 		writeGraphFingerprintPart(part.column.Source().QualifiedName())
 		writeGraphFingerprintPart(part.column.Name())
+		if part.columnType != nil {
+			writeGraphFingerprintPart(string(part.columnType.Kind()))
+		}
+		writeGraphFingerprintPart(part.typ.String())
 		writeGraphFingerprintPart(part.codec)
 	}
 	args := compiled.statement.Args()
