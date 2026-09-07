@@ -240,3 +240,16 @@ func TestMaterializeRejectsTypedNilOptionalAnalyzer(t *testing.T) {
 		t.Fatal("Materialize accepted typed nil analyzer")
 	}
 }
+
+func TestMaterializeRejectsNilLiveDatabaseBeforeProfile(t *testing.T) {
+	profile := &fakeProfile{}
+	catalogs := &fakeCatalog{}
+	r := schemasource.Request{ModuleRoot: t.TempDir(), Engine: schemasource.EngineConfig{Dialect: "sqlite", Profile: "sqlite-3.35"}, Source: schemasource.SchemaSourceConfig{Kind: "live", Identity: "x"}, LiveDSN: ":memory:"}
+	_, err := schemasource.Materialize(context.Background(), r, schemasource.Dependencies{Opener: fakeOpener{}, Profiles: profile, Catalogs: catalogs})
+	if err == nil {
+		t.Fatal("Materialize accepted nil live database")
+	}
+	if profile.calls != 0 || catalogs.calls != 0 {
+		t.Fatalf("downstream calls profile=%d catalog=%d", profile.calls, catalogs.calls)
+	}
+}

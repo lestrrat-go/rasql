@@ -212,6 +212,9 @@ func Materialize(ctx context.Context, req Request, deps Dependencies) (Result, e
 			if err != nil {
 				return err
 			}
+			if db == nil {
+				return fmt.Errorf("schema source: database opener returned nil database")
+			}
 		} else {
 			d := engineFor(req.Engine.Dialect)
 			owned, e := deps.Factory.Create(ctx, FactoryRequest{Dialect: d, ProfileID: req.Engine.Profile, BootstrapDSN: req.BootstrapDSN, TempRoot: req.TempRoot})

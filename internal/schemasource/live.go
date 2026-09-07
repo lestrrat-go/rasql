@@ -10,8 +10,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
+	"time"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5"
@@ -41,9 +41,26 @@ func driverName(d string) string {
 	}
 }
 
-type defaultFactory struct{}
+type defaultFactory struct {
+	open   func(string, string) (*sql.DB, error)
+	derive func(string, string, string) (string, error)
+}
 
-func (defaultFactory) Create(ctx context.Context, r FactoryRequest) (DisposableDatabase, error) {
+func (f defaultFactory) openDB(driver, dsn string) (*sql.DB, error) {
+	if f.open != nil {
+		return f.open(driver, dsn)
+	}
+	return sql.Open(driver, dsn)
+}
+
+func (f defaultFactory) deriveDSN(dialect, dsn, name string) (string, error) {
+	if f.derive != nil {
+		return f.derive(dialect, dsn, name)
+	}
+	return derivedDSN(dialect, dsn, name)
+}
+
+func (f defaultFactory) Create(ctx context.Context, r FactoryRequest) (DisposableDatabase, error) {
 	if r.Dialect == "sqlite" {
 		if r.TempRoot == "" {
 			return DisposableDatabase{}, fmt.Errorf("schema source: SQLite temp root is required")
@@ -72,7 +89,7 @@ func (defaultFactory) Create(ctx context.Context, r FactoryRequest) (DisposableD
 	if err != nil {
 		return DisposableDatabase{}, err
 	}
-	base, err := sql.Open(driverName(r.Dialect), r.BootstrapDSN)
+	base, err := f.openDB(driverName(r.Dialect), r.BootstrapDSN)
 	if err != nil {
 		return DisposableDatabase{}, err
 	}
@@ -81,15 +98,13 @@ func (defaultFactory) Create(ctx context.Context, r FactoryRequest) (DisposableD
 	if _, err = base.ExecContext(ctx, "CREATE DATABASE "+quoted); err != nil {
 		return DisposableDatabase{}, err
 	}
-	dsn, err := derivedDSN(r.Dialect, r.BootstrapDSN, name)
+	dsn, err := f.deriveDSN(r.Dialect, r.BootstrapDSN, name)
 	if err != nil {
-		_ = dropDatabase(ctx, base, r.Dialect, name)
-		return DisposableDatabase{}, err
+		return DisposableDatabase{}, cleanupCreatedDatabase(ctx, err, base, r.Dialect, name)
 	}
-	db, err := sql.Open(driverName(r.Dialect), dsn)
+	db, err := f.openDB(driverName(r.Dialect), dsn)
 	if err != nil {
-		_ = dropDatabase(ctx, base, r.Dialect, name)
-		return DisposableDatabase{}, err
+		return DisposableDatabase{}, cleanupCreatedDatabase(ctx, err, base, r.Dialect, name)
 	}
 	return DisposableDatabase{DB: db, DSN: dsn, CloseAndDrop: func(c context.Context) error {
 		cerr := db.Close()
@@ -100,6 +115,12 @@ func (defaultFactory) Create(ctx context.Context, r FactoryRequest) (DisposableD
 		defer d.Close()
 		return errorsJoin(cerr, dropDatabase(c, d, r.Dialect, name))
 	}}, nil
+}
+
+func cleanupCreatedDatabase(ctx context.Context, primary error, base *sql.DB, dialect, name string) error {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	return errors.Join(primary, dropDatabase(cleanupCtx, base, dialect, name))
 }
 func randomName() (string, error) {
 	b := make([]byte, 16)
@@ -144,13 +165,8 @@ func derivedDSN(d, s, n string) (string, error) {
 	return replaceKeywordDatabase(s, n), nil
 }
 
-var keywordDatabase = regexp.MustCompile(`(?i)(^|[[:space:]])dbname[[:space:]]*=[[:space:]]*('[^']*(?:''[^']*)*'|[^[:space:]]+)`)
-
 func replaceKeywordDatabase(s, name string) string {
-	quoted := "'" + strings.ReplaceAll(name, "'", "\\'") + "'"
-	if keywordDatabase.MatchString(s) {
-		return keywordDatabase.ReplaceAllString(s, `${1}dbname=`+quoted)
-	}
+	quoted := "'" + strings.ReplaceAll(strings.ReplaceAll(name, `\`, `\\`), "'", `\'`) + "'"
 	if strings.TrimSpace(s) == "" {
 		return "dbname=" + quoted
 	}
