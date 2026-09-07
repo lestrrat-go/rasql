@@ -508,9 +508,12 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 		}
 		missing := make([]keyTuple, 0, end-start)
 		for _, tuple := range tuples[start:end] {
-			if _, ok := cache[graphCacheKey(childFingerprint, tuple)]; !ok {
+			entry, ok := cache[graphCacheKey(childFingerprint, tuple)]
+			if !ok {
 				missing = append(missing, tuple)
+				continue
 			}
+			loaded[tuple.identity] = append(loaded[tuple.identity], entry.rows...)
 		}
 		if len(missing) == 0 {
 			continue
@@ -788,8 +791,13 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 			}
 			missing := make([]keyTuple, 0, end-start)
 			for _, tuple := range targetOrder[start:end] {
-				if _, ok := cache[graphCacheKey(targetFingerprint, tuple)]; !ok {
+				entry, ok := cache[graphCacheKey(targetFingerprint, tuple)]
+				if !ok {
 					missing = append(missing, tuple)
+					continue
+				}
+				for _, row := range entry.rows {
+					targets[tuple.identity] = row
 				}
 			}
 			if len(missing) == 0 {
