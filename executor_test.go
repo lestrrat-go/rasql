@@ -354,6 +354,7 @@ func TestPreparedRowsCopiesAndEncodesOneDetachedStatement(t *testing.T) {
 	}
 	raw := base.(profiledExecutor).Executor.(*runtimeFakeExecutor)
 	require.Equal(t, int64(1), raw.calls.Load())
+	require.Equal(t, "SELECT ?", raw.lastStatement.SQL())
 	handoff := raw.lastStatement.Args()[0].(sql.NamedArg)
 	require.Equal(t, "payload", handoff.Name)
 	require.Equal(t, []byte("x"), handoff.Value)
