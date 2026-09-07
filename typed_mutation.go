@@ -56,10 +56,41 @@ type CreatePlan[T any] struct {
 
 // PatchPlan is an immutable typed UPDATE plan.
 type PatchPlan[T any] struct {
-	table  Table[T]
-	fields []MutationField[T]
-	where  query.Predicate
-	err    error
+	table   Table[T]
+	fields  []MutationField[T]
+	where   query.Predicate
+	err     error
+	version *versionMutation
+}
+
+type versionMutation struct {
+	column   query.ColumnRef
+	expected int64
+}
+
+func (p PatchPlan[T]) WithVersion(column Column[T, int64], expected int64) (PatchPlan[T], error) {
+	if p.version != nil {
+		return PatchPlan[T]{}, fmt.Errorf("rasql: version predicate is already configured")
+	}
+	if p.err != nil {
+		return PatchPlan[T]{}, p.err
+	}
+	ref := column.ref
+	definition := p.table.Ref().Definition()
+	columnDef, ok := definition.Column(ref.Name())
+	if !ok || ref.Source().Definition().QualifiedName() != definition.QualifiedName() {
+		return PatchPlan[T]{}, fmt.Errorf("rasql: version column %q belongs to another table", ref.Name())
+	}
+	if _, integer := columnDef.Type.(schema.IntegerType); !integer || columnDef.Nullable || columnDef.GeneratedExpression != "" || columnDef.Identity != "" {
+		return PatchPlan[T]{}, fmt.Errorf("rasql: version column %q must be a non-null ordinary integer", ref.Name())
+	}
+	for _, field := range p.fields {
+		if field.column.Name() == ref.Name() {
+			return PatchPlan[T]{}, fmt.Errorf("rasql: version column %q is already assigned", ref.Name())
+		}
+	}
+	p.version = &versionMutation{column: ref, expected: expected}
+	return p, nil
 }
 
 type normalizedCreate[T any] struct {
@@ -72,7 +103,28 @@ type normalizedCreate[T any] struct {
 func NewCreatePlan[T any](table Table[T], fields ...MutationField[T]) (CreatePlan[T], error) {
 	plan := CreatePlan[T]{table: table, fields: append([]MutationField[T](nil), fields...)}
 	plan.err = validateMutationPlan(table, plan.fields, false, query.Predicate{})
+	if plan.err == nil {
+		plan.err = validateCreateRequired(table, plan.fields)
+	}
 	return plan, plan.err
+}
+
+func validateCreateRequired[T any](table Table[T], fields []MutationField[T]) error {
+	if isNilTable(table) {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		seen[field.column.Name()] = struct{}{}
+	}
+	definition := table.Ref().Definition()
+	for _, column := range definition.Columns {
+		if _, ok := seen[column.Name]; ok || column.Default != "" || column.Nullable || column.Identity != "" || column.GeneratedExpression != "" || isPrimaryKeyColumn(definition, column.Name) {
+			continue
+		}
+		return fmt.Errorf("rasql: create plan is missing required column %q", column.Name)
+	}
+	return nil
 }
 
 func NewPatchPlan[T any](table Table[T], where query.Predicate, fields ...MutationField[T]) (PatchPlan[T], error) {
@@ -112,6 +164,9 @@ func validateMutationPlan[T any](table Table[T], fields []MutationField[T], patc
 		if column.GeneratedExpression != "" || column.Identity == schema.IdentityAlways {
 			return fmt.Errorf("rasql: mutation field %q is not writable", column.Name)
 		}
+		if field.state == mutationClear && !column.Nullable {
+			return fmt.Errorf("rasql: mutation field %q does not accept NULL", column.Name)
+		}
 	}
 	return nil
 }
@@ -139,7 +194,13 @@ func (p CreatePlan[T]) lowerNormalized() (normalizedCreate[T], error) {
 	lowered := normalizedCreate[T]{table: p.table.Ref()}
 	for _, column := range columns {
 		field, ok := byName[column.Name]
-		if !ok || field.state == mutationDefault {
+		if !ok {
+			if column.Default == "" && !column.Nullable && column.Identity == "" && column.GeneratedExpression == "" && !isPrimaryKeyColumn(p.table.Ref().Definition(), column.Name) {
+				return normalizedCreate[T]{}, fmt.Errorf("rasql: create plan is missing required column %q", column.Name)
+			}
+			continue
+		}
+		if field.state == mutationDefault {
 			continue
 		}
 		value := field.value
@@ -151,6 +212,15 @@ func (p CreatePlan[T]) lowerNormalized() (normalizedCreate[T], error) {
 	}
 	lowered.defaultOnly = len(lowered.columns) == 0
 	return lowered, nil
+}
+
+func isPrimaryKeyColumn(definition schema.TableDef, name string) bool {
+	for _, key := range definition.PrimaryKey {
+		if key == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (p PatchPlan[T]) lower() (query.Update, error) {
@@ -174,11 +244,18 @@ func (p PatchPlan[T]) lower() (query.Update, error) {
 		}
 		assignments = append(assignments, query.Set(p.table.Ref().Column(column.Name), value))
 	}
+	if p.version != nil {
+		assignments = append(assignments, query.Set(p.version.column, query.Add(p.version.column, 1)))
+	}
 	statement, err := query.NewUpdate(p.table.Ref(), assignments...)
 	if err != nil {
 		return query.Update{}, err
 	}
-	return statement.WithWhere(p.where.Expression())
+	where := p.where.Expression()
+	if p.version != nil {
+		where = query.And(where, query.Equal(p.version.column, p.version.expected))
+	}
+	return statement.WithWhere(where)
 }
 
 func returning[T any](table Table[T]) []query.Projection {

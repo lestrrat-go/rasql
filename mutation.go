@@ -1,0 +1,343 @@
+package rasql
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/schema"
+	"github.com/lestrrat-go/rasql/stmt"
+)
+
+// MutationPlan is a validated immutable write command.
+type MutationPlan interface {
+	mutationPlan() (query.WriteStatement, error)
+}
+
+type mutationBatchPlan interface {
+	MutationPlan
+	mutationInsert() (query.Insert, error)
+}
+
+func (p CreatePlan[T]) mutationPlan() (query.WriteStatement, error) { return p.lower() }
+func (p CreatePlan[T]) mutationInsert() (query.Insert, error)       { return p.lower() }
+func (p PatchPlan[T]) mutationPlan() (query.WriteStatement, error)  { return p.lower() }
+func (p PatchPlan[T]) mutationPrecondition() bool                   { return p.version != nil }
+
+// DeletePlan is a typed immutable DELETE command.
+type DeletePlan[T any] struct {
+	table Table[T]
+	where query.Predicate
+	all   bool
+}
+
+// UpsertPlan adapts a validated dialect-neutral upsert to the mutation API.
+type UpsertPlan[T any] struct{ statement query.Upsert }
+
+func NewUpsertPlan[T any](statement query.Upsert) (UpsertPlan[T], error) {
+	if err := statement.Validate(); err != nil {
+		return UpsertPlan[T]{}, err
+	}
+	return UpsertPlan[T]{statement: statement}, nil
+}
+
+func (p UpsertPlan[T]) mutationPlan() (query.WriteStatement, error) { return p.statement, nil }
+
+func NewDeletePlan[T any](table Table[T], where query.Predicate) (DeletePlan[T], error) {
+	if err := requireTableOperation(table, schema.OperationDelete); err != nil {
+		return DeletePlan[T]{}, err
+	}
+	if where.Expression() == nil {
+		return DeletePlan[T]{}, fmt.Errorf("rasql: delete plan requires a predicate")
+	}
+	return DeletePlan[T]{table: table, where: where}, nil
+}
+
+func (p DeletePlan[T]) mutationPlan() (query.WriteStatement, error) {
+	if isNilTable(p.table) {
+		return nil, fmt.Errorf("rasql: delete plan table must not be nil")
+	}
+	statement, err := query.NewDelete(p.table.Ref())
+	if err != nil {
+		return nil, err
+	}
+	if p.where.Expression() == nil {
+		if !p.all {
+			return nil, fmt.Errorf("rasql: delete plan requires a predicate")
+		}
+		return statement.AllowAll()
+	}
+	return statement.WithWhere(p.where.Expression())
+}
+
+// StatementPlan adapts a validated query write statement to MutationPlan.
+type StatementPlan struct{ statement query.WriteStatement }
+
+func NewStatementPlan(statement query.WriteStatement) (StatementPlan, error) {
+	if statement == nil {
+		return StatementPlan{}, fmt.Errorf("rasql: mutation statement must not be nil")
+	}
+	if err := statement.Validate(); err != nil {
+		return StatementPlan{}, err
+	}
+	return StatementPlan{statement: statement}, nil
+}
+func (p StatementPlan) mutationPlan() (query.WriteStatement, error) { return p.statement, nil }
+
+func ExecMutation(ctx context.Context, executor Executor, plan MutationPlan) (MutationOutcome, error) {
+	if executor == nil {
+		return MutationOutcome{}, fmt.Errorf("rasql: executor must not be nil")
+	}
+	if plan == nil {
+		return MutationOutcome{}, fmt.Errorf("rasql: mutation plan must not be nil")
+	}
+	statement, err := plan.mutationPlan()
+	if err != nil {
+		return MutationOutcome{}, err
+	}
+	if len(statement.Returning()) != 0 {
+		return MutationOutcome{}, fmt.Errorf("rasql: mutation has RETURNING projections; use Returning")
+	}
+	compiled, err := compileMutation(executor, statement)
+	if err != nil {
+		return MutationOutcome{}, err
+	}
+	result, err := executor.Exec(ctx, compiled)
+	if err != nil {
+		return MutationOutcome{Durability: DurabilityUnknown}, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return MutationOutcome{Durability: DurabilityUnknown}, err
+	}
+	outcome := MutationOutcome{Affected: affected, Durability: executorDurability(executor)}
+	if versioned, ok := plan.(interface{ mutationPrecondition() bool }); ok && versioned.mutationPrecondition() && affected == 0 {
+		return outcome, ErrPrecondition
+	}
+	return outcome, nil
+}
+
+func compileMutation(executor Executor, statement query.WriteStatement) (stmt.Statement, error) {
+	provider, ok := executor.(compilerProvider)
+	if !ok || provider.queryCompiler() == nil {
+		return stmt.Statement{}, &PlanError{Code: "engine_profile_unavailable", Detail: "executor has no retained compiler"}
+	}
+	compiled, err := provider.queryCompiler().Write(statement)
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	compiledQuery, err := unwrapBindTokens(compiled)
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	registry := builtinCodecs
+	if cp, ok := executor.(CodecProvider); ok && cp.Codecs() != nil {
+		registry = cp.Codecs()
+	}
+	return encodeCompiled(compiledQuery, registry)
+}
+
+func executorDurability(_ Executor) Durability {
+	return DurabilityUnknown
+}
+
+// Returning attaches the requested Q1 projection to a mutation.
+func Returning[R any](plan MutationPlan, projection Projection[R]) (Query[R], error) {
+	if plan == nil {
+		return Query[R]{}, fmt.Errorf("rasql: mutation plan must not be nil")
+	}
+	if len(projection.items) == 0 || projection.decoder == nil {
+		return Query[R]{}, fmt.Errorf("rasql: returning projection must not be zero")
+	}
+	statement, err := plan.mutationPlan()
+	if err != nil {
+		return Query[R]{}, err
+	}
+	projections := make([]query.Projection, 0, len(projection.items))
+	for _, item := range projection.items {
+		p := query.Project(item.expression)
+		if item.column.Name != "" {
+			p = p.As(item.column.Name)
+		}
+		projections = append(projections, p)
+	}
+	var returning query.WriteStatement
+	switch value := statement.(type) {
+	case query.Insert:
+		returning, err = value.WithReturning(projections...)
+	case query.Update:
+		returning, err = value.WithReturning(projections...)
+	case query.Delete:
+		returning, err = value.WithReturning(projections...)
+	case query.Upsert:
+		returning, err = value.WithReturning(projections...)
+	default:
+		return Query[R]{}, fmt.Errorf("rasql: unsupported mutation statement %T", statement)
+	}
+	if err != nil {
+		return Query[R]{}, err
+	}
+	return Query[R]{projection: projection, plan: QueryPlan{mutation: returning}}, nil
+}
+
+func ExecMutationBatch(ctx context.Context, executor Executor, plans []MutationPlan, options MutationBatchOptions) (MutationBatchOutcome, error) {
+	if executor == nil {
+		return MutationBatchOutcome{}, fmt.Errorf("rasql: executor must not be nil")
+	}
+	if len(plans) == 0 {
+		return MutationBatchOutcome{}, fmt.Errorf("rasql: mutation batch requires at least one plan")
+	}
+	outcome := MutationBatchOutcome{Inputs: make([]InputOutcome, len(plans)), Durability: executorDurability(executor)}
+	maxRows := options.MaxRows
+	if maxRows == 0 {
+		maxRows = 1000
+	}
+	if maxRows < 1 {
+		return outcome, fmt.Errorf("rasql: mutation batch MaxRows must be positive")
+	}
+	if options.MaxBindParameters < 0 {
+		return outcome, fmt.Errorf("rasql: mutation batch MaxBindParameters must be positive")
+	}
+	var target string
+	for index, plan := range plans {
+		if plan == nil {
+			return outcome, fmt.Errorf("rasql: mutation batch input %d is nil", index)
+		}
+		statement, err := plan.mutationPlan()
+		if err != nil {
+			return outcome, err
+		}
+		if len(statement.Returning()) > 0 {
+			return outcome, fmt.Errorf("rasql: mutation batch input %d has RETURNING projections", index)
+		}
+		identity := mutationTarget(statement)
+		if identity == "" {
+			continue
+		}
+		if target == "" {
+			target = identity
+			continue
+		}
+		if target != identity {
+			return outcome, fmt.Errorf("rasql: mutation batch inputs target mixed tables %q and %q", target, identity)
+		}
+	}
+	for i := 0; i < len(plans); {
+		if err := ctx.Err(); err != nil {
+			return outcome, err
+		}
+		if batch, ok := plans[i].(mutationBatchPlan); ok {
+			end := i + 1
+			first, err := batch.mutationInsert()
+			if err != nil {
+				return outcome, err
+			}
+			columns := first.Columns()
+			rows := mutationRows(first.Rows())
+			for end < len(plans) && !first.UsesDefaultValues() && end-i < maxRows {
+				next, ok := plans[end].(mutationBatchPlan)
+				if !ok {
+					break
+				}
+				insert, insertErr := next.mutationInsert()
+				if insertErr != nil || !sameColumns(columns, insert.Columns()) || insert.UsesDefaultValues() != first.UsesDefaultValues() {
+					break
+				}
+				if options.MaxBindParameters > 0 && (len(rows)+len(insert.Rows()))*len(columns) > options.MaxBindParameters {
+					break
+				}
+				rows = append(rows, mutationRows(insert.Rows())...)
+				end++
+			}
+			var statement query.Insert
+			if first.UsesDefaultValues() && end-i == 1 {
+				statement = first
+			} else if len(rows) > 0 {
+				statement, err = query.NewInsertRows(first.Into(), columns, rows)
+				if err != nil {
+					return outcome, err
+				}
+			}
+			compiled, compileErr := compileMutation(executor, statement)
+			if compileErr != nil {
+				return outcome, compileErr
+			}
+			result, execErr := executor.Exec(ctx, compiled)
+			if execErr == nil {
+				if _, rowsErr := result.RowsAffected(); rowsErr != nil {
+					execErr = rowsErr
+				}
+			}
+			if execErr != nil {
+				certainty := InputUnknown
+				if options.Classifier != nil && options.Classifier.Certainty(execErr) == OutcomeRejected {
+					certainty = InputRejected
+				}
+				for j := i; j < end; j++ {
+					outcome.Inputs[j] = certainty
+				}
+				outcome.FailedBatch = append([]int(nil), makeRange(i, end)...)
+				return outcome, execErr
+			}
+			for j := i; j < end; j++ {
+				outcome.Inputs[j] = InputApplied
+			}
+			i = end
+			continue
+		}
+		mutation, err := ExecMutation(ctx, executor, plans[i])
+		if err == nil {
+			outcome.Inputs[i] = InputApplied
+			if mutation.Durability == DurabilityUnknown {
+				outcome.Durability = DurabilityUnknown
+			}
+			i++
+			continue
+		}
+		certainty := InputUnknown
+		if options.Classifier != nil && options.Classifier.Certainty(err) == OutcomeRejected {
+			certainty = InputRejected
+		}
+		outcome.Inputs[i] = certainty
+		outcome.FailedBatch = []int{i}
+		for j := i + 1; j < len(plans); j++ {
+			outcome.Inputs[j] = InputUnattempted
+		}
+		return outcome, err
+	}
+	return outcome, nil
+}
+
+func mutationTarget(statement query.WriteStatement) string {
+	switch value := statement.(type) {
+	case query.Insert:
+		return value.Into().Definition().QualifiedName()
+	case query.Update:
+		return value.Table().Definition().QualifiedName()
+	case query.Delete:
+		return value.From().Definition().QualifiedName()
+	case query.Upsert:
+		return value.Insert().Into().Definition().QualifiedName()
+	default:
+		return ""
+	}
+}
+
+func mutationRows(rows [][]query.Expression) [][]any {
+	result := make([][]any, len(rows))
+	for i, row := range rows {
+		result[i] = make([]any, len(row))
+		for j, value := range row {
+			result[i][j] = value
+		}
+	}
+	return result
+}
+
+func makeRange(first, end int) []int {
+	result := make([]int, end-first)
+	for i := range result {
+		result[i] = first + i
+	}
+	return result
+}
