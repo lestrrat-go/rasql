@@ -237,6 +237,20 @@ func (p CreatePlan[T]) lower() (query.Insert, error) {
 	return query.NewInsertRows(lowered.table, lowered.columns, [][]any{lowered.values})
 }
 
+func (p CreatePlan[T]) lowerRaw() (query.Insert, error) {
+	if p.err != nil {
+		return query.Insert{}, p.err
+	}
+	lowered, err := p.lowerNormalized()
+	if err != nil {
+		return query.Insert{}, err
+	}
+	if lowered.defaultOnly {
+		return query.NewInsert(lowered.table, query.Defaults())
+	}
+	return query.NewInsertRows(lowered.table, lowered.columns, [][]any{lowered.rawValues})
+}
+
 func (p CreatePlan[T]) lowerNormalized() (normalizedCreate[T], error) {
 	if p.err != nil {
 		return normalizedCreate[T]{}, p.err
@@ -307,6 +321,41 @@ func (p PatchPlan[T]) lower() (query.Update, error) {
 	return statement.WithWhere(where)
 }
 
+func (p PatchPlan[T]) lowerRaw() (query.Update, error) {
+	if p.err != nil {
+		return query.Update{}, p.err
+	}
+	columns := p.table.Ref().Definition().Columns
+	byName := make(map[string]MutationField[T], len(p.fields))
+	for _, field := range p.fields {
+		byName[field.column.Name()] = field
+	}
+	assignments := make([]query.Assignment, 0, len(p.fields))
+	for _, column := range columns {
+		field, ok := byName[column.Name]
+		if !ok {
+			continue
+		}
+		value := field.value
+		if field.state == mutationClear {
+			value = query.Bind(nil)
+		}
+		assignments = append(assignments, query.Set(p.table.Ref().Column(column.Name), value))
+	}
+	if p.version != nil {
+		assignments = append(assignments, query.Set(p.version.column, query.Add(p.version.column, 1)))
+	}
+	statement, err := query.NewUpdate(p.table.Ref(), assignments...)
+	if err != nil {
+		return query.Update{}, err
+	}
+	where := p.where.Expression()
+	if p.version != nil {
+		where = query.And(where, query.Equal(p.version.column, p.version.expected))
+	}
+	return statement.WithWhere(where)
+}
+
 func returning[T any](table Table[T]) []query.Projection {
 	columns := table.Ref().Definition().Columns
 	result := make([]query.Projection, len(columns))
@@ -327,7 +376,7 @@ func validateReturningDB(db DB) error {
 }
 
 func ExecCreate[T any](ctx context.Context, db DB, plan CreatePlan[T]) (sql.Result, error) {
-	statement, err := plan.lower()
+	statement, err := plan.lowerRaw()
 	if err != nil {
 		return nil, err
 	}
@@ -342,7 +391,7 @@ func QueryCreate[T any](ctx context.Context, db DB, plan CreatePlan[T]) (T, erro
 	if err := validateReturningDB(db); err != nil {
 		return zero, err
 	}
-	statement, err := plan.lower()
+	statement, err := plan.lowerRaw()
 	if err != nil {
 		return zero, err
 	}
@@ -354,7 +403,7 @@ func QueryCreate[T any](ctx context.Context, db DB, plan CreatePlan[T]) (T, erro
 }
 
 func ExecPatch[T any](ctx context.Context, db DB, plan PatchPlan[T]) (sql.Result, error) {
-	statement, err := plan.lower()
+	statement, err := plan.lowerRaw()
 	if err != nil {
 		return nil, err
 	}
@@ -368,7 +417,7 @@ func QueryPatchAll[T any](ctx context.Context, db DB, plan PatchPlan[T]) ([]T, e
 	if err := validateReturningDB(db); err != nil {
 		return nil, err
 	}
-	statement, err := plan.lower()
+	statement, err := plan.lowerRaw()
 	if err != nil {
 		return nil, err
 	}
@@ -387,7 +436,7 @@ func QueryPatchOne[T any](ctx context.Context, db DB, plan PatchPlan[T]) (T, err
 	if err := validateReturningDB(db); err != nil {
 		return zero, err
 	}
-	statement, err := plan.lower()
+	statement, err := plan.lowerRaw()
 	if err != nil {
 		return zero, err
 	}
