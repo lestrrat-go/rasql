@@ -197,7 +197,7 @@ type TasksTableAssigneeRelation struct {
 func (t TasksTable) Assignee() TasksTableAssigneeRelation {
 	child := t
 	parent := Members()
-	return TasksTableAssigneeRelation{Parent: parent, Child: child, ParentKey: parent.ID(), ChildKey: child.AssigneeID()}
+	return TasksTableAssigneeRelation{Parent: parent, Child: child, ParentKey: parent.IDRef(), ChildKey: child.AssigneeIDRef()}
 }
 
 // Join returns an INNER JOIN for the relationship.

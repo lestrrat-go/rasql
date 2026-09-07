@@ -103,7 +103,7 @@ type MembersTableTasksRelation struct {
 func (t MembersTable) Tasks() MembersTableTasksRelation {
 	child := Tasks()
 	parent := t
-	return MembersTableTasksRelation{Parent: parent, Child: child, ParentKey: parent.ID(), ChildKey: child.AssigneeID()}
+	return MembersTableTasksRelation{Parent: parent, Child: child, ParentKey: parent.IDRef(), ChildKey: child.AssigneeIDRef()}
 }
 
 // Join returns an INNER JOIN for the relationship.
