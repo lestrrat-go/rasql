@@ -264,7 +264,7 @@ type TasksTableProjectRelation struct {
 func (t TasksTable) Project() TasksTableProjectRelation {
 	child := t
 	parent := Projects()
-	return TasksTableProjectRelation{Parent: parent, Child: child, ParentKey: parent.ID().Ref(), ChildKey: child.ProjectID().Ref()}
+	return TasksTableProjectRelation{Parent: parent, Child: child, ParentKey: parent.IDRef(), ChildKey: child.ProjectIDRef()}
 }
 
 // Join returns an INNER JOIN for the relationship.
