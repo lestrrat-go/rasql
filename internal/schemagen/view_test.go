@@ -26,4 +26,6 @@ func TestPackageSourceGeneratesReadOnlyViewSurface(t *testing.T) {
 	require.NotContains(t, text, "rasql.As(t.Table")
 	require.True(t, strings.Contains(text, "func (t ActiveUsersTable) ID() query.TypedColumn[ActiveUsersRow, int64]"))
 	require.True(t, strings.Contains(text, "func (t ActiveUsersTable) IDRef() rasql.ColumnRef"))
+	require.NotContains(t, text, "ActiveUsersCreate")
+	require.NotContains(t, text, "ActiveUsersPatch")
 }
