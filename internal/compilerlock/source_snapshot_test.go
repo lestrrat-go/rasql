@@ -44,13 +44,28 @@ func TestSourceFileSnapshotSymlinkChain(t *testing.T) {
 	require.ErrorIs(t, snapshot.Revalidate(), compilerlock.ErrSourceChanged)
 }
 
+func TestSourceFileSnapshotResolvesLinkTargetsIncrementally(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "a"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "b", "deep"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "a", "schema.sql"), []byte("wrong"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "b", "schema.sql"), []byte("right"), 0o600))
+	require.NoError(t, os.Symlink("../b/deep", filepath.Join(root, "a", "jump")))
+	require.NoError(t, os.Symlink("a/jump/../schema.sql", filepath.Join(root, "source.sql")))
+	want, err := os.ReadFile(filepath.Join(root, "source.sql"))
+	require.NoError(t, err)
+	snapshot, err := compilerlock.SnapshotSourceFile(root, "source.sql")
+	require.NoError(t, err)
+	require.Equal(t, want, snapshot.Bytes())
+}
+
 func TestSourceFileSnapshotBoundsAndPaths(t *testing.T) {
 	root := t.TempDir()
-	for _, size := range []int{compilerlock.MaxSourceFileBytes, compilerlock.MaxSourceFileBytes + 1} {
+	for _, size := range []int{int(compilerlock.MaxSourceFileBytes), int(compilerlock.MaxSourceFileBytes + 1)} {
 		name := filepath.Join(root, "source-"+string(rune('a'+size%2))+".sql")
 		require.NoError(t, os.WriteFile(name, bytes.Repeat([]byte{'x'}, size), 0o600))
 		_, err := compilerlock.SnapshotSourceFile(root, filepath.Base(name))
-		if size == compilerlock.MaxSourceFileBytes {
+		if int64(size) == compilerlock.MaxSourceFileBytes {
 			require.NoError(t, err)
 		} else {
 			require.Error(t, err)

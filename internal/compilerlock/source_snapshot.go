@@ -14,7 +14,12 @@ import (
 
 var ErrSourceChanged = errors.New("compilerlock: source changed")
 
-type sourceFileIdentity struct{ info os.FileInfo }
+type sourceFileIdentity struct {
+	info    os.FileInfo
+	modTime int64
+	size    int64
+	mode    os.FileMode
+}
 
 type sourceLink struct {
 	identity sourceFileIdentity
@@ -62,9 +67,18 @@ func SnapshotSourceFile(moduleRoot, moduleRelativePath string) (SourceFileSnapsh
 	if err != nil {
 		return SourceFileSnapshot{}, err
 	}
+	postLinks, postTarget, postErr := resolveSource(root, relative)
+	postStat, postStatErr := os.Stat(postTarget)
+	if postErr != nil || postStatErr != nil || postTarget != target || !sameLinks(evidence, postLinks) || !sameIdentity(fileIdentity(target, st), fileIdentity(postTarget, postStat)) {
+		return SourceFileSnapshot{}, sourceChanged(relative, "source changed during read")
+	}
+	currentRoot, rootErr := os.Stat(root)
+	if rootErr != nil || !sameIdentity(rootID, fileIdentity(root, currentRoot)) {
+		return SourceFileSnapshot{}, sourceChanged(relative, "module root changed during read")
+	}
 	h := sha256.Sum256(b)
 	return SourceFileSnapshot{root: root, rootID: rootID, relative: relative, links: evidence,
-		target: sourceFileIdentity{info: st}, size: int64(len(b)), digest: hex.EncodeToString(h[:]),
+		target: fileIdentity(target, st), size: int64(len(b)), digest: hex.EncodeToString(h[:]),
 		bytes: append([]byte(nil), b...)}, nil
 }
 
@@ -110,64 +124,65 @@ func snapshotRoot(input string) (string, sourceFileIdentity, error) {
 		}
 		return "", sourceFileIdentity{}, err
 	}
-	return root, sourceFileIdentity{info: st}, nil
+	return root, fileIdentity(root, st), nil
 }
 
 func resolveSource(root, relative string) ([]sourceLink, string, error) {
-	current := filepath.Join(root, filepath.FromSlash(relative))
 	links := make([]sourceLink, 0, 2)
-	for steps := 0; steps < 128; steps++ {
-		rel, err := filepath.Rel(root, current)
-		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
-			return nil, "", fmt.Errorf("%w: %s: source escapes module root", ErrSourceChanged, relative)
-		}
-		parts := strings.Split(filepath.ToSlash(rel), "/")
-		prefix := root
-		restarted := false
-		for i, part := range parts {
-			prefix = filepath.Join(prefix, filepath.FromSlash(part))
-			st, err := os.Lstat(prefix)
-			if err != nil {
-				return nil, "", sourceChanged(relative, err.Error())
-			}
-			if st.Mode()&os.ModeSymlink == 0 {
-				continue
-			}
-			text, err := os.Readlink(prefix)
-			if err != nil {
-				return nil, "", sourceChanged(relative, err.Error())
-			}
-			links = append(links, sourceLink{identity: sourceFileIdentity{info: st}, text: text})
-			target := text
-			if !filepath.IsAbs(target) {
-				target = filepath.Join(filepath.Dir(prefix), target)
-			}
-			target = filepath.Clean(target)
-			targetRel, relErr := filepath.Rel(root, target)
-			if relErr != nil || targetRel == ".." || strings.HasPrefix(targetRel, ".."+string(filepath.Separator)) {
-				return nil, "", fmt.Errorf("%w: %s: source escapes module root", ErrSourceChanged, relative)
-			}
-			remaining := parts[i+1:]
-			current = target
-			if len(remaining) != 0 {
-				current = filepath.Join(append([]string{current}, remaining...)...)
-			}
-			restarted = true
-			break
-		}
-		if restarted {
+	current := root
+	pending := strings.Split(filepath.ToSlash(relative), "/")
+	for steps := 0; len(pending) > 0 && steps < 256; steps++ {
+		part := pending[0]
+		pending = pending[1:]
+		if part == "" || part == "." {
 			continue
 		}
-		st, err := os.Stat(current)
+		if part == ".." {
+			if current == root {
+				return nil, "", fmt.Errorf("%w: %s: source escapes module root", ErrSourceChanged, relative)
+			}
+			current = filepath.Dir(current)
+			continue
+		}
+		candidate := filepath.Join(current, filepath.FromSlash(part))
+		if !insideRoot(root, candidate) {
+			return nil, "", fmt.Errorf("%w: %s: source escapes module root", ErrSourceChanged, relative)
+		}
+		st, err := os.Lstat(candidate)
 		if err != nil {
 			return nil, "", sourceChanged(relative, err.Error())
 		}
-		if !st.Mode().IsRegular() {
-			return nil, "", fmt.Errorf("compilerlock: source is not regular: %s", relative)
+		if st.Mode()&os.ModeSymlink == 0 {
+			current = candidate
+			continue
 		}
-		return links, current, nil
+		text, err := os.Readlink(candidate)
+		if err != nil {
+			return nil, "", sourceChanged(relative, err.Error())
+		}
+		links = append(links, sourceLink{identity: fileIdentity(candidate, st), text: text})
+		if filepath.IsAbs(text) {
+			current = string(filepath.Separator)
+		} else {
+			current = filepath.Dir(candidate)
+		}
+		targetParts := strings.Split(filepath.ToSlash(text), "/")
+		pending = append(targetParts, pending...)
 	}
-	return nil, "", sourceChanged(relative, "too many symlink levels")
+	if len(pending) != 0 {
+		return nil, "", sourceChanged(relative, "too many symlink levels")
+	}
+	if !insideRoot(root, current) {
+		return nil, "", fmt.Errorf("%w: %s: source escapes module root", ErrSourceChanged, relative)
+	}
+	st, err := os.Stat(current)
+	if err != nil {
+		return nil, "", sourceChanged(relative, err.Error())
+	}
+	if !st.Mode().IsRegular() {
+		return nil, "", fmt.Errorf("compilerlock: source is not regular: %s", relative)
+	}
+	return links, current, nil
 }
 
 func readSource(name string) ([]byte, os.FileInfo, error) {
@@ -192,18 +207,46 @@ func readSource(name string) ([]byte, os.FileInfo, error) {
 	if closeErr != nil {
 		return nil, nil, closeErr
 	}
-	if len(b) > MaxSourceFileBytes {
+	if int64(len(b)) > MaxSourceFileBytes {
 		return nil, nil, fmt.Errorf("compilerlock: source exceeds %d bytes", MaxSourceFileBytes)
 	}
 	return b, st, nil
 }
 
+func fileIdentity(name string, info os.FileInfo) sourceFileIdentity {
+	if info == nil {
+		return sourceFileIdentity{}
+	}
+	return sourceFileIdentity{info: info, modTime: info.ModTime().UnixNano(), size: info.Size(), mode: info.Mode()}
+}
+
+func sameIdentity(a, b sourceFileIdentity) bool {
+	return a.info != nil && b.info != nil && os.SameFile(a.info, b.info) && a.modTime == b.modTime && a.size == b.size && a.mode == b.mode
+}
+
+func sameLinks(a, b []sourceLink) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].text != b[i].text || !sameIdentity(a[i].identity, b[i].identity) {
+			return false
+		}
+	}
+	return true
+}
+
+func insideRoot(root, candidate string) bool {
+	rel, err := filepath.Rel(root, filepath.Clean(candidate))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+}
+
 func revalidateOne(root string, rootID sourceFileIdentity, snapshot SourceFileSnapshot) error {
-	if snapshot.rootID.info == nil || !os.SameFile(rootID.info, snapshot.rootID.info) {
+	if !sameIdentity(rootID, snapshot.rootID) {
 		return sourceChanged(snapshot.relative, "module root changed")
 	}
 	currentRoot, err := os.Stat(root)
-	if err != nil || !os.SameFile(rootID.info, currentRoot) {
+	if err != nil || !sameIdentity(rootID, fileIdentity(root, currentRoot)) {
 		return sourceChanged(snapshot.relative, "module root changed")
 	}
 	links, target, err := resolveSource(root, snapshot.relative)
@@ -214,7 +257,7 @@ func revalidateOne(root string, rootID sourceFileIdentity, snapshot SourceFileSn
 		return sourceChanged(snapshot.relative, "symlink chain changed")
 	}
 	for i := range links {
-		if links[i].text != snapshot.links[i].text || !os.SameFile(links[i].identity.info, snapshot.links[i].identity.info) {
+		if links[i].text != snapshot.links[i].text || !sameIdentity(links[i].identity, snapshot.links[i].identity) {
 			return sourceChanged(snapshot.relative, "symlink chain changed")
 		}
 	}
@@ -222,8 +265,13 @@ func revalidateOne(root string, rootID sourceFileIdentity, snapshot SourceFileSn
 	if err != nil {
 		return wrapChanged(snapshot.relative, err)
 	}
-	if !os.SameFile(st, snapshot.target.info) || int64(len(b)) != snapshot.size {
+	if !sameIdentity(fileIdentity(target, st), snapshot.target) || int64(len(b)) != snapshot.size {
 		return sourceChanged(snapshot.relative, "target changed")
+	}
+	postLinks, postTarget, postErr := resolveSource(root, snapshot.relative)
+	postStat, postStatErr := os.Stat(postTarget)
+	if postErr != nil || postStatErr != nil || postTarget != target || !sameLinks(links, postLinks) || !sameIdentity(fileIdentity(target, st), fileIdentity(postTarget, postStat)) {
+		return sourceChanged(snapshot.relative, "source changed during read")
 	}
 	h := sha256.Sum256(b)
 	if hex.EncodeToString(h[:]) != snapshot.digest {
