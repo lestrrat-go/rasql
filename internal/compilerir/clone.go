@@ -1,5 +1,7 @@
 package compilerir
 
+import "maps"
+
 func (c PhysicalCatalog) Clone() PhysicalCatalog {
 	out := c
 	out.Objects = append([]PhysicalObject(nil), c.Objects...)
@@ -12,6 +14,11 @@ func (c PhysicalCatalog) Clone() PhysicalCatalog {
 		o.Constraints = append([]PhysicalConstraint(nil), o.Constraints...)
 		for j := range o.Constraints {
 			o.Constraints[j].Columns = append([]string(nil), o.Constraints[j].Columns...)
+			o.Constraints[j].IncludeColumns = append([]string(nil), o.Constraints[j].IncludeColumns...)
+			o.Constraints[j].Keys = append([]IndexPart(nil), o.Constraints[j].Keys...)
+			o.Constraints[j].DeleteSetColumns = append([]string(nil), o.Constraints[j].DeleteSetColumns...)
+			o.Constraints[j].StorageParameters = maps.Clone(o.Constraints[j].StorageParameters)
+			o.Constraints[j].Collations = maps.Clone(o.Constraints[j].Collations)
 			if o.Constraints[j].Reference != nil {
 				r := *o.Constraints[j].Reference
 				r.Columns = append([]string(nil), r.Columns...)
@@ -21,17 +28,20 @@ func (c PhysicalCatalog) Clone() PhysicalCatalog {
 		o.Indexes = append([]PhysicalIndex(nil), o.Indexes...)
 		for j := range o.Indexes {
 			o.Indexes[j].Parts = append([]IndexPart(nil), o.Indexes[j].Parts...)
+			o.Indexes[j].IncludeColumns = append([]string(nil), o.Indexes[j].IncludeColumns...)
+			o.Indexes[j].StorageParameters = maps.Clone(o.Indexes[j].StorageParameters)
 		}
 	}
 	return out
 }
-func cloneNative(n NativeType) NativeType {
-	n.Arguments = append([]string(nil), n.Arguments...)
-	if n.Element != nil {
-		e := cloneNative(*n.Element)
-		n.Element = &e
+func cloneNative(n *NativeType) *NativeType {
+	if n == nil {
+		return nil
 	}
-	return n
+	out := *n
+	out.Arguments = append([]string(nil), n.Arguments...)
+	out.Element = cloneNative(n.Element)
+	return &out
 }
 func (in IdentityInput) Clone() IdentityInput {
 	out := in
@@ -60,5 +70,57 @@ func (m SemanticModel) Clone() SemanticModel {
 			out.Objects[i].Relations[j].To = append([]string(nil), m.Objects[i].Relations[j].To...)
 		}
 	}
+	for i := range out.Queries {
+		out.Queries[i].Parameters = append([]SemanticValue(nil), m.Queries[i].Parameters...)
+		out.Queries[i].Results = append([]SemanticValue(nil), m.Queries[i].Results...)
+	}
+	return out
+}
+
+func (m GoModel) Clone() GoModel {
+	out := m
+	out.Files = append([]GoFile(nil), m.Files...)
+	for i := range out.Files {
+		out.Files[i].Declarations = append([]string(nil), m.Files[i].Declarations...)
+	}
+	out.Objects = append([]GoObject(nil), m.Objects...)
+	for i := range out.Objects {
+		out.Objects[i].Row.Fields = append([]GoField(nil), m.Objects[i].Row.Fields...)
+		out.Objects[i].Columns = append([]GoColumn(nil), m.Objects[i].Columns...)
+		out.Objects[i].Relations = append([]GoRelation(nil), m.Objects[i].Relations...)
+		if m.Objects[i].Create != nil {
+			shape := *m.Objects[i].Create
+			shape.Fields = append([]GoField(nil), shape.Fields...)
+			out.Objects[i].Create = &shape
+		}
+		if m.Objects[i].Patch != nil {
+			shape := *m.Objects[i].Patch
+			shape.Fields = append([]GoField(nil), shape.Fields...)
+			out.Objects[i].Patch = &shape
+		}
+	}
+	out.Queries = append([]GoQuery(nil), m.Queries...)
+	for i := range out.Queries {
+		out.Queries[i].Parameters = append([]GoField(nil), m.Queries[i].Parameters...)
+		if m.Queries[i].Result != nil {
+			shape := *m.Queries[i].Result
+			shape.Fields = append([]GoField(nil), shape.Fields...)
+			out.Queries[i].Result = &shape
+		}
+	}
+	return out
+}
+
+func (c GoConfig) Clone() GoConfig {
+	out := c
+	out.Objects = append([]ObjectGoName(nil), c.Objects...)
+	out.Queries = append([]QueryGoName(nil), c.Queries...)
+	return out
+}
+func (q QueryAnalysis) Clone() QueryAnalysis {
+	out := q
+	out.Parameters = append([]SemanticValue(nil), q.Parameters...)
+	out.Results = append([]SemanticValue(nil), q.Results...)
+	out.Diagnostics = append([]Diagnostic(nil), q.Diagnostics...)
 	return out
 }

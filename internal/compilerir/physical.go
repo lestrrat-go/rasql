@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"sort"
 
 	"github.com/lestrrat-go/rasql/schema"
@@ -26,51 +27,121 @@ const (
 )
 
 type PhysicalCatalog struct {
-	Engine  EngineIdentity
-	Objects []PhysicalObject
+	Engine  EngineIdentity   `json:"engine"`
+	Objects []PhysicalObject `json:"objects"`
 }
-type EngineIdentity struct{ Dialect, Version, Profile string }
+type EngineIdentity struct {
+	Dialect string `json:"dialect"`
+	Version string `json:"version"`
+	Profile string `json:"profile"`
+}
 type PhysicalObject struct {
-	ID                 ObjectID
-	Kind, Schema, Name string
-	Columns            []PhysicalColumn
-	Constraints        []PhysicalConstraint
-	Indexes            []PhysicalIndex
+	ID                                            ObjectID `json:"id"`
+	Kind                                          string   `json:"kind"`
+	Schema                                        string   `json:"schema"`
+	Name                                          string   `json:"name"`
+	Columns                                       []PhysicalColumn
+	Constraints                                   []PhysicalConstraint
+	Indexes                                       []PhysicalIndex
+	ExclusionConstraints                          []PhysicalExclusionConstraint
+	Strict, WithoutRowID, PrimaryKeyAutoincrement bool
+	PrimaryKeyOnConflict, VirtualTableModule      string
+	VirtualTableModuleArguments                   []string
 }
 type PhysicalColumn struct {
-	Name                                                            string
-	Ordinal                                                         int
-	LogicalKind                                                     string
-	Native                                                          NativeType
-	Nullable                                                        bool
-	DefaultSQL, GeneratedSQL, GeneratedStorage, Identity, Collation string
-	Hidden                                                          bool
+	Name             string      `json:"name"`
+	Ordinal          int         `json:"ordinal"`
+	LogicalKind      string      `json:"logical_kind"`
+	Native           *NativeType `json:"native"`
+	Nullable         bool        `json:"nullable"`
+	DefaultSQL       string      `json:"default_sql"`
+	GeneratedSQL     string      `json:"generated_sql"`
+	GeneratedStorage string      `json:"generated_storage"`
+	Identity         string      `json:"identity"`
+	Collation        string      `json:"collation"`
+	Hidden           bool        `json:"hidden"`
+	Integer          *IntegerTypeFacts
+	Text             *TextTypeFacts
+	Decimal          *DecimalTypeFacts
+}
+type OptionalInt struct {
+	Value int
+	Set   bool
+}
+type IntegerTypeFacts struct {
+	Unsigned     bool
+	DisplayWidth OptionalInt
+	ZeroFill     bool
+}
+type TextTypeFacts struct {
+	Width OptionalInt
+	Fixed bool
+}
+type DecimalTypeFacts struct {
+	Precision          int
+	Scale              OptionalInt
+	Unsigned, ZeroFill bool
 }
 type NativeType struct {
-	Dialect, Schema, Name, Kind string
-	Arguments                   []string
-	Element                     *NativeType
+	Dialect   string      `json:"dialect"`
+	Schema    string      `json:"schema"`
+	Name      string      `json:"name"`
+	Kind      string      `json:"kind"`
+	Arguments []string    `json:"arguments"`
+	Element   *NativeType `json:"element"`
 }
 type PhysicalConstraint struct {
-	Name, Kind                    string
-	Columns                       []string
-	Reference                     *ForeignReference
-	ExpressionSQL                 string
-	Deferrable, InitiallyDeferred bool
-	OnUpdate, OnDelete            string
+	Name, Kind                       string
+	Columns                          []string
+	Reference                        *ForeignReference
+	ExpressionSQL                    string
+	Deferrable, InitiallyDeferred    bool
+	OnUpdate, OnDelete               string
+	Deferrability, Match             string
+	NullsNotDistinct                 bool
+	IncludeColumns                   []string
+	OnConflict                       string
+	Keys                             []IndexPart
+	Temporal                         bool
+	StorageParameters                map[string]string
+	Tablespace                       string
+	ReplicaIdentity                  bool
+	Collations                       map[string]string
+	NoInherit, NotValid, NotEnforced bool
+	DeleteSetColumns                 []string
 }
 type ForeignReference struct {
-	Schema, Object string
-	Columns        []string
+	Schema  string   `json:"schema"`
+	Object  string   `json:"object"`
+	Columns []string `json:"columns"`
 }
 type PhysicalIndex struct {
-	Name         string
-	Unique       bool
-	Method       string
-	Parts        []IndexPart
-	PredicateSQL string
+	Name                                  string      `json:"name"`
+	Unique                                bool        `json:"unique"`
+	Method                                string      `json:"method"`
+	Parts                                 []IndexPart `json:"parts"`
+	PredicateSQL                          string      `json:"predicate_sql"`
+	IncludeColumns                        []string
+	Invisible, NotValid, NullsNotDistinct bool
+	StorageParameters                     map[string]string
+	Tablespace                            string
+	ReplicaIdentity                       bool
 }
-type IndexPart struct{ Column, ExpressionSQL, Direction, Nulls, Collation string }
+type IndexPart struct {
+	Column        string `json:"column"`
+	ExpressionSQL string `json:"expression_sql"`
+	Direction     string `json:"direction"`
+	Nulls         string `json:"nulls"`
+	Collation     string `json:"collation"`
+	OperatorClass string `json:"operator_class"`
+	PrefixLength  int    `json:"prefix_length"`
+}
+type PhysicalExclusionConstraint struct {
+	Name, Method                string
+	Elements                    []ExclusionElement
+	PredicateSQL, Deferrability string
+}
+type ExclusionElement struct{ ExpressionSQL, Operator string }
 type Diagnostic struct {
 	Level               DiagnosticLevel
 	Code, Path, Message string
@@ -97,26 +168,43 @@ func PhysicalFromTableDefs(engine EngineIdentity, tables []schema.TableDef) (Phy
 	c := PhysicalCatalog{Engine: engine}
 	for _, source := range tables {
 		t := source.Clone()
-		o := PhysicalObject{Kind: string(t.EffectiveKind()), Schema: t.Schema, Name: t.Name}
+		o := PhysicalObject{Kind: string(t.EffectiveKind()), Schema: t.Schema, Name: t.Name, Strict: t.Strict, WithoutRowID: t.WithoutRowID, PrimaryKeyAutoincrement: t.PrimaryKeyAutoincrement, PrimaryKeyOnConflict: string(t.PrimaryKeyOnConflict), VirtualTableModule: t.VirtualTableModule, VirtualTableModuleArguments: append([]string(nil), t.VirtualTableModuleArguments...)}
 		for i, col := range t.Columns {
 			pc := PhysicalColumn{Name: col.Name, Ordinal: i, LogicalKind: string(col.Type.Kind()), Nullable: col.Nullable, DefaultSQL: string(col.Default), GeneratedSQL: string(col.GeneratedExpression), GeneratedStorage: string(col.GeneratedStorage), Identity: string(col.Identity), Collation: col.Collation, Hidden: col.Hidden}
 			pc.Native = nativeType(col.NativeType)
+			switch typ := col.Type.(type) {
+			case schema.IntegerType:
+				pc.Integer = &IntegerTypeFacts{Unsigned: typ.Unsigned, ZeroFill: typ.ZeroFill}
+				if value, set := typ.DisplayWidth.Value(); set {
+					pc.Integer.DisplayWidth = OptionalInt{Value: value, Set: true}
+				}
+			case schema.TextType:
+				pc.Text = &TextTypeFacts{Fixed: typ.Fixed}
+				if value, set := typ.Width.Value(); set {
+					pc.Text.Width = OptionalInt{Value: value, Set: true}
+				}
+			case schema.DecimalType:
+				pc.Decimal = &DecimalTypeFacts{Precision: typ.Precision, Unsigned: typ.Unsigned, ZeroFill: typ.ZeroFill}
+				if value, set := typ.Scale.Value(); set {
+					pc.Decimal.Scale = OptionalInt{Value: value, Set: true}
+				}
+			}
 			o.Columns = append(o.Columns, pc)
 		}
-		for _, key := range t.PrimaryKey {
-			o.Constraints = append(o.Constraints, PhysicalConstraint{Kind: "primary_key", Columns: []string{key}})
+		if len(t.PrimaryKey) > 0 {
+			o.Constraints = append(o.Constraints, PhysicalConstraint{Kind: "primary_key", Columns: append([]string(nil), t.PrimaryKey...)})
 		}
 		for _, u := range t.UniqueConstraints {
-			o.Constraints = append(o.Constraints, PhysicalConstraint{Name: u.Name, Kind: "unique", Columns: append([]string(nil), u.Columns...)})
+			o.Constraints = append(o.Constraints, PhysicalConstraint{Name: u.Name, Kind: "unique", Columns: append([]string(nil), u.Columns...), Deferrability: string(u.Deferrable), NullsNotDistinct: u.NullsNotDistinct, IncludeColumns: append([]string(nil), u.IncludeColumns...), OnConflict: string(u.OnConflict), StorageParameters: maps.Clone(u.StorageParameters), Tablespace: u.Tablespace, ReplicaIdentity: u.ReplicaIdentity, Collations: maps.Clone(u.Collations)})
 		}
 		for _, f := range t.ForeignKeys {
-			o.Constraints = append(o.Constraints, PhysicalConstraint{Name: f.Name, Kind: "foreign_key", Columns: append([]string(nil), f.Columns...), Reference: &ForeignReference{Schema: f.ReferencedSchema, Object: f.ReferencedTable, Columns: append([]string(nil), f.ReferencedColumns...)}, OnDelete: string(f.OnDelete), OnUpdate: string(f.OnUpdate), Deferrable: f.Deferrable != "", InitiallyDeferred: f.Deferrable == schema.DeferrableInitiallyDeferred})
+			o.Constraints = append(o.Constraints, PhysicalConstraint{Name: f.Name, Kind: "foreign_key", Columns: append([]string(nil), f.Columns...), Reference: &ForeignReference{Schema: f.ReferencedSchema, Object: f.ReferencedTable, Columns: append([]string(nil), f.ReferencedColumns...)}, OnDelete: string(f.OnDelete), OnUpdate: string(f.OnUpdate), Deferrability: string(f.Deferrable), Deferrable: f.Deferrable != "", InitiallyDeferred: f.Deferrable == schema.DeferrableInitiallyDeferred, Match: string(f.Match), NotValid: f.NotValid, NotEnforced: f.NotEnforced, Temporal: f.Temporal, DeleteSetColumns: append([]string(nil), f.DeleteSetColumns...)})
 		}
 		for _, check := range t.Checks {
-			o.Constraints = append(o.Constraints, PhysicalConstraint{Name: check.Name, Kind: "check", ExpressionSQL: string(check.Expression)})
+			o.Constraints = append(o.Constraints, PhysicalConstraint{Name: check.Name, Kind: "check", ExpressionSQL: string(check.Expression), NoInherit: check.NoInherit, NotValid: check.NotValid, NotEnforced: check.NotEnforced})
 		}
 		for _, index := range t.Indexes {
-			pi := PhysicalIndex{Name: index.Name, Unique: index.Unique, Method: string(index.Method), PredicateSQL: string(index.Predicate)}
+			pi := PhysicalIndex{Name: index.Name, Unique: index.Unique, Method: string(index.Method), PredicateSQL: string(index.Predicate), IncludeColumns: append([]string(nil), index.IncludeColumns...), Invisible: index.Invisible, NotValid: index.NotValid, StorageParameters: maps.Clone(index.StorageParameters), Tablespace: index.Tablespace, ReplicaIdentity: index.ReplicaIdentity, NullsNotDistinct: index.NullsNotDistinct}
 			for _, p := range index.Columns {
 				pi.Parts = append(pi.Parts, IndexPart{Column: p})
 			}
@@ -139,46 +227,66 @@ func PhysicalFromTableDefs(engine EngineIdentity, tables []schema.TableDef) (Phy
 	return c, nil
 }
 
-func nativeType(n *schema.NativeTypeDef) NativeType {
+func nativeType(n *schema.NativeTypeDef) *NativeType {
 	if n == nil {
-		return NativeType{}
+		return nil
 	}
 	out := NativeType{Dialect: n.Dialect, Schema: n.Schema, Name: n.Name, Kind: string(n.Kind), Arguments: append([]string(nil), n.Arguments...)}
 	if n.Element != nil {
-		e := nativeType(n.Element)
-		out.Element = &e
+		out.Element = nativeType(n.Element)
 	}
-	return out
+	return &out
 }
 
 func AssignObjectIDs(c PhysicalCatalog, in IdentityInput) (PhysicalCatalog, []Diagnostic) {
+	c = c.Clone()
+	var diagnostics []Diagnostic
+	if in.SourceIdentity == "" {
+		diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "identity_source_empty", Path: "source_identity", Message: "source identity must not be empty"})
+	}
 	priorByID := make(map[ObjectID]PriorObject, len(in.Prior))
-	for _, p := range in.Prior {
+	priorNames := make(map[QualifiedName]struct{}, len(in.Prior))
+	for i, p := range in.Prior {
+		if p.ID == "" {
+			diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "prior_id_empty", Path: fmt.Sprintf("prior[%d].id", i), Message: "prior object ID must not be empty"})
+		}
+		if _, ok := priorByID[p.ID]; ok {
+			diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "prior_id_duplicate", Path: fmt.Sprintf("prior[%d].id", i), Message: "prior object ID is duplicated"})
+		}
 		priorByID[p.ID] = p
+		if _, ok := priorNames[p.Name]; ok {
+			diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "prior_name_duplicate", Path: fmt.Sprintf("prior[%d].name", i), Message: "prior object name is duplicated"})
+		}
+		priorNames[p.Name] = struct{}{}
+	}
+	renameDest := make(map[QualifiedName]struct{}, len(in.Renames))
+	renamed := make(map[ObjectID]QualifiedName, len(in.Renames))
+	for i, r := range in.Renames {
+		if _, ok := priorByID[r.ID]; !ok {
+			diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "rename_id_missing", Path: fmt.Sprintf("renames[%d].id", i), Message: "rename ID is absent from prior objects"})
+		}
+		if _, ok := renameDest[r.To]; ok {
+			diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "rename_destination_duplicate", Path: fmt.Sprintf("renames[%d].to", i), Message: "rename destination is duplicated"})
+		}
+		renameDest[r.To] = struct{}{}
+		renamed[r.ID] = r.To
 	}
 	for i := range c.Objects {
 		o := &c.Objects[i]
 		o.ID = hashID(in.SourceIdentity, o.Kind, o.Schema, o.Name)
 	}
 	for _, p := range in.Prior {
+		name := p.Name
+		if renamedName, ok := renamed[p.ID]; ok {
+			name = renamedName
+		}
 		for i := range c.Objects {
-			if c.Objects[i].Kind == p.Kind && c.Objects[i].Schema == p.Name.Schema && c.Objects[i].Name == p.Name.Name {
+			if c.Objects[i].Kind == p.Kind && c.Objects[i].Schema == name.Schema && c.Objects[i].Name == name.Name {
 				c.Objects[i].ID = p.ID
 			}
 		}
 	}
-	for _, r := range in.Renames {
-		prior, ok := priorByID[r.ID]
-		if !ok {
-			continue
-		}
-		for i := range c.Objects {
-			if c.Objects[i].Kind == prior.Kind && c.Objects[i].Schema == r.To.Schema && c.Objects[i].Name == r.To.Name {
-				c.Objects[i].ID = r.ID
-			}
-		}
-	}
-	return c, nil
+	return c, sortDiagnostics(diagnostics)
 }
 
 func hashID(source, kind, schemaName, name string) ObjectID {
@@ -198,18 +306,32 @@ func TableDefsFromPhysical(c PhysicalCatalog) ([]schema.TableDef, []Diagnostic) 
 	var out []schema.TableDef
 	var diagnostics []Diagnostic
 	for _, object := range c.Objects {
-		t := schema.TableDef{Schema: object.Schema, Name: object.Name, Kind: schema.ObjectKind(object.Kind)}
+		t := schema.TableDef{Schema: object.Schema, Name: object.Name, Kind: schema.ObjectKind(object.Kind), Strict: object.Strict, WithoutRowID: object.WithoutRowID, PrimaryKeyAutoincrement: object.PrimaryKeyAutoincrement, PrimaryKeyOnConflict: schema.ConflictResolution(object.PrimaryKeyOnConflict), VirtualTableModule: object.VirtualTableModule, VirtualTableModuleArguments: append([]string(nil), object.VirtualTableModuleArguments...)}
 		for _, col := range object.Columns {
 			typeValue := schema.ColumnType(schema.OpaqueType{})
 			switch col.LogicalKind {
 			case string(schema.KindBoolean):
 				typeValue = schema.BooleanType{}
 			case string(schema.KindInteger):
-				typeValue = schema.IntegerType{}
+				typ := schema.IntegerType{}
+				if col.Integer != nil {
+					typ.Unsigned, typ.ZeroFill = col.Integer.Unsigned, col.Integer.ZeroFill
+					if col.Integer.DisplayWidth.Set {
+						typ.DisplayWidth = schema.NewIntegerDisplayWidth(col.Integer.DisplayWidth.Value)
+					}
+				}
+				typeValue = typ
 			case string(schema.KindFloat):
 				typeValue = schema.FloatType{}
 			case string(schema.KindText):
-				typeValue = schema.TextType{}
+				typ := schema.TextType{}
+				if col.Text != nil {
+					typ.Fixed = col.Text.Fixed
+					if col.Text.Width.Set {
+						typ.Width = schema.NewTextWidth(col.Text.Width.Value)
+					}
+				}
+				typeValue = typ
 			case string(schema.KindBytes):
 				typeValue = schema.BytesType{}
 			case string(schema.KindTime):
@@ -219,15 +341,45 @@ func TableDefsFromPhysical(c PhysicalCatalog) ([]schema.TableDef, []Diagnostic) 
 			case string(schema.KindUUID):
 				typeValue = schema.UUIDType{}
 			case string(schema.KindDecimal):
-				typeValue = schema.DecimalType{}
+				if col.Decimal == nil || !col.Decimal.Scale.Set {
+					diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "decimal_facts_missing", Path: object.Name + "." + col.Name, Message: "decimal precision and stated scale are required"})
+					typeValue = schema.DecimalType{}
+				} else {
+					typeValue = schema.DecimalType{Precision: col.Decimal.Precision, Scale: schema.NewDecimalScale(col.Decimal.Scale.Value), Unsigned: col.Decimal.Unsigned, ZeroFill: col.Decimal.ZeroFill}
+				}
 			default:
 				diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticWarning, Code: "opaque_type", Path: object.Name + "." + col.Name, Message: "native type has no legacy schema equivalent"})
 			}
 			var native *schema.NativeTypeDef
-			if col.Native.Name != "" {
+			if col.Native != nil && col.Native.Name != "" {
 				native = &schema.NativeTypeDef{Dialect: col.Native.Dialect, Schema: col.Native.Schema, Name: col.Native.Name, Kind: schema.NativeTypeKind(col.Native.Kind), Arguments: append([]string(nil), col.Native.Arguments...)}
 			}
-			t.Columns = append(t.Columns, schema.ColumnDef{Name: col.Name, Type: typeValue, Nullable: col.Nullable, Collation: col.Collation, GeneratedExpression: sqltext.Text(col.GeneratedSQL), GeneratedStorage: schema.GeneratedStorage(col.GeneratedStorage), Identity: schema.IdentityGeneration(col.Identity), Hidden: col.Hidden, NativeType: native})
+			t.Columns = append(t.Columns, schema.ColumnDef{Name: col.Name, Type: typeValue, Nullable: col.Nullable, Default: sqltext.Text(col.DefaultSQL), Collation: col.Collation, GeneratedExpression: sqltext.Text(col.GeneratedSQL), GeneratedStorage: schema.GeneratedStorage(col.GeneratedStorage), Identity: schema.IdentityGeneration(col.Identity), Hidden: col.Hidden, NativeType: native})
+		}
+		for _, constraint := range object.Constraints {
+			switch constraint.Kind {
+			case "primary_key":
+				t.PrimaryKey = append([]string(nil), constraint.Columns...)
+			case "unique":
+				t.UniqueConstraints = append(t.UniqueConstraints, schema.UniqueDef{Name: constraint.Name, Columns: append([]string(nil), constraint.Columns...), Deferrable: schema.Deferrability(constraint.Deferrability), NullsNotDistinct: constraint.NullsNotDistinct, IncludeColumns: append([]string(nil), constraint.IncludeColumns...), OnConflict: schema.ConflictResolution(constraint.OnConflict), StorageParameters: maps.Clone(constraint.StorageParameters), Tablespace: constraint.Tablespace, ReplicaIdentity: constraint.ReplicaIdentity, Collations: maps.Clone(constraint.Collations)})
+			case "check":
+				t.Checks = append(t.Checks, schema.CheckDef{Name: constraint.Name, Expression: sqltext.Text(constraint.ExpressionSQL), NoInherit: constraint.NoInherit, NotValid: constraint.NotValid, NotEnforced: constraint.NotEnforced})
+			case "foreign_key":
+				if constraint.Reference != nil {
+					t.ForeignKeys = append(t.ForeignKeys, schema.ForeignKeyDef{Name: constraint.Name, Columns: append([]string(nil), constraint.Columns...), ReferencedSchema: constraint.Reference.Schema, ReferencedTable: constraint.Reference.Object, ReferencedColumns: append([]string(nil), constraint.Reference.Columns...), Deferrable: schema.Deferrability(constraint.Deferrability), Match: schema.MatchType(constraint.Match), OnDelete: schema.ReferenceAction(constraint.OnDelete), OnUpdate: schema.ReferenceAction(constraint.OnUpdate), NotValid: constraint.NotValid, NotEnforced: constraint.NotEnforced, Temporal: constraint.Temporal, DeleteSetColumns: append([]string(nil), constraint.DeleteSetColumns...)})
+				}
+			}
+		}
+		for _, index := range object.Indexes {
+			idx := schema.IndexDef{Name: index.Name, Unique: index.Unique, Method: schema.IndexMethod(index.Method), Predicate: sqltext.Text(index.PredicateSQL), IncludeColumns: append([]string(nil), index.IncludeColumns...), Invisible: index.Invisible, NotValid: index.NotValid, StorageParameters: maps.Clone(index.StorageParameters), Tablespace: index.Tablespace, ReplicaIdentity: index.ReplicaIdentity, NullsNotDistinct: index.NullsNotDistinct}
+			for _, part := range index.Parts {
+				if part.ExpressionSQL != "" {
+					idx.Expressions = append(idx.Expressions, sqltext.Text(part.ExpressionSQL))
+				} else {
+					idx.Columns = append(idx.Columns, part.Column)
+				}
+			}
+			t.Indexes = append(t.Indexes, idx)
 		}
 		out = append(out, t)
 	}

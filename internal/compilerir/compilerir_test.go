@@ -1,6 +1,9 @@
 package compilerir_test
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/internal/compilerir"
@@ -41,5 +44,31 @@ func TestBuildSemanticRejectsUnmappedOpaqueType(t *testing.T) {
 	_, diagnostics := compilerir.BuildSemantic(catalog, compilerir.MappingConfig{}, nil)
 	if len(diagnostics) == 0 || diagnostics[0].Code != "opaque_type" {
 		t.Fatalf("missing opaque diagnostic: %#v", diagnostics)
+	}
+}
+
+func TestCatalogFixturesLoadPhysicalFacts(t *testing.T) {
+	for _, dialect := range []string{"postgresql", "mysql", "sqlite"} {
+		dialect := dialect
+		t.Run(dialect, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join("testdata", dialect, "catalog.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fixture struct {
+				Engine  compilerir.EngineIdentity   `json:"engine"`
+				Objects []compilerir.PhysicalObject `json:"objects"`
+			}
+			if err := json.Unmarshal(data, &fixture); err != nil {
+				t.Fatal(err)
+			}
+			if fixture.Engine.Dialect != dialect || len(fixture.Objects) == 0 {
+				t.Fatalf("fixture lacks engine or objects: %#v", fixture)
+			}
+			catalog := compilerir.PhysicalCatalog{Engine: fixture.Engine, Objects: fixture.Objects}
+			if err := catalog.Validate(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
