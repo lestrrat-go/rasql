@@ -168,3 +168,21 @@ func TestQ1SnapshotterRunsOnceAndBuildsReusableQuery(t *testing.T) {
 	require.NoError(t, query.Validate())
 	require.Equal(t, 1, calls)
 }
+
+func TestQ1SnapshotDetachesMutableContainers(t *testing.T) {
+	bytes := []byte("before")
+	values := map[string][]byte{"key": []byte("value")}
+	expression, err := rasql.ValueWithCodec(struct {
+		Bytes  []byte
+		Values map[string][]byte
+	}{bytes, values}, "snapshot.codec")
+	require.NoError(t, err)
+	bytes[0] = 'X'
+	values["key"][0] = 'X'
+	retained := rasql.Q1BindArgument(expression).(struct {
+		Bytes  []byte
+		Values map[string][]byte
+	})
+	require.Equal(t, []byte("before"), retained.Bytes)
+	require.Equal(t, []byte("value"), retained.Values["key"])
+}

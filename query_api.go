@@ -239,11 +239,17 @@ func (p QueryPlan) Validate() error {
 		return planError("invalid_source", "plan.sources", "must not be empty")
 	}
 	seen := make(map[string]struct{}, len(p.sources))
+	qualifiers := make(map[string]struct{}, len(p.sources))
 	for i, source := range p.sources {
 		if source.ref.QualifiedName() == "" {
 			return planError("invalid_source", fmt.Sprintf("plan.sources[%d]", i), "source is zero")
 		}
 		name := q1SourceIdentity(source.ref)
+		qualifier := source.ref.QualifiedName()
+		if _, ok := qualifiers[qualifier]; ok {
+			return planError("invalid_source", fmt.Sprintf("plan.sources[%d]", i), "duplicate SQL qualifier")
+		}
+		qualifiers[qualifier] = struct{}{}
 		if _, ok := seen[name]; ok {
 			return planError("invalid_source", fmt.Sprintf("plan.sources[%d]", i), "duplicate source")
 		}

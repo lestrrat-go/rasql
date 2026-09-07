@@ -33,7 +33,7 @@ func TestQ1SourceIdentityAndDecoderValidation(t *testing.T) {
 	a := validationTable(t, "a")
 	b := validationTable(t, "b")
 	ar, _ := rasql.SourceOf(a, "same")
-	br, _ := rasql.SourceOf(b, "same")
+	br, _ := rasql.SourceOf(b, "other")
 	p := validationProjection(t)
 	q := rasql.Select(ar.Source(), p).Where(rasql.EqualValue(rasql.Value(int64(1)), int64(1)))
 	require.NoError(t, q.Validate())
@@ -51,6 +51,11 @@ func TestQ1SourceIdentityAndDecoderValidation(t *testing.T) {
 	require.Equal(t, "invalid_source", pe.Code)
 	joined := rasql.Select(ar.Source(), p).Join(br.Source(), rasql.EqualExpr(ac.Expr(), bc.Expr()))
 	require.NoError(t, joined.Validate())
+	duplicateSource, _ := rasql.SourceOf(b, "same")
+	duplicate := rasql.Select(ar.Source(), p).Join(duplicateSource.Source(), rasql.EqualValue(rasql.Value(int64(1)), int64(1)))
+	var duplicateError *rasql.PlanError
+	require.ErrorAs(t, duplicate.Validate(), &duplicateError)
+	require.Equal(t, "invalid_source", duplicateError.Code)
 	decoder := &validationDecoder{schema: p.Schema()}
 	projection2, err := rasql.NewProjection([]rasql.ProjectionItem{rasql.Item("id", rasql.Value(int64(1)), schema.IntegerType{}, "")}, decoder)
 	require.NoError(t, err)
