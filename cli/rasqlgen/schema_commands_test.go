@@ -2,6 +2,7 @@ package rasqlgen_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -71,6 +72,21 @@ func TestOfflineCheckReportsSourceDriftAndGenerateRefreshesGenerationOnly(t *tes
 	require.NoError(t, rasqlgen.RunTopLevel([]string{"generate", "-config", configPath}, &output, &diagnostics), diagnostics.String())
 	lockAfter := readFile(t, filepath.Join(root, "rasql.lock.json"))
 	require.NotEqual(t, lockBefore, lockAfter)
+}
+
+func TestSchemaUpdatePropagatesCancellationBeforePublication(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "migrations"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "migrations", "001_init.sql"), []byte("CREATE TABLE users (id INTEGER PRIMARY KEY);\n"), 0o600))
+	configPath := filepath.Join(root, "rasql.json")
+	writeSchemaConfig(t, configPath, "store", "fixture-cancel")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var output, diagnostics bytes.Buffer
+	err := rasqlgen.RunTopLevelContext(ctx, []string{"schema", "update", "-config", configPath}, &output, &diagnostics)
+	require.ErrorContains(t, err, context.Canceled.Error())
+	require.NoFileExists(t, filepath.Join(root, ".rasql-update.pending.json"))
+	require.NoFileExists(t, filepath.Join(root, "rasql.lock.json"))
 }
 
 func writeSchemaConfig(t *testing.T, path, packageName, identity string) {

@@ -41,6 +41,7 @@ var (
 	readForeignMarker   = readGenfileMarkerAt
 	writeFinalFile      = writePublicationFile
 	verifyFinalState    = verifyPublicationState
+	resolvePublication  = resolvePublicationDestination
 )
 
 // resolveCommitDestination is the same kind of unexported seam, for the one
@@ -535,23 +536,10 @@ func (p Plan) commit(ctx context.Context, publication *Publication) error {
 		}
 	}
 
-	// Step 3: delete this run's leftovers, only when Prune is set --
-	// otherwise step 1 already refused the run above.
-	if p.prune {
-		for _, orphan := range orphans {
-			if err := contextError(ctx); err != nil {
-				return err
-			}
-			if err := orphan.confirm(dir); err != nil {
-				return err
-			}
-			if err := removeGeneratedFile(dir, orphan.name); err != nil {
-				return fmt.Errorf("generate: delete %s: %w", orphan.orphan, err)
-			}
-		}
-	}
-	if published != nil {
-		if err := published.deleteRecoveries(ctx); err != nil {
+	// Step 3: delete this run's leftovers when Prune is set, plus any
+	// publication recovery entries explicitly requested by the caller.
+	if p.prune || published != nil {
+		if err := deletePublicationOrphans(ctx, dir, orphans, published); err != nil {
 			return err
 		}
 	}
@@ -730,7 +718,7 @@ func preparePublication(ctx context.Context, publication Publication, rootPath, 
 			return nil, err
 		}
 		absolute := filepath.Join(rootPath, filepath.FromSlash(file.Path))
-		resolved, parentInfo, err := resolvePublicationDestination(absolute)
+		resolved, parentInfo, err := resolvePublication(absolute)
 		if err != nil {
 			return nil, err
 		}
@@ -762,7 +750,7 @@ func preparePublication(ctx context.Context, publication Publication, rootPath, 
 			return nil, err
 		}
 		absolute := filepath.Join(rootPath, filepath.FromSlash(deletion.Path))
-		resolved, parentInfo, err := resolvePublicationDestination(absolute)
+		resolved, parentInfo, err := resolvePublication(absolute)
 		if err != nil {
 			return nil, err
 		}
@@ -913,20 +901,51 @@ func (p *preparedPublication) write(ctx context.Context) error {
 	return nil
 }
 
-func (p *preparedPublication) deleteRecoveries(ctx context.Context) error {
-	for i := range p.deletions {
+type publicationDeletion struct {
+	path     string
+	orphan   *validatedOrphan
+	recovery *preparedRecoveryDeletion
+}
+
+func deletePublicationOrphans(ctx context.Context, dir *os.Root, orphans []validatedOrphan, publication *preparedPublication) error {
+	deletions := make([]publicationDeletion, 0, len(orphans))
+	for i := range orphans {
+		deletions = append(deletions, publicationDeletion{
+			path:   filepath.Join(orphans[i].dirPath, orphans[i].name),
+			orphan: &orphans[i],
+		})
+	}
+	if publication != nil {
+		for i := range publication.deletions {
+			deletion := &publication.deletions[i]
+			deletions = append(deletions, publicationDeletion{
+				path:     deletion.destination,
+				recovery: deletion,
+			})
+		}
+	}
+	sort.SliceStable(deletions, func(i, j int) bool { return deletions[i].path < deletions[j].path })
+	for _, deletion := range deletions {
 		if err := contextError(ctx); err != nil {
 			return err
 		}
-		deletion := &p.deletions[i]
-		if deletion.info == nil {
+		if deletion.orphan != nil {
+			if err := deletion.orphan.confirm(dir); err != nil {
+				return err
+			}
+			if err := removeGeneratedFile(dir, deletion.orphan.name); err != nil {
+				return fmt.Errorf("generate: delete %s: %w", deletion.orphan.orphan, err)
+			}
 			continue
 		}
-		if err := deletion.confirm(); err != nil {
+		if deletion.recovery.info == nil {
+			continue
+		}
+		if err := deletion.recovery.confirm(); err != nil {
 			return err
 		}
-		if err := removeGeneratedFile(deletion.root, deletion.name); err != nil {
-			return fmt.Errorf("generate: delete %s: %w", deletion.Path, err)
+		if err := removeGeneratedFile(deletion.recovery.root, deletion.recovery.name); err != nil {
+			return fmt.Errorf("generate: delete %s: %w", deletion.recovery.Path, err)
 		}
 	}
 	return nil
@@ -1742,6 +1761,13 @@ func (o validatedOrphan) confirm(dir *os.Root) error {
 	}
 	if !os.SameFile(o.info, info) {
 		return fmt.Errorf("generate: refusing to delete %s: it is no longer the file this commit checked, so deleting it would delete a file nothing authorized; rerun Store.Plan", o.orphan)
+	}
+	current, err := publicationOrphanState(dir, o.dirPath, o.name)
+	if err != nil {
+		return fmt.Errorf("generate: check %s before deletion: %w", o.orphan, err)
+	}
+	if current != o.old {
+		return fmt.Errorf("generate: refusing to delete %s: its bytes changed since Store.Plan ran; rerun Store.Plan", o.orphan)
 	}
 	return nil
 }

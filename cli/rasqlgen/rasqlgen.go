@@ -3,6 +3,7 @@ package rasqlgen
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -28,6 +29,15 @@ func ExitCode(err error) int {
 // to output, and what the flag package prints while parsing goes to
 // diagnostics, so the unified command can keep the two on separate streams.
 func Run(args []string, output, diagnostics io.Writer) error {
+	return RunContext(context.Background(), args, output, diagnostics)
+}
+
+// RunContext executes a codegen command with the supplied invocation context.
+// Cancellation is propagated through source materialization and publication.
+func RunContext(ctx context.Context, args []string, output, diagnostics io.Writer) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if output == nil || diagnostics == nil {
 		return errors.New("rasqlgen: command output must not be nil")
 	}
@@ -44,6 +54,7 @@ func Run(args []string, output, diagnostics io.Writer) error {
 		flagSetPrefix: "rasql codegen ",
 		output:        output,
 		diagnostics:   &flagPrinted,
+		ctx:           ctx,
 	}.run(args)
 	if flagPrinted.Len() > 0 {
 		flagStream := diagnostics
@@ -58,11 +69,19 @@ func Run(args []string, output, diagnostics io.Writer) error {
 // RunTopLevel dispatches the schema, generate, and check commands exposed by
 // the unified rasql binary.
 func RunTopLevel(args []string, output, diagnostics io.Writer) error {
+	return RunTopLevelContext(context.Background(), args, output, diagnostics)
+}
+
+// RunTopLevelContext dispatches unified rasql schema commands with context.
+func RunTopLevelContext(ctx context.Context, args []string, output, diagnostics io.Writer) error {
 	if output == nil || diagnostics == nil {
 		return errors.New("rasqlgen: command output must not be nil")
 	}
 	var printed bytes.Buffer
-	err := command{program: "rasql", flagSetPrefix: "rasql ", output: output, diagnostics: &printed}.run(args)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	err := command{program: "rasql", flagSetPrefix: "rasql ", output: output, diagnostics: &printed, ctx: ctx}.run(args)
 	if printed.Len() > 0 {
 		stream := diagnostics
 		if errors.Is(err, flag.ErrHelp) {
@@ -87,6 +106,7 @@ func RunLegacy(args []string, writer io.Writer) error {
 		flagSetPrefix: "",
 		output:        writer,
 		diagnostics:   writer,
+		ctx:           context.Background(),
 	}.run(args)
 }
 
@@ -111,6 +131,7 @@ type command struct {
 	// sorts them: this writer is the single writer under the standalone
 	// binary, and a buffer Run routes by the returned error.
 	diagnostics io.Writer
+	ctx         context.Context
 }
 
 func (c command) run(args []string) error {

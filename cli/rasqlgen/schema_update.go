@@ -49,7 +49,11 @@ func (c command) runSchemaUpdate(args []string) error {
 	} else {
 		request.BootstrapDSN = *dsn
 	}
-	result, err := schemasource.Materialize(context.Background(), request, schemasource.DefaultDependencies())
+	ctx := c.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	result, err := schemasource.Materialize(ctx, request, schemasource.DefaultDependencies())
 	if err != nil {
 		return fmt.Errorf("schema update: %w", err)
 	}
@@ -162,7 +166,7 @@ func (c command) runSchemaUpdate(args []string) error {
 		},
 		AfterVerify: func(context.Context, []generate.PublicationEntry) error { return removePending(root) },
 	}
-	if err := plan.CommitPublication(context.Background(), publication); err != nil {
+	if err := plan.CommitPublication(ctx, publication); err != nil {
 		return err
 	}
 	_, _ = fmt.Fprintf(c.output, "updated schema and generated %s\n", cfg.Output)
@@ -247,7 +251,11 @@ func (c command) runSchemaVerify(args []string) error {
 		return err
 	}
 	request := schemasource.Request{ModuleRoot: root, Engine: schemasource.EngineConfig{Dialect: cfg.Engine.Dialect, Profile: cfg.Engine.Profile}, Source: schemasource.SchemaSourceConfig{Kind: cfg.Schema.Kind, Identity: cfg.Schema.Identity, Paths: cfg.Schema.Paths, Inputs: cfg.Schema.Inputs, Command: cfg.Schema.Command, Environment: cfg.Schema.Environment}, LiveDSN: *dsn, BootstrapDSN: *dsn, TempRoot: filepath.Join(root, ".tmp")}
-	verified, err := schemasource.Verify(context.Background(), request, schemasource.DefaultDependencies(), lock)
+	ctx := c.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	verified, err := schemasource.Verify(ctx, request, schemasource.DefaultDependencies(), lock)
 	if err != nil {
 		return fmt.Errorf("schema verify: %w", err)
 	}

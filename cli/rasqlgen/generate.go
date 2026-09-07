@@ -182,7 +182,11 @@ func (c command) runGenerate(args []string) error {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	parent := c.ctx
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, *timeout)
 	defer cancel()
 
 	database, err := sql.Open(spec.openName, *dsn)

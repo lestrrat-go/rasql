@@ -99,7 +99,11 @@ func (c command) runOfflineGenerate(settings config, configPath string, check bo
 		_, _ = fmt.Fprintf(c.output, "%s is up to date\n", settings.Output)
 		return nil
 	}
-	plan, err := store.PlanContext(context.Background())
+	ctx := c.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	plan, err := store.PlanContext(ctx)
 	if err != nil {
 		return err
 	}
@@ -130,7 +134,7 @@ func (c command) runOfflineGenerate(settings config, configPath string, check bo
 		},
 		AfterVerify: func(context.Context, []generate.PublicationEntry) error { return removePending(root) },
 	}
-	if err := plan.CommitPublication(context.Background(), publication); err != nil {
+	if err := plan.CommitPublication(ctx, publication); err != nil {
 		return err
 	}
 	_, _ = fmt.Fprintf(c.output, "generated %s offline\n", settings.Output)
