@@ -129,9 +129,30 @@ func Result(d dialect.Dialect, s query.ResultQuery) (stmt.Statement, error) {
 }
 
 func validateResultMetadata(result query.ResultQuery) error {
-	want := len(result.Columns())
-	switch body := result.Body().(type) {
+	return validateResultMetadataBody(result.Body(), result.Columns())
+}
+
+func validateResultMetadataBody(body query.QueryBody, columns []query.ResultColumn) error {
+	want := len(columns)
+	switch body := body.(type) {
 	case query.Select:
+		if source := body.From(); source.ResultBody() != nil {
+			if err := validateResultMetadataBody(source.ResultBody(), source.Columns()); err != nil {
+				return err
+			}
+		}
+		for _, join := range body.Joins() {
+			if source := join.Source(); source.ResultBody() != nil {
+				if err := validateResultMetadataBody(source.ResultBody(), source.Columns()); err != nil {
+					return err
+				}
+			}
+		}
+		for _, cte := range body.CTEs() {
+			if err := validateResultMetadataBody(cte.Query().Body(), cte.Query().Columns()); err != nil {
+				return err
+			}
+		}
 		if got := len(body.Projections()); got != want {
 			return fmt.Errorf("result columns count %d does not match SELECT projection count %d", want, got)
 		}
@@ -139,16 +160,26 @@ func validateResultMetadata(result query.ResultQuery) error {
 		if body == nil {
 			return fmt.Errorf("result query body must not be empty")
 		}
-		if got := len(body.Projections()); got != want {
-			return fmt.Errorf("result columns count %d does not match SELECT projection count %d", want, got)
-		}
+		return validateResultMetadataBody(*body, columns)
 	case query.Compound:
+		if err := validateResultMetadataBody(body.Left().Body(), body.Left().Columns()); err != nil {
+			return err
+		}
+		if err := validateResultMetadataBody(body.Right().Body(), body.Right().Columns()); err != nil {
+			return err
+		}
 		if got := len(body.Left().Columns()); got != want {
 			return fmt.Errorf("result columns count %d does not match compound output count %d", want, got)
 		}
 	case *query.Compound:
 		if body == nil {
 			return fmt.Errorf("result query body must not be empty")
+		}
+		if err := validateResultMetadataBody(body.Left().Body(), body.Left().Columns()); err != nil {
+			return err
+		}
+		if err := validateResultMetadataBody(body.Right().Body(), body.Right().Columns()); err != nil {
+			return err
 		}
 		if got := len(body.Left().Columns()); got != want {
 			return fmt.Errorf("result columns count %d does not match compound output count %d", want, got)

@@ -24,5 +24,7 @@ func CompilePass() {
 	_ = p.Version()
 	_ = p.Capabilities()
 	_ = p.Limits()
+	var discover = rasql.DiscoverEngineProfile
+	_ = discover
 	_, _ = rasql.NewCustomEngineProfile("example", rasql.EngineVersion{Known: true, Major: 1}, rasql.EngineCapabilities{}, rasql.EngineLimits{MaxBindParameters: 1})
 }

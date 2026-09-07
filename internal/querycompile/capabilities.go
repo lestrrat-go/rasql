@@ -104,6 +104,14 @@ func validateExpressionCapabilities(p engineprofile.Profile, expression query.Ex
 		}
 	}
 	switch expression := expression.(type) {
+	case query.TrustedFragment:
+		for _, part := range expression.Parts() {
+			if hole, ok := part.(interface{ ValueExpression() query.Expression }); ok {
+				if err := validateExpressionCapabilities(p, hole.ValueExpression()); err != nil {
+					return err
+				}
+			}
+		}
 	case query.Over:
 		if !p.Capabilities.WindowFunctions {
 			return unsupported(p, "window functions")
@@ -174,6 +182,13 @@ func validateExpressionCapabilities(p engineprofile.Profile, expression query.Ex
 }
 
 func validateWriteCapabilities(p engineprofile.Profile, statement query.WriteStatement) error {
+	if statement == nil {
+		return fmt.Errorf("write statement must not be nil")
+	}
+	value := reflect.ValueOf(statement)
+	if value.Kind() == reflect.Pointer && value.IsNil() {
+		return fmt.Errorf("write statement must not be nil")
+	}
 	returning := statement.Returning()
 	for _, projection := range returning {
 		if err := validateExpressionCapabilities(p, projection.ProjectedExpression()); err != nil {
@@ -219,8 +234,16 @@ func validateWriteCapabilities(p engineprofile.Profile, statement query.WriteSta
 			}
 		}
 		return validateExpressionCapabilities(p, statement.Where())
+	case *query.Update:
+		if statement != nil {
+			return validateWriteCapabilities(p, *statement)
+		}
 	case query.Delete:
 		return validateExpressionCapabilities(p, statement.Where())
+	case *query.Delete:
+		if statement != nil {
+			return validateWriteCapabilities(p, *statement)
+		}
 	case query.Upsert:
 		for _, assignment := range statement.Assignments() {
 			if err := validateExpressionCapabilities(p, assignment.Value()); err != nil {

@@ -266,3 +266,51 @@ func TestAcceptanceQueryReturningInsertOnlyRejectsUpdateAndDelete(t *testing.T) 
 	require.NoError(t, err)
 	require.Contains(t, statement.SQL(), "RETURNING")
 }
+
+func TestAcceptanceQueryRejectsNilWriteFormsWithoutPanic(t *testing.T) {
+	c, err := querycompile.New(queryProfile(t))
+	require.NoError(t, err)
+	for _, statement := range []query.WriteStatement{nil, (*query.Insert)(nil), (*query.Update)(nil), (*query.Delete)(nil), (*query.Upsert)(nil)} {
+		require.NotPanics(t, func() {
+			compiled, compileErr := c.Write(statement)
+			require.Error(t, compileErr)
+			require.Empty(t, compiled.SQL())
+		})
+	}
+}
+
+func TestAcceptanceQueryChecksTrustedFragmentHolesAndPointerWrites(t *testing.T) {
+	p := customPostgresProfile(t, func(c *engineprofile.Capabilities) {
+		c.WindowFunctions = false
+		c.PerParentLimit = engineprofile.PerParentLimitUnsupported
+	})
+	c, err := querycompile.NewWithDialect(p, dialect.PostgreSQL())
+	require.NoError(t, err)
+	users := queryTable(t)
+	window := query.OverWindow(query.Func("row_number"), query.Window(nil, query.Asc(users.Column("id"))))
+	inner, err := query.NewSelect(users, query.Project(window).As("n"))
+	require.NoError(t, err)
+	body, err := query.NewSelect(users, query.Project(query.TrustedSQL("{}", query.Hole(window))).As("n"))
+	require.NoError(t, err)
+	result, err := query.ResultOf(body, query.ResultColumn{Name: "n", Type: schema.IntegerType{}})
+	require.NoError(t, err)
+	statement, err := c.Select(result)
+	require.ErrorIs(t, err, engineprofile.ErrUnsupportedFeature)
+	require.Empty(t, statement.SQL())
+
+	update, err := query.NewUpdate(users, query.Set(users.Column("id"), query.Scalar(inner)))
+	require.NoError(t, err)
+	update, err = update.AllowAll()
+	require.NoError(t, err)
+	statement, err = c.Write(&update)
+	require.ErrorIs(t, err, engineprofile.ErrUnsupportedFeature)
+	require.Empty(t, statement.SQL())
+
+	deleteStatement, err := query.NewDelete(users)
+	require.NoError(t, err)
+	deleteStatement, err = deleteStatement.WithWhere(query.Equal(users.Column("id"), query.Scalar(inner)))
+	require.NoError(t, err)
+	statement, err = c.Write(&deleteStatement)
+	require.ErrorIs(t, err, engineprofile.ErrUnsupportedFeature)
+	require.Empty(t, statement.SQL())
+}

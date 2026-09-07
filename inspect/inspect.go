@@ -262,6 +262,9 @@ func (i Inspector) sqliteObjectNames(ctx context.Context, databaseName string) (
 	}
 	rows, err := i.queryer.QueryContext(ctx, query)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, err
+		}
 		return i.sqliteLegacyObjectNames(ctx, databaseName)
 	}
 	defer func() { _ = rows.Close() }()
@@ -286,6 +289,12 @@ func (i Inspector) sqliteObjectNames(ctx context.Context, databaseName string) (
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("inspect: iterate SQLite object names: %w", err)
+	}
+	if len(objects) == 0 {
+		if err := rows.Close(); err != nil {
+			return nil, fmt.Errorf("inspect: close SQLite object names: %w", err)
+		}
+		return i.sqliteLegacyObjectNames(ctx, databaseName)
 	}
 	sort.Slice(objects, func(left, right int) bool {
 		if objects[left].Schema != objects[right].Schema {

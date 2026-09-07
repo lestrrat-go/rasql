@@ -39,7 +39,7 @@ func (e *DiscoveryError) Error() string {
 }
 func (e *DiscoveryError) Unwrap() error { return e.Code }
 
-func Observe(ctx context.Context, q Queryer, engine EngineID) (ObservedIdentity, error) {
+func Observe(ctx context.Context, q Queryer, engine EngineID) (identity ObservedIdentity, retErr error) {
 	if isNil(q) || (engine != PostgreSQL && engine != MySQL && engine != SQLite) {
 		return ObservedIdentity{}, &DiscoveryError{Code: ErrVersionObservation, RequestedEngine: engine, Detail: "invalid queryer or engine"}
 	}
@@ -48,7 +48,12 @@ func Observe(ctx context.Context, q Queryer, engine EngineID) (ObservedIdentity,
 	if err != nil {
 		return ObservedIdentity{}, &DiscoveryError{Code: ErrVersionObservation, RequestedEngine: engine, Detail: err.Error()}
 	}
-	defer rows.Close()
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && retErr == nil {
+			identity = ObservedIdentity{}
+			retErr = &DiscoveryError{Code: ErrVersionObservation, RequestedEngine: engine, Detail: closeErr.Error()}
+		}
+	}()
 	columns, err := rows.Columns()
 	if err != nil {
 		return ObservedIdentity{}, &DiscoveryError{Code: ErrVersionObservation, RequestedEngine: engine, Detail: err.Error()}
@@ -83,21 +88,7 @@ func Discover(ctx context.Context, q Queryer, engine EngineID, id string) (Profi
 	}
 	p, err := Resolve(id, o)
 	if err != nil {
-		var discoveryErr *DiscoveryError
-		if errors.As(err, &discoveryErr) {
-			return Profile{}, err
-		}
-		code := ErrUnsupportedVersion
-		if engineForProfile(id) == 0 {
-			code = ErrUnknownProfile
-		}
-		if errors.Is(err, ErrProfileMismatch) {
-			code = ErrProfileMismatch
-		}
-		if errors.Is(err, ErrInvalidProfile) && engineForProfile(id) != 0 && o.Engine != engineForProfile(id) {
-			code = ErrProfileMismatch
-		}
-		return Profile{}, &DiscoveryError{Code: code, RequestedEngine: engine, ProfileID: id, Raw: o.Raw, Observed: o, Detail: err.Error()}
+		return Profile{}, err
 	}
 	return p, nil
 }

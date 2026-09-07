@@ -89,10 +89,6 @@ func (e *ProfileError) Error() string {
 func (e *ProfileError) Unwrap() error { return e.Code }
 
 func validEngine(e EngineID) bool { return e >= PostgreSQL && e <= Custom }
-func less(a, b Version) bool {
-	return a.Major < b.Major || a.Major == b.Major && (a.Minor < b.Minor || a.Minor == b.Minor && a.Patch < b.Patch)
-}
-
 func New(profileID string, engine EngineID, customName string, version Version, caps Capabilities, limits Limits) (Profile, error) {
 	if !validEngine(engine) || strings.TrimSpace(profileID) == "" || limits.MaxBindParameters <= 0 {
 		return Profile{}, &ProfileError{Code: ErrInvalidProfile, Engine: engine, Version: version, Detail: "invalid identity or bind limit"}

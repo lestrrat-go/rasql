@@ -65,15 +65,15 @@ func Read(ctx context.Context, db DB, p engineprofile.Profile, scope Scope) (Res
 		_ = tx.Rollback()
 		return Result{}, err
 	}
-	names, err := ins.ObjectNames(ctx)
+	names, err := catalogNames(ctx, ins, scope)
 	if err != nil {
 		_ = tx.Rollback()
 		return Result{}, err
 	}
 	selected := selectNames(names, scope, p.Engine == engineprofile.SQLite)
 	if len(scope.Include) > 0 {
-		seen := make(map[string]bool, len(selected))
-		for _, n := range selected {
+		seen := make(map[string]bool, len(names))
+		for _, n := range names {
 			seen[n.Schema+"\x00"+n.Name] = true
 		}
 		for _, want := range scope.Include {
@@ -123,13 +123,45 @@ func Read(ctx context.Context, db DB, p engineprofile.Profile, scope Scope) (Res
 	return Result{Tables: tables, Observed: p, Unresolved: unresolved}, nil
 }
 
+func catalogNames(ctx context.Context, ins inspect.Inspector, scope Scope) ([]inspect.ObjectName, error) {
+	if len(scope.Include) == 0 {
+		return ins.ObjectNames(ctx)
+	}
+	var names []inspect.ObjectName
+	seen := make(map[string]bool)
+	for _, want := range scope.Include {
+		var current []inspect.ObjectName
+		var err error
+		if want.Schema != "" {
+			current, err = ins.ObjectNamesIn(ctx, want.Schema)
+		} else {
+			current, err = ins.ObjectNames(ctx)
+		}
+		if err != nil {
+			return nil, err
+		}
+		for _, n := range current {
+			key := n.Schema + "\x00" + n.Name
+			if !seen[key] {
+				seen[key] = true
+				names = append(names, n)
+			}
+		}
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if names[i].Schema != names[j].Schema {
+			return names[i].Schema < names[j].Schema
+		}
+		return names[i].Name < names[j].Name
+	})
+	return names, nil
+}
+
 func unresolvedFact(object inspect.ObjectName, err error) (UnresolvedFact, bool) {
-	var missing *inspect.TableNotFoundError
-	if errors.As(err, &missing) {
+	if errors.Is(err, inspect.ErrTableNotFound) {
 		return UnresolvedFact{Object: schema.ObjectName{Schema: object.Schema, Name: object.Name}, Path: "$", Code: "object_missing", Detail: err.Error()}, true
 	}
-	var incomplete *inspect.IncompleteMetadataError
-	if errors.As(err, &incomplete) {
+	if errors.Is(err, inspect.ErrIncompleteMetadata) {
 		return UnresolvedFact{Object: schema.ObjectName{Schema: object.Schema, Name: object.Name}, Path: "columns", Code: "columns_incomplete", Detail: err.Error()}, true
 	}
 	return UnresolvedFact{}, false
