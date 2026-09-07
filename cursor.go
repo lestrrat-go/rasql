@@ -152,8 +152,10 @@ func encodeBuiltinCursor(value any) ([]byte, error) {
 		return nil, errors.New("nil cursor value")
 	}
 	if t, ok := value.(time.Time); ok {
-		var out [8]byte
-		binary.BigEndian.PutUint64(out[:], uint64(t.UTC().UnixNano()))
+		var out [12]byte
+		utc := t.UTC()
+		binary.BigEndian.PutUint64(out[:8], uint64(utc.Unix()))
+		binary.BigEndian.PutUint32(out[8:], uint32(utc.Nanosecond()))
 		return out[:], nil
 	}
 	v := reflect.ValueOf(value)
@@ -198,10 +200,15 @@ func encodeBuiltinCursor(value any) ([]byte, error) {
 
 func decodeBuiltinCursor(data []byte, typ reflect.Type) (any, error) {
 	if typ == reflect.TypeOf(time.Time{}) {
-		if len(data) != 8 {
+		if len(data) != 12 {
 			return nil, errors.New("invalid time cursor")
 		}
-		return time.Unix(0, int64(binary.BigEndian.Uint64(data))).UTC(), nil
+		seconds := int64(binary.BigEndian.Uint64(data[:8]))
+		nanos := binary.BigEndian.Uint32(data[8:])
+		if nanos >= 1e9 {
+			return nil, errors.New("invalid time cursor")
+		}
+		return time.Unix(seconds, int64(nanos)).UTC(), nil
 	}
 	if typ.Kind() == reflect.Float32 || typ.Kind() == reflect.Float64 {
 		if len(data) != 8 {
@@ -214,6 +221,15 @@ func decodeBuiltinCursor(data []byte, typ reflect.Type) (any, error) {
 			bits = ^bits
 		}
 		value := math.Float64frombits(bits)
+		if math.IsNaN(value) {
+			return nil, errors.New("NaN is not a cursor value")
+		}
+		if typ.Kind() == reflect.Float32 {
+			narrow := float32(value)
+			if math.IsInf(float64(narrow), 0) || float64(narrow) != value {
+				return nil, errors.New("float cursor overflows destination type")
+			}
+		}
 		out := reflect.New(typ).Elem()
 		out.SetFloat(value)
 		return out.Interface(), nil

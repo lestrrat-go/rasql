@@ -213,19 +213,22 @@ func TestR5AutocommitMutationDiffersFromExplicitTransaction(t *testing.T) {
 	second, err := PageAfter(t.Context(), executor, query, spec, PagePolicy{DefaultLimit: 2, MaxLimit: 2}, PageRequest{Limit: 2, After: first.Next})
 	require.NoError(t, err)
 	require.Equal(t, []int64{3}, rowIDs(second.Values))
-	tx, err := database.BeginTx(t.Context(), &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
+	err = Within(t.Context(), executor, &sql.TxOptions{Isolation: sql.LevelRepeatableRead}, func(ctx context.Context, scoped Executor) error {
+		txFirst, scopeErr := PageAfter(ctx, scoped, query, spec, PagePolicy{DefaultLimit: 1, MaxLimit: 2}, PageRequest{Limit: 1})
+		if scopeErr != nil {
+			return scopeErr
+		}
+		if _, scopeErr = database.ExecContext(ctx, "INSERT INTO "+tableName+" (id) VALUES (4)"); scopeErr != nil {
+			return scopeErr
+		}
+		txSecond, scopeErr := PageAfter(ctx, scoped, query, spec, PagePolicy{DefaultLimit: 10, MaxLimit: 10}, PageRequest{Limit: 10, After: txFirst.Next})
+		if scopeErr != nil {
+			return scopeErr
+		}
+		require.Equal(t, []int64{3}, rowIDs(txSecond.Values))
+		return nil
+	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = tx.Rollback() })
-	txDB, err := New(tx, dialect.PostgreSQL())
-	require.NoError(t, err)
-	txExecutor, txQuery, txSpec := makeQuery(txDB)
-	txFirst, err := PageAfter(t.Context(), txExecutor, txQuery, txSpec, PagePolicy{DefaultLimit: 1, MaxLimit: 2}, PageRequest{Limit: 1})
-	require.NoError(t, err)
-	_, err = database.ExecContext(t.Context(), "INSERT INTO "+tableName+" (id) VALUES (4)")
-	require.NoError(t, err)
-	txSecond, err := PageAfter(t.Context(), txExecutor, txQuery, txSpec, PagePolicy{DefaultLimit: 10, MaxLimit: 10}, PageRequest{Limit: 10, After: txFirst.Next})
-	require.NoError(t, err)
-	require.Equal(t, []int64{3}, rowIDs(txSecond.Values))
 }
 
 func rowIDs(rows []r5LiveRow) []int64 {
