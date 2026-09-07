@@ -156,7 +156,7 @@ import (
 type ID int64
 type NullID struct { Raw ID; Valid bool }
 
-func (v NullID) NullableBind() (any, bool) { return v.Raw, v.Valid }
+func (v *NullID) NullableBind() (any, bool) { return v.Raw, v.Valid }
 func (v NullID) Value() (driver.Value, error) { if !v.Valid { return nil, nil }; return int64(v.Raw), nil }
 func (v *NullID) Scan(value any) error {
 	if value == nil { v.Raw, v.Valid = 0, false; return nil }
@@ -211,12 +211,18 @@ func TestCustomNullableRelationship(t *testing.T) {
 	loaded, err := belongs.Load(t.Context(), db, []store.ProfilesRow{present, empty})
 	require.NoError(t, err)
 	require.Len(t, loaded, 1)
+	for key, row := range loaded {
+		require.NotNil(t, key)
+		require.Equal(t, store.ID(1), *key)
+		require.Equal(t, store.ID(1), row.ID)
+	}
 	inverse := store.Users().Profiles()
 	require.Equal(t, store.ID(1), inverse.SourceKey(store.UsersRow{ID: 1}))
 	require.Equal(t, store.ID(1), inverse.TargetKey(present))
 	inverseLoaded, err := inverse.Load(t.Context(), db, []store.UsersRow{{ID: 1}, {ID: 2}})
 	require.NoError(t, err)
 	require.Len(t, inverseLoaded, 1)
+	require.Equal(t, store.ID(10), inverseLoaded[1].ID)
 }
 `
 
