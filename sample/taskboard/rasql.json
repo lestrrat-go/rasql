@@ -3,6 +3,6 @@
   "output": "internal/store",
   "dialect": "postgresql",
   "queries": [
-    {"input": "queries/overdue_count.sql", "function": "OverdueCount"}
+    {"input": "queries/overdue_count.sql", "function": "OverdueCount", "bindings": {"on": {"Go": {"Type": "time.Time", "Imports": [{"Path": "time"}]}}}}
   ]
 }

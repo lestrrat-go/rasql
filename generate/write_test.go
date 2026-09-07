@@ -193,6 +193,16 @@ func TestWritePackageRejectsTableNamedSchema(t *testing.T) {
 	require.Empty(t, entries)
 }
 
+func TestWritePackageRejectsIncompleteNativeBeforePublishingFiles(t *testing.T) {
+	directory := t.TempDir()
+	table := schema.TableDef{Name: "broken", Columns: []schema.ColumnDef{{Name: "value", Type: schema.OpaqueType{}}}}
+	err := generate.WritePackage("store", directory, table)
+	require.Error(t, err)
+	entries, err := os.ReadDir(directory)
+	require.NoError(t, err)
+	require.Empty(t, entries)
+}
+
 // TestWritePackageRejectsTableSpellingTheGeneratedTest confirms that the
 // accessor for a table named test_rasqlgen_generated_definitions_are_valid is
 // refused before anything is written, because it spells the function

@@ -2,7 +2,7 @@ package generate_test
 
 import (
 	"bytes"
-	"fmt"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -70,9 +70,11 @@ func TestSchemaDescriptorRoundTripsThroughGeneratedSource(t *testing.T) {
 // naming every one of its own options, and a relationship matching it.
 func newTableDefFixture() schema.TableDef {
 	return schema.TableDef{
-		Schema:  "public",
-		Name:    "widgets",
-		RowName: "WidgetRow",
+		Schema:     "public",
+		Name:       "widgets",
+		Kind:       schema.ObjectTable,
+		Operations: schema.OperationRead | schema.OperationInsert | schema.OperationUpdate | schema.OperationDelete | schema.OperationDDL,
+		RowName:    "WidgetRow",
 		Columns: []schema.ColumnDef{
 			{
 				Name: "id",
@@ -83,10 +85,11 @@ func newTableDefFixture() schema.TableDef {
 				},
 			},
 			{
-				Name:     "name",
-				Type:     schema.TextType{Width: schema.NewTextWidth(255), Fixed: true},
-				Nullable: true,
-				Default:  "'unknown'",
+				Name:      "name",
+				Type:      schema.TextType{Width: schema.NewTextWidth(255), Fixed: true},
+				Nullable:  true,
+				Default:   "'unknown'",
+				Collation: "NOCASE",
 			},
 			{
 				Name: "amount",
@@ -96,13 +99,18 @@ func newTableDefFixture() schema.TableDef {
 					Unsigned:  true,
 					ZeroFill:  true,
 				},
+				GoBinding: &schema.GoBinding{
+					Type:         "u.URL",
+					NullableType: "*u.URL",
+					Imports:      []schema.GoImport{{Path: "net/url", Name: "u"}},
+				},
 			},
 			{Name: "score", Type: schema.FloatType{}},
 			{Name: "active", Type: schema.BooleanType{}},
 			{Name: "payload", Type: schema.BytesType{}},
 			{Name: "created_at", Type: schema.TimeType{}},
 			{Name: "meta", Type: schema.JSONType{}},
-			{Name: "uid", Type: schema.UUIDType{}},
+			{Name: "uid", Type: schema.UUIDType{}, NativeType: &schema.NativeTypeDef{Dialect: "postgresql", Schema: "public", Name: "uuid_array", Kind: schema.NativeArray, Arguments: []string{"uuid"}, Element: &schema.NativeTypeDef{Dialect: "postgresql", Name: "uuid", Kind: schema.NativeBuiltin}}},
 			{
 				Name:     "external_id",
 				Type:     schema.IntegerType{},
@@ -248,8 +256,10 @@ func newTableDefFixture() schema.TableDef {
 // module's own business rather than SQLite's table catalog.
 func newVirtualTableDefFixture() schema.TableDef {
 	return schema.TableDef{
-		Schema: "main",
-		Name:   "search_docs",
+		Schema:     "main",
+		Name:       "search_docs",
+		Kind:       schema.ObjectTable,
+		Operations: schema.OperationRead | schema.OperationInsert | schema.OperationUpdate | schema.OperationDelete | schema.OperationDDL,
 		Columns: []schema.ColumnDef{
 			{Name: "content", Type: schema.TextType{}},
 			{Name: "rank", Type: schema.TextType{}, Hidden: true},
@@ -449,7 +459,11 @@ func withEachCoveredFieldDropped(value reflect.Value, visit func(name string)) {
 // any difference in how either side formats a value makes every table's
 // comparison fail.
 func descriptorFingerprint(table schema.TableDef) string {
-	return fmt.Sprintf("%#v", table)
+	data, err := json.Marshal(table)
+	if err != nil {
+		return err.Error()
+	}
+	return string(data)
 }
 
 // TestDescriptorFingerprintChangesWhenAnyFieldIsDropped is the evidence that
@@ -497,7 +511,7 @@ type descriptorAccessor struct {
 // }". Capturing all three names from the generated source, rather than
 // recomputing rasqlgen's own name-derivation rules a second time here, is
 // what keeps this test honest about what rasqlgen actually named them.
-var descriptorAccessorPattern = regexp.MustCompile(`(?m)^// (\w+) returns a copy of the descriptor for the "([^"]*)" table\.\n^func (\w+)\(\) schema\.TableDef \{ return (\w+)\.Clone\(\) \}$`)
+var descriptorAccessorPattern = regexp.MustCompile(`(?m)^// (\w+) returns a copy of the descriptor for the "([^"]*)" table\.\n^func (\w+)\(\) schema\.TableDef \{\s*return (\w+)\.Clone\(\)\s*\}$`)
 
 // extractDescriptorAccessors returns, for each table schema_gen.go declares,
 // its descriptorAccessor, sorted by table name so the generated files this
@@ -580,6 +594,7 @@ const roundTripCheckRowsPlaceholder = "\t\t// ROWS\n"
 const roundTripCheckTemplate = `package store
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -618,7 +633,11 @@ func RunDescriptorRoundTripCheck() string {
 // own descriptorFingerprint (generate/descriptor_roundtrip_test.go) does,
 // since the want strings above came from there.
 func descriptorFingerprint(definition schema.TableDef) string {
-	return fmt.Sprintf("%#v", definition)
+	data, err := json.Marshal(definition)
+	if err != nil {
+		return err.Error()
+	}
+	return string(data)
 }
 
 // fingerprintDifference reports where want and got first differ, with the

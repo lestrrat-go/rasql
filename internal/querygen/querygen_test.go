@@ -24,6 +24,40 @@ func TestGoSourceCompiles(t *testing.T) {
 	requireGeneratedSourceCompiles(t, source)
 }
 
+func TestGoSourceRewritesBindingAliasesByImportPath(t *testing.T) {
+	column := func(table, name, path string) schema.ColumnDef {
+		return schema.ColumnDef{Name: name, Type: schema.TextType{}, GoBinding: &schema.GoBinding{
+			Type: "x.URL", Imports: []schema.GoImport{{Path: path, Name: "x"}},
+		}}
+	}
+	def := namedsql.QueryDef{
+		Name: "urls", SQL: "SELECT 1", Parameters: []string{"first", "second"},
+		Binds: []namedsql.BindDef{{Name: "first", Table: "urls", Column: "first"}, {Name: "second", Table: "urls", Column: "second"}},
+	}
+	source, err := querygen.GoSource(def, "generated", "URLs", schema.TableDef{Name: "urls", Columns: []schema.ColumnDef{
+		column("urls", "first", "net/url"), column("urls", "second", "html/template"),
+	}})
+	require.NoError(t, err)
+	require.Contains(t, string(source), `x "html/template"`)
+	require.Contains(t, string(source), `x2 "net/url"`)
+	require.Contains(t, string(source), "first x2.URL")
+	require.Contains(t, string(source), "second x.URL")
+	requireGeneratedSourceCompiles(t, source)
+}
+
+func TestGoSourceRejectsConflictingAliasesForOnePath(t *testing.T) {
+	def := namedsql.QueryDef{
+		Name: "urls", SQL: "SELECT 1", Parameters: []string{"first", "second"},
+		Binds: []namedsql.BindDef{{Name: "first", Table: "urls", Column: "first"}, {Name: "second", Table: "urls", Column: "second"}},
+	}
+	table := schema.TableDef{Name: "urls", Columns: []schema.ColumnDef{
+		{Name: "first", Type: schema.TextType{}, GoBinding: &schema.GoBinding{Type: "u.URL", Imports: []schema.GoImport{{Path: "net/url", Name: "u"}}}},
+		{Name: "second", Type: schema.TextType{}, GoBinding: &schema.GoBinding{Type: "url.URL", Imports: []schema.GoImport{{Path: "net/url", Name: "url"}}}},
+	}}
+	_, err := querygen.GoSource(def, "generated", "URLs", table)
+	require.ErrorContains(t, err, "conflicting aliases")
+}
+
 func TestGoSourceCompilesWithCollidingGeneratedNames(t *testing.T) {
 	parsed, err := namedsql.Parse("user_by_values", "SELECT id FROM users WHERE first = {{bind \"stmt\"}} OR second = {{bind \"stmt1\"}} OR third = {{bind \"stmt2\"}}")
 	require.NoError(t, err)
@@ -138,6 +172,80 @@ func TestGoSourceUntypedBindGoldenBytes(t *testing.T) {
 		"\treturn stmt.New(\"SELECT id, email FROM users WHERE email = $1\", email)\n" +
 		"}\n"
 	require.Equal(t, want, string(source))
+}
+
+func TestGoSourceNullableReferencedColumnUsesNullableParameter(t *testing.T) {
+	parsed, err := namedsql.Parse("user_by_email", `SELECT id FROM users WHERE email = {{bind "email" users.email}}`)
+	require.NoError(t, err)
+	compiled, err := parsed.Compile(dialect.PostgreSQL())
+	require.NoError(t, err)
+	table := schema.TableDef{Name: "users", Columns: []schema.ColumnDef{
+		{Name: "id", Type: schema.IntegerType{}},
+		{Name: "email", Type: schema.TextType{}, Nullable: true},
+	}}
+	source, err := querygen.GoSource(compiled.QueryDef(), "generated", "UserByEmail", table)
+	require.NoError(t, err)
+	require.Contains(t, string(source), "func UserByEmail(email *string)")
+}
+
+func TestGoSourceExplicitBindingsResolveStandaloneAndOverrideColumns(t *testing.T) {
+	parsed, err := namedsql.Parse("users", `SELECT id FROM users WHERE nickname = {{bind "nickname" users.nickname}} LIMIT {{bind "limit"}}`)
+	require.NoError(t, err)
+	compiled, err := parsed.Compile(dialect.PostgreSQL())
+	require.NoError(t, err)
+	table := schema.TableDef{Name: "users", Columns: []schema.ColumnDef{
+		{Name: "id", Type: schema.IntegerType{}},
+		{Name: "nickname", Type: schema.TextType{}, Nullable: true},
+	}}
+	definition, err := compiled.QueryDef().WithBindings(map[string]namedsql.ParameterBinding{
+		"limit":    {Go: schema.GoBinding{Type: "int"}},
+		"nickname": {Go: schema.GoBinding{Type: "UserName", NullableType: "NullableUserName"}, Nullable: false},
+	})
+	require.NoError(t, err)
+	source, err := querygen.GoSource(definition, "generated", "Users", table)
+	require.NoError(t, err)
+	require.Contains(t, string(source), "func Users(nickname UserName, limit int)")
+}
+
+func TestGoSourceExplicitBindingStillRequiresReferencedColumn(t *testing.T) {
+	parsed, err := namedsql.Parse("users", `SELECT id FROM users WHERE nickname = {{bind "nickname" users.missing}}`)
+	require.NoError(t, err)
+	compiled, err := parsed.Compile(dialect.PostgreSQL())
+	require.NoError(t, err)
+	definition, err := compiled.QueryDef().WithBindings(map[string]namedsql.ParameterBinding{
+		"nickname": {Go: schema.GoBinding{Type: "string"}},
+	})
+	require.NoError(t, err)
+	_, err = querygen.GoSource(definition, "generated", "Users", schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
+	require.ErrorContains(t, err, "has no column missing")
+}
+
+func TestGoSourceExplicitBindingRejectsMalformedType(t *testing.T) {
+	parsed, err := namedsql.Parse("users", `SELECT id FROM users WHERE id = {{bind "id"}}`)
+	require.NoError(t, err)
+	compiled, err := parsed.Compile(dialect.PostgreSQL())
+	require.NoError(t, err)
+	definition, err := compiled.QueryDef().WithBindings(map[string]namedsql.ParameterBinding{
+		"id": {Go: schema.GoBinding{Type: "[]"}},
+	})
+	require.NoError(t, err)
+	_, err = querygen.GoSource(definition, "generated", "Users")
+	require.ErrorContains(t, err, "does not parse")
+}
+
+func TestGoSourceExplicitBindingsTypeLimitAndOffset(t *testing.T) {
+	parsed, err := namedsql.Parse("users", `SELECT id FROM users LIMIT {{bind "limit"}} OFFSET {{bind "offset"}}`)
+	require.NoError(t, err)
+	compiled, err := parsed.Compile(dialect.PostgreSQL())
+	require.NoError(t, err)
+	definition, err := compiled.QueryDef().WithBindings(map[string]namedsql.ParameterBinding{
+		"limit":  {Go: schema.GoBinding{Type: "int"}},
+		"offset": {Go: schema.GoBinding{Type: "int"}},
+	})
+	require.NoError(t, err)
+	source, err := querygen.GoSource(definition, "generated", "Users")
+	require.NoError(t, err)
+	require.Contains(t, string(source), "func Users(limit int, offset int)")
 }
 
 // TestGoSourceTypedBindGoldenBytes pins the exact emitted bytes of the case

@@ -12,6 +12,31 @@ import (
 	"github.com/lestrrat-go/rasql/sqltext"
 )
 
+// ObjectKind identifies the catalog object described by a TableDef.
+type ObjectKind string
+
+const (
+	ObjectTable ObjectKind = "table"
+	ObjectView  ObjectKind = "view"
+)
+
+// Operation identifies an operation supported by a catalog object.
+type Operation uint16
+
+const (
+	OperationRead Operation = 1 << iota
+	OperationInsert
+	OperationUpdate
+	OperationDelete
+	OperationDDL
+)
+
+const allTableOperations = OperationRead | OperationInsert | OperationUpdate | OperationDelete | OperationDDL
+
+func (k ObjectKind) valid() bool { return k == "" || k == ObjectTable || k == ObjectView }
+
+func (o Operation) valid() bool { return o&^allTableOperations == 0 }
+
 // DecimalScale is the number of digits a DecimalType column keeps to the right
 // of the decimal point. Its zero value states no scale at all, which is a
 // different thing from a stated scale of zero: DECIMAL(19,0) is a legitimate
@@ -159,10 +184,14 @@ func (w *IntegerDisplayWidth) UnmarshalJSON(data []byte) error {
 
 // ColumnDef describes a table column.
 type ColumnDef struct {
-	Name     string
-	Type     ColumnType
-	Nullable bool
-	Default  sqltext.Text
+	Name      string
+	Type      ColumnType
+	Nullable  bool
+	Default   sqltext.Text
+	GoBinding *GoBinding `json:",omitempty"`
+
+	// Collation names the column's explicit collation, or is empty when the database default applies.
+	Collation string `json:",omitempty"`
 
 	// GeneratedExpression is the expression a generated column computes,
 	// exactly as the server reports it, or empty for an ordinary column.
@@ -214,6 +243,8 @@ type ColumnDef struct {
 	// never comes from a PostgreSQL or MySQL descriptor, or from an
 	// ordinary SQLite table.
 	Hidden bool `json:",omitempty"`
+
+	NativeType *NativeTypeDef `json:"NativeType,omitempty"`
 }
 
 // MarshalJSON encodes a column type as a tagged object so type-specific
@@ -224,10 +255,13 @@ func (c ColumnDef) MarshalJSON() ([]byte, error) {
 		Type                json.RawMessage    `json:"Type"`
 		Nullable            bool               `json:"Nullable"`
 		Default             string             `json:"Default"`
+		GoBinding           *GoBinding         `json:",omitempty"`
+		Collation           string             `json:"Collation,omitempty"`
 		GeneratedExpression string             `json:"GeneratedExpression,omitempty"`
 		GeneratedStorage    GeneratedStorage   `json:"GeneratedStorage,omitempty"`
 		Identity            IdentityGeneration `json:"Identity,omitempty"`
 		Hidden              bool               `json:"Hidden,omitempty"`
+		NativeType          *NativeTypeDef     `json:"NativeType,omitempty"`
 	}
 	typeData, err := marshalColumnType(c.Type)
 	if err != nil {
@@ -238,10 +272,13 @@ func (c ColumnDef) MarshalJSON() ([]byte, error) {
 		Type:                typeData,
 		Nullable:            c.Nullable,
 		Default:             string(c.Default),
+		GoBinding:           c.GoBinding,
+		Collation:           c.Collation,
 		GeneratedExpression: string(c.GeneratedExpression),
 		GeneratedStorage:    c.GeneratedStorage,
 		Identity:            c.Identity,
 		Hidden:              c.Hidden,
+		NativeType:          c.NativeType,
 	})
 }
 
@@ -252,10 +289,13 @@ func (c *ColumnDef) UnmarshalJSON(data []byte) error {
 		Type                json.RawMessage    `json:"Type"`
 		Nullable            bool               `json:"Nullable"`
 		Default             string             `json:"Default"`
+		GoBinding           *GoBinding         `json:",omitempty"`
+		Collation           string             `json:"Collation,omitempty"`
 		GeneratedExpression string             `json:"GeneratedExpression,omitempty"`
 		GeneratedStorage    GeneratedStorage   `json:"GeneratedStorage,omitempty"`
 		Identity            IdentityGeneration `json:"Identity,omitempty"`
 		Hidden              bool               `json:"Hidden,omitempty"`
+		NativeType          *NativeTypeDef     `json:"NativeType,omitempty"`
 	}
 	var wire wireColumn
 	if err := json.Unmarshal(data, &wire); err != nil {
@@ -270,10 +310,13 @@ func (c *ColumnDef) UnmarshalJSON(data []byte) error {
 		Type:                columnType,
 		Nullable:            wire.Nullable,
 		Default:             sqltext.Text(wire.Default),
+		GoBinding:           wire.GoBinding,
+		Collation:           wire.Collation,
 		GeneratedExpression: sqltext.Text(wire.GeneratedExpression),
 		GeneratedStorage:    wire.GeneratedStorage,
 		Identity:            wire.Identity,
 		Hidden:              wire.Hidden,
+		NativeType:          wire.NativeType,
 	}
 	return nil
 }
@@ -935,8 +978,10 @@ type TableDef struct {
 	// inspection remains qualified when it is rendered. SQLite inspection
 	// requires a retained connection when the descriptor addresses temp or
 	// attached data.
-	Schema string
-	Name   string
+	Schema     string
+	Name       string
+	Kind       ObjectKind `json:",omitempty"`
+	Operations Operation  `json:",omitempty"`
 
 	// RowName overrides the Go row type rasqlgen generates for the table.
 	// The default, used when RowName is empty, is <Table>Row: a table named
@@ -1066,6 +1111,30 @@ func (t TableDef) Qualified() bool {
 	return t.Schema != ""
 }
 
+// EffectiveKind treats descriptors written before object kinds were added as tables.
+func (t TableDef) EffectiveKind() ObjectKind {
+	if t.Kind == "" {
+		return ObjectTable
+	}
+	return t.Kind
+}
+
+// Supports reports whether the descriptor permits operation.
+func (t TableDef) Supports(operation Operation) bool {
+	if operation == 0 || operation&^allTableOperations != 0 {
+		return false
+	}
+	operations := t.Operations
+	if operations == 0 {
+		if t.EffectiveKind() == ObjectView {
+			operations = OperationRead
+		} else {
+			operations = allTableOperations
+		}
+	}
+	return operations&operation == operation
+}
+
 // QualifiedName returns the table's name for display: "schema.name" when t
 // names a schema and "name" otherwise. It is for error messages, log output
 // and map keys only. It is never a SQL identifier: a renderer quotes Schema
@@ -1117,6 +1186,8 @@ func cloneColumns(source []ColumnDef) []ColumnDef {
 	clone := slices.Clone(source)
 	for i := range clone {
 		clone[i].Type = cloneColumnType(clone[i].Type)
+		clone[i].NativeType = clone[i].NativeType.clone()
+		clone[i].GoBinding = clone[i].GoBinding.Clone()
 	}
 	return clone
 }
@@ -1167,6 +1238,12 @@ func validateExportedGoIdentifier(name string) error {
 
 // Validate reports whether t has a valid, internally consistent descriptor.
 func (t TableDef) Validate() error {
+	if !t.Kind.valid() {
+		return validationError("table.kind", "unsupported object kind %q", t.Kind)
+	}
+	if !t.Operations.valid() {
+		return validationError("table.operations", "unsupported operation bits %d", t.Operations)
+	}
 	if t.Schema != "" {
 		if err := ValidateIdentifier(t.Schema); err != nil {
 			return validationError("table.schema", "%s", err)
@@ -1192,6 +1269,14 @@ func (t TableDef) Validate() error {
 		}
 		if !validColumnType(column.Type) {
 			return validationError(path+".type", "unsupported column type %T", column.Type)
+		}
+		if err := validateNativeColumn(column, path); err != nil {
+			return err
+		}
+		if column.Collation != "" {
+			if err := ValidateIdentifier(column.Collation); err != nil {
+				return validationError(path+".collation", "%s", err)
+			}
 		}
 		switch typed := column.Type.(type) {
 		case DecimalType:
@@ -1320,11 +1405,11 @@ func validateRelationships(relationships []RelationshipDef, _ []ForeignKeyDef, c
 		if relationship.Name == "" {
 			return validationError(path+".name", "must not be empty")
 		}
-		if err := ValidateIdentifier(relationship.Name); err != nil {
+		if err := ValidateSimpleIdentifier(relationship.Name); err != nil {
 			return validationError(path+".name", "%s", err)
 		}
 		if relationship.InverseName != "" {
-			if err := ValidateIdentifier(relationship.InverseName); err != nil {
+			if err := ValidateSimpleIdentifier(relationship.InverseName); err != nil {
 				return validationError(path+".inverse_name", "%s", err)
 			}
 		}

@@ -44,6 +44,12 @@ module root. Write it once and check it in:
   "dialect": "sqlite",
   "prune": true,
   "tables": {
+    "namespaces": ["billing", "audit"],
+    "include_objects": [{"schema": "billing", "name": "events"}, {"schema": "audit", "name": "events"}],
+    "names": {
+      "billing.events": {"accessor": "BillingEvents", "table_type": "BillingEventsTable", "row_type": "BillingEventsRow", "file_base": "billing_events"},
+      "audit.events": {"accessor": "AuditEvents", "table_type": "AuditEventsTable", "row_type": "AuditEventsRow", "file_base": "audit_events"}
+    },
     "exclude": ["audit_log"],
     "history_table": "schema_migrations",
     "row_names": {"users": "User"}
@@ -59,14 +65,27 @@ module root. Write it once and check it in:
 resolved against the module root unless `root` names a different base.
 `dialect` is `postgresql` (or `postgres`), `mysql`, or `sqlite`.
 
-`tables.include` names the only tables to generate, and `tables.exclude` names
-tables to skip. A sweep otherwise covers every visible base table.
+`tables.namespaces` selects PostgreSQL schemas, MySQL databases, or attached
+SQLite databases. `tables.include_objects` and `tables.exclude_objects` use
+exact `{schema, name}` identities, which lets one package include same-named
+tables from multiple namespaces. The command-line equivalents are
+`-namespaces`, `-include-objects`, and `-exclude-objects`; object flags accept
+`namespace.table` or an unqualified table. `tables.include` names the only
+tables to generate, and `tables.exclude` names tables to skip. A sweep
+otherwise covers every visible base table.
 `tables.history_table` names the migration history table to skip when it is
 not `rasql_schema_migrations`. `tables.row_names` overrides a generated row
 type: the generator derives `UsersRow` from a `users` table on its own, and
 `"users": "User"` makes it `User` instead. State one when the derived name
 reads badly, and when it collides with another table's generated names, which
 refuses the run.
+
+Programmatic generators can set `generate.Store.Names` when physical names do
+not make good Go identifiers or normalize to the same symbol. Keys are exact
+`schema.ObjectName` values, so an empty schema targets only the unqualified
+table. `ObjectNames` can set table accessors, table and row types, output file
+bases, and per-column fields and accessors. These names affect Go output only;
+SQL descriptors retain the exact physical names.
 
 `queries` compiles static SQL templates into generated functions beside the
 table code. Each entry names the `function` to generate and states its
@@ -88,6 +107,20 @@ column's descriptor instead of `any`. The table must be one this run
 generates, so a `tables.include` or `tables.exclude` that leaves it out makes
 the reference an error rather than an untyped parameter.
 
+Query entries can set `bindings` by parameter name when a standalone bind
+needs an explicit Go type:
+
+```json
+"bindings": {
+  "limit": {"Go": {"Type": "int"}}
+}
+```
+
+An explicit binding overrides the generated application type while a stated
+column reference still has to resolve. Set `Nullable` to `true` to select the
+binding's `NullableType`; an unconfigured nullable column uses its nullable
+form automatically. Unconfigured standalone binds remain `any`.
+
 A template held in `input` is read again before the run writes anything, so an
 edit made while a run was in flight is caught rather than committed around. A
 template held in `sql` is already in hand, so nothing has to be re-read.
@@ -98,6 +131,15 @@ names the file instead.
 
 A key the file does not define is refused rather than ignored, so a
 misspelling is a message rather than a setting that silently does nothing.
+
+Generated descriptors preserve native type metadata alongside portable column
+types. PostgreSQL domains, enums, and arrays, MySQL ENUM and SET labels, and
+validated SQLite declarations remain available to generated code. A native
+type without a portable Go binding generates `any`; callers provide explicit
+`sql.Scanner` and `driver.Valuer` implementations when they need a concrete
+value. Code generation refuses incomplete native metadata before it writes
+generated files, and diff-live preserves native DDL only for the inspected
+engine while returning a typed error for another dialect.
 
 ## What stays on the command line
 
@@ -119,6 +161,30 @@ type wins over the file, so a one-off run needs no edit to it. The two list
 flags take comma-separated names.
 
 ## Next
+
+Applications that generate from a `schema.TableDef` can set a column's
+`GoBinding` to choose a named Go type, its nullable form, and the imports used
+by those expressions. The same binding is emitted into descriptor, row, and
+column-typed static query code. Custom types keep database/sql behavior by
+implementing `sql.Scanner` for reads and `driver.Valuer` for writes.
+
+<!-- INCLUDE(examples/rasqlgen_binding_example_test.go#binding) -->
+```go
+users := schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{
+	Name: "id", Type: schema.TextType{}, GoBinding: &schema.GoBinding{
+		Type: "UserID", NullableType: "NullableUserID",
+	}, Nullable: true,
+}}}
+source, err := generate.PackageSource("store", users)
+if err != nil {
+	fmt.Println(err)
+	return
+}
+fmt.Println(strings.Contains(string(source), "ID NullableUserID"))
+fmt.Println(strings.Contains(string(source), "NullableUserID"))
+```
+source: [examples/rasqlgen_binding_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasqlgen_binding_example_test.go)
+<!-- END INCLUDE -->
 
 [The generated store](02-generated-store.md) says what the command writes and
 what each generated member is for. [Typed queries](03-typed-queries.md) reads

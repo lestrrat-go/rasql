@@ -1,8 +1,11 @@
-// Package dialect defines SQL rendering rules for supported databases.
+// Package dialect defines SQL rendering rules for supported databases. A
+// dialect may optionally implement CompilerProvider to extend pagination and
+// expression rendering through the common renderer emitter.
 package dialect
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/lestrrat-go/rasql/schema"
 )
@@ -66,6 +69,17 @@ const (
 	// — MATCH (cols) AGAINST (expr), not a binary operator — while
 	// PostgreSQL has neither.
 	CapabilityMatchOperator
+	// CapabilityAggregateFilter reports support for aggregate FILTER (WHERE ...).
+	CapabilityAggregateFilter
+	CapabilitySelectForUpdate
+	CapabilitySelectForShare
+	CapabilitySelectLockOf
+	CapabilitySelectLockNoWait
+	CapabilitySelectLockSkipLocked
+	CapabilityUpsertConflictWhere
+	CapabilityUpsertUpdateWhere
+	// CapabilitySavepoint reports whether the dialect supports transactional savepoints.
+	CapabilitySavepoint
 )
 
 // UpsertStyle identifies a dialect's conflict-handling syntax.
@@ -96,6 +110,27 @@ type Dialect interface {
 	Supports(Capability) bool
 }
 
+// NativeTypeNamer optionally reconstructs a stored native type identity.
+type NativeTypeNamer interface {
+	NativeTypeName(schema.NativeTypeDef) (name string, supported bool, err error)
+}
+
+// IdentifierComparer is an optional dialect extension for identifier
+// resolution. Dialect implementations do not need to implement it.
+type IdentifierComparer interface {
+	IdentifiersEqual(left, right string) bool
+}
+
+// IdentifiersEqual compares identifiers using the dialect's resolution rule
+// when it provides one, and exact comparison otherwise.
+func IdentifiersEqual(d Dialect, left, right string) bool {
+	comparer, ok := d.(IdentifierComparer)
+	if ok {
+		return comparer.IdentifiersEqual(left, right)
+	}
+	return left == right
+}
+
 // PostgreSQL returns the PostgreSQL dialect.
 func PostgreSQL() Dialect {
 	return builtin{
@@ -103,7 +138,7 @@ func PostgreSQL() Dialect {
 		quote:        '"',
 		placeholder:  dollarPlaceholder,
 		upsert:       UpsertOnConflict,
-		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilityDefaultValuesUpsert | CapabilitySubqueryLimit | CapabilityWriteSubqueryTarget | CapabilityQualifiedReference | CapabilityQualifiedIndexTarget | CapabilityPartialIndex,
+		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilityDefaultValuesUpsert | CapabilitySubqueryLimit | CapabilityWriteSubqueryTarget | CapabilityQualifiedReference | CapabilityQualifiedIndexTarget | CapabilityPartialIndex | CapabilityAggregateFilter | CapabilitySelectForUpdate | CapabilitySelectForShare | CapabilitySelectLockOf | CapabilitySelectLockNoWait | CapabilitySelectLockSkipLocked | CapabilityUpsertConflictWhere | CapabilityUpsertUpdateWhere | CapabilitySavepoint,
 		decimalName:  "NUMERIC",
 		maxPrecision: 1000,
 		maxScale:     1000,
@@ -133,7 +168,7 @@ func MySQL() Dialect {
 		quote:        '`',
 		placeholder:  questionPlaceholder,
 		upsert:       UpsertDuplicateKey,
-		capabilities: CapabilityUpsert | CapabilityDefaultValuesUpsert | CapabilityEmptyInsert | CapabilityQualifiedReference | CapabilityQualifiedIndexTarget,
+		capabilities: CapabilityUpsert | CapabilityDefaultValuesUpsert | CapabilityEmptyInsert | CapabilityQualifiedReference | CapabilityQualifiedIndexTarget | CapabilitySelectForUpdate | CapabilitySelectForShare | CapabilitySelectLockOf | CapabilitySelectLockNoWait | CapabilitySelectLockSkipLocked | CapabilitySavepoint,
 		decimalName:  "DECIMAL",
 		maxPrecision: 65,
 		maxScale:     30,
@@ -162,12 +197,12 @@ func MySQL() Dialect {
 
 // SQLite returns the SQLite dialect.
 func SQLite() Dialect {
-	return builtin{
+	return sqliteBuiltin{builtin: builtin{
 		name:         "sqlite",
 		quote:        '"',
 		placeholder:  questionPlaceholder,
 		upsert:       UpsertOnConflict,
-		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilitySubqueryLimit | CapabilityWriteSubqueryTarget | CapabilityQualifiedIndexName | CapabilityPartialIndex | CapabilityMatchOperator,
+		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilitySubqueryLimit | CapabilityWriteSubqueryTarget | CapabilityQualifiedIndexName | CapabilityPartialIndex | CapabilityMatchOperator | CapabilityAggregateFilter | CapabilityUpsertConflictWhere | CapabilityUpsertUpdateWhere | CapabilitySavepoint,
 		decimalName:  "TEXT",
 		// varcharText is left false: SQLite already drops schema.DecimalType's
 		// Precision and Scale for the same reason (see decimalTypeName below),
@@ -189,7 +224,32 @@ func SQLite() Dialect {
 			schema.KindJSON:    "TEXT",
 			schema.KindUUID:    "TEXT",
 		},
+	}}
+}
+
+type sqliteBuiltin struct {
+	builtin
+}
+
+// IdentifiersEqual follows SQLite's identifier comparison for ASCII letters.
+// SQLite does not Unicode-fold quoted identifiers.
+func (d sqliteBuiltin) IdentifiersEqual(left, right string) bool {
+	if len(left) != len(right) {
+		return false
 	}
+	for i := 0; i < len(left); i++ {
+		leftByte, rightByte := left[i], right[i]
+		if leftByte >= 'A' && leftByte <= 'Z' {
+			leftByte += 'a' - 'A'
+		}
+		if rightByte >= 'A' && rightByte <= 'Z' {
+			rightByte += 'a' - 'A'
+		}
+		if leftByte != rightByte {
+			return false
+		}
+	}
+	return true
 }
 
 type builtin struct {
@@ -220,7 +280,8 @@ func (d builtin) QuoteIdentifier(name string) (string, error) {
 	if err := schema.ValidateIdentifier(name); err != nil {
 		return "", fmt.Errorf("dialect %s: invalid identifier: %w", d.name, err)
 	}
-	return string(d.quote) + name + string(d.quote), nil
+	quoted := strings.ReplaceAll(name, string(d.quote), string(d.quote)+string(d.quote))
+	return string(d.quote) + quoted + string(d.quote), nil
 }
 
 func (d builtin) Placeholder(position int) (string, error) {
@@ -252,6 +313,138 @@ func (d builtin) TypeName(column schema.ColumnDef) (string, error) {
 		return "", fmt.Errorf("dialect %s: unsupported column type %q", d.name, column.Type.Kind())
 	}
 	return typeName, nil
+}
+
+func (d builtin) NativeTypeName(native schema.NativeTypeDef) (string, bool, error) {
+	if native.Dialect != d.name {
+		return "", false, nil
+	}
+	if native.Name == "" {
+		return "", false, fmt.Errorf("dialect %s: native type name must not be empty", d.name)
+	}
+	quote := func(value string) (string, error) { return d.QuoteIdentifier(value) }
+	qualified := func() (string, error) {
+		if native.Schema == "" {
+			return quote(native.Name)
+		}
+		schemaName, err := quote(native.Schema)
+		if err != nil {
+			return "", err
+		}
+		name, err := quote(native.Name)
+		if err != nil {
+			return "", err
+		}
+		return schemaName + "." + name, nil
+	}
+	switch native.Kind {
+	case schema.NativeOther, schema.NativeBuiltin:
+		if d.name == "sqlite" {
+			if !sqliteNativeDeclarationSupported(native.Name, native.Arguments) {
+				return "", false, nil
+			}
+			if len(native.Arguments) == 0 {
+				if sqliteNativeNameUnquoted(native.Name) {
+					return native.Name, true, nil
+				}
+				name, err := quote(native.Name)
+				return name, err == nil, err
+			}
+			if !sqliteNativeNameUnquoted(native.Name) {
+				return "", false, nil
+			}
+			return native.Name + "(" + strings.Join(native.Arguments, ", ") + ")", true, nil
+		}
+		if d.name == "postgresql" && native.Kind == schema.NativeBuiltin && len(native.Arguments) > 0 {
+			if len(native.Arguments) != 1 || native.Arguments[0] == "" {
+				return "", false, nil
+			}
+			for _, char := range native.Arguments[0] {
+				if char < '0' || char > '9' {
+					return "", false, nil
+				}
+			}
+			if native.Name != "time" && native.Name != "timetz" && native.Name != "timestamp" && native.Name != "timestamptz" {
+				return "", false, nil
+			}
+			name, err := qualified()
+			if err != nil {
+				return "", false, err
+			}
+			return name + "(" + native.Arguments[0] + ")", true, nil
+		}
+		name, err := qualified()
+		return name, err == nil, err
+	case schema.NativeArray:
+		if native.Element == nil {
+			return "", false, fmt.Errorf("dialect %s: native array lacks an element type", d.name)
+		}
+		if d.name != "postgresql" {
+			return "", false, nil
+		}
+		element, supported, err := d.NativeTypeName(*native.Element)
+		if err != nil || !supported {
+			return "", supported, err
+		}
+		return element + "[]", true, nil
+	case schema.NativeEnum, schema.NativeSet:
+		if d.name != "mysql" {
+			if native.Kind == schema.NativeEnum && d.name == "postgresql" {
+				name, err := qualified()
+				return name, err == nil, err
+			}
+			return "", false, nil
+		}
+		name := "ENUM"
+		if native.Kind == schema.NativeSet {
+			name = "SET"
+		}
+		literals := make([]string, len(native.Arguments))
+		for i, value := range native.Arguments {
+			value = strings.ReplaceAll(value, "\\", "\\\\")
+			literals[i] = "'" + strings.ReplaceAll(value, "'", "''") + "'"
+		}
+		return name + "(" + strings.Join(literals, ", ") + ")", true, nil
+	default:
+		name, err := qualified()
+		return name, err == nil, err
+	}
+}
+
+func sqliteNativeNameUnquoted(value string) bool {
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "INT", "INTEGER", "TINYINT", "SMALLINT", "MEDIUMINT", "BIGINT", "INT2", "INT8",
+		"CHAR", "CHARACTER", "VARCHAR", "VARYING CHARACTER", "NCHAR", "NATIVE CHARACTER", "NVARCHAR", "TEXT", "CLOB",
+		"BLOB", "REAL", "DOUBLE", "FLOAT", "NUMERIC", "DECIMAL", "BOOLEAN", "DATE",
+		"DATETIME", "TIME", "JSON":
+		return true
+	default:
+		return false
+	}
+}
+
+func sqliteNativeDeclarationSupported(value string, arguments []string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '_' || char == ' ' || char == '"' {
+			continue
+		}
+		return false
+	}
+	for _, argument := range arguments {
+		if argument == "" {
+			return false
+		}
+		for _, char := range argument {
+			if char < '0' || char > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // unsignedTypeName renders the DDL type for a column that states no negative
