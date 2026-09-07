@@ -1,11 +1,10 @@
 package rasql
 
 import (
+	"reflect"
 	"sync/atomic"
 
 	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/sqltext"
-	"github.com/lestrrat-go/rasql/stmt"
 )
 
 type Expr[T any] struct {
@@ -39,66 +38,23 @@ type bindSlot struct {
 	codec string
 }
 
-type compiledQuery struct {
-	statement stmt.Statement
-	bindSlots []bindSlot
-}
-
-func unwrapBindTokens(statement stmt.Statement) (compiledQuery, error) {
-	arguments := statement.Args()
-	slots := make([]bindSlot, len(arguments))
-	for i, argument := range arguments {
-		token, ok := argument.(bindToken)
-		if !ok {
-			continue
-		}
-		arguments[i] = token.value
-		slots[i] = bindSlot{id: token.id, codec: token.codec}
-	}
-	return compiledQuery{statement: stmt.New(sqltext.Text(statement.SQL()), arguments...), bindSlots: slots}, nil
-}
-
-func matchBaseOccurrences(base, paged compiledQuery) ([]int, error) {
-	result := make([]int, 0, len(base.bindSlots))
-	next := 0
-	for _, wanted := range base.bindSlots {
-		if wanted.id == 0 {
-			return nil, planError("uncertain_contract", "binds", "base bind has no logical ID")
-		}
-		found := false
-		for next < len(paged.bindSlots) {
-			index := next
-			candidate := paged.bindSlots[next]
-			next++
-			if candidate == wanted {
-				result = append(result, index)
-				found = true
-				break
-			}
-		}
-		if !found {
-			return nil, planError("uncertain_contract", "binds", "base bind occurrence is missing or reordered")
-		}
-	}
-	return result, nil
-}
-
 func Value[T any](value T) Expr[T] {
 	id := bindID(atomic.AddUint64(&nextBindID, 1))
-	return Expr[T]{node: query.Bind(bindToken{id: id, value: value})}
+	return Expr[T]{node: query.Bind(bindToken{id: id, value: cloneBindValue(value)})}
 }
 func ValueWithCodec[T any](value T, codec string) (Expr[T], error) {
 	if codec != "" && !codecPattern.MatchString(codec) {
 		return Expr[T]{}, planError("invalid_schema", "codec", "malformed codec identifier")
 	}
 	id := bindID(atomic.AddUint64(&nextBindID, 1))
-	return Expr[T]{node: query.Bind(bindToken{id: id, value: value, codec: codec}), codec: codec}, nil
+	return Expr[T]{node: query.Bind(bindToken{id: id, value: cloneBindValue(value), codec: codec}), codec: codec}, nil
 }
 func EqualExpr[T comparable](left, right Expr[T]) Predicate {
 	return Predicate{node: query.Equal(left.node, right.node)}
 }
 func EqualValue[T comparable](left Expr[T], right T) Predicate {
-	return Predicate{node: query.Equal(left.node, Value(right).node)}
+	id := bindID(atomic.AddUint64(&nextBindID, 1))
+	return Predicate{node: query.Equal(left.node, query.Bind(bindToken{id: id, value: cloneBindValue(right), codec: left.codec}))}
 }
 func EqualNullable[T comparable](left, right NullExpr[T]) Predicate {
 	return Predicate{node: query.Equal(left.node, right.node)}
@@ -156,4 +112,55 @@ func AscNull[T any](value NullExpr[T], nulls NullOrder) OrderTerm {
 }
 func DescNull[T any](value NullExpr[T], nulls NullOrder) OrderTerm {
 	return OrderTerm{node: value.node, descending: true, nulls: nulls}
+}
+
+func cloneBindValue[T any](value T) any {
+	cloned := cloneReflectValue(reflect.ValueOf(value))
+	if !cloned.IsValid() {
+		return nil
+	}
+	return cloned.Interface()
+}
+func cloneReflectValue(value reflect.Value) reflect.Value {
+	if !value.IsValid() {
+		return value
+	}
+	switch value.Kind() {
+	case reflect.Pointer:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		copy := reflect.New(value.Type().Elem())
+		copy.Elem().Set(cloneReflectValue(value.Elem()))
+		return copy
+	case reflect.Interface:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		copy := cloneReflectValue(value.Elem())
+		result := reflect.New(value.Type()).Elem()
+		result.Set(copy)
+		return result
+	case reflect.Slice:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		copy := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+		for i := 0; i < value.Len(); i++ {
+			copy.Index(i).Set(cloneReflectValue(value.Index(i)))
+		}
+		return copy
+	case reflect.Map:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		copy := reflect.MakeMapWithSize(value.Type(), value.Len())
+		iter := value.MapRange()
+		for iter.Next() {
+			copy.SetMapIndex(cloneReflectValue(iter.Key()), cloneReflectValue(iter.Value()))
+		}
+		return copy
+	default:
+		return value
+	}
 }

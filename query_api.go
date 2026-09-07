@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
-	"strings"
 
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
@@ -288,42 +287,6 @@ func (q Query[R]) Offset(n int) (Query[R], error) {
 	return q, nil
 }
 
-type TypedSource[R any] struct {
-	query Query[R]
-	alias string
-}
-
-func Derive[R any](q Query[R], alias string) (TypedSource[R], error) {
-	if err := schema.ValidateSimpleIdentifier(alias); err != nil {
-		return TypedSource[R]{}, planError("invalid_source", "alias", err.Error())
-	}
-	return TypedSource[R]{query: q, alias: alias}, nil
-}
-func (d TypedSource[R]) Source() Source { return Source{} }
-
-type CTEPlan interface{ ctePlan() }
-type TypedCTE[R any] struct {
-	name  string
-	query Query[R]
-}
-
-func CTEOf[R any](name string, q Query[R]) (TypedCTE[R], error) {
-	if err := schema.ValidateSimpleIdentifier(name); err != nil {
-		return TypedCTE[R]{}, planError("invalid_cte", "name", err.Error())
-	}
-	return TypedCTE[R]{name: name, query: q}, nil
-}
-func (c TypedCTE[R]) Source(alias string) (TypedSource[R], error) { return Derive(c.query, alias) }
-func (c TypedCTE[R]) ctePlan()                                    {}
-func With[R any](q Query[R], _ ...CTEPlan) (Query[R], error)      { return q, nil }
-func Combine[R any](left Query[R], _ CompoundOperator, right Query[R]) (Query[R], error) {
-	if !reflect.DeepEqual(left.Schema().Columns(), right.Schema().Columns()) {
-		return Query[R]{}, planError("invalid_compound", "schema", "schemas do not match")
-	}
-	return left, nil
-}
-func Count[R any](q Query[R], _ bool) Query[int64] { return Query[int64]{plan: q.plan} }
-
 type scalarDecoder[T any] struct{ schema ResultSchema }
 
 func (d scalarDecoder[T]) ResultSchema() ResultSchema                   { return d.schema }
@@ -342,37 +305,4 @@ func NullableScalar[T any](name string, value NullExpr[T], logical schema.Column
 		return Projection[Nullable[T]]{}, err
 	}
 	return NewProjection([]ProjectionItem{NullItem(name, value, logical, codec)}, scalarDecoder[Nullable[T]]{schema: resultSchema})
-}
-
-type Cardinality uint8
-
-const (
-	Many Cardinality = iota + 1
-	AtMostOne
-	ExactlyOne
-)
-
-type NativeStatement struct {
-	Engine, SQL string
-	Args        []NativeArgument
-}
-type NativeArgument struct {
-	Value any
-	Codec string
-}
-
-func Native[R any](statement NativeStatement, projection Projection[R], cardinality Cardinality) (Query[R], error) {
-	if statement.Engine == "" || strings.TrimSpace(statement.SQL) == "" {
-		return Query[R]{}, planError("invalid_projection", "native", "engine and SQL are required")
-	}
-	if cardinality < Many || cardinality > ExactlyOne {
-		return Query[R]{}, planError("invalid_projection", "cardinality", "unsupported cardinality")
-	}
-	return Query[R]{projection: projection}, nil
-}
-func DynamicProjection[R any](s ResultSchema) (Projection[R], error) {
-	if len(s.columns) == 0 {
-		return Projection[R]{}, planError("invalid_projection", "schema", "must not be empty")
-	}
-	return Projection[R]{schema: s}, nil
 }
