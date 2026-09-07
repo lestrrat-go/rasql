@@ -28,6 +28,9 @@ type ResultRows interface {
 	Finish(error, bool) error
 }
 type compilerProvider interface{ queryCompiler() *querycompile.Compiler }
+type returnedColumnBinder[R any] interface {
+	bindReturnedColumns([]string) (RowDecoder[R], ResultSchema, error)
+}
 
 type dbExecutor struct {
 	db       DB
@@ -94,10 +97,12 @@ func isNilExecutor(e Executor) bool {
 }
 
 type preparedRows[R any] struct {
-	statement stmt.Statement
-	schema    ResultSchema
-	decoder   RowDecoder[R]
-	codecs    CodecRegistry
+	statement   stmt.Statement
+	schema      ResultSchema
+	decoder     RowDecoder[R]
+	codecs      CodecRegistry
+	cardinality Cardinality
+	emptyErr    error
 }
 type rowTerminal struct{ cause error }
 type rowTerminalKey struct{}
@@ -117,6 +122,13 @@ func prepareRows[R any](executor Executor, q Query[R], compiled compiledQuery) (
 	compiler := provider.queryCompiler()
 	if compiler == nil {
 		return result, &PlanError{Code: "engine_profile_unavailable", Detail: "executor has no retained compiler"}
+	}
+	engine, cardinality, native := q.nativeInfo()
+	if native {
+		dialect := executor.Dialect()
+		if dialect == nil || dialect.Name() != engine {
+			return result, planError("engine_mismatch", "native.engine", "executor dialect does not match native SQL")
+		}
 	}
 	registry := builtinCodecs
 	if cp, ok := executor.(CodecProvider); ok {
@@ -157,11 +169,15 @@ func prepareRows[R any](executor Executor, q Query[R], compiled compiledQuery) (
 	if err != nil {
 		return result, err
 	}
-	result.statement, result.schema, result.decoder, result.codecs = statement, q.Schema(), q.Projection().Decoder(), registry
+	result.statement, result.schema, result.decoder, result.codecs, result.cardinality, result.emptyErr = statement, q.Schema(), q.Projection().Decoder(), registry, cardinality, q.resultRequirement.emptyErr
 	return result, nil
 }
 
 func rowsPrepared[R any](ctx context.Context, executor Executor, prepared preparedRows[R]) (iter.Seq2[R, error], error) {
+	return rowsPreparedRequired(ctx, executor, prepared, Many)
+}
+
+func rowsPreparedRequired[R any](ctx context.Context, executor Executor, prepared preparedRows[R], consumer Cardinality) (iter.Seq2[R, error], error) {
 	if isNilExecutor(executor) {
 		return nil, errors.New("executor must not be nil")
 	}
@@ -190,6 +206,18 @@ func rowsPrepared[R any](ctx context.Context, executor Executor, prepared prepar
 			return
 		}
 		expected := prepared.schema.Columns()
+		decoder := prepared.decoder
+		bound := false
+		if binder, ok := any(decoder).(returnedColumnBinder[R]); ok {
+			boundDecoder, boundSchema, bindErr := binder.bindReturnedColumns(columns)
+			if bindErr != nil {
+				finished := owned.Finish(bindErr, true)
+				yield(zero, finished)
+				return
+			}
+			decoder, expected = boundDecoder, boundSchema.Columns()
+			bound = true
+		}
 		if len(columns) != len(expected) {
 			mismatch := &PlanError{Code: "result_columns_mismatch", Path: "result.columns", Detail: "column count differs from prepared schema"}
 			finished := owned.Finish(mismatch, true)
@@ -197,6 +225,9 @@ func rowsPrepared[R any](ctx context.Context, executor Executor, prepared prepar
 			return
 		}
 		for i, name := range columns {
+			if bound {
+				break
+			}
 			if name != expected[i].Name {
 				mismatch := &PlanError{Code: "result_columns_mismatch", Path: fmt.Sprintf("result.columns[%d]", i), Detail: "column name differs from prepared schema"}
 				finished := owned.Finish(mismatch, true)
@@ -204,15 +235,26 @@ func rowsPrepared[R any](ctx context.Context, executor Executor, prepared prepar
 				return
 			}
 		}
-		codecs := make([]ValueCodec, len(prepared.schema.Columns()))
-		for i, column := range prepared.schema.Columns() {
+		codecs := make([]ValueCodec, len(expected))
+		for i, column := range expected {
 			codecs[i], _ = codecFor(prepared.codecs, column.Codec)
 		}
 		source := codecScanSource{source: owned, columns: prepared.schema.Columns(), codecs: codecs}
+		policy := prepared.cardinality
+		if consumer > policy {
+			policy = consumer
+		}
+		count := 0
 		for owned.Next() {
 			var value R
-			if err := prepared.decoder.DecodeRow(source, &value); err != nil {
+			if err := decoder.DecodeRow(source, &value); err != nil {
 				finished := owned.Finish(err, true)
+				yield(zero, finished)
+				return
+			}
+			count++
+			if policy != Many && count > 1 {
+				finished := owned.Finish(ErrMultipleRows, true)
 				yield(zero, finished)
 				return
 			}
@@ -232,6 +274,15 @@ func rowsPrepared[R any](ctx context.Context, executor Executor, prepared prepar
 		}
 		if err := owned.Err(); err != nil {
 			finished := owned.Finish(err, false)
+			yield(zero, finished)
+			return
+		}
+		if policy == ExactlyOne && count == 0 {
+			cause := prepared.emptyErr
+			if cause == nil {
+				cause = ErrNoRows
+			}
+			finished := owned.Finish(cause, false)
 			yield(zero, finished)
 			return
 		}
@@ -281,35 +332,22 @@ func All[R any](ctx context.Context, executor Executor, q Query[R]) ([]R, error)
 }
 func One[R any](ctx context.Context, executor Executor, q Query[R]) (R, error) {
 	var zero R
-	terminal := &rowTerminal{cause: ErrNoRows}
-	ctx = context.WithValue(ctx, rowTerminalKey{}, terminal)
-	rows, err := Rows(ctx, executor, q)
+	rows, err := rowsFor(ctx, executor, q, ExactlyOne)
 	if err != nil {
 		return zero, err
 	}
-	count := 0
 	var result R
 	for value, err := range rows {
 		if err != nil {
 			return zero, err
 		}
-		count++
-		if count > 1 {
-			terminal.cause = ErrMultipleRows
-			return zero, ErrMultipleRows
-		}
 		result = value
-	}
-	if count == 0 {
-		return zero, ErrNoRows
 	}
 	return result, nil
 }
 func Maybe[R any](ctx context.Context, executor Executor, q Query[R]) (R, bool, error) {
 	var zero R
-	terminal := &rowTerminal{}
-	ctx = context.WithValue(ctx, rowTerminalKey{}, terminal)
-	rows, err := Rows(ctx, executor, q)
+	rows, err := rowsFor(ctx, executor, q, AtMostOne)
 	if err != nil {
 		return zero, false, err
 	}
@@ -320,11 +358,27 @@ func Maybe[R any](ctx context.Context, executor Executor, q Query[R]) (R, bool, 
 			return zero, false, err
 		}
 		count++
-		if count > 1 {
-			terminal.cause = ErrMultipleRows
-			return zero, false, ErrMultipleRows
-		}
 		result = value
 	}
 	return result, count == 1, nil
+}
+
+func rowsFor[R any](ctx context.Context, executor Executor, q Query[R], consumer Cardinality) (iter.Seq2[R, error], error) {
+	provider, ok := executor.(compilerProvider)
+	if !ok {
+		return nil, &PlanError{Code: "engine_profile_unavailable", Detail: "executor has no retained compiler"}
+	}
+	compiler := provider.queryCompiler()
+	if compiler == nil {
+		return nil, &PlanError{Code: "engine_profile_unavailable", Detail: "executor has no retained compiler"}
+	}
+	compiled, err := compileQuery(compiler, q)
+	if err != nil {
+		return nil, err
+	}
+	prepared, err := prepareRows(executor, q, compiled)
+	if err != nil {
+		return nil, err
+	}
+	return rowsPreparedRequired(ctx, executor, prepared, consumer)
 }

@@ -425,11 +425,23 @@ func compileQuery[R any](compiler *querycompile.Compiler, q Query[R]) (compiledQ
 	if compiler == nil {
 		return compiledQuery{}, planError("invalid_compiler", "compiler", "must not be nil")
 	}
-	result, err := resultQuery(q)
-	if err != nil {
+	if err := q.Validate(); err != nil {
 		return compiledQuery{}, mapCompileError(err)
 	}
-	statement, err := compiler.Select(result)
+	var statement stmt.Statement
+	var err error
+	switch {
+	case q.plan.mutation != nil:
+		statement, err = compiler.Write(q.plan.mutation)
+	case q.plan.native != nil:
+		statement, err = compiler.Native(q.plan.native.statement)
+	default:
+		result, resultErr := resultQuery(q)
+		if resultErr != nil {
+			return compiledQuery{}, resultErr
+		}
+		statement, err = compiler.Select(result)
+	}
 	if err != nil {
 		return compiledQuery{}, mapCompileError(err)
 	}

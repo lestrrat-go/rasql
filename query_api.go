@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"strings"
 
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
@@ -249,15 +250,31 @@ type QueryPlan struct {
 	partitionLimit int
 	err            error
 	projected      bool
+	native         *nativeQueryPlan
+	mutation       query.WriteStatement
+	planErr        error
 }
 type Query[R any] struct {
-	plan       QueryPlan
-	projection Projection[R]
+	plan              QueryPlan
+	projection        Projection[R]
+	resultRequirement queryResultRequirement
 }
 
 func (p QueryPlan) Validate() error {
 	if p.err != nil {
 		return p.err
+	}
+	if p.planErr != nil {
+		return p.planErr
+	}
+	if p.native != nil {
+		if p.native.engine == "" || strings.TrimSpace(p.native.statement.SQL()) == "" {
+			return planError("invalid_projection", "native", "native plan is incomplete")
+		}
+		if len(p.sources) != 0 || p.body != nil || p.mutation != nil {
+			return planError("unsupported_feature", "native", "native plans cannot be composed")
+		}
+		return nil
 	}
 	if p.body != nil {
 		return p.body.Validate()
@@ -358,6 +375,7 @@ func (p QueryPlan) Validate() error {
 	}
 	return nil
 }
+
 func q1SourceIdentity(ref query.RelationRef) string {
 	if table, ok := ref.Table(); ok {
 		return fmt.Sprintf("table:%s|schema:%s|name:%s|alias:%s", table.QualifierSchema(), table.Schema(), table.Name(), ref.Alias())
@@ -465,6 +483,9 @@ func Select[R any](from Source, projection Projection[R]) Query[R] {
 func Project[R any](base QueryPlan, projection Projection[R]) Query[R] {
 	base.projection = cloneItems(projection.items)
 	base.projected = true
+	if base.native != nil {
+		base.planErr = planError("unsupported_feature", "native", "native plans cannot be composed")
+	}
 	return Query[R]{plan: base, projection: projection}
 }
 func (q Query[R]) Schema() ResultSchema      { return q.projection.Schema() }
@@ -481,44 +502,81 @@ func clonePlan(p QueryPlan) QueryPlan {
 	p.ctes = append([]query.CTE(nil), p.ctes...)
 	p.partition = append([]GroupKey(nil), p.partition...)
 	p.partitionOrder = append([]OrderTerm(nil), p.partitionOrder...)
+	p.native = cloneNativePlan(p.native)
 	return p
 }
 func (q Query[R]) Where(p Predicate) Query[R] {
 	q.plan = clonePlan(q.plan)
+	if q.plan.native != nil {
+		q.plan.planErr = planError("unsupported_feature", "native", "native plans cannot be composed")
+		return q
+	}
 	q.plan.where = append(q.plan.where, p)
 	return q
 }
 func (q Query[R]) Join(s Source, on Predicate) Query[R] {
 	q.plan = clonePlan(q.plan)
+	if q.plan.native != nil {
+		q.plan.planErr = planError("unsupported_feature", "native", "native plans cannot be composed")
+		return q
+	}
 	q.plan.joins = append(q.plan.joins, query.InnerJoin(s.ref, on.node))
 	return q
 }
 func (q Query[R]) LeftJoin(s Source, on Predicate) Query[R] {
 	q.plan = clonePlan(q.plan)
+	if q.plan.native != nil {
+		q.plan.planErr = planError("unsupported_feature", "native", "native plans cannot be composed")
+		return q
+	}
 	q.plan.joins = append(q.plan.joins, query.LeftJoin(s.ref, on.node))
 	return q
 }
 func (q Query[R]) GroupBy(keys ...GroupKey) Query[R] {
 	q.plan = clonePlan(q.plan)
+	if q.plan.native != nil {
+		q.plan.planErr = planError("unsupported_feature", "native", "native plans cannot be composed")
+		return q
+	}
 	q.plan.group = append(q.plan.group, keys...)
 	return q
 }
 func (q Query[R]) Having(p Predicate) Query[R] {
 	q.plan = clonePlan(q.plan)
+	if q.plan.native != nil {
+		q.plan.planErr = planError("unsupported_feature", "native", "native plans cannot be composed")
+		return q
+	}
 	q.plan.having = append(q.plan.having, p)
 	return q
 }
 func (q Query[R]) OrderBy(terms ...OrderTerm) Query[R] {
 	q.plan = clonePlan(q.plan)
+	if q.plan.native != nil {
+		q.plan.planErr = planError("unsupported_feature", "native", "native plans cannot be composed")
+		return q
+	}
 	q.plan.order = append(q.plan.order, terms...)
 	return q
 }
-func (q Query[R]) Distinct() Query[R] { q.plan = clonePlan(q.plan); q.plan.distinct = true; return q }
+func (q Query[R]) Distinct() Query[R] {
+	q.plan = clonePlan(q.plan)
+	if q.plan.native != nil {
+		q.plan.planErr = planError("unsupported_feature", "native", "native plans cannot be composed")
+		return q
+	}
+	q.plan.distinct = true
+	return q
+}
 func (q Query[R]) Limit(n int) (Query[R], error) {
 	if n < 0 {
 		return q, planError("invalid_projection", "limit", "must not be negative")
 	}
 	q.plan = clonePlan(q.plan)
+	if q.plan.native != nil {
+		q.plan.planErr = planError("unsupported_feature", "native", "native plans cannot be composed")
+		return q, nil
+	}
 	q.plan.limit = &n
 	return q, nil
 }
@@ -527,6 +585,10 @@ func (q Query[R]) Offset(n int) (Query[R], error) {
 		return q, planError("invalid_projection", "offset", "must not be negative")
 	}
 	q.plan = clonePlan(q.plan)
+	if q.plan.native != nil {
+		q.plan.planErr = planError("unsupported_feature", "native", "native plans cannot be composed")
+		return q, nil
+	}
 	q.plan.offset = &n
 	return q, nil
 }
