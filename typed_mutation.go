@@ -137,6 +137,7 @@ type normalizedCreate[T any] struct {
 	table       query.TableRef
 	columns     []query.ColumnRef
 	values      []any
+	rawValues   []any
 	defaultOnly bool
 }
 
