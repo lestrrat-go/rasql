@@ -296,9 +296,7 @@ func schemaSourceWithOptions(packageName string, tables, allTables []schema.Tabl
 		}
 		source.WriteString("\n")
 		source.WriteString("\t\"github.com/lestrrat-go/rasql\"\n")
-		if containsRelationships(tables, allTables, names, &bindings) {
-			source.WriteString("\t\"github.com/lestrrat-go/rasql/query\"\n")
-		}
+		source.WriteString("\t\"github.com/lestrrat-go/rasql/query\"\n")
 		// The descriptor literal is the only thing here that names the
 		// schema package, so leaving it out leaves the import out too.
 		if descriptors == withDescriptors {
@@ -332,7 +330,9 @@ func schemaSourceWithOptions(packageName string, tables, allTables []schema.Tabl
 		source.WriteString("\n")
 		writeTableType(&source, table, names)
 		source.WriteString("\n")
-		writeTableColumns(&source, table, names)
+		if err := writeTableColumns(&source, table, names, bindings); err != nil {
+			return nil, err
+		}
 		source.WriteString("\n")
 		if descriptors == withDescriptors {
 			writeTableDescriptor(&source, table, names)
@@ -857,19 +857,21 @@ func validateVariableNames(tables []schema.TableDef) error {
 		// cross-table. Falsify this by finding an accepted table name whose
 		// timeScannerTypeName begins with an uppercase rune.
 
-		methods := make(map[string]struct{}, len(table.Columns))
+		methods := make(map[string]string, len(table.Columns)*2)
 		for _, column := range table.Columns {
 			method := goName(column.Name)
 			if method == "" || !token.IsIdentifier(method) {
 				return fmt.Errorf("generate: column %q on table %q cannot become a Go method", column.Name, table.Name)
 			}
-			if _, exists := reservedFieldNames[method]; exists {
-				return fmt.Errorf("generate: column %q on table %q uses reserved generated method %q", column.Name, table.Name, method)
+			for _, generated := range []string{method, method + "Ref"} {
+				if _, exists := reservedFieldNames[generated]; exists {
+					return fmt.Errorf("generate: column %q on table %q uses reserved generated method %q", column.Name, table.Name, generated)
+				}
+				if owner, exists := methods[generated]; exists {
+					return fmt.Errorf("generate: columns %q and %q on table %q both generate method %q", owner, column.Name, table.Name, generated)
+				}
+				methods[generated] = column.Name
 			}
-			if _, exists := methods[method]; exists {
-				return fmt.Errorf("generate: column %q on table %q duplicates generated method %q", column.Name, table.Name, method)
-			}
-			methods[method] = struct{}{}
 		}
 		relationshipMethods := make(map[string]struct {
 			index int
@@ -900,6 +902,9 @@ func validateVariableNames(tables []schema.TableDef) error {
 			}
 			method := goName(relationship.Name)
 			if _, exists := methods[method]; exists {
+				if column, ok := methods[method]; ok && method == goName(column)+"Ref" {
+					continue
+				}
 				return fmt.Errorf("generate: relationship %q on table %q collides with generated method %q", relationship.Name, table.Name, method)
 			}
 		}
@@ -1204,12 +1209,16 @@ func writeTableType(source *bytes.Buffer, table schema.TableDef, names *Resolved
 
 // writeTableColumns writes one accessor method per column, returning a
 // reference to that column on t.
-func writeTableColumns(source *bytes.Buffer, table schema.TableDef, names *ResolvedNames) {
+func writeTableColumns(source *bytes.Buffer, table schema.TableDef, names *ResolvedNames, bindings generatedBindings) error {
 	object, _ := names.Object(table)
 	typeName := object.TableType
 	for _, column := range table.Columns {
 		resolved, _ := names.Column(table, column.Name)
 		method := resolved.Accessor
+		fieldType, err := bindings.typeFor(table, column, column.Nullable)
+		if err != nil {
+			return err
+		}
 		source.WriteString("// ")
 		source.WriteString(method)
 		source.WriteString(" returns a reference to the ")
@@ -1219,7 +1228,37 @@ func writeTableColumns(source *bytes.Buffer, table schema.TableDef, names *Resol
 		source.WriteString(typeName)
 		source.WriteString(") ")
 		source.WriteString(method)
-		source.WriteString("() rasql.ColumnRef { return ")
+		if column.Nullable {
+			source.WriteString("() query.NullableColumn[")
+		} else {
+			source.WriteString("() query.TypedColumn[")
+		}
+		source.WriteString(object.RowType)
+		source.WriteString(", ")
+		source.WriteString(fieldType)
+		source.WriteString("] { return query.")
+		if column.Nullable {
+			source.WriteString("NullableColumnOf")
+		} else {
+			source.WriteString("TypedColumnOf")
+		}
+		source.WriteString("[")
+		source.WriteString(object.RowType)
+		source.WriteString(", ")
+		source.WriteString(fieldType)
+		source.WriteString("](")
+		if table.EffectiveKind() == schema.ObjectView {
+			source.WriteString("t.Column(")
+		} else {
+			source.WriteString("rasql.ColumnOf(t.Table, ")
+		}
+		source.WriteString(quote(column.Name))
+		source.WriteString(")) }\n")
+		source.WriteString("func (t ")
+		source.WriteString(typeName)
+		source.WriteString(") ")
+		source.WriteString(method)
+		source.WriteString("Ref() rasql.ColumnRef { return ")
 		if table.EffectiveKind() == schema.ObjectView {
 			source.WriteString("t.Column(")
 		} else {
@@ -1228,6 +1267,7 @@ func writeTableColumns(source *bytes.Buffer, table schema.TableDef, names *Resol
 		source.WriteString(quote(column.Name))
 		source.WriteString(") }\n")
 	}
+	return nil
 }
 
 func writeTableAccessor(source *bytes.Buffer, table schema.TableDef, names *ResolvedNames) {
@@ -1370,6 +1410,11 @@ func containsRelationships(tables, allTables []schema.TableDef, names *ResolvedN
 func relationshipSpecs(table schema.TableDef, allTables []schema.TableDef, names *ResolvedNames, bindings *generatedBindings) []relationshipSpec {
 	result := make([]relationshipSpec, 0)
 	usedMethods := make(map[string]struct{})
+	for _, column := range table.Columns {
+		accessor := resolvedColumnName(names, table, column.Name).Accessor
+		usedMethods[accessor] = struct{}{}
+		usedMethods[accessor+"Ref"] = struct{}{}
+	}
 	for _, relationship := range table.Relationships {
 		parent, ok := relationshipTable(allTables, relationshipTargetSchema(relationship), relationship.ReferencedTable)
 		if !ok {
@@ -1385,7 +1430,7 @@ func relationshipSpecs(table schema.TableDef, allTables []schema.TableDef, names
 				continue
 			}
 			if _, exists := usedMethods[method]; exists {
-				continue
+				method = nextRelationshipMethod(method, usedMethods)
 			}
 			usedMethods[method] = struct{}{}
 			keyType := ""
@@ -1425,7 +1470,7 @@ func relationshipSpecs(table schema.TableDef, allTables []schema.TableDef, names
 				continue
 			}
 			if _, exists := usedMethods[method]; exists {
-				continue
+				method = nextRelationshipMethod(method, usedMethods)
 			}
 			usedMethods[method] = struct{}{}
 			parentObject := resolvedObjectName(names, table)
@@ -1465,7 +1510,7 @@ func relationshipSpecs(table schema.TableDef, allTables []schema.TableDef, names
 			continue
 		}
 		if _, exists := usedMethods[method]; exists {
-			continue
+			method = nextRelationshipMethod(method, usedMethods)
 		}
 		usedMethods[method] = struct{}{}
 		childType := tableTypeName(table.Name)
@@ -1613,6 +1658,15 @@ func relationshipSpecs(table schema.TableDef, allTables []schema.TableDef, names
 		}
 	}
 	return result
+}
+
+func nextRelationshipMethod(base string, used map[string]struct{}) string {
+	for suffix := 2; ; suffix++ {
+		candidate := base + strconv.Itoa(suffix)
+		if _, occupied := used[candidate]; !occupied && !reservedRelationshipMethod(candidate) {
+			return candidate
+		}
+	}
 }
 
 func relationshipColumnTypes(bindings *generatedBindings, table schema.TableDef, columns []schema.ColumnDef) []string {
@@ -1870,9 +1924,9 @@ func writeRelationships(source *bytes.Buffer, table schema.TableDef, allTables [
 		if len(relationship.parentColumns) == 1 {
 			source.WriteString("ParentKey: parent.")
 			source.WriteString(relationship.parentAccessor)
-			source.WriteString("(), ChildKey: child.")
+			source.WriteString("Ref(), ChildKey: child.")
 			source.WriteString(relationship.childAccessor)
-			source.WriteString("()}")
+			source.WriteString("Ref()}")
 		} else {
 			source.WriteString("ParentKey: []rasql.ColumnRef{")
 			for index := range relationship.parentFields {
@@ -1882,7 +1936,7 @@ func writeRelationships(source *bytes.Buffer, table schema.TableDef, allTables [
 				source.WriteString("parent.")
 				resolved, _ := names.Column(relationship.parent, relationship.parentColumns[index].Name)
 				source.WriteString(resolved.Accessor)
-				source.WriteString("()")
+				source.WriteString("Ref()")
 			}
 			source.WriteString("}, ChildKey: []rasql.ColumnRef{")
 			for index := range relationship.childFields {
@@ -1892,7 +1946,7 @@ func writeRelationships(source *bytes.Buffer, table schema.TableDef, allTables [
 				source.WriteString("child.")
 				resolved, _ := names.Column(relationship.child, relationship.childColumns[index].Name)
 				source.WriteString(resolved.Accessor)
-				source.WriteString("()")
+				source.WriteString("Ref()")
 			}
 			source.WriteString("}}")
 		}
@@ -2390,7 +2444,7 @@ func writeColumnRefsFromAccessor(source *bytes.Buffer, tableAccessor string, acc
 		source.WriteString(tableAccessor)
 		source.WriteString("().")
 		source.WriteString(accessor)
-		source.WriteString("()")
+		source.WriteString("Ref()")
 	}
 	source.WriteString("}")
 }

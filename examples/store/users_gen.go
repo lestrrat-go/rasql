@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/query"
 )
 
 // UsersRow is one row of the "users" table.
@@ -100,22 +101,40 @@ type UsersTable struct {
 }
 
 // ID returns a reference to the "id" column.
-func (t UsersTable) ID() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
+func (t UsersTable) ID() query.TypedColumn[UsersRow, int64] {
+	return query.TypedColumnOf[UsersRow, int64](rasql.ColumnOf(t.Table, "id"))
+}
+func (t UsersTable) IDRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
 
 // Email returns a reference to the "email" column.
-func (t UsersTable) Email() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "email") }
+func (t UsersTable) Email() query.TypedColumn[UsersRow, string] {
+	return query.TypedColumnOf[UsersRow, string](rasql.ColumnOf(t.Table, "email"))
+}
+func (t UsersTable) EmailRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "email") }
 
 // Nickname returns a reference to the "nickname" column.
-func (t UsersTable) Nickname() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "nickname") }
+func (t UsersTable) Nickname() query.NullableColumn[UsersRow, *string] {
+	return query.NullableColumnOf[UsersRow, *string](rasql.ColumnOf(t.Table, "nickname"))
+}
+func (t UsersTable) NicknameRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "nickname") }
 
 // Status returns a reference to the "status" column.
-func (t UsersTable) Status() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "status") }
+func (t UsersTable) Status() query.TypedColumn[UsersRow, string] {
+	return query.TypedColumnOf[UsersRow, string](rasql.ColumnOf(t.Table, "status"))
+}
+func (t UsersTable) StatusRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "status") }
 
 // FirstName returns a reference to the "first_name" column.
-func (t UsersTable) FirstName() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "first_name") }
+func (t UsersTable) FirstName() query.TypedColumn[UsersRow, string] {
+	return query.TypedColumnOf[UsersRow, string](rasql.ColumnOf(t.Table, "first_name"))
+}
+func (t UsersTable) FirstNameRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "first_name") }
 
 // LastName returns a reference to the "last_name" column.
-func (t UsersTable) LastName() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "last_name") }
+func (t UsersTable) LastName() query.TypedColumn[UsersRow, string] {
+	return query.TypedColumnOf[UsersRow, string](rasql.ColumnOf(t.Table, "last_name"))
+}
+func (t UsersTable) LastNameRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "last_name") }
 
 // Users returns the descriptor for the "users" table.
 func Users() UsersTable {

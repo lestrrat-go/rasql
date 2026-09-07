@@ -45,7 +45,7 @@ func Example_rasql_insert_defaults() {
 	}
 
 	// SQL: SELECT users.id, users.email, users.nickname, users.status, users.first_name, users.last_name FROM users WHERE users.id = ? (argument: 1)
-	user, err := rasql.SelectFrom(users).WhereEqual(users.ID(), 1).One(ctx, db)
+	user, err := rasql.SelectFrom(users).WhereEqual(users.ID().Ref(), 1).One(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query user: %s\n", err)
 		return

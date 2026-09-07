@@ -63,9 +63,9 @@ func Example_rasql_order_by_alias() {
 
 	// displayName is written once and used in both Project and Order below.
 	// SQL: SELECT users.id, COALESCE(users.nickname, users.email) AS display_name FROM users ORDER BY display_name DESC
-	displayName := query.Coalesce(users.Nickname(), users.Email()).As("display_name")
+	displayName := query.Coalesce(users.Nickname().Ref(), users.Email().Ref()).As("display_name")
 	rows, err := rasql.DecodeFrom[userDisplayName](users).
-		Project(users.ID(), displayName).
+		Project(users.ID().Ref(), displayName).
 		Order(query.DescResult(displayName)).
 		Query(ctx, db)
 	if err != nil {
@@ -85,9 +85,9 @@ func Example_rasql_order_by_alias() {
 	// separately aliased id. rasql refuses this in Go rather than letting it
 	// reach a server, since PostgreSQL and MySQL both call it ambiguous and
 	// SQLite would otherwise resolve it silently.
-	nicknameAsID := users.Nickname().As("id")
+	nicknameAsID := users.Nickname().Ref().As("id")
 	_, err = rasql.DecodeFrom[userDisplayName](users).
-		Project(users.ID(), nicknameAsID).
+		Project(users.ID().Ref(), nicknameAsID).
 		Order(query.AscResult(nicknameAsID)).
 		Build(dialect.SQLite())
 	if err != nil {

@@ -73,7 +73,7 @@ func Example_rasql_exists() {
 	// yet. EXISTS reads no value, so the projection is arbitrary; a column of
 	// the subquery's own table costs no parameter and renders the same on every
 	// engine.
-	hasOrder, err := query.NewSelect(orders.Ref(), orders.ID())
+	hasOrder, err := query.NewSelect(orders.Ref(), orders.ID().Ref())
 	if err != nil {
 		fmt.Printf("failed to build the orders subquery: %s\n", err)
 		return
@@ -83,7 +83,7 @@ func Example_rasql_exists() {
 		fmt.Printf("failed to correlate the orders subquery: %s\n", err)
 		return
 	}
-	hasOrder, err = hasOrder.WithWhere(query.Equal(orders.UserID(), users.ID()))
+	hasOrder, err = hasOrder.WithWhere(query.Equal(orders.UserID().Ref(), users.ID().Ref()))
 	if err != nil {
 		fmt.Printf("failed to filter the orders subquery: %s\n", err)
 		return
@@ -91,9 +91,9 @@ func Example_rasql_exists() {
 
 	// SQL: SELECT users.id, users.email FROM users WHERE EXISTS (SELECT orders.id FROM orders WHERE orders.user_id = users.id) ORDER BY users.id ASC
 	buyers, err := rasql.DecodeFrom[userSummary](users).
-		Project(users.ID(), users.Email()).
+		Project(users.ID().Ref(), users.Email().Ref()).
 		Where(query.Exists(hasOrder)).
-		Order(query.Asc(users.ID())).
+		Order(query.Asc(users.ID().Ref())).
 		All(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query users with an order: %s\n", err)
@@ -106,9 +106,9 @@ func Example_rasql_exists() {
 	// The same subquery under NOT EXISTS answers the opposite question, and it
 	// is still evaluated once per user rather than once for the statement.
 	quiet, err := rasql.DecodeFrom[userSummary](users).
-		Project(users.ID(), users.Email()).
+		Project(users.ID().Ref(), users.Email().Ref()).
 		Where(query.NotExists(hasOrder)).
-		Order(query.Asc(users.ID())).
+		Order(query.Asc(users.ID().Ref())).
 		All(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query users without an order: %s\n", err)

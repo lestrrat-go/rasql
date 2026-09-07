@@ -45,12 +45,12 @@ func Example_rasql_partial_update() {
 
 	// SQL: UPDATE users SET email = ? WHERE users.id < ? (arguments: "ada@example.com", 100)
 	// BEGIN(partial_update)
-	statement, err := query.NewUpdate(users.Ref(), query.Set(users.Email(), "ada@example.com"))
+	statement, err := query.NewUpdate(users.Ref(), query.Set(users.Email().Ref(), "ada@example.com"))
 	if err != nil {
 		fmt.Printf("failed to build update: %s\n", err)
 		return
 	}
-	statement, err = statement.WithWhere(query.LessThan(users.ID(), 100))
+	statement, err = statement.WithWhere(query.LessThan(users.ID().Ref(), 100))
 	if err != nil {
 		fmt.Printf("failed to filter update: %s\n", err)
 		return
@@ -69,7 +69,7 @@ func Example_rasql_partial_update() {
 	fmt.Printf("%d user updated\n", updated)
 
 	// The row outside the predicate keeps the email it was inserted with.
-	kept, err := rasql.SelectFrom(users).WhereEqual(users.ID(), 512).One(ctx, db)
+	kept, err := rasql.SelectFrom(users).WhereEqual(users.ID().Ref(), 512).One(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query user: %s\n", err)
 		return

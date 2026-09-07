@@ -56,7 +56,7 @@ func Example_rasqlgen_computed_field() {
 	// DecodeFrom projects what the caller names, since the result shape is not
 	// the table's row type.
 	report, err := rasql.DecodeFrom[userReport](users).
-		Project(users.Email(), users.FirstName(), users.LastName()).
+		Project(users.Email().Ref(), users.FirstName().Ref(), users.LastName().Ref()).
 		One(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)

@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/query"
 )
 
 // TasksRow is one row of the "tasks" table.
@@ -64,10 +65,16 @@ type TasksTable struct {
 }
 
 // ID returns a reference to the "id" column.
-func (t TasksTable) ID() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
+func (t TasksTable) ID() query.TypedColumn[TasksRow, int64] {
+	return query.TypedColumnOf[TasksRow, int64](rasql.ColumnOf(t.Table, "id"))
+}
+func (t TasksTable) IDRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
 
 // Status returns a reference to the "status" column.
-func (t TasksTable) Status() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "status") }
+func (t TasksTable) Status() query.TypedColumn[TasksRow, string] {
+	return query.TypedColumnOf[TasksRow, string](rasql.ColumnOf(t.Table, "status"))
+}
+func (t TasksTable) StatusRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "status") }
 
 // Tasks returns the descriptor for the "tasks" table.
 func Tasks() TasksTable {

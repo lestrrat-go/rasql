@@ -60,9 +60,9 @@ func Example_rasql_distinct() {
 	// which makes every row unique before DISTINCT runs.
 	// SQL: SELECT DISTINCT orders.user_id FROM orders ORDER BY orders.user_id
 	rows, err := rasql.DecodeFrom[orderingUser](orders).
-		Project(orders.UserID().As("user_id")).
+		Project(orders.UserID().Ref().As("user_id")).
 		Distinct().
-		Order(query.Asc(orders.UserID())).
+		Order(query.Asc(orders.UserID().Ref())).
 		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query ordering users: %s\n", err)

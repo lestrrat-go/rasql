@@ -68,7 +68,7 @@ func TestNativeRuntime(t *testing.T) {
  value, ok = row.ColumnValue("choice"); require.True(t, ok); require.Equal(t, "one", value)
  value, ok = row.ColumnValue("role"); require.True(t, ok); require.Equal(t, "admin", value)
  for _, test := range []struct { column query.ColumnRef; value any }{
-  {generated.Events().Mood(), "happy"}, {generated.Events().Moods(), []string{"sad"}}, {generated.Events().Amount(), "amount"}, {generated.Events().Choice(), "one"}, {generated.Events().Role(), "admin"},
+ {generated.Events().MoodRef(), "happy"}, {generated.Events().MoodsRef(), []string{"sad"}}, {generated.Events().AmountRef(), "amount"}, {generated.Events().ChoiceRef(), "one"}, {generated.Events().RoleRef(), "admin"},
  } {
   statement, err := query.NewSelect(generated.Events().Ref(), test.column); require.NoError(t, err)
   statement, err = statement.WithWhere(query.Equal(test.column, query.Bind(test.value))); require.NoError(t, err)

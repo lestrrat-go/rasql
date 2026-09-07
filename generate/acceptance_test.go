@@ -67,7 +67,7 @@ func TestGeneratedStoreRunsAgainstSQLite(t *testing.T) {
 		t.Fatalf("insert user: %s", err)
 	}
 
-	row, err := rasql.SelectFrom(store.Users()).WhereEqual(store.Users().Email(), "ada@example.com").One(ctx, db)
+	row, err := rasql.SelectFrom(store.Users()).WhereEqual(store.Users().Email().Ref(), "ada@example.com").One(ctx, db)
 	if err != nil {
 		t.Fatalf("select user: %s", err)
 	}

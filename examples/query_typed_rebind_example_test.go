@@ -15,7 +15,7 @@ type userEmail struct {
 
 func Example_rebindTypedResult() {
 	users := store.Users()
-	base := rasql.SelectFrom(users).WhereEqual(users.ID(), 7)
+	base := rasql.SelectFrom(users).WhereEqual(users.ID().Ref(), 7)
 	result, err := base.Result()
 	if err != nil {
 		return
@@ -23,7 +23,7 @@ func Example_rebindTypedResult() {
 	_ = result
 	dto := rasql.RebindResult[userEmail](base,
 		[]query.ResultColumn{{Name: "email", Type: users.Ref().Definition().Columns[1].Type}},
-		users.Email(),
+		users.Email().Ref(),
 	)
 	statement, err := dto.Build(dialect.PostgreSQL())
 	if err != nil {

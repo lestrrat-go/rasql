@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/query"
 )
 
 // EmployeesRow is one row of the "employees" table.
@@ -73,13 +74,22 @@ type EmployeesTable struct {
 }
 
 // ID returns a reference to the "id" column.
-func (t EmployeesTable) ID() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
+func (t EmployeesTable) ID() query.TypedColumn[EmployeesRow, int64] {
+	return query.TypedColumnOf[EmployeesRow, int64](rasql.ColumnOf(t.Table, "id"))
+}
+func (t EmployeesTable) IDRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
 
 // Name returns a reference to the "name" column.
-func (t EmployeesTable) Name() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "name") }
+func (t EmployeesTable) Name() query.TypedColumn[EmployeesRow, string] {
+	return query.TypedColumnOf[EmployeesRow, string](rasql.ColumnOf(t.Table, "name"))
+}
+func (t EmployeesTable) NameRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "name") }
 
 // ManagerID returns a reference to the "manager_id" column.
-func (t EmployeesTable) ManagerID() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "manager_id") }
+func (t EmployeesTable) ManagerID() query.NullableColumn[EmployeesRow, *int64] {
+	return query.NullableColumnOf[EmployeesRow, *int64](rasql.ColumnOf(t.Table, "manager_id"))
+}
+func (t EmployeesTable) ManagerIDRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "manager_id") }
 
 // Employees returns the descriptor for the "employees" table.
 func Employees() EmployeesTable {

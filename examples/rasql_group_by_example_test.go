@@ -63,10 +63,10 @@ func Example_rasql_group_by() {
 	// could not.
 	// SQL: SELECT tasks.status, COUNT(*) AS total FROM tasks GROUP BY tasks.status HAVING COUNT(*) > ? ORDER BY tasks.status (argument: 1)
 	rows, err := rasql.DecodeFrom[statusCount](tasks).
-		Project(tasks.Status(), query.CountAll().As("total")).
-		GroupBy(tasks.Status()).
+		Project(tasks.Status().Ref(), query.CountAll().As("total")).
+		GroupBy(tasks.Status().Ref()).
 		Having(query.GreaterThan(query.CountAll(), 1)).
-		Order(query.Asc(tasks.Status())).
+		Order(query.Asc(tasks.Status().Ref())).
 		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query status counts: %s\n", err)

@@ -66,10 +66,16 @@ type MembersTable struct {
 }
 
 // ID returns a reference to the "id" column.
-func (t MembersTable) ID() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
+func (t MembersTable) ID() query.TypedColumn[MembersRow, int64] {
+	return query.TypedColumnOf[MembersRow, int64](rasql.ColumnOf(t.Table, "id"))
+}
+func (t MembersTable) IDRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
 
 // Name returns a reference to the "name" column.
-func (t MembersTable) Name() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "name") }
+func (t MembersTable) Name() query.TypedColumn[MembersRow, string] {
+	return query.TypedColumnOf[MembersRow, string](rasql.ColumnOf(t.Table, "name"))
+}
+func (t MembersTable) NameRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "name") }
 
 // Members returns the descriptor for the "members" table.
 func Members() MembersTable {
@@ -97,7 +103,7 @@ type MembersTableTasksRelation struct {
 func (t MembersTable) Tasks() MembersTableTasksRelation {
 	child := Tasks()
 	parent := t
-	return MembersTableTasksRelation{Parent: parent, Child: child, ParentKey: parent.ID(), ChildKey: child.AssigneeID()}
+	return MembersTableTasksRelation{Parent: parent, Child: child, ParentKey: parent.IDRef(), ChildKey: child.AssigneeIDRef()}
 }
 
 // Join returns an INNER JOIN for the relationship.

@@ -28,9 +28,9 @@ func ExampleLoadHasManyPlan() {
 		panic(err)
 	}
 	orders := store.Orders()
-	loaded, err := rasql.LoadHasManyPlan(context.Background(), db, orders, []query.ColumnRef{orders.UserID()}, []store.UsersRow{{ID: 1}}, func(user store.UsersRow) int64 { return user.ID }, func(order store.OrdersRow) int64 { return order.UserID }, func(key int64) ([]any, bool) { return []any{key}, true }, rasql.RelationshipLoadOptions{
+	loaded, err := rasql.LoadHasManyPlan(context.Background(), db, orders, []query.ColumnRef{orders.UserIDRef()}, []store.UsersRow{{ID: 1}}, func(user store.UsersRow) int64 { return user.ID }, func(order store.OrdersRow) int64 { return order.UserID }, func(key int64) ([]any, bool) { return []any{key}, true }, rasql.RelationshipLoadOptions{
 		Where:          query.Equal(orders.UserID(), 1),
-		OrderBy:        []query.Order{query.Desc(orders.ID())},
+		OrderBy:        []query.Order{query.Desc(orders.IDRef())},
 		PerParentLimit: 5,
 	})
 	if err != nil {

@@ -22,7 +22,7 @@ type userEmail struct {
 
 func Example_rebindTypedResult() {
 	users := store.Users()
-	base := rasql.SelectFrom(users).WhereEqual(users.ID(), 7)
+	base := rasql.SelectFrom(users).WhereEqual(users.ID().Ref(), 7)
 	result, err := base.Result()
 	if err != nil {
 		return
@@ -30,7 +30,7 @@ func Example_rebindTypedResult() {
 	_ = result
 	dto := rasql.RebindResult[userEmail](base,
 		[]query.ResultColumn{{Name: "email", Type: users.Ref().Definition().Columns[1].Type}},
-		users.Email(),
+		users.Email().Ref(),
 	)
 	statement, err := dto.Build(dialect.PostgreSQL())
 	if err != nil {
@@ -80,9 +80,9 @@ if err != nil {
 	panic(err)
 }
 orders := store.Orders()
-loaded, err := rasql.LoadHasManyPlan(context.Background(), db, orders, []query.ColumnRef{orders.UserID()}, []store.UsersRow{{ID: 1}}, func(user store.UsersRow) int64 { return user.ID }, func(order store.OrdersRow) int64 { return order.UserID }, func(key int64) ([]any, bool) { return []any{key}, true }, rasql.RelationshipLoadOptions{
+loaded, err := rasql.LoadHasManyPlan(context.Background(), db, orders, []query.ColumnRef{orders.UserIDRef()}, []store.UsersRow{{ID: 1}}, func(user store.UsersRow) int64 { return user.ID }, func(order store.OrdersRow) int64 { return order.UserID }, func(key int64) ([]any, bool) { return []any{key}, true }, rasql.RelationshipLoadOptions{
 	Where:          query.Equal(orders.UserID(), 1),
-	OrderBy:        []query.Order{query.Desc(orders.ID())},
+	OrderBy:        []query.Order{query.Desc(orders.IDRef())},
 	PerParentLimit: 5,
 })
 if err != nil {
@@ -104,6 +104,11 @@ Nullable referenced columns use their nullable generated form. Query
 configuration can set an explicit binding for a standalone parameter or
 override a nullable column deliberately; unconfigured standalone parameters
 remain `any`.
+
+Use `query.TypedIsNull` and `query.TypedIsNotNull` with generated nullable
+accessors. The dynamic `query.IsNull` and `query.IsNotNull` functions remain
+available for `query.Expression` values and do not satisfy typed `Where` or
+`Having` calls.
 
 ## Operation reference
 
@@ -250,7 +255,7 @@ func Example_rasql_typed_query() {
 	// rows directly, so the loop does not need manual scanning or conversion.
 	// SQL: SELECT users.id, users.email FROM users ORDER BY users.email ASC LIMIT 2 OFFSET 1
 	rows, err := rasql.SelectFrom(users).
-		OrderAsc(users.Email()).
+		OrderAsc(users.Email().Ref()).
 		Offset(1).
 		Limit(2).
 		Query(ctx, db)
@@ -280,7 +285,7 @@ source: [examples/rasql_typed_query_example_test.go](https://github.com/lestrrat
 
 <!-- INCLUDE(examples/rasql_no_rows_example_test.go#no_rows) -->
 ```go
-_, err = rasql.SelectFrom(users).WhereEqual(users.ID(), 1).One(ctx, db)
+_, err = rasql.SelectFrom(users).WhereEqual(users.ID().Ref(), 1).One(ctx, db)
 if errors.Is(err, rasql.ErrNoRows) {
 	fmt.Println("no such user")
 }
@@ -351,8 +356,8 @@ func Example_rasql_where_in() {
 	// Query return an error instead of rendering IN (), which is not valid SQL.
 	// SQL: SELECT users.id, users.email FROM users WHERE users.id IN (?, ?) ORDER BY users.id ASC (arguments: 1, 3)
 	rows, err := rasql.SelectFrom(users).
-		WhereIn(users.ID(), 1, 3).
-		OrderAsc(users.ID()).
+		WhereIn(users.ID().Ref(), 1, 3).
+		OrderAsc(users.ID().Ref()).
 		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
@@ -380,10 +385,10 @@ For anything richer, `Where` and `Order` accept expressions from the `query` pac
 ```go
 rows, err := rasql.SelectFrom(users).
 	Where(query.And(
-		query.GreaterThan(users.ID(), 10),
-		query.IsNotNull(users.ID()),
+		query.GreaterThan(users.ID().Ref(), 10),
+		query.IsNotNull(users.ID().Ref()),
 	)).
-	Order(query.Desc(users.ID())).
+	Order(query.Desc(users.ID().Ref())).
 	Query(ctx, db)
 ```
 source: [examples/rasql_where_expressions_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_where_expressions_example_test.go)
@@ -452,15 +457,15 @@ func Example_rasql_nested_predicates() {
 	// call, and the whole tree is one predicate. The builder is immutable, so
 	// the same value below renders the statement and then runs it.
 	selected := rasql.SelectFrom(users).
-		Where(query.Like(users.Email(), "%@example.com")).
+		Where(query.Like(users.Email().Ref(), "%@example.com")).
 		Where(query.Or(
-			query.LessThan(users.ID(), 10),
+			query.LessThan(users.ID().Ref(), 10),
 			query.And(
-				query.GreaterThan(users.ID(), 20),
-				query.IsNotNull(users.Email()),
+				query.GreaterThan(users.ID().Ref(), 20),
+				query.IsNotNull(users.Email().Ref()),
 			),
 		)).
-		Order(query.Asc(users.ID()))
+		Order(query.Asc(users.ID().Ref()))
 
 	// Every level of the tree renders its own parentheses, so the SQL groups the
 	// way the Go code nests rather than by the database's operator precedence.
@@ -583,12 +588,12 @@ func Example_rasql_subquery() {
 	// domainUsers selects the id of every user whose email ends in the chosen
 	// domain. It reads no table of the enclosing statement, so it validates and
 	// renders as its own SELECT.
-	domainUsers, err := query.NewSelect(users.Ref(), users.ID())
+	domainUsers, err := query.NewSelect(users.Ref(), users.ID().Ref())
 	if err != nil {
 		fmt.Printf("failed to build domain-users subquery: %s\n", err)
 		return
 	}
-	domainUsers, err = domainUsers.WithWhere(query.Like(users.Email(), "%@example.com"))
+	domainUsers, err = domainUsers.WithWhere(query.Like(users.Email().Ref(), "%@example.com"))
 	if err != nil {
 		fmt.Printf("failed to filter domain-users subquery: %s\n", err)
 		return
@@ -613,10 +618,10 @@ func Example_rasql_subquery() {
 	// average of every order.
 	// SQL: SELECT orders.user_id, orders.total FROM orders WHERE orders.user_id IN (SELECT users.id FROM users WHERE users.email LIKE ?) AND orders.total >= (SELECT AVG(all_orders.total) FROM orders AS all_orders) ORDER BY orders.total ASC (argument: "%@example.com")
 	rows, err := rasql.DecodeFrom[orderSummary](orders).
-		Project(orders.UserID().As("user_id"), orders.Total()).
-		Where(query.InSelect(orders.UserID(), domainUsers)).
-		Where(query.GreaterThanOrEqual(orders.Total(), query.Scalar(average))).
-		Order(query.Asc(orders.Total())).
+		Project(orders.UserID().Ref().As("user_id"), orders.Total().Ref()).
+		Where(query.InSelect(orders.UserID().Ref(), domainUsers)).
+		Where(query.GreaterThanOrEqual(orders.Total().Ref(), query.Scalar(average))).
+		Order(query.Asc(orders.Total().Ref())).
 		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query orders: %s\n", err)
@@ -729,7 +734,7 @@ func Example_rasql_exists() {
 	// yet. EXISTS reads no value, so the projection is arbitrary; a column of
 	// the subquery's own table costs no parameter and renders the same on every
 	// engine.
-	hasOrder, err := query.NewSelect(orders.Ref(), orders.ID())
+	hasOrder, err := query.NewSelect(orders.Ref(), orders.ID().Ref())
 	if err != nil {
 		fmt.Printf("failed to build the orders subquery: %s\n", err)
 		return
@@ -739,7 +744,7 @@ func Example_rasql_exists() {
 		fmt.Printf("failed to correlate the orders subquery: %s\n", err)
 		return
 	}
-	hasOrder, err = hasOrder.WithWhere(query.Equal(orders.UserID(), users.ID()))
+	hasOrder, err = hasOrder.WithWhere(query.Equal(orders.UserID().Ref(), users.ID().Ref()))
 	if err != nil {
 		fmt.Printf("failed to filter the orders subquery: %s\n", err)
 		return
@@ -747,9 +752,9 @@ func Example_rasql_exists() {
 
 	// SQL: SELECT users.id, users.email FROM users WHERE EXISTS (SELECT orders.id FROM orders WHERE orders.user_id = users.id) ORDER BY users.id ASC
 	buyers, err := rasql.DecodeFrom[userSummary](users).
-		Project(users.ID(), users.Email()).
+		Project(users.ID().Ref(), users.Email().Ref()).
 		Where(query.Exists(hasOrder)).
-		Order(query.Asc(users.ID())).
+		Order(query.Asc(users.ID().Ref())).
 		All(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query users with an order: %s\n", err)
@@ -762,9 +767,9 @@ func Example_rasql_exists() {
 	// The same subquery under NOT EXISTS answers the opposite question, and it
 	// is still evaluated once per user rather than once for the statement.
 	quiet, err := rasql.DecodeFrom[userSummary](users).
-		Project(users.ID(), users.Email()).
+		Project(users.ID().Ref(), users.Email().Ref()).
 		Where(query.NotExists(hasOrder)).
-		Order(query.Asc(users.ID())).
+		Order(query.Asc(users.ID().Ref())).
 		All(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query users without an order: %s\n", err)
@@ -856,10 +861,10 @@ func Example_rasql_group_by() {
 	// could not.
 	// SQL: SELECT tasks.status, COUNT(*) AS total FROM tasks GROUP BY tasks.status HAVING COUNT(*) > ? ORDER BY tasks.status (argument: 1)
 	rows, err := rasql.DecodeFrom[statusCount](tasks).
-		Project(tasks.Status(), query.CountAll().As("total")).
-		GroupBy(tasks.Status()).
+		Project(tasks.Status().Ref(), query.CountAll().As("total")).
+		GroupBy(tasks.Status().Ref()).
 		Having(query.GreaterThan(query.CountAll(), 1)).
-		Order(query.Asc(tasks.Status())).
+		Order(query.Asc(tasks.Status().Ref())).
 		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query status counts: %s\n", err)
@@ -953,9 +958,9 @@ func Example_rasql_distinct() {
 	// which makes every row unique before DISTINCT runs.
 	// SQL: SELECT DISTINCT orders.user_id FROM orders ORDER BY orders.user_id
 	rows, err := rasql.DecodeFrom[orderingUser](orders).
-		Project(orders.UserID().As("user_id")).
+		Project(orders.UserID().Ref().As("user_id")).
 		Distinct().
-		Order(query.Asc(orders.UserID())).
+		Order(query.Asc(orders.UserID().Ref())).
 		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query ordering users: %s\n", err)
@@ -993,8 +998,8 @@ if err != nil {
 	return
 }
 rows, err := rasql.SelectFrom(employees).
-	Join(rasql.InnerJoin(manager, query.Equal(employees.ManagerID(), manager.ID()))).
-	OrderAsc(employees.ID()).
+	Join(rasql.InnerJoin(manager, query.Equal(employees.ManagerID().Ref(), manager.ID()))).
+	OrderAsc(employees.ID().Ref()).
 	Query(ctx, db)
 ```
 source: [examples/rasql_self_join_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_self_join_example_test.go)
@@ -1096,10 +1101,10 @@ func Example_rasql_dynamic_projection() {
 	// DecodeFrom maps the selected names into orderSummary's exported fields.
 	// SQL: SELECT users.id AS user_id, users.email FROM users INNER JOIN orders ON users.id = orders.user_id WHERE orders.total > ? ORDER BY orders.total DESC (argument: 20)
 	rows, err := rasql.DecodeFrom[orderSummary](users).
-		Join(rasql.InnerJoin(orders, query.Equal(users.ID(), orders.UserID()))).
-		Project(users.ID().As("user_id"), users.Email()).
-		Where(query.GreaterThan(orders.Total(), 20)).
-		Order(query.Desc(orders.Total())).
+		Join(rasql.InnerJoin(orders, query.Equal(users.ID().Ref(), orders.UserID().Ref()))).
+		Project(users.ID().Ref().As("user_id"), users.Email().Ref()).
+		Where(query.GreaterThan(orders.Total().Ref(), 20)).
+		Order(query.Desc(orders.Total().Ref())).
 		Query(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to build order totals query: %s\n", err)
@@ -1168,7 +1173,7 @@ func Example_rasql_debug_query() {
 	users := store.Users()
 
 	count := 0
-	rows, err := rasql.SelectFrom(users).WhereEqual(users.ID(), 42).Query(context.Background(), db)
+	rows, err := rasql.SelectFrom(users).WhereEqual(users.ID().Ref(), 42).Query(context.Background(), db)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return

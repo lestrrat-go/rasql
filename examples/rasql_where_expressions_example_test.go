@@ -50,10 +50,10 @@ func Example_rasql_where_expressions() {
 	// BEGIN(where_expressions)
 	rows, err := rasql.SelectFrom(users).
 		Where(query.And(
-			query.GreaterThan(users.ID(), 10),
-			query.IsNotNull(users.ID()),
+			query.GreaterThan(users.ID().Ref(), 10),
+			query.IsNotNull(users.ID().Ref()),
 		)).
-		Order(query.Desc(users.ID())).
+		Order(query.Desc(users.ID().Ref())).
 		Query(ctx, db)
 	// END(where_expressions)
 	if err != nil {

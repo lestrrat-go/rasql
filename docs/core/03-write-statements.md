@@ -157,12 +157,12 @@ wrapped with `query.Derived` or placed in a CTE before it is used by another sta
 
 <!-- INCLUDE(examples/rasql_partial_update_example_test.go#partial_update) -->
 ```go
-statement, err := query.NewUpdate(users.Ref(), query.Set(users.Email(), "ada@example.com"))
+statement, err := query.NewUpdate(users.Ref(), query.Set(users.Email().Ref(), "ada@example.com"))
 if err != nil {
 	fmt.Printf("failed to build update: %s\n", err)
 	return
 }
-statement, err = statement.WithWhere(query.LessThan(users.ID(), 100))
+statement, err = statement.WithWhere(query.LessThan(users.ID().Ref(), 100))
 if err != nil {
 	fmt.Printf("failed to filter update: %s\n", err)
 	return
@@ -236,9 +236,9 @@ func Example_rasql_returning() {
 	// database and status to its column default, which is what this example
 	// reads back.
 	statement, err := query.NewInsert(users.Ref(),
-		query.Set(users.Email(), "ada@example.com"),
-		query.Set(users.FirstName(), "Ada"),
-		query.Set(users.LastName(), "Lovelace"))
+		query.Set(users.Email().Ref(), "ada@example.com"),
+		query.Set(users.FirstName().Ref(), "Ada"),
+		query.Set(users.LastName().Ref(), "Lovelace"))
 	if err != nil {
 		fmt.Printf("failed to build insert: %s\n", err)
 		return
@@ -249,8 +249,8 @@ func Example_rasql_returning() {
 	// the whole users table, and it refuses a clause that omits a column of
 	// that table: an omitted column would decode as a zero value with nothing
 	// to say the database never sent it.
-	statement, err = statement.WithReturning(users.ID(), users.Email(), users.Nickname(),
-		users.Status(), users.FirstName(), users.LastName())
+	statement, err = statement.WithReturning(users.ID().Ref(), users.Email().Ref(), users.Nickname().Ref(),
+		users.Status().Ref(), users.FirstName().Ref(), users.LastName().Ref())
 	if err != nil {
 		fmt.Printf("failed to add RETURNING clause: %s\n", err)
 		return
@@ -280,8 +280,8 @@ A fluent delete uses the same dynamic and typed terminals:
 <!-- INCLUDE(examples/rasql_delete_returning_example_test.go#delete_returning_dynamic) -->
 ```go
 builder := dynamic.DeleteFrom(users.Ref()).
-	WhereEqual(users.ID(), 42).
-	Returning(users.ID(), users.Email())
+	WhereEqual(users.ID().Ref(), 42).
+	Returning(users.ID().Ref(), users.Email().Ref())
 
 rows, err := builder.Query(ctx, db)
 ```
@@ -296,9 +296,9 @@ and `QueryWriteOne[T]`. Use one terminal per builder:
 <!-- INCLUDE(examples/rasql_delete_returning_example_test.go#delete_returning_typed) -->
 ```go
 typed := rasql.DeleteFrom(users).
-	WhereEqual(users.ID(), 43).
-	Returning(users.ID(), users.Email(), users.Nickname(),
-		users.Status(), users.FirstName(), users.LastName())
+	WhereEqual(users.ID().Ref(), 43).
+	Returning(users.ID().Ref(), users.Email().Ref(), users.Nickname().Ref(),
+		users.Status().Ref(), users.FirstName().Ref(), users.LastName().Ref())
 
 deleted, err := rasql.QueryDeleteOne[store.UsersRow](ctx, db, typed)
 ```

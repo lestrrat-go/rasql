@@ -59,7 +59,7 @@ func (compilerExample) CompilePagination(emitter dialect.Emitter, pagination dia
 func Example_customCompiler() {
 	users := store.Users()
 	builder := rasql.DecodeFromRef[struct{}](users.Ref()).
-		Project(query.Project(containsExample{column: users.Email(), value: "@example.com"})).
+		Project(query.Project(containsExample{column: users.EmailRef(), value: "@example.com"})).
 		Limit(3)
 	statement, err := builder.Build(compilerExampleDialect{Dialect: dialect.SQLite()})
 	if err != nil {
