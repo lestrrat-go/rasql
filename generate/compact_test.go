@@ -298,6 +298,71 @@ func TestCompactEmitsGraphAndPageFactories(t *testing.T) {
 	require.Contains(t, source, "rasqlgenNullablePageKey")
 }
 
+func TestCompactGeneratedGraphAliasReproducer(t *testing.T) {
+	catalog := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "sqlite", Version: "3"}, Objects: []compilerir.PhysicalObject{
+		{ID: "users", Kind: "table", Name: "users", Columns: []compilerir.PhysicalColumn{{Name: "id", LogicalKind: "integer"}}, Constraints: []compilerir.PhysicalConstraint{{Kind: "primary_key", Columns: []string{"id"}}}},
+		{ID: "projects", Kind: "table", Name: "projects", Columns: []compilerir.PhysicalColumn{{Name: "id", LogicalKind: "integer"}, {Name: "owner_id", Ordinal: 1, LogicalKind: "integer"}}, Constraints: []compilerir.PhysicalConstraint{{Kind: "primary_key", Columns: []string{"id"}}, {Kind: "foreign_key", Name: "projects_owner_fk", Columns: []string{"owner_id"}, Reference: &compilerir.ForeignReference{Object: "users", Columns: []string{"id"}}}}},
+	}}
+	semantic, diagnostics := compilerir.BuildSemantic(catalog, compilerir.MappingConfig{}, nil)
+	require.Empty(t, diagnostics)
+	config := compilerir.GoConfig{Package: "store", Output: "generated", Emitter: "compact", Objects: []compilerir.ObjectGoName{{ID: "users", File: "users_gen.go"}, {ID: "projects", File: "projects_gen.go"}}}
+	model, diagnostics := compilerir.BuildGo(semantic, config)
+	require.Empty(t, diagnostics)
+	in, err := generate.NewEmitterInput(catalog, semantic, model, config, compilerir.MappingConfig{})
+	require.NoError(t, err)
+	store, err := generate.RenderCompact(in)
+	require.NoError(t, err)
+	root := t.TempDir()
+	store.Root, store.Dir = root, "generated"
+	plan, err := store.Plan()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "generated"), 0o755))
+	require.NoError(t, plan.Commit())
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/graph\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire modernc.org/sqlite v1.55.0\nreplace github.com/lestrrat-go/rasql => "+repoRoot(t)+"\n"), 0o600))
+	consumer := `package store_test
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/lestrrat-go/rasql"
+	generated "example.com/graph/generated"
+)
+
+type projectGraph struct { Owner rasql.LoadedOne[userGraph] }
+type userGraph struct { ID int64 }
+
+func TestGeneratedEdgeRejectsAliasedStage(t *testing.T) {
+	parentSource, err := generated.Projects().Source("p")
+	if err != nil { t.Fatal(err) }
+	parentExpressions, err := (generated.ProjectsColumns{}).Bind(parentSource)
+	if err != nil { t.Fatal(err) }
+	parentProjection, err := generated.ProjectsProjection(parentExpressions)
+	if err != nil { t.Fatal(err) }
+	parentQuery := rasql.Select(parentSource.Source(), parentProjection)
+	childSource, err := generated.Users().Source("u")
+	if err != nil { t.Fatal(err) }
+	childExpressions, err := (generated.UsersColumns{}).Bind(childSource)
+	if err != nil { t.Fatal(err) }
+	childProjection, err := generated.UsersProjection(childExpressions)
+	if err != nil { t.Fatal(err) }
+	childQuery := rasql.Select(childSource.Source(), childProjection)
+	childPlan, err := rasql.NewGraphPlan(childQuery, func(row generated.UsersRow) userGraph { return userGraph{ID: row.ID} })
+	if err != nil { t.Fatal(err) }
+	edge, err := generated.ProjectsProjectsOwnerFkEdge(childPlan, rasql.EdgeOptions{}, func(graph *projectGraph, value rasql.LoadedOne[userGraph]) { graph.Owner = value })
+	if err != nil { t.Fatal(err) }
+	_, err = rasql.NewGraphPlan(parentQuery, func(generated.ProjectsRow) projectGraph { return projectGraph{} }, edge)
+	if err == nil || !strings.Contains(err.Error(), "graph_key_mismatch") { t.Fatalf("err = %v, want graph_key_mismatch", err) }
+}
+`
+	require.NoError(t, os.WriteFile(filepath.Join(root, "generated", "graph_test.go"), []byte(consumer), 0o600))
+	command := exec.Command("go", "test", "-mod=mod", "./generated")
+	command.Dir = root
+	command.Env = append(os.Environ(), "GOCACHE="+filepath.Join(root, "cache"))
+	output, err := command.CombinedOutput()
+	require.NoError(t, err, "%s", output)
+}
+
 func repoRoot(t *testing.T) string {
 	t.Helper()
 	root, err := filepath.Abs("..")
