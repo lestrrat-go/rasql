@@ -311,7 +311,7 @@ func prepareRows[R any](executor Executor, q Query[R], compiled compiledQuery) (
 		if dialect.Name() != engine {
 			return result, planError("engine_mismatch", "native.engine", "executor dialect does not match native SQL")
 		}
-	} else {
+	} else if q.plan.mutation == nil {
 		composed, err := resultQuery(q)
 		if err != nil {
 			return result, err
