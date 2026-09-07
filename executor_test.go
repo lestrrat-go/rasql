@@ -90,11 +90,12 @@ func setRuntimeDestination(destination, value any) {
 }
 
 type runtimeFakeExecutor struct {
-	calls   atomic.Int64
-	rows    [][]any
-	dialect dialect.Dialect
-	last    *runtimeFakeRows
-	mu      sync.Mutex
+	calls         atomic.Int64
+	rows          [][]any
+	dialect       dialect.Dialect
+	last          *runtimeFakeRows
+	mu            sync.Mutex
+	lastStatement stmt.Statement
 }
 type nilMapExecutor map[string]string
 
@@ -107,10 +108,11 @@ func (nilMapExecutor) Exec(context.Context, stmt.Statement) (sql.Result, error) 
 }
 
 func (e *runtimeFakeExecutor) Dialect() dialect.Dialect { return e.dialect }
-func (e *runtimeFakeExecutor) Query(context.Context, stmt.Statement) (ResultRows, error) {
+func (e *runtimeFakeExecutor) Query(_ context.Context, statement stmt.Statement) (ResultRows, error) {
 	e.calls.Add(1)
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.lastStatement = statement
 	e.last = &runtimeFakeRows{values: e.rows}
 	return e.last, nil
 }
@@ -132,6 +134,15 @@ func (runtimeBytesDecoder) DecodeRow(source ScanSource, result *[]byte) error {
 	return source.Scan(result)
 }
 
+type runtimePair struct{ First, Second int64 }
+type runtimePairDecoder struct{ schema ResultSchema }
+
+func (d runtimePairDecoder) ResultSchema() ResultSchema { return d.schema }
+func (runtimePairDecoder) Presence() []Presence         { return nil }
+func (runtimePairDecoder) DecodeRow(source ScanSource, result *runtimePair) error {
+	return source.Scan(&result.First, &result.Second)
+}
+
 func runtimeQuery(t *testing.T) Query[int64] {
 	t.Helper()
 	table, err := ReadTableOf[struct{}](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "value", Type: schema.IntegerType{}}}})
@@ -143,6 +154,22 @@ func runtimeQuery(t *testing.T) Query[int64] {
 	resultSchema, err := NewResultSchema(ResultColumn{Name: "value", Type: schema.IntegerType{}})
 	require.NoError(t, err)
 	projection, err := NewProjection([]ProjectionItem{Item("value", column.Expr(), schema.IntegerType{}, "")}, runtimeDecoder{schema: resultSchema})
+	require.NoError(t, err)
+	return Select(relation.Source(), projection)
+}
+func runtimePairQuery(t *testing.T, firstCodec, secondCodec string) Query[runtimePair] {
+	t.Helper()
+	table, err := ReadTableOf[runtimePair](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "first", Type: schema.IntegerType{}}, {Name: "second", Type: schema.IntegerType{}}}})
+	require.NoError(t, err)
+	relation, err := SourceOf(table, "i")
+	require.NoError(t, err)
+	first, err := BindColumn[runtimePair, int64](relation, "first", firstCodec)
+	require.NoError(t, err)
+	second, err := BindColumn[runtimePair, int64](relation, "second", secondCodec)
+	require.NoError(t, err)
+	schemaValue, err := NewResultSchema(ResultColumn{Name: "first", Type: schema.IntegerType{}, Codec: firstCodec}, ResultColumn{Name: "second", Type: schema.IntegerType{}, Codec: secondCodec})
+	require.NoError(t, err)
+	projection, err := NewProjection([]ProjectionItem{Item("first", first.Expr(), schema.IntegerType{}, firstCodec), Item("second", second.Expr(), schema.IntegerType{}, secondCodec)}, runtimePairDecoder{schema: schemaValue})
 	require.NoError(t, err)
 	return Select(relation.Source(), projection)
 }
@@ -312,16 +339,75 @@ func TestPreparedRowsCopiesAndEncodesOneDetachedStatement(t *testing.T) {
 	codec := countingRuntimeCodec{encode: &encodes, decode: &decodes}
 	registry, err := NewCodecRegistry(map[CodecID]ValueCodec{"count": codec})
 	require.NoError(t, err)
-	inner, err := WithCodecs(runtimeExecutor(t, nil), registry)
+	base := runtimeExecutor(t, nil)
+	inner, err := WithCodecs(base, registry)
 	require.NoError(t, err)
-	compiled := compiledQuery{statement: stmt.New(sqltext.Text("SELECT ?"), []byte("x")), bindSlots: []bindSlot{{id: 1, codec: "count"}}, copyArgs: []bindValueCopy{func() (any, error) { copies.Add(1); return []byte("x"), nil }}}
+	compiled := compiledQuery{statement: stmt.New(sqltext.Text("SELECT ?"), sql.Named("payload", []byte("x"))), bindSlots: []bindSlot{{id: 1, codec: "count"}}, copyArgs: []bindValueCopy{func() (any, error) { copies.Add(1); return sql.Named("payload", []byte("x")), nil }}}
 	prepared, err := prepareRows(inner, runtimeQuery(t), compiled)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), copies.Load())
 	require.Equal(t, int64(1), encodes.Load())
-	args := prepared.statement.Args()
-	args[0].([]byte)[0] = 'z'
-	require.Equal(t, []byte("x"), compiled.statement.Args()[0].([]byte))
+	sequence, err := rowsPrepared(context.Background(), inner, prepared)
+	require.NoError(t, err)
+	for _, rowErr := range sequence {
+		require.NoError(t, rowErr)
+	}
+	raw := base.(profiledExecutor).Executor.(*runtimeFakeExecutor)
+	require.Equal(t, int64(1), raw.calls.Load())
+	handoff := raw.lastStatement.Args()[0].(sql.NamedArg)
+	require.Equal(t, "payload", handoff.Name)
+	require.Equal(t, []byte("x"), handoff.Value)
+	require.Equal(t, int64(1), copies.Load())
+	require.Equal(t, int64(1), encodes.Load())
+	handoff.Value.([]byte)[0] = 'z'
+	require.Equal(t, []byte("x"), compiled.statement.Args()[0].(sql.NamedArg).Value)
+}
+
+func TestPreparedRowsCopyFailuresRunNoCodecOrExecutor(t *testing.T) {
+	copyFailure := errors.New("copy failed")
+	var encodes, decodes atomic.Int64
+	codec := countingRuntimeCodec{encode: &encodes, decode: &decodes}
+	registry, err := NewCodecRegistry(map[CodecID]ValueCodec{"count": codec})
+	require.NoError(t, err)
+	base := runtimeExecutor(t, nil)
+	inner, err := WithCodecs(base, registry)
+	require.NoError(t, err)
+	compiled := compiledQuery{statement: stmt.New(sqltext.Text("SELECT ?"), 1), bindSlots: []bindSlot{{id: 1, codec: "count"}}, copyArgs: []bindValueCopy{func() (any, error) { return nil, copyFailure }}}
+	_, err = prepareRows(inner, runtimeQuery(t), compiled)
+	require.ErrorIs(t, err, copyFailure)
+	require.Equal(t, int64(0), encodes.Load())
+	raw := base.(profiledExecutor).Executor.(*runtimeFakeExecutor)
+	require.Equal(t, int64(0), raw.calls.Load())
+	for name, broken := range map[string]compiledQuery{
+		"missing slot":     {statement: stmt.New(sqltext.Text("SELECT ?"), 1), bindSlots: nil, copyArgs: []bindValueCopy{func() (any, error) { return 1, nil }}},
+		"missing copier":   {statement: stmt.New(sqltext.Text("SELECT ?"), 1), bindSlots: []bindSlot{{id: 1, codec: "count"}}, copyArgs: nil},
+		"missing argument": {statement: stmt.New(sqltext.Text("SELECT")), bindSlots: []bindSlot{{id: 1, codec: "count"}}, copyArgs: []bindValueCopy{func() (any, error) { return 1, nil }}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := prepareRows(inner, runtimeQuery(t), broken)
+			require.Error(t, err)
+			require.Equal(t, int64(0), encodes.Load())
+			require.Equal(t, int64(0), raw.calls.Load())
+		})
+	}
+}
+
+func TestPreparedRowsMissingCodecPathsAreIndexed(t *testing.T) {
+	var counter atomic.Int64
+	registry, err := NewCodecRegistry(map[CodecID]ValueCodec{"present": countingRuntimeCodec{encode: &counter, decode: &counter}})
+	require.NoError(t, err)
+	base := runtimeExecutor(t, nil)
+	inner, err := WithCodecs(base, registry)
+	require.NoError(t, err)
+	compiled := compiledQuery{statement: stmt.New(sqltext.Text("SELECT ?"), 1), bindSlots: []bindSlot{{id: 1, codec: "present"}}, copyArgs: []bindValueCopy{func() (any, error) { return 1, nil }}}
+	_, err = prepareRows(inner, runtimePairQuery(t, "present", "missing"), compiled)
+	var planErr *PlanError
+	require.ErrorAs(t, err, &planErr)
+	require.Equal(t, "result.columns[1].codec", planErr.Path)
+	_, err = prepareRows(inner, runtimeQuery(t), compiledQuery{statement: stmt.New(sqltext.Text("SELECT ?"), 1, 2), bindSlots: []bindSlot{{id: 1, codec: "present"}, {id: 2, codec: "missing"}}, copyArgs: []bindValueCopy{func() (any, error) { return 1, nil }, func() (any, error) { return 2, nil }}})
+	require.ErrorAs(t, err, &planErr)
+	require.Equal(t, "binds[1].codec", planErr.Path)
+	require.Equal(t, int64(0), base.(profiledExecutor).Executor.(*runtimeFakeExecutor).calls.Load())
 }
 
 type countingRuntimeCodec struct{ encode, decode *atomic.Int64 }
