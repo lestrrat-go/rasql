@@ -51,8 +51,11 @@ func TestR5BuiltinCursorPreservesNamedTypesAndRejectsOverflow(t *testing.T) {
 	_, err = encodeBuiltinCursor(math.NaN())
 	require.Error(t, err)
 	for _, value := range []float64{math.Inf(1), -math.Inf(1)} {
-		_, encodeErr := encodeBuiltinCursor(value)
+		encoded, encodeErr := encodeBuiltinCursor(value)
 		require.NoError(t, encodeErr)
+		decoded, decodeErr := decodeBuiltinCursor(encoded, reflect.TypeOf(float32(0)))
+		require.NoError(t, decodeErr)
+		require.Equal(t, float32(value), decoded)
 	}
 	malformedNaN := make([]byte, 8)
 	binary.BigEndian.PutUint64(malformedNaN, math.Float64bits(math.NaN())^(1<<63))

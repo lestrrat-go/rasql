@@ -226,7 +226,7 @@ func decodeBuiltinCursor(data []byte, typ reflect.Type) (any, error) {
 		}
 		if typ.Kind() == reflect.Float32 {
 			narrow := float32(value)
-			if math.IsInf(float64(narrow), 0) || float64(narrow) != value {
+			if float64(narrow) != value {
 				return nil, errors.New("float cursor overflows destination type")
 			}
 		}
