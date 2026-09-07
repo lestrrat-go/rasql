@@ -46,8 +46,8 @@ var tasksDef = schema.TableDef{
 		{Name: "assignee_id", Type: schema.IntegerType{}, Nullable: true},
 		{Name: "title", Type: schema.TextType{}},
 		{Name: "is_open", Type: schema.BooleanType{}, Default: "true"},
-		{Name: "created_at", Type: schema.TimeType{}, Default: "now()"},
-		{Name: "due_on", Type: schema.TimeType{}, Nullable: true},
+		{Name: "created_at", Type: schema.TimeType{}, Default: "now()", NativeType: &schema.NativeTypeDef{Dialect: "postgresql", Schema: "pg_catalog", Name: "timestamptz", Kind: schema.NativeTypeKind("builtin"), Arguments: []string{"6"}}},
+		{Name: "due_on", Type: schema.TimeType{}, Nullable: true, NativeType: &schema.NativeTypeDef{Dialect: "postgresql", Schema: "pg_catalog", Name: "date", Kind: schema.NativeTypeKind("builtin")}},
 	},
 	PrimaryKey: []string{"id"},
 	Indexes: []schema.IndexDef{

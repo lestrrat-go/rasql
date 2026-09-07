@@ -110,6 +110,11 @@ type Dialect interface {
 	Supports(Capability) bool
 }
 
+// NativeTypeNamer optionally reconstructs a stored native type identity.
+type NativeTypeNamer interface {
+	NativeTypeName(schema.NativeTypeDef) (name string, supported bool, err error)
+}
+
 // IdentifierComparer is an optional dialect extension for identifier
 // resolution. Dialect implementations do not need to implement it.
 type IdentifierComparer interface {
@@ -308,6 +313,138 @@ func (d builtin) TypeName(column schema.ColumnDef) (string, error) {
 		return "", fmt.Errorf("dialect %s: unsupported column type %q", d.name, column.Type.Kind())
 	}
 	return typeName, nil
+}
+
+func (d builtin) NativeTypeName(native schema.NativeTypeDef) (string, bool, error) {
+	if native.Dialect != d.name {
+		return "", false, nil
+	}
+	if native.Name == "" {
+		return "", false, fmt.Errorf("dialect %s: native type name must not be empty", d.name)
+	}
+	quote := func(value string) (string, error) { return d.QuoteIdentifier(value) }
+	qualified := func() (string, error) {
+		if native.Schema == "" {
+			return quote(native.Name)
+		}
+		schemaName, err := quote(native.Schema)
+		if err != nil {
+			return "", err
+		}
+		name, err := quote(native.Name)
+		if err != nil {
+			return "", err
+		}
+		return schemaName + "." + name, nil
+	}
+	switch native.Kind {
+	case schema.NativeOther, schema.NativeBuiltin:
+		if d.name == "sqlite" {
+			if !sqliteNativeDeclarationSupported(native.Name, native.Arguments) {
+				return "", false, nil
+			}
+			if len(native.Arguments) == 0 {
+				if sqliteNativeNameUnquoted(native.Name) {
+					return native.Name, true, nil
+				}
+				name, err := quote(native.Name)
+				return name, err == nil, err
+			}
+			if !sqliteNativeNameUnquoted(native.Name) {
+				return "", false, nil
+			}
+			return native.Name + "(" + strings.Join(native.Arguments, ", ") + ")", true, nil
+		}
+		if d.name == "postgresql" && native.Kind == schema.NativeBuiltin && len(native.Arguments) > 0 {
+			if len(native.Arguments) != 1 || native.Arguments[0] == "" {
+				return "", false, nil
+			}
+			for _, char := range native.Arguments[0] {
+				if char < '0' || char > '9' {
+					return "", false, nil
+				}
+			}
+			if native.Name != "time" && native.Name != "timetz" && native.Name != "timestamp" && native.Name != "timestamptz" {
+				return "", false, nil
+			}
+			name, err := qualified()
+			if err != nil {
+				return "", false, err
+			}
+			return name + "(" + native.Arguments[0] + ")", true, nil
+		}
+		name, err := qualified()
+		return name, err == nil, err
+	case schema.NativeArray:
+		if native.Element == nil {
+			return "", false, fmt.Errorf("dialect %s: native array lacks an element type", d.name)
+		}
+		if d.name != "postgresql" {
+			return "", false, nil
+		}
+		element, supported, err := d.NativeTypeName(*native.Element)
+		if err != nil || !supported {
+			return "", supported, err
+		}
+		return element + "[]", true, nil
+	case schema.NativeEnum, schema.NativeSet:
+		if d.name != "mysql" {
+			if native.Kind == schema.NativeEnum && d.name == "postgresql" {
+				name, err := qualified()
+				return name, err == nil, err
+			}
+			return "", false, nil
+		}
+		name := "ENUM"
+		if native.Kind == schema.NativeSet {
+			name = "SET"
+		}
+		literals := make([]string, len(native.Arguments))
+		for i, value := range native.Arguments {
+			value = strings.ReplaceAll(value, "\\", "\\\\")
+			literals[i] = "'" + strings.ReplaceAll(value, "'", "''") + "'"
+		}
+		return name + "(" + strings.Join(literals, ", ") + ")", true, nil
+	default:
+		name, err := qualified()
+		return name, err == nil, err
+	}
+}
+
+func sqliteNativeNameUnquoted(value string) bool {
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "INT", "INTEGER", "TINYINT", "SMALLINT", "MEDIUMINT", "BIGINT", "INT2", "INT8",
+		"CHAR", "CHARACTER", "VARCHAR", "VARYING CHARACTER", "NCHAR", "NATIVE CHARACTER", "NVARCHAR", "TEXT", "CLOB",
+		"BLOB", "REAL", "DOUBLE", "FLOAT", "NUMERIC", "DECIMAL", "BOOLEAN", "DATE",
+		"DATETIME", "TIME", "JSON":
+		return true
+	default:
+		return false
+	}
+}
+
+func sqliteNativeDeclarationSupported(value string, arguments []string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '_' || char == ' ' || char == '"' {
+			continue
+		}
+		return false
+	}
+	for _, argument := range arguments {
+		if argument == "" {
+			return false
+		}
+		for _, char := range argument {
+			if char < '0' || char > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // unsignedTypeName renders the DDL type for a column that states no negative

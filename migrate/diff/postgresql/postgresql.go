@@ -1101,12 +1101,40 @@ func normalizedTable(table *pgquery.CreateTableStatement, ignoreQuotes bool) pgq
 func normalizedColumn(column pgquery.ColumnDefinition, ignoreQuotes bool) pgquery.ColumnDefinition {
 	normalized := column
 	normalized.Name = normalizedIdentifier(column.Name, ignoreQuotes)
+	normalized.Type = normalizedDataType(column.Type)
 	if column.Constraints == nil {
 		return normalized
 	}
 	normalized.Constraints = make([]pgquery.ColumnConstraint, len(column.Constraints))
 	for index, constraint := range column.Constraints {
 		normalized.Constraints[index] = normalizedColumnConstraint(constraint, ignoreQuotes)
+	}
+	return normalized
+}
+
+func normalizedDataType(dataType pgquery.DataType) pgquery.DataType {
+	normalized := dataType
+	normalized.Words = append([]string(nil), dataType.Words...)
+	normalized.Modifiers = append([]pgquery.Expression(nil), dataType.Modifiers...)
+	if len(normalized.Words) != 1 {
+		return normalized
+	}
+	const catalogPrefix = `"pg_catalog"."`
+	word := normalized.Words[0]
+	if strings.HasPrefix(word, catalogPrefix) && strings.HasSuffix(word, `"`) {
+		name := strings.TrimSuffix(strings.TrimPrefix(word, catalogPrefix), `"`)
+		switch name {
+		case "date", "json", "jsonb", "numeric", "time", "timetz", "timestamp", "timestamptz":
+			normalized.Words[0] = name
+		}
+	}
+	switch normalized.Words[0] {
+	case "time", "timetz", "timestamp", "timestamptz":
+		if len(normalized.Modifiers) == 1 {
+			if precision, ok := normalized.Modifiers[0].(*pgquery.Literal); ok && precision.Value == "6" {
+				normalized.Modifiers = nil
+			}
+		}
 	}
 	return normalized
 }

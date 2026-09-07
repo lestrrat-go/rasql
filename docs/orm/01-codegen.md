@@ -132,6 +132,15 @@ names the file instead.
 A key the file does not define is refused rather than ignored, so a
 misspelling is a message rather than a setting that silently does nothing.
 
+Generated descriptors preserve native type metadata alongside portable column
+types. PostgreSQL domains, enums, and arrays, MySQL ENUM and SET labels, and
+validated SQLite declarations remain available to generated code. A native
+type without a portable Go binding generates `any`; callers provide explicit
+`sql.Scanner` and `driver.Valuer` implementations when they need a concrete
+value. Code generation refuses incomplete native metadata before it writes
+generated files, and diff-live preserves native DDL only for the inspected
+engine while returning a typed error for another dialect.
+
 ## What stays on the command line
 
 `-dsn` is never read from the settings file, because that file is checked in

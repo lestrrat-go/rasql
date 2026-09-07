@@ -108,7 +108,7 @@ func newTableDefFixture() schema.TableDef {
 			{Name: "payload", Type: schema.BytesType{}},
 			{Name: "created_at", Type: schema.TimeType{}},
 			{Name: "meta", Type: schema.JSONType{}},
-			{Name: "uid", Type: schema.UUIDType{}},
+			{Name: "uid", Type: schema.UUIDType{}, NativeType: &schema.NativeTypeDef{Dialect: "postgresql", Schema: "public", Name: "uuid_array", Kind: schema.NativeArray, Arguments: []string{"uuid"}, Element: &schema.NativeTypeDef{Dialect: "postgresql", Name: "uuid", Kind: schema.NativeBuiltin}}},
 			{
 				Name:     "external_id",
 				Type:     schema.IntegerType{},
@@ -507,7 +507,7 @@ type descriptorAccessor struct {
 // }". Capturing all three names from the generated source, rather than
 // recomputing rasqlgen's own name-derivation rules a second time here, is
 // what keeps this test honest about what rasqlgen actually named them.
-var descriptorAccessorPattern = regexp.MustCompile(`(?m)^// (\w+) returns a copy of the descriptor for the "([^"]*)" table\.\n^func (\w+)\(\) schema\.TableDef \{ return (\w+)\.Clone\(\) \}$`)
+var descriptorAccessorPattern = regexp.MustCompile(`(?m)^// (\w+) returns a copy of the descriptor for the "([^"]*)" table\.\n^func (\w+)\(\) schema\.TableDef \{\s*return (\w+)\.Clone\(\)\s*\}$`)
 
 // extractDescriptorAccessors returns, for each table schema_gen.go declares,
 // its descriptorAccessor, sorted by table name so the generated files this
