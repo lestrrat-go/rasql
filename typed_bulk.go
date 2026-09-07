@@ -264,7 +264,7 @@ func bulkBatches[T any](plans []CreatePlan[T], maxRows, maxBinds int) ([]bulkBat
 		if err != nil {
 			return nil, err
 		}
-		binds := len(lowered.values)
+		binds := len(lowered.rawValues)
 		if binds > maxBinds {
 			return nil, fmt.Errorf("rasql: bulk plan input %d uses %d bind parameters, limit is %d", index, binds, maxBinds)
 		}
@@ -273,13 +273,13 @@ func bulkBatches[T any](plans []CreatePlan[T], maxRows, maxBinds int) ([]bulkBat
 			continue
 		}
 		if len(result) == 0 || result[len(result)-1].defaults || !sameColumns(result[len(result)-1].columns, lowered.columns) || len(result[len(result)-1].plans) == maxRows || (len(result[len(result)-1].rows)+1)*len(lowered.values) > maxBinds {
-			result = append(result, bulkBatch[T]{columns: append([]query.ColumnRef(nil), lowered.columns...), indexes: []int{index}, plans: []CreatePlan[T]{plan}, rows: [][]any{append([]any(nil), lowered.values...)}})
+			result = append(result, bulkBatch[T]{columns: append([]query.ColumnRef(nil), lowered.columns...), indexes: []int{index}, plans: []CreatePlan[T]{plan}, rows: [][]any{append([]any(nil), lowered.rawValues...)}})
 			continue
 		}
 		batch := &result[len(result)-1]
 		batch.plans = append(batch.plans, plan)
 		batch.indexes = append(batch.indexes, index)
-		batch.rows = append(batch.rows, append([]any(nil), lowered.values...))
+		batch.rows = append(batch.rows, append([]any(nil), lowered.rawValues...))
 	}
 	return result, nil
 }

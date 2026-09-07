@@ -258,11 +258,14 @@ func (p CreatePlan[T]) lowerNormalized() (normalizedCreate[T], error) {
 			continue
 		}
 		var value any = field.bound
+		rawValue := field.value
 		if field.state == mutationClear {
 			value = nil
+			rawValue = nil
 		}
 		lowered.columns = append(lowered.columns, p.table.Ref().Column(column.Name))
 		lowered.values = append(lowered.values, value)
+		lowered.rawValues = append(lowered.rawValues, rawValue)
 	}
 	lowered.defaultOnly = len(lowered.columns) == 0
 	return lowered, nil
