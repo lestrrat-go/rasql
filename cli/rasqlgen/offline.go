@@ -231,7 +231,28 @@ func offlineDigestGroups(root string, settings config, lock compilerlock.File) (
 	}
 	queries := make([]compilerlock.QueryDigestInput, 0, len(lock.Queries))
 	queryChanged := false
+	lockedQueries := make(map[compilerir.QueryID]compilerlock.QueryRecord, len(lock.Queries))
 	for _, query := range lock.Queries {
+		if _, exists := lockedQueries[query.ID]; exists {
+			queryChanged = true
+		}
+		lockedQueries[query.ID] = query
+	}
+	configuredQueries := make(map[compilerir.QueryID]configQuery, len(settings.Queries))
+	for _, query := range settings.Queries {
+		if _, exists := configuredQueries[query.ID]; exists {
+			queryChanged = true
+		}
+		configuredQueries[query.ID] = query
+	}
+	if len(lockedQueries) != len(configuredQueries) {
+		queryChanged = true
+	}
+	for _, query := range lock.Queries {
+		configured, configuredOK := configuredQueries[query.ID]
+		if !configuredOK || !queryDeclarationPolicyMatches(configured, query) {
+			queryChanged = true
+		}
 		input := query.SQL
 		if snapshot, snapshotErr := compilerlock.SnapshotSourceFile(root, query.SQL.Path); snapshotErr == nil {
 			input.SHA256 = snapshot.Record().SHA256
@@ -241,17 +262,7 @@ func offlineDigestGroups(root string, settings config, lock compilerlock.File) (
 		if input.SHA256 != query.SQL.SHA256 {
 			queryChanged = true
 		}
-		current := query
-		for _, configured := range settings.Queries {
-			if configured.ID != query.ID {
-				continue
-			}
-			current.Operation = configured.Operation
-			current.Cardinality = configured.Cardinality
-			current.Parameters = configValueRecords(configured.Parameters, mappings)
-			current.Results = configValueRecords(configured.Results, mappings)
-		}
-		queries = append(queries, compilerlock.QueryDigestInput{ID: string(query.ID), SQL: input, Operation: current.Operation, Parameters: current.Parameters, Results: current.Results, Cardinality: current.Cardinality})
+		queries = append(queries, compilerlock.QueryDigestInput{ID: string(query.ID), SQL: input, Operation: query.Operation, Parameters: query.Parameters, Results: query.Results, Cardinality: query.Cardinality})
 	}
 	generation := compilerir.GoConfig{Package: lock.Generation.Package, Output: lock.Generation.Output, Emitter: lock.Generation.Emitter, Prune: lock.Generation.Prune}
 	if settings.Package != "" {
@@ -267,7 +278,13 @@ func offlineDigestGroups(root string, settings config, lock compilerlock.File) (
 		generation.Objects = append(generation.Objects, compilerir.ObjectGoName{ID: compilerir.ObjectID(object.ID), Source: object.Source, Row: object.Row, Create: object.Create, Patch: object.Patch, File: object.File})
 	}
 	for _, query := range lock.Generation.Queries {
-		generation.Queries = append(generation.Queries, compilerir.QueryGoName{ID: compilerir.QueryID(query.ID), Function: query.Function, Result: query.Result, Projection: query.Projection, Decoder: query.Decoder, File: query.File})
+		configured, ok := configuredQueries[compilerir.QueryID(query.ID)]
+		function, file := query.Function, query.File
+		if ok {
+			function = configured.Function
+			file = configuredQueryOutput(configured)
+		}
+		generation.Queries = append(generation.Queries, compilerir.QueryGoName{ID: compilerir.QueryID(query.ID), Function: function, Result: query.Result, Projection: query.Projection, Decoder: query.Decoder, File: file})
 	}
 	digests, err := compilerlock.BuildDigests(compilerlock.DigestInputs{Source: compilerlock.SourceDigestInput{Record: lock.Source, Engine: lock.Engine}, Mappings: mappings, Queries: queries, Generation: generation})
 	if err != nil {
@@ -294,17 +311,49 @@ func offlineDigestGroups(root string, settings config, lock compilerlock.File) (
 	return groups, nil
 }
 
-func configValueRecords(values []compilerquery.ValueDeclaration, mappings compilerir.MappingConfig) []compilerlock.ValueRecord {
-	if values == nil {
-		return nil
+func queryDeclarationPolicyMatches(configured configQuery, locked compilerlock.QueryRecord) bool {
+	if normalizeQueryPath(configured.Input) != normalizeQueryPath(locked.SQL.Path) || normalizeQueryEngine(configured.Engine) != normalizeQueryEngine(locked.Evidence.Dialect) || strings.ToLower(configured.Operation) != strings.ToLower(locked.Operation) || strings.ToLower(configured.Cardinality) != strings.ToLower(locked.Cardinality) {
+		return false
 	}
-	out := make([]compilerlock.ValueRecord, len(values))
-	for i, value := range values {
-		nullable := value.Nullable != nil && *value.Nullable
-		logicalKind, _, _ := compilerir.DeclaredQueryLogicalKind(value.Scalar, mappings)
-		out[i] = compilerlock.ValueRecord{Name: value.Name, Scalar: value.Scalar, Nullable: nullable, TypeCertainty: compilerir.CertaintyDeclared, NullabilityCertainty: compilerir.CertaintyDeclared, LogicalKind: logicalKind}
+	return queryValuePolicyMatches(configured.Parameters, locked.Parameters) && queryValuePolicyMatches(configured.Results, locked.Results)
+}
+
+func queryValuePolicyMatches(configured []compilerquery.ValueDeclaration, locked []compilerlock.ValueRecord) bool {
+	if len(configured) != len(locked) {
+		return false
 	}
-	return out
+	for index, value := range configured {
+		if value.Nullable == nil || value.Name != locked[index].Name || value.Scalar != locked[index].Scalar || *value.Nullable != locked[index].Nullable {
+			return false
+		}
+	}
+	return true
+}
+
+func normalizeQueryPath(value string) string {
+	if value == "" {
+		return ""
+	}
+	return filepath.ToSlash(filepath.Clean(filepath.FromSlash(value)))
+}
+
+func normalizeQueryEngine(value string) string {
+	switch strings.ToLower(value) {
+	case "postgres":
+		return "postgresql"
+	default:
+		return strings.ToLower(value)
+	}
+}
+
+func configuredQueryOutput(query configQuery) string {
+	if query.Output != "" {
+		return query.Output
+	}
+	if query.Input != "" {
+		return derivedQueryOutput(query.Input)
+	}
+	return snakeCase(query.Function) + "_gen.go"
 }
 
 func lockQueryDigests(lock compilerlock.File) []compilerlock.QueryDigestInput {
