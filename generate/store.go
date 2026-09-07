@@ -647,6 +647,7 @@ func (s Store) planTypedQuery(dir string, q TypedQuery, filenames, identifiers m
 		Package: s.Package, Function: q.Function, Engine: q.Engine, SQL: q.SQL,
 		Operation: q.Operation, Cardinality: q.Cardinality, Result: result,
 		Projection: q.Projection, Decoder: q.Decoder, Parameters: q.Parameters, Results: q.Results, Imports: q.Imports,
+		ArgumentNames: q.ArgumentNames,
 	})
 	if err != nil {
 		return File{}, err

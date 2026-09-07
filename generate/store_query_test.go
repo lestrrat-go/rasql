@@ -10,7 +10,9 @@ import (
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/generate"
+	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/genfile"
+	"github.com/lestrrat-go/rasql/internal/querygen"
 	"github.com/lestrrat-go/rasql/namedsql"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
@@ -197,6 +199,35 @@ func TestStoreCompilesTypedQuery(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(generated), "func UserByEmail(email string)")
 	require.NoError(t, store.Check())
+}
+
+func TestStoreCompilesTypedQueryPreservingRepeatedArgumentNames(t *testing.T) {
+	root := t.TempDir()
+	store := generate.Store{
+		Package: "store",
+		Root:    root,
+		Dir:     "store",
+		Tables:  []schema.TableDef{usersTableDef()},
+		TypedQueries: []generate.TypedQuery{{
+			Function: "Repeated", Output: "repeated_gen.go", Engine: "sqlite",
+			SQL: "SELECT id FROM users WHERE id > ? OR id = ?", Operation: "select", Cardinality: "many",
+			Result: "RepeatedResult", Projection: "RepeatedProjection", Decoder: "RepeatedDecoder",
+			ArgumentNames: []string{"id", "id"},
+			Parameters: []querygen.TypedValue{{
+				Go:       compilerir.GoField{Name: "id", Type: "int64"},
+				Semantic: compilerir.SemanticValue{Name: "id", Scalar: "integer", LogicalKind: "integer"},
+			}},
+			Results: []querygen.TypedValue{{
+				Go:       compilerir.GoField{Name: "id", Type: "int64"},
+				Semantic: compilerir.SemanticValue{Name: "id", Scalar: "integer", LogicalKind: "integer"},
+			}},
+		}},
+	}
+
+	require.NoError(t, store.Write())
+	generated, err := os.ReadFile(filepath.Join(root, "store", "repeated_gen.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(generated), "Args: []rasql.NativeArgument{{Value: id, Codec: \"\"}, {Value: id, Codec: \"\"}}")
 }
 
 func TestStoreCompilesExplicitStaticParameter(t *testing.T) {
