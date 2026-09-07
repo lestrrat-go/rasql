@@ -181,7 +181,7 @@ func graphUniqueOrder[R any](q Query[R], order []OrderTerm) ([]OrderTerm, bool) 
 	}
 	table, ok := q.plan.sources[0].ref.Table()
 	if !ok {
-		return order, len(order) > 0
+		return nil, false
 	}
 	definition := table.Definition()
 	candidate := append([]string(nil), definition.PrimaryKey...)
@@ -199,7 +199,7 @@ func graphUniqueOrder[R any](q Query[R], order []OrderTerm) ([]OrderTerm, bool) 
 	}
 	if len(candidate) == 0 {
 		for _, index := range definition.Indexes {
-			if index.Unique && len(index.Expressions) == 0 && len(index.Columns) > 0 {
+			if index.Unique && index.Predicate == "" && len(index.Expressions) == 0 && len(index.Columns) > 0 {
 				if graphAnyNullable(definition.Columns, index.Columns) {
 					continue
 				}
@@ -209,16 +209,14 @@ func graphUniqueOrder[R any](q Query[R], order []OrderTerm) ([]OrderTerm, bool) 
 		}
 	}
 	if len(candidate) == 0 {
-		return order, len(order) > 0
+		return nil, false
 	}
-	seen := make(map[string]struct{}, len(order))
-	for _, term := range order {
-		if column, ok := term.node.(query.ColumnRef); ok {
-			seen[column.Name()] = struct{}{}
-		}
+	if len(order) < len(candidate) {
+		return nil, false
 	}
-	for _, name := range candidate {
-		if _, ok := seen[name]; !ok {
+	for index, name := range candidate {
+		column, ok := order[len(order)-len(candidate)+index].node.(query.ColumnRef)
+		if !ok || column.Source().QualifiedName() != q.plan.sources[0].ref.QualifiedName() || column.Name() != name {
 			return nil, false
 		}
 	}

@@ -61,9 +61,9 @@ func graphAcceptanceFixture(t *testing.T, childRows int) (Executor, Source, Sour
 	require.NoError(t, err)
 	database.SetMaxOpenConns(1)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	_, err = database.Exec(`CREATE TABLE graph_parents (id INTEGER NOT NULL, tenant INTEGER)`)
+	_, err = database.Exec(`CREATE TABLE graph_parents (id INTEGER NOT NULL PRIMARY KEY, tenant INTEGER)`)
 	require.NoError(t, err)
-	_, err = database.Exec(`CREATE TABLE graph_children (id INTEGER NOT NULL, parent INTEGER NOT NULL, tenant INTEGER NOT NULL, rank INTEGER NOT NULL)`)
+	_, err = database.Exec(`CREATE TABLE graph_children (id INTEGER NOT NULL PRIMARY KEY, parent INTEGER NOT NULL, tenant INTEGER NOT NULL, rank INTEGER NOT NULL)`)
 	require.NoError(t, err)
 	for i := 1; i <= 500; i++ {
 		var tenant any = int64(1)
@@ -84,11 +84,11 @@ func graphAcceptanceFixture(t *testing.T, childRows int) (Executor, Source, Sour
 	require.NoError(t, err)
 	executor, err := AsExecutor(db, profile)
 	require.NoError(t, err)
-	parentTable, err := ReadTableOf[graphParentRow](schema.TableDef{Name: "graph_parents", Columns: []schema.ColumnDef{
+	parentTable, err := ReadTableOf[graphParentRow](schema.TableDef{Name: "graph_parents", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}, Nullable: true},
 	}})
 	require.NoError(t, err)
-	childTable, err := ReadTableOf[graphChildRow](schema.TableDef{Name: "graph_children", Columns: []schema.ColumnDef{
+	childTable, err := ReadTableOf[graphChildRow](schema.TableDef{Name: "graph_children", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}}, {Name: "parent", Type: schema.IntegerType{}},
 		{Name: "tenant", Type: schema.IntegerType{}}, {Name: "rank", Type: schema.IntegerType{}},
 	}})
@@ -124,8 +124,8 @@ func graphAcceptanceFixture(t *testing.T, childRows int) (Executor, Source, Sour
 
 func TestGraphSQLitePerParentLimitAndAbsentCompositeKeys(t *testing.T) {
 	executor, _, _, _, parentQuery, childQuery := graphAcceptanceFixture(t, 4_750)
-	parentTable := MustReadTableOf[graphParentRow](schema.TableDef{Name: "graph_parents", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}, Nullable: true}}})
-	childTable := MustReadTableOf[graphChildRow](schema.TableDef{Name: "graph_children", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "parent", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}}, {Name: "rank", Type: schema.IntegerType{}}}})
+	parentTable := MustReadTableOf[graphParentRow](schema.TableDef{Name: "graph_parents", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}, Nullable: true}}})
+	childTable := MustReadTableOf[graphChildRow](schema.TableDef{Name: "graph_children", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "parent", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}}, {Name: "rank", Type: schema.IntegerType{}}}})
 	parentRelation, err := SourceOf(parentTable, "p")
 	require.NoError(t, err)
 	childRelation, err := SourceOf(childTable, "c")
@@ -164,8 +164,8 @@ func TestGraphSQLitePerParentLimitAndAbsentCompositeKeys(t *testing.T) {
 
 func TestGraphPlanConcurrentReuse(t *testing.T) {
 	executor, _, _, _, parentQuery, childQuery := graphAcceptanceFixture(t, 100)
-	parentTable := MustReadTableOf[graphParentRow](schema.TableDef{Name: "graph_parents", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}, Nullable: true}}})
-	childTable := MustReadTableOf[graphChildRow](schema.TableDef{Name: "graph_children", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "parent", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}}, {Name: "rank", Type: schema.IntegerType{}}}})
+	parentTable := MustReadTableOf[graphParentRow](schema.TableDef{Name: "graph_parents", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}, Nullable: true}}})
+	childTable := MustReadTableOf[graphChildRow](schema.TableDef{Name: "graph_children", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "parent", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}}, {Name: "rank", Type: schema.IntegerType{}}}})
 	parents, err := SourceOf(parentTable, "p")
 	require.NoError(t, err)
 	children, err := SourceOf(childTable, "c")
@@ -203,8 +203,8 @@ func TestGraphPlanConcurrentReuse(t *testing.T) {
 
 func TestGraphHasOneRequiresDuplicateDetectionLimit(t *testing.T) {
 	_, _, _, _, parentQuery, childQuery := graphAcceptanceFixture(t, 0)
-	parentTable := MustReadTableOf[graphParentRow](schema.TableDef{Name: "graph_parents", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}, Nullable: true}}})
-	childTable := MustReadTableOf[graphChildRow](schema.TableDef{Name: "graph_children", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "parent", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}}, {Name: "rank", Type: schema.IntegerType{}}}})
+	parentTable := MustReadTableOf[graphParentRow](schema.TableDef{Name: "graph_parents", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}, Nullable: true}}})
+	childTable := MustReadTableOf[graphChildRow](schema.TableDef{Name: "graph_children", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "parent", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}}, {Name: "rank", Type: schema.IntegerType{}}}})
 	parents, err := SourceOf(parentTable, "p")
 	require.NoError(t, err)
 	children, err := SourceOf(childTable, "c")
