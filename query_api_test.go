@@ -128,3 +128,38 @@ func TestQueryOperationsAreImmutable(t *testing.T) {
 		t.Fatal("accepted negative offset")
 	}
 }
+
+func TestSourceBoundColumnsValidateNullabilityAndMembership(t *testing.T) {
+	table, err := ReadTableOf[int64](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "nickname", Type: schema.TextType{}, Nullable: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	relation, err := SourceOf(table, "u")
+	if err != nil {
+		t.Fatal(err)
+	}
+	column, err := BindColumn[int64, int64](relation, "id", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if column.Expr().node == nil {
+		t.Fatal("column expression is zero")
+	}
+	nullable, err := BindNullColumn[int64, string](relation, "nickname", "custom.codec")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nullable.NullExpr().node == nil {
+		t.Fatal("nullable expression is zero")
+	}
+	optional := Optional(relation)
+	if _, err := BindOptionalColumn[int64, int64](optional, "id", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := BindColumn[int64, int64](relation, "nickname", ""); err == nil {
+		t.Fatal("accepted nullable column as required")
+	}
+	if _, err := BindColumn[int64, int64](relation, "missing", ""); err == nil {
+		t.Fatal("accepted unknown column")
+	}
+}

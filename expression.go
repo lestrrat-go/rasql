@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 
 	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/schema"
 )
 
 type Expr[T any] struct {
@@ -23,6 +24,67 @@ type Column[Row, T any] struct {
 type NullColumn[Row, T any] struct {
 	ref   query.ColumnRef
 	codec string
+}
+
+func BindColumn[Row, T any](relation TypedRelation[Row], name, codec string) (Column[Row, T], error) {
+	return bindColumn[Row, T](relation.source, name, codec, false)
+}
+func BindNullColumn[Row, T any](relation TypedRelation[Row], name, codec string) (NullColumn[Row, T], error) {
+	if err := validateBoundColumn(relation.source, name, codec); err != nil {
+		return NullColumn[Row, T]{}, err
+	}
+	for _, column := range relation.source.ref.Columns() {
+		if column.Name == name {
+			if !column.Nullable {
+				return NullColumn[Row, T]{}, planError("invalid_source", "column", "nullability does not match handle")
+			}
+			return NullColumn[Row, T]{ref: relation.source.ref.Column(name), codec: codec}, nil
+		}
+	}
+	return NullColumn[Row, T]{}, planError("invalid_source", "column", "column is not a member of source")
+}
+func BindOptionalColumn[Row, T any](relation OptionalRelation[Row], name, codec string) (NullColumn[Row, T], error) {
+	if relation.source.ref.QualifiedName() == "" {
+		return NullColumn[Row, T]{}, planError("invalid_source", "relation", "source is zero")
+	}
+	if err := validateBoundColumn(relation.source, name, codec); err != nil {
+		return NullColumn[Row, T]{}, err
+	}
+	return NullColumn[Row, T]{ref: relation.source.ref.Column(name), codec: codec}, nil
+}
+func bindColumn[Row, T any](relation Source, name, codec string, nullable bool) (Column[Row, T], error) {
+	if err := validateBoundColumn(relation, name, codec); err != nil {
+		return Column[Row, T]{}, err
+	}
+	for _, column := range relation.ref.Columns() {
+		if column.Name == name {
+			if column.Nullable != nullable {
+				return Column[Row, T]{}, planError("invalid_source", "column", "nullability does not match handle")
+			}
+			return Column[Row, T]{ref: relation.ref.Column(name), codec: codec}, nil
+		}
+	}
+	return Column[Row, T]{}, planError("invalid_source", "column", "column is not a member of source")
+}
+func validateBoundColumn(relation Source, name, codec string) error {
+	if relation.ref.QualifiedName() == "" {
+		return planError("invalid_source", "relation", "source is zero")
+	}
+	if err := schema.ValidateIdentifier(name); err != nil {
+		return planError("invalid_source", "column", err.Error())
+	}
+	if codec != "" && !codecPattern.MatchString(codec) {
+		return planError("invalid_schema", "codec", "malformed codec identifier")
+	}
+	for _, column := range relation.ref.Columns() {
+		if column.Name == name {
+			if err := schema.ValidateColumnType(column.Type); err != nil {
+				return planError("invalid_schema", "column.type", err.Error())
+			}
+			return nil
+		}
+	}
+	return planError("invalid_source", "column", "column is not a member of source")
 }
 
 var nextBindID uint64
@@ -112,6 +174,16 @@ func AscNull[T any](value NullExpr[T], nulls NullOrder) OrderTerm {
 }
 func DescNull[T any](value NullExpr[T], nulls NullOrder) OrderTerm {
 	return OrderTerm{node: value.node, descending: true, nulls: nulls}
+}
+
+func CountRows() Expr[int64]                     { return Expr[int64]{node: query.CountAll()} }
+func CountExpr[T any](value Expr[T]) Expr[int64] { return Expr[int64]{node: query.Count(value.node)} }
+func CountNullExpr[T any](value NullExpr[T]) Expr[int64] {
+	return Expr[int64]{node: query.Count(value.node)}
+}
+func MinExpr[T any](value Expr[T]) NullExpr[T] { return NullExpr[T]{node: query.Min(value.node)} }
+func MinNullExpr[T any](value NullExpr[T]) NullExpr[T] {
+	return NullExpr[T]{node: query.Min(value.node)}
 }
 
 func cloneBindValue[T any](value T) any {

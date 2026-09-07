@@ -217,6 +217,38 @@ type Query[R any] struct {
 	projection Projection[R]
 }
 
+func (p QueryPlan) Validate() error {
+	if len(p.sources) == 0 {
+		return planError("invalid_source", "plan.sources", "must not be empty")
+	}
+	seen := make(map[string]struct{}, len(p.sources))
+	for i, source := range p.sources {
+		if source.ref.QualifiedName() == "" {
+			return planError("invalid_source", fmt.Sprintf("plan.sources[%d]", i), "source is zero")
+		}
+		name := source.ref.QualifiedName()
+		if _, ok := seen[name]; ok {
+			return planError("invalid_source", fmt.Sprintf("plan.sources[%d]", i), "duplicate source")
+		}
+		seen[name] = struct{}{}
+	}
+	for i, predicate := range append(append([]Predicate(nil), p.where...), p.having...) {
+		if predicate.node == nil {
+			return planError("invalid_projection", fmt.Sprintf("plan.predicates[%d]", i), "predicate is zero")
+		}
+	}
+	return nil
+}
+func (q Query[R]) Validate() error {
+	if len(q.projection.items) == 0 || q.projection.decoder == nil {
+		return planError("invalid_projection", "projection", "projection is zero")
+	}
+	if err := q.plan.Validate(); err != nil {
+		return err
+	}
+	return nil
+}
+
 func Select[R any](from Source, projection Projection[R]) Query[R] {
 	return Query[R]{plan: QueryPlan{sources: []Source{from}, projection: cloneItems(projection.items)}, projection: projection}
 }
