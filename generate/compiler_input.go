@@ -98,7 +98,7 @@ func restoreLegacy(tables []schema.TableDef, input CompilerInput) ([]schema.Tabl
 		if !ok {
 			return nil, fmt.Errorf("generate: legacy.objects[%d].id missing object %q", i, id)
 		}
-		if string(tables[i].EffectiveKind()) != physical.Kind {
+		if string((schema.TableDef{Kind: object.Kind}).EffectiveKind()) != physical.Kind {
 			return nil, fmt.Errorf("generate: legacy.objects[%d].kind does not match physical kind %q", i, physical.Kind)
 		}
 		tables[i].Kind = object.Kind

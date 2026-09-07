@@ -252,6 +252,9 @@ func resolveForeignReference(engine EngineIdentity, sourceSchema string, ref For
 	if ref.Schema != "" {
 		return q, nil, false
 	}
+	if engine.Dialect == "sqlite" {
+		return q, nil, false
+	}
 	var found QualifiedName
 	var columns map[string]struct{}
 	for candidate, candidateColumns := range objects {
@@ -498,7 +501,12 @@ func parseGoType(s string, imports map[string]struct{}) error {
 		case *ast.StarExpr:
 			return check(n.X)
 		case *ast.MapType:
-			return check(n.Key)
+			if err := check(n.Key); err != nil {
+				return err
+			}
+			return check(n.Value)
+		case *ast.ParenExpr:
+			return check(n.X)
 		case *ast.IndexExpr:
 			if err := check(n.X); err != nil {
 				return err

@@ -49,3 +49,28 @@ func TestBuildGoUsesDefaultRasqlImportAlias(t *testing.T) {
 		}
 	}
 }
+
+func TestValidatePhysicalDoesNotCrossSQLiteSchemas(t *testing.T) {
+	catalog := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "sqlite"}, Objects: []compilerir.PhysicalObject{
+		{ID: "orders", Kind: "table", Schema: "archive", Name: "orders", Columns: []compilerir.PhysicalColumn{{Name: "id", LogicalKind: "integer"}}, Constraints: []compilerir.PhysicalConstraint{{Kind: "foreign_key", Columns: []string{"id"}, Reference: &compilerir.ForeignReference{Object: "users", Columns: []string{"id"}}}}},
+		{ID: "users", Kind: "table", Schema: "main", Name: "users", Columns: []compilerir.PhysicalColumn{{Name: "id", LogicalKind: "integer"}}},
+	}}
+	if err := compilerir.ValidatePhysical(catalog); err == nil {
+		t.Fatal("unqualified archive reference resolved to main")
+	}
+	_, diagnostics := compilerir.BuildSemantic(catalog, compilerir.MappingConfig{}, nil)
+	if len(diagnostics) == 0 {
+		t.Fatal("BuildSemantic accepted a cross-database fallback")
+	}
+}
+
+func TestValidateGoChecksMapValuesAndParenthesizedTypes(t *testing.T) {
+	bad := compilerir.GoModel{Package: "store", Queries: []compilerir.GoQuery{{ID: "q", Name: "Find", Cardinality: "exec", Parameters: []compilerir.GoField{{Name: "Value", Type: "map[string]missing.Type"}}}}}
+	if err := compilerir.ValidateGo(bad); err == nil {
+		t.Fatal("unimported map value type was accepted")
+	}
+	good := compilerir.GoModel{Package: "store", Queries: []compilerir.GoQuery{{ID: "q", Name: "Find", Cardinality: "exec", Parameters: []compilerir.GoField{{Name: "Value", Type: "(int64)"}}}}}
+	if err := compilerir.ValidateGo(good); err != nil {
+		t.Fatalf("parenthesized builtin type was rejected: %v", err)
+	}
+}

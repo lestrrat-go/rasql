@@ -106,3 +106,15 @@ func TestPublicCompilerInputMatchesLegacyPlan(t *testing.T) {
 		t.Fatalf("nil sidecar was rejected: %v", err)
 	}
 }
+
+func TestCompilerInputRejectsSidecarKindMismatch(t *testing.T) {
+	input, diagnostics := generate.CompilerInputFromTableDefs(compilerir.EngineIdentity{Dialect: "sqlite"}, []schema.TableDef{{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}}})
+	if len(diagnostics) != 0 {
+		t.Fatal(diagnostics)
+	}
+	input.Legacy.Objects[0].Kind = schema.ObjectView
+	store := generate.Store{Package: "store", Dir: filepath.Join(t.TempDir(), "store"), CompilerInput: &input}
+	if _, err := store.Plan(); err == nil || !strings.Contains(err.Error(), "legacy.objects[0].kind") {
+		t.Fatalf("sidecar kind mismatch was accepted: %v", err)
+	}
+}
