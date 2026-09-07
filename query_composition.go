@@ -8,6 +8,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/internal/querycompile"
+	"github.com/lestrrat-go/rasql/internal/sqlscan"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/sqltext"
@@ -18,16 +19,13 @@ import (
 type TypedSource[R any] struct{ source Source }
 
 func Derive[R any](q Query[R], alias string) (TypedSource[R], error) {
-	if err := rejectNativeComposition(q); err != nil {
-		return TypedSource[R]{}, err
-	}
 	if err := q.Validate(); err != nil {
 		return TypedSource[R]{}, err
 	}
 	if err := schema.ValidateSimpleIdentifier(alias); err != nil {
 		return TypedSource[R]{}, planError("invalid_source", "alias", err.Error())
 	}
-	result, err := resultQuery(q)
+	result, err := compositionResultQuery(q)
 	if err != nil {
 		return TypedSource[R]{}, err
 	}
@@ -49,16 +47,13 @@ type TypedCTE[R any] struct {
 type CTEPlan interface{ ctePlan() query.CTE }
 
 func CTEOf[R any](name string, q Query[R]) (TypedCTE[R], error) {
-	if err := rejectNativeComposition(q); err != nil {
-		return TypedCTE[R]{}, err
-	}
 	if err := schema.ValidateSimpleIdentifier(name); err != nil {
 		return TypedCTE[R]{}, planError("invalid_cte", "name", err.Error())
 	}
 	if err := q.Validate(); err != nil {
 		return TypedCTE[R]{}, err
 	}
-	result, err := resultQuery(q)
+	result, err := compositionResultQuery(q)
 	if err != nil {
 		return TypedCTE[R]{}, err
 	}
@@ -214,6 +209,21 @@ func rejectNativeComposition[R any](q Query[R]) error {
 		return planError("unsupported_feature", "native", "native plans cannot be composed")
 	}
 	return nil
+}
+
+func compositionResultQuery[R any](q Query[R]) (query.ResultQuery, error) {
+	if q.plan.native == nil {
+		return resultQuery(q)
+	}
+	native := q.plan.native
+	body, err := query.NativeResultOf(native.engine, sqltext.Text(native.statement.SQL()), native.statement.BoundArgs())
+	if err != nil {
+		if errors.Is(err, sqlscan.ErrNotSelect) {
+			return query.ResultQuery{}, planError("unsupported_feature", "native", err.Error())
+		}
+		return query.ResultQuery{}, &PlanError{Code: "invalid_query", Path: "native.sql", Detail: err.Error(), cause: err}
+	}
+	return query.ResultOf(body, q.Schema().Columns()...)
 }
 
 func sameResultSchema(left, right ResultSchema) bool {
@@ -485,6 +495,9 @@ func mapCompileError(err error) error {
 	var planErr *PlanError
 	if errors.As(err, &planErr) {
 		return err
+	}
+	if errors.Is(err, sqlscan.ErrInvalidPlaceholder) {
+		return &PlanError{Code: "invalid_query", Path: "native.sql", Detail: err.Error(), cause: err}
 	}
 	var validationErr *query.ValidationError
 	if errors.As(err, &validationErr) {
