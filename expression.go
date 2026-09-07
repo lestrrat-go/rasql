@@ -106,6 +106,7 @@ type bindToken struct {
 	id    bindID
 	value any
 	codec string
+	err   error
 }
 type bindSlot struct {
 	id    bindID
@@ -115,7 +116,7 @@ type bindSlot struct {
 func Value[T any](value T) Expr[T] {
 	id := bindID(atomic.AddUint64(&nextBindID, 1))
 	snapshot, err := snapshotBind(value)
-	return Expr[T]{node: query.Bind(bindToken{id: id, value: snapshot}), bindErr: err}
+	return Expr[T]{node: query.Bind(bindToken{id: id, value: snapshot, err: err}), bindErr: err}
 }
 func ValueWithCodec[T any](value T, codec string) (Expr[T], error) {
 	if codec != "" && !codecPattern.MatchString(codec) {

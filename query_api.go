@@ -242,6 +242,9 @@ func (p QueryPlan) Validate() error {
 		if item.bindErr != nil {
 			return planError("unsnapshotable_bind", fmt.Sprintf("plan.projection[%d]", i), item.bindErr.Error())
 		}
+		if err := validateQ1Expression(item.expression, allowed, fmt.Sprintf("plan.projection[%d]", i)); err != nil {
+			return err
+		}
 		if item.expression == nil {
 			return planError("invalid_projection", fmt.Sprintf("plan.projection[%d]", i), "expression is zero")
 		}
@@ -251,6 +254,10 @@ func (p QueryPlan) Validate() error {
 			}
 		}
 	}
+	joinAllowed := make(map[string]struct{})
+	for k := range allowed {
+		joinAllowed[k] = struct{}{}
+	}
 	for i, join := range p.joins {
 		if join.On() == nil {
 			return planError("invalid_source", fmt.Sprintf("plan.joins[%d].on", i), "condition is zero")
@@ -258,6 +265,10 @@ func (p QueryPlan) Validate() error {
 		if join.Source().QualifiedName() == "" {
 			return planError("invalid_source", fmt.Sprintf("plan.joins[%d].source", i), "source is zero")
 		}
+		if err := validateQ1Expression(join.On(), joinAllowed, fmt.Sprintf("plan.joins[%d].on", i)); err != nil {
+			return err
+		}
+		joinAllowed[join.Source().QualifiedName()] = struct{}{}
 	}
 	for i, predicate := range append(append([]Predicate(nil), p.where...), p.having...) {
 		if predicate.node == nil {
@@ -265,6 +276,9 @@ func (p QueryPlan) Validate() error {
 		}
 		if predicate.bindErr != nil {
 			return planError("unsnapshotable_bind", fmt.Sprintf("plan.predicates[%d]", i), predicate.bindErr.Error())
+		}
+		if err := validateQ1Expression(predicate.node, allowed, fmt.Sprintf("plan.predicates[%d]", i)); err != nil {
+			return err
 		}
 		if predicate.source != "" {
 			if _, ok := allowed[predicate.source]; !ok {
@@ -281,6 +295,9 @@ func (p QueryPlan) Validate() error {
 		if key.node == nil {
 			return planError("invalid_projection", fmt.Sprintf("plan.group[%d]", i), "group key is zero")
 		}
+		if err := validateQ1Expression(key.node, allowed, fmt.Sprintf("plan.group[%d]", i)); err != nil {
+			return err
+		}
 		if key.source != "" {
 			if _, ok := allowed[key.source]; !ok {
 				return planError("invalid_source", fmt.Sprintf("plan.group[%d]", i), "expression source is outside plan")
@@ -291,9 +308,54 @@ func (p QueryPlan) Validate() error {
 		if term.node == nil {
 			return planError("invalid_projection", fmt.Sprintf("plan.order[%d]", i), "order term is zero")
 		}
+		if err := validateQ1Expression(term.node, allowed, fmt.Sprintf("plan.order[%d]", i)); err != nil {
+			return err
+		}
 		if term.source != "" {
 			if _, ok := allowed[term.source]; !ok {
 				return planError("invalid_source", fmt.Sprintf("plan.order[%d]", i), "expression source is outside plan")
+			}
+		}
+	}
+	return nil
+}
+
+func validateQ1Expression(expression query.Expression, allowed map[string]struct{}, path string) error {
+	if expression == nil {
+		return planError("invalid_projection", path, "expression is zero")
+	}
+	switch node := expression.(type) {
+	case query.ColumnRef:
+		if err := node.Validate(); err != nil {
+			return planError("invalid_source", path, err.Error())
+		}
+		name := node.Source().QualifiedName()
+		if _, ok := allowed[name]; !ok {
+			return planError("invalid_source", path, "expression source is outside plan")
+		}
+	case query.Value:
+		if token, ok := node.Argument().(bindToken); ok && token.err != nil {
+			return planError("unsnapshotable_bind", path, token.err.Error())
+		}
+	case query.Binary:
+		if err := validateQ1Expression(node.Left(), allowed, path+".left"); err != nil {
+			return err
+		}
+		return validateQ1Expression(node.Right(), allowed, path+".right")
+	case query.Logical:
+		for i, child := range node.Expressions() {
+			if err := validateQ1Expression(child, allowed, fmt.Sprintf("%s[%d]", path, i)); err != nil {
+				return err
+			}
+		}
+	case query.Not:
+		return validateQ1Expression(node.Expression(), allowed, path+".expression")
+	case query.NullTest:
+		return validateQ1Expression(node.Expression(), allowed, path+".expression")
+	case query.Function:
+		for i, child := range node.Arguments() {
+			if err := validateQ1Expression(child, allowed, fmt.Sprintf("%s.arguments[%d]", path, i)); err != nil {
+				return err
 			}
 		}
 	}
