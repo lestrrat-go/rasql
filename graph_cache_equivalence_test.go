@@ -273,7 +273,8 @@ func TestGraphSQLiteEquivalentChildQueriesShareLoadGraphCache(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, values, 2)
 	require.Equal(t, int64(2), fixture.executor.statements.Load())
-	require.Equal(t, int64(1), codec.enc.Load())
+	// Each separately prepared child stage encodes its fixed occurrence once.
+	require.Equal(t, int64(2), codec.enc.Load())
 	require.Equal(t, int64(2), firstMapped.Load())
 	require.Equal(t, int64(2), secondMapped.Load())
 	for _, value := range values {
@@ -336,11 +337,12 @@ func TestGraphSQLiteCacheDecoderAndEmptyEntryCompatibility(t *testing.T) {
 func TestGraphSQLiteCacheDoesNotReuseMappedValuesOrBytes(t *testing.T) {
 	fixture := graphCacheFixtureFor(t)
 	var firstMapped, secondMapped atomic.Int64
-	first := graphCacheChildPlan(t, graphCacheChildQuery(t, fixture, nil, "first", ""), "first", &firstMapped)
-	second := graphCacheChildPlan(t, graphCacheChildQuery(t, fixture, nil, "second", ""), "second", &secondMapped)
+	first := graphCacheChildPlan(t, graphCacheChildQuery(t, fixture, nil, "same", ""), "first", &firstMapped)
+	second := graphCacheChildPlan(t, graphCacheChildQuery(t, fixture, nil, "same", ""), "second", &secondMapped)
 	plan := graphCacheParentPlan(t, fixture, first, second, EdgeOptions{})
 	values, err := LoadGraph(t.Context(), fixture.executor, plan)
 	require.NoError(t, err)
+	require.Equal(t, int64(1), fixture.executor.statements.Load())
 	require.Equal(t, int64(4), firstMapped.Load())
 	require.Equal(t, int64(4), secondMapped.Load())
 	require.Len(t, values[0].First.Values, 2)
