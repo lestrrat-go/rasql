@@ -312,7 +312,10 @@ func offlineDigestGroups(root string, settings config, lock compilerlock.File) (
 }
 
 func queryDeclarationPolicyMatches(configured configQuery, locked compilerlock.QueryRecord) bool {
-	if normalizeQueryPath(configured.Input) != normalizeQueryPath(locked.SQL.Path) || normalizeQueryEngine(configured.Engine) != normalizeQueryEngine(locked.Evidence.Dialect) || strings.ToLower(configured.Operation) != strings.ToLower(locked.Operation) || strings.ToLower(configured.Cardinality) != strings.ToLower(locked.Cardinality) {
+	if normalizeQueryPath(configured.Input) != normalizeQueryPath(locked.SQL.Path) ||
+		normalizeQueryEngine(configured.Engine) != normalizeQueryEngine(locked.Evidence.Dialect) ||
+		!strings.EqualFold(configured.Operation, locked.Operation) ||
+		!strings.EqualFold(configured.Cardinality, locked.Cardinality) {
 		return false
 	}
 	return queryValuePolicyMatches(configured.Parameters, locked.Parameters) && queryValuePolicyMatches(configured.Results, locked.Results)
