@@ -73,7 +73,7 @@ func SnapshotSourceFile(moduleRoot, moduleRelativePath string) (SourceFileSnapsh
 		return SourceFileSnapshot{}, sourceChanged(relative, "source changed during read")
 	}
 	currentRoot, rootErr := os.Stat(root)
-	if rootErr != nil || !sameIdentity(rootID, fileIdentity(root, currentRoot)) {
+	if rootErr != nil || !sameRootIdentity(rootID, fileIdentity(root, currentRoot)) {
 		return SourceFileSnapshot{}, sourceChanged(relative, "module root changed during read")
 	}
 	h := sha256.Sum256(b)
@@ -162,7 +162,15 @@ func resolveSource(root, relative string) ([]sourceLink, string, error) {
 		}
 		links = append(links, sourceLink{identity: fileIdentity(candidate, st), text: text})
 		if filepath.IsAbs(text) {
-			current = string(filepath.Separator)
+			if text == root {
+				current = root
+				text = ""
+			} else if strings.HasPrefix(text, root+string(filepath.Separator)) {
+				current = root
+				text = strings.TrimPrefix(text, root+string(filepath.Separator))
+			} else {
+				current = string(filepath.Separator)
+			}
 		} else {
 			current = filepath.Dir(candidate)
 		}
@@ -224,6 +232,10 @@ func sameIdentity(a, b sourceFileIdentity) bool {
 	return a.info != nil && b.info != nil && os.SameFile(a.info, b.info) && a.modTime == b.modTime && a.size == b.size && a.mode == b.mode
 }
 
+func sameRootIdentity(a, b sourceFileIdentity) bool {
+	return a.info != nil && b.info != nil && os.SameFile(a.info, b.info)
+}
+
 func sameLinks(a, b []sourceLink) bool {
 	if len(a) != len(b) {
 		return false
@@ -242,11 +254,11 @@ func insideRoot(root, candidate string) bool {
 }
 
 func revalidateOne(root string, rootID sourceFileIdentity, snapshot SourceFileSnapshot) error {
-	if !sameIdentity(rootID, snapshot.rootID) {
+	if !sameRootIdentity(rootID, snapshot.rootID) {
 		return sourceChanged(snapshot.relative, "module root changed")
 	}
 	currentRoot, err := os.Stat(root)
-	if err != nil || !sameIdentity(rootID, fileIdentity(root, currentRoot)) {
+	if err != nil || !sameRootIdentity(rootID, fileIdentity(root, currentRoot)) {
 		return sourceChanged(snapshot.relative, "module root changed")
 	}
 	links, target, err := resolveSource(root, snapshot.relative)
@@ -272,6 +284,10 @@ func revalidateOne(root string, rootID sourceFileIdentity, snapshot SourceFileSn
 	postStat, postStatErr := os.Stat(postTarget)
 	if postErr != nil || postStatErr != nil || postTarget != target || !sameLinks(links, postLinks) || !sameIdentity(fileIdentity(target, st), fileIdentity(postTarget, postStat)) {
 		return sourceChanged(snapshot.relative, "source changed during read")
+	}
+	currentRoot, rootErr := os.Stat(root)
+	if rootErr != nil || !sameRootIdentity(rootID, fileIdentity(root, currentRoot)) {
+		return sourceChanged(snapshot.relative, "module root changed during read")
 	}
 	h := sha256.Sum256(b)
 	if hex.EncodeToString(h[:]) != snapshot.digest {

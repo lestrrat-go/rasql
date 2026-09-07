@@ -97,10 +97,27 @@ func TestAcceptanceNormalizationPreservesPositionalArrays(t *testing.T) {
 	require.NoError(t, err)
 	base, err := compilerlock.Decode(b)
 	require.NoError(t, err)
+	// The checked-in PostgreSQL catalog has one index and no exclusion
+	// constraints. Add distinguishable entries so every unordered nested
+	// collection exercised below has a meaningful shuffle.
+	base.Catalog.Objects[0].Indexes = append(base.Catalog.Objects[0].Indexes, compilerlock.IndexRecord{
+		Name: "users_note", KeyForm: "columns", Parts: []compilerlock.IndexPartRecord{{Column: "note"}},
+	})
+	base.Catalog.Objects[0].ExclusionConstraints = append(base.Catalog.Objects[0].ExclusionConstraints, compilerlock.ExclusionConstraintRecord{
+		Name: "users_exclusion", Elements: []compilerlock.ExclusionElementRecord{{ExpressionSQL: "id", Operator: "="}},
+	})
+	for i := range base.Queries {
+		if base.Queries[i].ID == "q-unknown-postgresql" {
+			base.Queries[i].Evidence.Diagnostics = append(base.Queries[i].Evidence.Diagnostics, "query_column_unknown")
+		}
+	}
 	want, err := compilerlock.Encode(base)
 	require.NoError(t, err)
 	for seed := int64(1); seed <= 100; seed++ {
-		f := base
+		encoded, err := compilerlock.Encode(base)
+		require.NoError(t, err)
+		f, err := compilerlock.Decode(encoded)
+		require.NoError(t, err)
 		r := rand.New(rand.NewSource(seed))
 		shuffle := func(n int, swap func(int, int)) {
 			for i := n - 1; i > 0; i-- {
@@ -111,17 +128,57 @@ func TestAcceptanceNormalizationPreservesPositionalArrays(t *testing.T) {
 		shuffle(len(f.Catalog.Objects), func(i, j int) {
 			f.Catalog.Objects[i], f.Catalog.Objects[j] = f.Catalog.Objects[j], f.Catalog.Objects[i]
 		})
+		for i := range f.Catalog.Objects {
+			object := &f.Catalog.Objects[i]
+			shuffle(len(object.Columns), func(i, j int) { object.Columns[i], object.Columns[j] = object.Columns[j], object.Columns[i] })
+			shuffle(len(object.Constraints), func(i, j int) {
+				object.Constraints[i], object.Constraints[j] = object.Constraints[j], object.Constraints[i]
+			})
+			shuffle(len(object.Indexes), func(i, j int) { object.Indexes[i], object.Indexes[j] = object.Indexes[j], object.Indexes[i] })
+			shuffle(len(object.ExclusionConstraints), func(i, j int) {
+				object.ExclusionConstraints[i], object.ExclusionConstraints[j] = object.ExclusionConstraints[j], object.ExclusionConstraints[i]
+			})
+		}
 		shuffle(len(f.Queries), func(i, j int) { f.Queries[i], f.Queries[j] = f.Queries[j], f.Queries[i] })
+		for qi := range f.Queries {
+			shuffle(len(f.Queries[qi].Evidence.Diagnostics), func(i, j int) {
+				f.Queries[qi].Evidence.Diagnostics[i], f.Queries[qi].Evidence.Diagnostics[j] = f.Queries[qi].Evidence.Diagnostics[j], f.Queries[qi].Evidence.Diagnostics[i]
+			})
+		}
 		shuffle(len(f.Generation.Objects), func(i, j int) {
 			f.Generation.Objects[i], f.Generation.Objects[j] = f.Generation.Objects[j], f.Generation.Objects[i]
 		})
 		shuffle(len(f.Generation.Queries), func(i, j int) {
 			f.Generation.Queries[i], f.Generation.Queries[j] = f.Generation.Queries[j], f.Generation.Queries[i]
 		})
-		before := f.Catalog.Objects[0].Columns
+		beforeColumns := make(map[string][]compilerlock.ColumnRecord, len(f.Catalog.Objects))
+		for _, object := range f.Catalog.Objects {
+			beforeColumns[object.ID] = append([]compilerlock.ColumnRecord(nil), object.Columns...)
+		}
+		beforeParameters := make(map[string][]compilerlock.ValueRecord, len(f.Queries))
+		beforeResults := make(map[string][]compilerlock.ValueRecord, len(f.Queries))
+		beforeKeys := make(map[string][]compilerlock.IndexPartRecord)
+		for _, query := range f.Queries {
+			beforeParameters[string(query.ID)] = append([]compilerlock.ValueRecord(nil), query.Parameters...)
+			beforeResults[string(query.ID)] = append([]compilerlock.ValueRecord(nil), query.Results...)
+		}
+		for _, object := range f.Catalog.Objects {
+			for _, index := range object.Indexes {
+				beforeKeys[index.Name] = append([]compilerlock.IndexPartRecord(nil), index.Parts...)
+			}
+		}
 		got, err := compilerlock.Encode(f)
 		require.NoError(t, err)
 		require.Equal(t, want, got, "seed %d", seed)
-		require.True(t, reflect.DeepEqual(before, f.Catalog.Objects[0].Columns), "Encode must not mutate positional column arrays")
+		for _, object := range f.Catalog.Objects {
+			require.True(t, reflect.DeepEqual(beforeColumns[object.ID], object.Columns), "Encode must not mutate columns")
+			for _, index := range object.Indexes {
+				require.True(t, reflect.DeepEqual(beforeKeys[index.Name], index.Parts), "Encode must not mutate index key parts")
+			}
+		}
+		for _, query := range f.Queries {
+			require.True(t, reflect.DeepEqual(beforeParameters[string(query.ID)], query.Parameters), "Encode must not mutate parameters")
+			require.True(t, reflect.DeepEqual(beforeResults[string(query.ID)], query.Results), "Encode must not mutate results")
+		}
 	}
 }
