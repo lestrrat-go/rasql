@@ -16,12 +16,24 @@ import (
 )
 
 type statementObserver struct {
-	mu   sync.Mutex
-	rows []int64
+	mu          sync.Mutex
+	rows        []int64
+	logicalErrs []error
 }
 
 func (observer *statementObserver) start(ctx context.Context, event rasql.Event) (context.Context, rasql.EventCompletion) {
-	if event.Kind != rasql.EventStatement || event.Phase != rasql.EventStart {
+	if event.Phase != rasql.EventStart {
+		return ctx, nil
+	}
+	if event.Kind == rasql.EventGraph {
+		return ctx, rasql.EventCompletionFunc(func(_ context.Context, terminal rasql.Event) error {
+			observer.mu.Lock()
+			defer observer.mu.Unlock()
+			observer.logicalErrs = append(observer.logicalErrs, terminal.Err)
+			return nil
+		})
+	}
+	if event.Kind != rasql.EventStatement {
 		return ctx, nil
 	}
 	return ctx, rasql.EventCompletionFunc(func(_ context.Context, terminal rasql.Event) error {
@@ -39,6 +51,12 @@ func (observer *statementObserver) snapshot() []int64 {
 	observer.mu.Lock()
 	defer observer.mu.Unlock()
 	return append([]int64(nil), observer.rows...)
+}
+
+func (observer *statementObserver) logicalErrors() []error {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	return append([]error(nil), observer.logicalErrs...)
 }
 
 func openFixture(t *testing.T, cancelStatement int, cancelChild context.CancelFunc) (store.Repository, rasql.Executor, *statementObserver) {
@@ -205,12 +223,16 @@ func TestOpenProjectsCancellationBeforeEachStage(t *testing.T) {
 			if test.cancelBeforeRun {
 				cancel()
 			}
-			repository, _, _ := openFixture(t, test.statement, func() {
+			repository, _, observer := openFixture(t, test.statement, func() {
 				cancel()
 			})
 			_, err := repository.OpenProjects(ctx, rasql.PageRequest{Limit: 10})
 			if !errors.Is(err, context.Canceled) {
 				t.Fatalf("OpenProjects returned %v, want context.Canceled", err)
+			}
+			logicalErrors := observer.logicalErrors()
+			if len(logicalErrors) == 0 || !errors.Is(logicalErrors[len(logicalErrors)-1], context.Canceled) {
+				t.Fatalf("observer recorded logical errors %v, want context.Canceled", logicalErrors)
 			}
 		})
 	}
