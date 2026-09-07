@@ -25,6 +25,7 @@ const (
 // SetField, SetNullableField, ClearField, and DefaultField to create one.
 type MutationField[T any] struct {
 	column query.ColumnRef
+	codec  string
 	state  mutationState
 	value  any
 }
@@ -37,35 +38,45 @@ type mutationNullColumn[R, V any] interface {
 	RasqlMutationNullColumn() mutationcolumn.Nullable[R, V]
 }
 
-func mutationColumnRef[C any](column C) query.ColumnRef {
+func mutationColumnInfo[C any](column C) (query.ColumnRef, string) {
 	switch value := any(column).(type) {
+	case interface {
+		mutationColumnRef() query.ColumnRef
+		mutationColumnCodec() string
+	}:
+		return value.mutationColumnRef(), value.mutationColumnCodec()
 	case interface{ mutationColumnRef() query.ColumnRef }:
-		return value.mutationColumnRef()
+		return value.mutationColumnRef(), ""
 	case interface{ Ref() query.ColumnRef }:
-		return value.Ref()
+		return value.Ref(), ""
 	default:
 		panic("rasql: unsupported mutation column")
 	}
 }
 
 func SetField[T, V any, C mutationColumn[T, V]](column C, value V) MutationField[T] {
-	return MutationField[T]{column: mutationColumnRef(column), state: mutationSet, value: value}
+	ref, codec := mutationColumnInfo(column)
+	return MutationField[T]{column: ref, codec: codec, state: mutationSet, value: value}
 }
 
 func SetNullableField[T, V any, C mutationNullColumn[T, V]](column C, value V) MutationField[T] {
-	return MutationField[T]{column: mutationColumnRef(column), state: mutationSet, value: value}
+	ref, codec := mutationColumnInfo(column)
+	return MutationField[T]{column: ref, codec: codec, state: mutationSet, value: value}
 }
 
 func ClearField[T, V any, C mutationNullColumn[T, V]](column C) MutationField[T] {
-	return MutationField[T]{column: mutationColumnRef(column), state: mutationClear}
+	ref, codec := mutationColumnInfo(column)
+	return MutationField[T]{column: ref, codec: codec, state: mutationClear}
 }
 
 func DefaultField[T, V any, C mutationColumn[T, V]](column C) MutationField[T] {
-	return MutationField[T]{column: mutationColumnRef(column), state: mutationDefault}
+	ref, codec := mutationColumnInfo(column)
+	return MutationField[T]{column: ref, codec: codec, state: mutationDefault}
 }
 
 func DefaultNullableField[T, V any, C mutationNullColumn[T, V]](column C) MutationField[T] {
-	return MutationField[T]{column: mutationColumnRef(column), state: mutationDefault}
+	ref, codec := mutationColumnInfo(column)
+	return MutationField[T]{column: ref, codec: codec, state: mutationDefault}
 }
 
 // CreatePlan is an immutable typed INSERT plan.
@@ -114,7 +125,7 @@ func (p PatchPlan[T]) WithVersion(column Column[T, int64], expected int64) (Patc
 			return p, fmt.Errorf("rasql: version column %q is already assigned", ref.Name())
 		}
 	}
-	p.version = &versionMutation{column: ref, expected: expected}
+	p.version = &versionMutation{column: p.table.Ref().Column(ref.Name()), expected: expected}
 	return p, nil
 }
 
@@ -242,6 +253,12 @@ func (p CreatePlan[T]) lowerNormalized() (normalizedCreate[T], error) {
 		value := field.value
 		if field.state == mutationClear {
 			value = nil
+		} else {
+			bound, err := mutationBind(value, field.codec)
+			if err != nil {
+				return normalizedCreate[T]{}, err
+			}
+			value = bound
 		}
 		lowered.columns = append(lowered.columns, p.table.Ref().Column(column.Name))
 		lowered.values = append(lowered.values, value)
@@ -274,9 +291,15 @@ func (p PatchPlan[T]) lower() (query.Update, error) {
 		if !ok {
 			continue
 		}
-		value := field.value
+		value := any(field.value)
 		if field.state == mutationClear {
 			value = query.Bind(nil)
+		} else {
+			bound, err := mutationBind(value, field.codec)
+			if err != nil {
+				return query.Update{}, err
+			}
+			value = bound
 		}
 		assignments = append(assignments, query.Set(p.table.Ref().Column(column.Name), value))
 	}
@@ -383,4 +406,15 @@ func QueryPatchOne[T any](ctx context.Context, db DB, plan PatchPlan[T]) (T, err
 		return zero, err
 	}
 	return QueryWriteOne[T](ctx, db, statement)
+}
+
+func mutationBind(value any, codec string) (query.Expression, error) {
+	if codec == "" {
+		return Value(value).node, nil
+	}
+	bound, err := ValueWithCodec(value, codec)
+	if err != nil {
+		return nil, err
+	}
+	return bound.node, nil
 }

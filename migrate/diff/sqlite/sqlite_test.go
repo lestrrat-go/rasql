@@ -646,18 +646,17 @@ func TestLiveSourcesRejectsWithoutRowIDTable(t *testing.T) {
 	require.ErrorContains(t, err, "can describe but not yet render")
 }
 
-// TestLiveSourcesRejectsPrimaryKeyAutoincrement is the
-// PrimaryKeyAutoincrement counterpart to TestLiveSourcesRejectsStrictTable.
-func TestLiveSourcesRejectsPrimaryKeyAutoincrement(t *testing.T) {
+func TestLiveSourcesRendersPrimaryKeyAutoincrement(t *testing.T) {
 	analyzer := sqlite.New()
-	_, err := analyzer.LiveSources(schema.TableDef{
+	sources, err := analyzer.LiveSources(schema.TableDef{
 		Name:                    "members",
 		Columns:                 []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "name", Type: schema.TextType{}}},
 		PrimaryKey:              []string{"id"},
 		PrimaryKeyAutoincrement: true,
 	})
-	require.ErrorContains(t, err, `"members"`)
-	require.ErrorContains(t, err, "can describe but not yet render")
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	require.Contains(t, string(sources[0].SQL), "PRIMARY KEY AUTOINCREMENT")
 }
 
 // TestLiveSourcesRejectsPrimaryKeyConflictResolution is the

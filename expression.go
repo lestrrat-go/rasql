@@ -44,10 +44,12 @@ func (c Column[Row, T]) RasqlMutationColumn() mutationcolumn.NonNull[Row, T] {
 	return mutationcolumn.NonNull[Row, T]{}
 }
 func (c Column[Row, T]) mutationColumnRef() query.ColumnRef { return c.ref }
+func (c Column[Row, T]) mutationColumnCodec() string        { return c.codec }
 func (c NullColumn[Row, T]) RasqlMutationNullColumn() mutationcolumn.Nullable[Row, T] {
 	return mutationcolumn.Nullable[Row, T]{}
 }
 func (c NullColumn[Row, T]) mutationColumnRef() query.ColumnRef { return c.ref }
+func (c NullColumn[Row, T]) mutationColumnCodec() string        { return c.codec }
 
 // BindResultColumn binds a non-null column exposed by a typed derived source.
 func BindResultColumn[R, T any](source TypedSource[R], name string) (Column[R, T], error) {
@@ -209,6 +211,9 @@ func (c Column[Row, T]) Expr() Expr[T] {
 func (c NullColumn[Row, T]) NullExpr() NullExpr[T] {
 	return NullExpr[T]{node: c.ref, codec: c.codec, source: c.ref.Source().QualifiedName()}
 }
+
+// Expr is an alias for NullExpr for nullable projection construction.
+func (c NullColumn[Row, T]) Expr() NullExpr[T] { return c.NullExpr() }
 
 type GroupKey struct {
 	node   query.Expression

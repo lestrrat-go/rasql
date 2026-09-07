@@ -126,26 +126,30 @@ func ExecMutation(ctx context.Context, executor Executor, plan MutationPlan) (Mu
 	return outcome, nil
 }
 
-func compileMutation(executor Executor, statement query.WriteStatement) (stmt.Statement, error) {
+func compileMutationParts(executor Executor, statement query.WriteStatement) (compiledQuery, error) {
 	provider, ok := executor.(compilerProvider)
 	if !ok || provider.queryCompiler() == nil {
-		return stmt.Statement{}, &PlanError{Code: "engine_profile_unavailable", Detail: "executor has no retained compiler"}
+		return compiledQuery{}, &PlanError{Code: "engine_profile_unavailable", Detail: "executor has no retained compiler"}
 	}
 	compiled, err := provider.queryCompiler().Write(statement)
 	if err != nil {
+		return compiledQuery{}, err
+	}
+	return unwrapBindTokens(compiled)
+}
+
+func compileMutation(executor Executor, statement query.WriteStatement) (stmt.Statement, error) {
+	compiledQuery, err := compileMutationParts(executor, statement)
+	if err != nil {
 		return stmt.Statement{}, err
 	}
-	compiledQuery, err := unwrapBindTokens(compiled)
+	statementCopy, err := compiledQuery.statementCopy()
 	if err != nil {
 		return stmt.Statement{}, err
 	}
 	registry := builtinCodecs
 	if cp, ok := executor.(CodecProvider); ok && cp.Codecs() != nil {
 		registry = cp.Codecs()
-	}
-	statementCopy, err := compiledQuery.statementCopy()
-	if err != nil {
-		return stmt.Statement{}, err
 	}
 	return encodeStatement(statementCopy, compiledQuery.bindSlots, registry)
 }
@@ -294,6 +298,22 @@ func prepareMutationBatches(executor Executor, plans []MutationPlan, maxRows, bi
 			}
 			columns := first.Columns()
 			rows := mutationRows(first.Rows())
+			var best compiledQuery
+			compileCandidate := func(insert query.Insert) (compiledQuery, error) { return compileMutationParts(executor, insert) }
+			if first.UsesDefaultValues() {
+				best, err = compileCandidate(first)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				best, err = compileCandidate(first)
+				if err != nil {
+					return nil, err
+				}
+				if bindLimit > 0 && len(best.statement.BoundArgs()) > bindLimit {
+					return nil, &PlanError{Code: "bind_limit", Path: "args", Detail: "mutation batch exceeds bind parameter limit"}
+				}
+			}
 			for end < len(plans) && !first.UsesDefaultValues() && end-i < maxRows {
 				next, ok := plans[end].(mutationBatchPlan)
 				if !ok {
@@ -303,26 +323,27 @@ func prepareMutationBatches(executor Executor, plans []MutationPlan, maxRows, bi
 				if insertErr != nil || !sameColumns(columns, insert.Columns()) || insert.UsesDefaultValues() != first.UsesDefaultValues() {
 					break
 				}
-				if bindLimit > 0 && (len(rows)+len(insert.Rows()))*len(columns) > bindLimit {
+				candidateRows := append(append([][]any(nil), rows...), mutationRows(insert.Rows())...)
+				candidate, candidateErr := query.NewInsertRows(first.Into(), columns, candidateRows)
+				if candidateErr != nil {
+					return nil, candidateErr
+				}
+				compiled, candidateErr := compileCandidate(candidate)
+				if candidateErr != nil {
+					return nil, candidateErr
+				}
+				if bindLimit > 0 && len(compiled.statement.BoundArgs()) > bindLimit {
 					break
 				}
-				rows = append(rows, mutationRows(insert.Rows())...)
+				rows = candidateRows
+				best = compiled
 				end++
 			}
-			var statement query.Insert
-			if first.UsesDefaultValues() && end-i == 1 {
-				statement = first
-			} else if len(rows) > 0 {
-				statement, err = query.NewInsertRows(first.Into(), columns, rows)
-				if err != nil {
-					return nil, err
-				}
+			encoded, err := encodeCompiledMutation(best, executor)
+			if err != nil {
+				return nil, err
 			}
-			compiled, compileErr := compileMutation(executor, statement)
-			if compileErr != nil {
-				return nil, compileErr
-			}
-			prepared = append(prepared, preparedMutationBatch{start: i, end: end, statement: compiled})
+			prepared = append(prepared, preparedMutationBatch{start: i, end: end, statement: encoded})
 			i = end
 			continue
 		}
@@ -338,6 +359,18 @@ func prepareMutationBatches(executor Executor, plans []MutationPlan, maxRows, bi
 		i++
 	}
 	return prepared, nil
+}
+
+func encodeCompiledMutation(compiled compiledQuery, executor Executor) (stmt.Statement, error) {
+	copy, err := compiled.statementCopy()
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	registry := builtinCodecs
+	if cp, ok := executor.(CodecProvider); ok && cp.Codecs() != nil {
+		registry = cp.Codecs()
+	}
+	return encodeStatement(copy, compiled.bindSlots, registry)
 }
 
 func execPreparedMutationBatches(ctx context.Context, executor Executor, prepared []preparedMutationBatch, options MutationBatchOptions, outcome MutationBatchOutcome) (MutationBatchOutcome, error) {
@@ -384,49 +417,61 @@ func mutationBindLimit(executor Executor, override int) int {
 }
 
 func execAtomicMutationBatch(ctx context.Context, executor Executor, plans []MutationPlan, options MutationBatchOptions) (MutationBatchOutcome, error) {
+	maxRows := options.MaxRows
+	if maxRows == 0 {
+		maxRows = 1000
+	}
+	prepared, err := prepareMutationBatches(executor, plans, maxRows, mutationBindLimit(executor, options.MaxBindParameters))
+	outcome := MutationBatchOutcome{Inputs: make([]InputOutcome, len(plans)), Durability: executorDurability(executor)}
+	if err != nil {
+		return outcome, err
+	}
+	if err := ctx.Err(); err != nil {
+		return outcome, err
+	}
 	var child Executor
 	var finalizer scopeFinalizer
-	var err error
 	if state, ok := executor.(scopeState); ok && state.scopeIsTransaction() {
 		beginner, supported := executor.(savepointBeginner)
 		if !supported {
-			return MutationBatchOutcome{}, planError("savepoint_unsupported", "scope", "executor does not support savepoints")
+			return outcome, planError("savepoint_unsupported", "scope", "executor does not support savepoints")
 		}
 		child, finalizer, err = beginner.beginSavepoint(ctx)
 	} else {
 		beginner, supported := executor.(transactionBeginner)
 		if !supported {
-			return MutationBatchOutcome{}, planError("transaction_scope_unsupported", "scope", "executor does not support transaction scopes")
+			return outcome, planError("transaction_scope_unsupported", "scope", "executor does not support transaction scopes")
 		}
 		child, finalizer, err = beginner.beginScope(ctx, nil)
 	}
 	if err != nil {
-		return MutationBatchOutcome{}, err
+		return outcome, err
 	}
 	if isNilExecutor(child) {
-		return MutationBatchOutcome{}, planError("transaction_scope_invalid", "scope", "scope beginner returned a nil child executor")
+		return outcome, planError("transaction_scope_invalid", "scope", "scope beginner returned a nil child executor")
 	}
 	if isNilScopeFinalizer(finalizer) {
-		return MutationBatchOutcome{}, planError("transaction_scope_invalid", "scope", "scope beginner returned a nil finalizer")
+		return outcome, planError("transaction_scope_invalid", "scope", "scope beginner returned a nil finalizer")
 	}
-	nonAtomic := options
-	nonAtomic.Atomic = false
-	var outcome MutationBatchOutcome
+	logicalCtx, logicalExecutor, complete := beginLogicalInvocation(ctx, child, EventMutationBatch)
 	var executionErr error
 	var panicked any
 	func() {
 		defer func() { panicked = recover() }()
-		outcome, executionErr = ExecMutationBatch(ctx, child, plans, nonAtomic)
+		outcome, executionErr = execPreparedMutationBatches(logicalCtx, logicalExecutor, prepared, options, outcome)
 	}()
+	attempted := mutationAttempted(outcome)
+	cleanupCtx, cancel := atomicCleanupContext(ctx)
+	defer cancel()
 	if panicked != nil {
-		attempted := mutationAttempted(outcome)
-		cleanupCtx, cancel := atomicCleanupContext(ctx)
 		rollbackErr := finalizer.Rollback(cleanupCtx)
-		cancel()
 		if rollbackErr != nil {
 			for _, index := range attempted {
 				outcome.Inputs[index] = InputUnknown
 			}
+			outcome.Durability = DurabilityUnknown
+			joined := errors.Join(fmt.Errorf("mutation batch panicked: %v", panicked), rollbackErr)
+			complete.completeLogicalInvocation(joined, 0, false)
 			panic(AtomicPanic{Value: panicked, Cleanup: rollbackErr})
 		}
 		for _, index := range attempted {
@@ -434,19 +479,20 @@ func execAtomicMutationBatch(ctx context.Context, executor Executor, plans []Mut
 				outcome.Inputs[index] = InputRolledBack
 			}
 		}
+		outcome.Durability = DurabilityPending
+		complete.completeLogicalInvocation(fmt.Errorf("mutation batch panicked: %v", panicked), 0, false)
 		panic(panicked)
 	}
-	attempted := mutationAttempted(outcome)
 	if executionErr != nil {
-		cleanupCtx, cancel := atomicCleanupContext(ctx)
-		defer cancel()
 		rollbackErr := finalizer.Rollback(cleanupCtx)
 		if rollbackErr != nil {
 			for _, index := range attempted {
 				outcome.Inputs[index] = InputUnknown
 			}
 			outcome.Durability = DurabilityUnknown
-			return outcome, errors.Join(executionErr, rollbackErr)
+			joined := errors.Join(executionErr, rollbackErr)
+			complete.completeLogicalInvocation(joined, 0, false)
+			return outcome, joined
 		}
 		for _, index := range attempted {
 			if outcome.Inputs[index] == InputApplied {
@@ -454,18 +500,19 @@ func execAtomicMutationBatch(ctx context.Context, executor Executor, plans []Mut
 			}
 		}
 		outcome.Durability = DurabilityPending
+		complete.completeLogicalInvocation(executionErr, 0, false)
 		return outcome, executionErr
 	}
-	cleanupCtx, cancel := atomicCleanupContext(ctx)
-	defer cancel()
 	if err := finalizer.Commit(cleanupCtx); err != nil {
 		for _, index := range attempted {
 			outcome.Inputs[index] = InputUnknown
 		}
 		outcome.Durability = DurabilityUnknown
+		complete.completeLogicalInvocation(err, 0, false)
 		return outcome, err
 	}
 	outcome.Durability = executorDurability(executor)
+	complete.completeLogicalInvocation(nil, 0, false)
 	return outcome, nil
 }
 
