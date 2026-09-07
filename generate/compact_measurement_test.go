@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -34,6 +35,8 @@ func TestCompactGeneratedMeasurements(t *testing.T) {
 	compactMetrics := generatedMetrics(t, compactPlan.Files())
 	t.Logf("legacy declarations=%d lines=%d bytes=%d", legacyMetrics.declarations, legacyMetrics.lines, legacyMetrics.bytes)
 	t.Logf("compact declarations=%d lines=%d bytes=%d", compactMetrics.declarations, compactMetrics.lines, compactMetrics.bytes)
+	require.LessOrEqual(t, compactMetrics.declarations*100, legacyMetrics.declarations*80)
+	require.LessOrEqual(t, compactMetrics.lines*100, legacyMetrics.lines*80)
 }
 
 func measurementEmitterFixture(t *testing.T) generate.EmitterInput {
@@ -91,11 +94,14 @@ func generatedMetrics(t *testing.T, files []generate.File) generatedMetric {
 		if strings.HasSuffix(file.Path, "_test.go") {
 			continue
 		}
+		fileLines := 0
+		fileDeclarations := 0
 		result.bytes += len(file.Source)
 		for _, line := range strings.Split(string(file.Source), "\n") {
 			trimmed := strings.TrimSpace(line)
 			if trimmed != "" && !strings.HasPrefix(trimmed, "//") {
 				result.lines++
+				fileLines++
 			}
 		}
 		parsed, err := parser.ParseFile(token.NewFileSet(), file.Path, file.Source, 0)
@@ -104,10 +110,13 @@ func generatedMetrics(t *testing.T, files []generate.File) generatedMetric {
 			switch declaration := declaration.(type) {
 			case *ast.FuncDecl:
 				result.declarations++
+				fileDeclarations++
 			case *ast.GenDecl:
 				result.declarations += len(declaration.Specs)
+				fileDeclarations += len(declaration.Specs)
 			}
 		}
+		t.Logf("%s declarations=%d lines=%d bytes=%d", filepath.Base(file.Path), fileDeclarations, fileLines, len(file.Source))
 	}
 	return result
 }

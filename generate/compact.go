@@ -116,9 +116,19 @@ func RenderCompact(in EmitterInput) (Store, error) {
 		}
 		files = append(files, compactFile{name: name, source: append([]byte(nil), source...), declarations: declarations})
 	}
-	meta := []byte(genfile.Marker + "\n\npackage " + copy.Generation.Package + "\n")
+	meta := []byte(compactMetadataSource(copy.Generation.Package))
 	test := []byte(genfile.Marker + "\n\npackage " + copy.Generation.Package + "\n")
-	files = append(files, compactFile{name: schemaDescriptorFilename, source: meta})
+	metaDeclarations, err := compactDeclarations(meta)
+	if err != nil {
+		return Store{}, fmt.Errorf("generate: compact metadata: %w", err)
+	}
+	for _, declaration := range metaDeclarations {
+		if owner, exists := seenDecls[declaration]; exists {
+			return Store{}, fmt.Errorf("generate: compact declaration %q collides with %s", declaration, owner)
+		}
+		seenDecls[declaration] = schemaDescriptorFilename
+	}
+	files = append(files, compactFile{name: schemaDescriptorFilename, source: meta, declarations: metaDeclarations})
 	files = append(files, compactFile{name: schemaDescriptorTestFilename, source: test})
 	sort.Slice(files, func(i, j int) bool { return files[i].name < files[j].name })
 	manifest, err := compactManifest(copy, tables, seenDecls)
@@ -132,6 +142,52 @@ func RenderCompact(in EmitterInput) (Store, error) {
 		Dialect: compactDialect(copy.Catalog.Engine.Dialect),
 		compact: &compactStoreInput{input: copy, files: cloneCompactFiles(files), manifest: append([]APIMapping(nil), manifest...)},
 	}, nil
+}
+
+func compactMetadataSource(packageName string) string {
+	return genfile.Marker + "\n\npackage " + packageName + `
+
+import "github.com/lestrrat-go/rasql"
+
+func rasqlgenBind[S, C any](sticky *error, source S, name, codec string, bind func(S, string, string) (C, error)) C {
+	if *sticky != nil {
+		var zero C
+		return zero
+	}
+	value, err := bind(source, name, codec)
+	if err != nil {
+		*sticky = err
+	}
+	return value
+}
+
+func rasqlgenAppendMutationField[R any](fields []rasql.MutationField[R], field rasql.MutationField[R]) []rasql.MutationField[R] {
+	result := append([]rasql.MutationField[R](nil), fields...)
+	return append(result, field)
+}
+
+func rasqlgenResultSchema(columns []rasql.ResultColumn) rasql.ResultSchema {
+	value, err := rasql.NewResultSchema(columns...)
+	if err != nil {
+		panic(err)
+	}
+	return value
+}
+
+func rasqlgenOptionalResultSchema(columns []rasql.ResultColumn) rasql.ResultSchema {
+	copy := append([]rasql.ResultColumn(nil), columns...)
+	for i := range copy {
+		copy[i].Nullable = true
+	}
+	return rasqlgenResultSchema(copy)
+}
+
+func rasqlgenAssignNullable[T any](source rasql.Nullable[T], target *T) {
+	if source.Valid {
+		*target = source.Value
+	}
+}
+`
 }
 
 func findCompactTable(tables []schema.TableDef, object compilerir.PhysicalObject) (schema.TableDef, bool) {

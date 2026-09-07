@@ -64,11 +64,11 @@ func CompactObjectSource(packageName string, object CompactObject) ([]byte, erro
 	b.WriteString("type ")
 	b.WriteString(row)
 	b.WriteString(" struct {\n")
-	for _, field := range object.Go.Row.Fields {
+	for _, group := range compactFieldGroups(object.Go.Row.Fields) {
 		b.WriteString("\t")
-		b.WriteString(exportedCompact(field.Name))
+		b.WriteString(strings.Join(group.Names, ", "))
 		b.WriteByte(' ')
-		b.WriteString(field.Type)
+		b.WriteString(group.Type)
 		b.WriteByte('\n')
 	}
 	b.WriteString("}\n\n")
@@ -150,6 +150,27 @@ func CompactObjectSource(packageName string, object CompactObject) ([]byte, erro
 
 type compactImport struct{ Path, Alias string }
 
+type compactFieldGroup struct {
+	Names []string
+	Type  string
+}
+
+func appendCompactFieldGroup(groups []compactFieldGroup, name, typ string) []compactFieldGroup {
+	if len(groups) > 0 && groups[len(groups)-1].Type == typ {
+		groups[len(groups)-1].Names = append(groups[len(groups)-1].Names, name)
+		return groups
+	}
+	return append(groups, compactFieldGroup{Names: []string{name}, Type: typ})
+}
+
+func compactFieldGroups(fields []compilerir.GoField) []compactFieldGroup {
+	groups := make([]compactFieldGroup, 0, len(fields))
+	for _, field := range fields {
+		groups = appendCompactFieldGroup(groups, exportedCompact(field.Name), field.Type)
+	}
+	return groups
+}
+
 func compactImports(object CompactObject) []compactImport {
 	seen := map[string]compactImport{}
 	for _, column := range object.Go.Columns {
@@ -196,38 +217,40 @@ func writeCompactColumns(b *bytes.Buffer, object CompactObject, accessor, row st
 	b.WriteString("Columns struct{}\n\ntype ")
 	b.WriteString(accessor)
 	b.WriteString("Expressions struct {\n")
+	groups := make([]compactFieldGroup, 0, len(object.Go.Columns))
 	for _, column := range object.Go.Columns {
 		if !columnReadable(object.Semantic, column.Name) {
 			continue
 		}
-		b.WriteString("\t")
-		b.WriteString(exportedCompact(column.Name))
-		b.WriteByte(' ')
+		typ := "rasql.Column[" + row + "," + compactColumnValueType(object, column) + "]"
 		if column.Nullable {
-			b.WriteString("rasql.NullColumn[")
-		} else {
-			b.WriteString("rasql.Column[")
+			typ = "rasql.NullColumn[" + row + "," + compactColumnValueType(object, column) + "]"
 		}
-		b.WriteString(row)
-		b.WriteByte(',')
-		b.WriteString(compactColumnValueType(object, column))
-		b.WriteByte(']')
+		groups = appendCompactFieldGroup(groups, exportedCompact(column.Name), typ)
+	}
+	for _, group := range groups {
+		b.WriteString("\t")
+		b.WriteString(strings.Join(group.Names, ", "))
+		b.WriteByte(' ')
+		b.WriteString(group.Type)
 		b.WriteByte('\n')
 	}
 	b.WriteString("}\n\ntype Optional")
 	b.WriteString(accessor)
 	b.WriteString("Expressions struct {\n")
+	groups = groups[:0]
 	for _, column := range object.Go.Columns {
 		if !columnReadable(object.Semantic, column.Name) {
 			continue
 		}
+		groups = appendCompactFieldGroup(groups, exportedCompact(column.Name), "rasql.NullColumn["+row+","+compactColumnValueType(object, column)+"]")
+	}
+	for _, group := range groups {
 		b.WriteString("\t")
-		b.WriteString(exportedCompact(column.Name))
-		b.WriteString(" rasql.NullColumn[")
-		b.WriteString(row)
-		b.WriteByte(',')
-		b.WriteString(compactColumnValueType(object, column))
-		b.WriteString("]\n")
+		b.WriteString(strings.Join(group.Names, ", "))
+		b.WriteByte(' ')
+		b.WriteString(group.Type)
+		b.WriteByte('\n')
 	}
 	b.WriteString("}\n\n")
 
@@ -255,14 +278,20 @@ func writeCompactBinder(b *bytes.Buffer, object CompactObject, accessor, row str
 	b.WriteString("]) (")
 	b.WriteString(result)
 	b.WriteString(", error) {\n")
+	b.WriteString("\tvar err error\n\tresult := ")
+	b.WriteString(result)
+	b.WriteString("{\n")
 	for _, column := range object.Go.Columns {
 		if !columnReadable(object.Semantic, column.Name) {
 			continue
 		}
-		b.WriteString("\t")
-		b.WriteString("value")
+		b.WriteString("\t\t")
 		b.WriteString(exportedCompact(column.Name))
-		b.WriteString(", err := rasql.")
+		b.WriteString(": rasqlgenBind(&err, source, ")
+		b.WriteString(strconv.Quote(column.PhysicalName))
+		b.WriteString(", ")
+		b.WriteString(strconv.Quote(column.Codec))
+		b.WriteString(", rasql.")
 		if optional {
 			b.WriteString("BindOptionalColumn[")
 		} else if column.Nullable {
@@ -273,27 +302,9 @@ func writeCompactBinder(b *bytes.Buffer, object CompactObject, accessor, row str
 		b.WriteString(row)
 		b.WriteByte(',')
 		b.WriteString(compactColumnValueType(object, column))
-		b.WriteString("](source, ")
-		b.WriteString(strconv.Quote(column.PhysicalName))
-		b.WriteString(", ")
-		b.WriteString(strconv.Quote(column.Codec))
-		b.WriteString(")\n\tif err != nil { return ")
-		b.WriteString(result)
-		b.WriteString("{}, err }\n")
+		b.WriteString("]),\n")
 	}
-	b.WriteString("\treturn ")
-	b.WriteString(result)
-	b.WriteString("{")
-	for _, column := range object.Go.Columns {
-		if !columnReadable(object.Semantic, column.Name) {
-			continue
-		}
-		b.WriteString(exportedCompact(column.Name))
-		b.WriteString(": value")
-		b.WriteString(exportedCompact(column.Name))
-		b.WriteByte(',')
-	}
-	b.WriteString("}, nil }\n\n")
+	b.WriteString("\t}\n\treturn result, err\n}\n\n")
 }
 
 func writeCompactDecoder(b *bytes.Buffer, object CompactObject, accessor, row string, optional bool) {
@@ -305,25 +316,39 @@ func writeCompactDecoder(b *bytes.Buffer, object CompactObject, accessor, row st
 	if optional {
 		schemaName = compactLowerFirst(accessor) + "OptionalResultSchema"
 	}
-	b.WriteString("var ")
-	b.WriteString(schemaName)
-	b.WriteString(" = func() rasql.ResultSchema { value, err := rasql.NewResultSchema(\n")
-	for _, column := range object.Go.Columns {
-		if !columnReadable(object.Semantic, column.Name) {
-			continue
+	baseColumnsName := compactLowerFirst(accessor) + "ResultColumns"
+	if !optional {
+		b.WriteString("var ")
+		b.WriteString(baseColumnsName)
+		b.WriteString(" = []rasql.ResultColumn{\n")
+		for _, column := range object.Go.Columns {
+			if !columnReadable(object.Semantic, column.Name) {
+				continue
+			}
+			b.WriteString("\t{Name: ")
+			b.WriteString(strconv.Quote(column.PhysicalName))
+			b.WriteString(", Type: ")
+			b.WriteString(compactSchemaType(object.Table, column.PhysicalName))
+			if column.Nullable {
+				b.WriteString(", Nullable: true")
+			}
+			b.WriteString(", Codec: ")
+			b.WriteString(strconv.Quote(column.Codec))
+			b.WriteString("},\n")
 		}
-		b.WriteString("\t\trasql.ResultColumn{Name: ")
-		b.WriteString(strconv.Quote(column.PhysicalName))
-		b.WriteString(", Type: ")
-		b.WriteString(compactSchemaType(object.Table, column.PhysicalName))
-		if optional || column.Nullable {
-			b.WriteString(", Nullable: true")
-		}
-		b.WriteString(", Codec: ")
-		b.WriteString(strconv.Quote(column.Codec))
-		b.WriteString("},\n")
+		b.WriteString("}\n")
+		b.WriteString("var ")
+		b.WriteString(schemaName)
+		b.WriteString(" = rasqlgenResultSchema(")
+		b.WriteString(baseColumnsName)
+		b.WriteString(")\n\n")
+	} else {
+		b.WriteString("var ")
+		b.WriteString(schemaName)
+		b.WriteString(" = rasqlgenOptionalResultSchema(")
+		b.WriteString(baseColumnsName)
+		b.WriteString(")\n\n")
 	}
-	b.WriteString("); if err != nil { panic(err) }; return value }()\n\n")
 	b.WriteString("type ")
 	b.WriteString(name)
 	b.WriteString(" struct{}\nfunc (")
@@ -352,6 +377,7 @@ func writeCompactDecoder(b *bytes.Buffer, object CompactObject, accessor, row st
 	b.WriteString(row)
 	b.WriteString(") error {\n")
 	if optional {
+		valueGroups := make([]compactFieldGroup, 0, len(object.Go.Columns))
 		for _, column := range object.Go.Columns {
 			if !columnReadable(object.Semantic, column.Name) {
 				continue
@@ -359,11 +385,14 @@ func writeCompactDecoder(b *bytes.Buffer, object CompactObject, accessor, row st
 			if compactCustomNullable(object, column) {
 				continue
 			}
+			valueGroups = appendCompactFieldGroup(valueGroups, exportedCompact(column.Name)+"Value", "rasql.Nullable["+compactColumnValueType(object, column)+"]")
+		}
+		for _, group := range valueGroups {
 			b.WriteString("\tvar ")
-			b.WriteString(exportedCompact(column.Name))
-			b.WriteString("Value rasql.Nullable[")
-			b.WriteString(compactColumnValueType(object, column))
-			b.WriteString("]\n")
+			b.WriteString(strings.Join(group.Names, ", "))
+			b.WriteByte(' ')
+			b.WriteString(group.Type)
+			b.WriteByte('\n')
 		}
 	}
 	b.WriteString("\tif err := source.Scan(")
@@ -399,16 +428,21 @@ func writeCompactDecoder(b *bytes.Buffer, object CompactObject, accessor, row st
 			if compactCustomNullable(object, column) {
 				continue
 			}
-			b.WriteString("\tif ")
+			b.WriteString("\trasqlgenAssignNullable(")
 			b.WriteString(exportedCompact(column.Name))
-			b.WriteString("Value.Valid { row.")
+			b.WriteString("Value, &row.")
 			b.WriteString(exportedCompact(column.Name))
-			b.WriteString(" = ")
-			b.WriteString(exportedCompact(column.Name))
-			b.WriteString("Value.Value }\n")
+			b.WriteString(")\n")
 		}
 	}
 	b.WriteString("\treturn nil\n}\n\n")
+	if !optional {
+		b.WriteString("func (row *")
+		b.WriteString(row)
+		b.WriteString(") ScanRow(source rasql.ScanSource) error { return ")
+		b.WriteString(name)
+		b.WriteString("{}.DecodeRow(source, row) }\n\n")
+	}
 }
 
 func writeCompactProjections(b *bytes.Buffer, object CompactObject, accessor, row string, optional bool) {
@@ -474,33 +508,31 @@ func writeCompactMutations(b *bytes.Buffer, object CompactObject, accessor, row 
 	if patch == "" {
 		patch = accessor + "Patch"
 	}
-	if create != "" {
-		writeMutationType(b, object, accessor, row, create, false)
-	}
-	if patch != "" {
-		writeMutationType(b, object, accessor, row, patch, true)
-	}
-	b.WriteString("func ")
-	b.WriteString(compactLowerFirst(accessor))
-	b.WriteString("MutationColumns() ")
+	mutationColumns := compactLowerFirst(accessor) + "MutationColumns"
+	b.WriteString("var ")
+	b.WriteString(mutationColumns)
+	b.WriteString(" = func() ")
 	b.WriteString(accessor)
 	b.WriteString("Expressions { source, err := ")
 	b.WriteString(accessor)
 	b.WriteString("().Source(\"\"); if err != nil { panic(err) }; value, err := (")
 	b.WriteString(accessor)
-	b.WriteString("Columns{}).Bind(source); if err != nil { panic(err) }; return value }\n\n")
+	b.WriteString("Columns{}).Bind(source); if err != nil { panic(err) }; return value }()\n\n")
+	if create != "" {
+		writeMutationType(b, object, accessor, row, create, false, mutationColumns)
+	}
+	if patch != "" {
+		writeMutationType(b, object, accessor, row, patch, true, mutationColumns)
+	}
 }
 
-func writeMutationType(b *bytes.Buffer, object CompactObject, accessor, row, name string, patch bool) {
+func writeMutationType(b *bytes.Buffer, object CompactObject, accessor, row, name string, patch bool, mutationColumns string) {
 	b.WriteString("type ")
 	b.WriteString(name)
 	b.WriteString(" struct { fields []rasql.MutationField[")
 	b.WriteString(row)
-	b.WriteString("]")
-	if patch {
-		b.WriteString("; where rasql.Predicate")
-	}
-	b.WriteString(" }\nfunc New")
+	b.WriteString("] }")
+	b.WriteString("\nfunc New")
 	b.WriteString(name)
 	b.WriteString("() ")
 	b.WriteString(name)
@@ -526,16 +558,14 @@ func writeMutationType(b *bytes.Buffer, object CompactObject, accessor, row, nam
 			b.WriteString(compactColumnValueType(object, column))
 			b.WriteString(") ")
 			b.WriteString(name)
-			b.WriteString(" { v.fields = append(append([]rasql.MutationField[")
-			b.WriteString(row)
-			b.WriteString("](nil), v.fields...), ")
+			b.WriteString(" { v.fields = rasqlgenAppendMutationField(v.fields, ")
 			if column.Nullable {
 				b.WriteString("rasql.SetNullableField(")
 			} else {
 				b.WriteString("rasql.SetField(")
 			}
-			b.WriteString(compactLowerFirst(accessor))
-			b.WriteString("MutationColumns().")
+			b.WriteString(mutationColumns)
+			b.WriteByte('.')
 			b.WriteString(method)
 			b.WriteString(", value)); return v }\n")
 			if column.Nullable {
@@ -545,11 +575,9 @@ func writeMutationType(b *bytes.Buffer, object CompactObject, accessor, row, nam
 				b.WriteString(method)
 				b.WriteString("() ")
 				b.WriteString(name)
-				b.WriteString(" { v.fields = append(append([]rasql.MutationField[")
-				b.WriteString(row)
-				b.WriteString("](nil), v.fields...), rasql.ClearField(")
-				b.WriteString(compactLowerFirst(accessor))
-				b.WriteString("MutationColumns().")
+				b.WriteString(" { v.fields = rasqlgenAppendMutationField(v.fields, rasql.ClearField(")
+				b.WriteString(mutationColumns)
+				b.WriteByte('.')
 				b.WriteString(method)
 				b.WriteString(")); return v }\n")
 			}
@@ -560,16 +588,14 @@ func writeMutationType(b *bytes.Buffer, object CompactObject, accessor, row, nam
 				b.WriteString(method)
 				b.WriteString("() ")
 				b.WriteString(name)
-				b.WriteString(" { v.fields = append(append([]rasql.MutationField[")
-				b.WriteString(row)
-				b.WriteString("](nil), v.fields...), ")
+				b.WriteString(" { v.fields = rasqlgenAppendMutationField(v.fields, ")
 				if column.Nullable {
 					b.WriteString("rasql.DefaultNullableField(")
 				} else {
 					b.WriteString("rasql.DefaultField(")
 				}
-				b.WriteString(compactLowerFirst(accessor))
-				b.WriteString("MutationColumns().")
+				b.WriteString(mutationColumns)
+				b.WriteByte('.')
 				b.WriteString(method)
 				b.WriteString(")); return v }\n")
 			}
@@ -578,30 +604,21 @@ func writeMutationType(b *bytes.Buffer, object CompactObject, accessor, row, nam
 	if patch {
 		b.WriteString("func (v ")
 		b.WriteString(name)
-		b.WriteString(") Where(value rasql.Predicate) ")
-		b.WriteString(name)
-		b.WriteString(" { v.where = value; return v }\n")
+		b.WriteString(") Where(value rasql.Predicate) (rasql.PatchPlan[")
+		b.WriteString(row)
+		b.WriteString("], error) { return rasql.NewPatchPlan(")
+		b.WriteString(accessor)
+		b.WriteString("().Table, value, v.fields...) }\n\n")
+		return
 	}
 	b.WriteString("func (v ")
 	b.WriteString(name)
-	b.WriteString(") Plan() (")
-	if patch {
-		b.WriteString("rasql.PatchPlan[")
-	} else {
-		b.WriteString("rasql.CreatePlan[")
-	}
+	b.WriteString(") Plan() (rasql.CreatePlan[")
 	b.WriteString(row)
 	b.WriteString("], error) {\n")
-	b.WriteString("\t")
-	if patch {
-		b.WriteString("return rasql.NewPatchPlan(")
-		b.WriteString(accessor)
-		b.WriteString("().Table, v.where, v.fields...)")
-	} else {
-		b.WriteString("return rasql.NewCreatePlan(")
-		b.WriteString(accessor)
-		b.WriteString("().Table, v.fields...)")
-	}
+	b.WriteString("\treturn rasql.NewCreatePlan(")
+	b.WriteString(accessor)
+	b.WriteString("().Table, v.fields...)")
 	b.WriteString("\n}\n\n")
 }
 
