@@ -22,7 +22,7 @@ func graphCodecs(executor Executor) CodecRegistry {
 	return builtinCodecs
 }
 
-func graphValidate(node *graphPlanNode, executor Executor) error {
+func graphValidate(node *graphPlanNode, executor Executor, rootCompiled *compiledQuery) error {
 	if node == nil {
 		return planError("invalid_graph_plan", "graph", "must not be zero")
 	}
@@ -51,7 +51,14 @@ func graphValidate(node *graphPlanNode, executor Executor) error {
 			if err := current.node.query.validate(); err != nil {
 				return err
 			}
-			if _, err := current.node.query.compile(executor); err != nil {
+			compiled, err := current.node.query.compile(executor)
+			if err != nil {
+				return err
+			}
+			if current.node == node {
+				*rootCompiled = compiled
+			}
+			if err := current.node.query.validateCompiled(executor, compiled); err != nil {
 				return err
 			}
 			if err := validateGraphKeys(current.node, executor); err != nil {
@@ -96,6 +103,9 @@ func validateGraphEdge(edge *graphEdgeSpec, executor Executor, path string) erro
 	if edge.childKey == nil || len(edge.childKey.parts) == 0 {
 		return planError("invalid_graph_plan", path, "child key is empty")
 	}
+	if edge.kind == graphManyThrough {
+		return validateManyThroughEdge(edge, executor, path)
+	}
 	limit := edge.options.PerParentLimit
 	if edge.kind == graphHasOne {
 		limit = 2
@@ -116,8 +126,14 @@ func validateGraphEdge(edge *graphEdgeSpec, executor Executor, path string) erro
 	if budget <= 0 || budget-len(compiled.bindSlots) < len(edge.childKey.parts) {
 		return planError("bind_limit", path, "bind budget cannot fit one key")
 	}
-	if edge.kind != graphManyThrough {
-		return nil
+	return nil
+}
+
+func validateManyThroughEdge(edge *graphEdgeSpec, executor Executor, path string) error {
+	profile := executorCompilerProfile(executor)
+	budget := edge.options.BindLimit
+	if budget == 0 || budget > profile.MaxBind {
+		budget = profile.MaxBind
 	}
 	junctionQ, err := graphJunctionQuery(edge.junction, edge.junctionParent, edge.junctionChild)
 	if err != nil {
@@ -189,10 +205,11 @@ func LoadGraph[R, G any](ctx context.Context, executor Executor, plan GraphPlan[
 	if executor == nil || plan.node == nil {
 		return nil, planError("invalid_graph_plan", "graph", "executor and plan are required")
 	}
-	if err := graphValidate(plan.node, executor); err != nil {
+	var rootCompiled compiledQuery
+	if err := graphValidate(plan.node, executor, &rootCompiled); err != nil {
 		return nil, err
 	}
-	rootPrepared, err := plan.node.query.prepare(executor)
+	rootPrepared, err := plan.node.query.prepareCompiled(executor, rootCompiled)
 	if err != nil {
 		return nil, err
 	}

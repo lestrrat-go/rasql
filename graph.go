@@ -61,6 +61,8 @@ type graphQueryOps interface {
 	validate() error
 	compile(Executor) (compiledQuery, error)
 	prepare(Executor) (graphPreparedQuery, error)
+	prepareCompiled(Executor, compiledQuery) (graphPreparedQuery, error)
+	validateCompiled(Executor, compiledQuery) error
 	run(context.Context, Executor, func() (int64, error)) ([]graphRow, error)
 	mapRow(any) any
 	sourceName() string
@@ -93,6 +95,9 @@ func (q graphQuery[R, G]) prepare(executor Executor) (graphPreparedQuery, error)
 	if err != nil {
 		return graphPreparedQuery{}, err
 	}
+	return q.prepareCompiled(executor, compiled)
+}
+func (q graphQuery[R, G]) prepareCompiled(executor Executor, compiled compiledQuery) (graphPreparedQuery, error) {
 	prepared, err := prepareRows(executor, q.value, compiled)
 	if err != nil {
 		return graphPreparedQuery{}, err
@@ -115,6 +120,20 @@ func (q graphQuery[R, G]) prepare(executor Executor) (graphPreparedQuery, error)
 		})
 		return result, sequenceErr
 	}}, nil
+}
+func (q graphQuery[R, G]) validateCompiled(executor Executor, compiled compiledQuery) error {
+	registry := graphCodecs(executor)
+	for index, column := range q.value.Schema().Columns() {
+		if _, err := codecFor(registry, column.Codec); err != nil {
+			return planError("codec_unavailable", fmt.Sprintf("result.columns[%d].codec", index), column.Codec)
+		}
+	}
+	for index, slot := range compiled.bindSlots {
+		if _, err := codecFor(registry, slot.codec); err != nil {
+			return planError("codec_unavailable", fmt.Sprintf("binds[%d].codec", index), slot.codec)
+		}
+	}
+	return nil
 }
 func (q graphQuery[R, G]) mapRow(row any) any {
 	value := row.(R)
