@@ -1,7 +1,6 @@
 package rasql_test
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/lestrrat-go/rasql"
@@ -16,83 +15,106 @@ func TestMutationVersionedReturningCardinalityMatrix(t *testing.T) {
 	}{
 		{name: "zero", rows: 0}, {name: "one", rows: 1}, {name: "two", rows: 2},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			executor, table, id := mutationFixture(t)
-			value := query.TypedColumnOf[mutationRow, string](table.Column("value"))
-			relation, err := rasql.SourceOf[mutationRow](table, "")
-			require.NoError(t, err)
-			version, err := rasql.BindColumn[mutationRow, int64](relation, "version", "")
-			require.NoError(t, err)
-			for i := 1; i <= 2; i++ {
-				create, createErr := rasql.NewCreatePlan(table, rasql.SetField(id, int64(i)), rasql.SetField(value, "before"))
-				require.NoError(t, createErr)
-				_, createErr = rasql.ExecMutation(t.Context(), executor, create)
-				require.NoError(t, createErr)
-			}
-			where := query.EqualValue(id, int64(99))
-			switch test.rows {
-			case 1:
-				where = query.EqualValue(id, int64(1))
-			case 2:
-				where = query.GreaterOrEqualValue(id, int64(1))
-			}
-			patch, err := rasql.NewPatchPlan(table, where, rasql.SetField(value, "after"))
-			require.NoError(t, err)
-			patch, err = patch.WithVersion(version, 1)
-			require.NoError(t, err)
-			returned, err := rasql.Returning(patch, mutationProjection(t, table))
-			require.NoError(t, err)
-
-			all, allErr := rasql.All(t.Context(), executor, returned)
-			switch test.rows {
-			case 0:
-				require.ErrorIs(t, allErr, rasql.ErrPrecondition)
-				require.Empty(t, all)
-			case 1:
-				require.NoError(t, allErr)
-				require.Len(t, all, 1)
-			case 2:
-				require.ErrorIs(t, allErr, rasql.ErrMultipleRows)
-				require.Empty(t, all)
-			}
-
-			if test.rows == 1 {
-				one, oneErr := rasql.One(t.Context(), executor, returned)
-				require.NoError(t, oneErr)
-				require.Equal(t, int64(1), one.ID)
-				maybe, ok, maybeErr := rasql.Maybe(t.Context(), executor, returned)
-				require.NoError(t, maybeErr)
-				require.True(t, ok)
-				require.Equal(t, int64(1), maybe.ID)
-			}
-			if test.rows == 0 {
-				_, oneErr := rasql.One(t.Context(), executor, returned)
-				require.ErrorIs(t, oneErr, rasql.ErrPrecondition)
-				_, ok, maybeErr := rasql.Maybe(t.Context(), executor, returned)
-				require.ErrorIs(t, maybeErr, rasql.ErrPrecondition)
-				require.False(t, ok)
-			}
-			if test.rows == 2 {
-				sequence, seqErr := rasql.Rows(t.Context(), executor, returned)
-				require.NoError(t, seqErr)
-				seen := 0
-				var terminal error
-				for item, itemErr := range sequence {
-					seen++
-					terminal = itemErr
-					_ = item
-					break
+		for _, terminal := range []string{"Rows", "All", "One", "Maybe"} {
+			t.Run(test.name+"/"+terminal, func(t *testing.T) {
+				executor, returned := newVersionedReturningAcceptance(t, test.rows)
+				switch terminal {
+				case "Rows":
+					sequence, err := rasql.Rows(t.Context(), executor, returned)
+					require.NoError(t, err)
+					seen := 0
+					var terminalErr error
+					for item, itemErr := range sequence {
+						if itemErr != nil {
+							terminalErr = itemErr
+							break
+						}
+						seen++
+						_ = item
+						if test.rows == 1 {
+							break
+						}
+					}
+					expectedSeen := 0
+					if test.rows == 1 {
+						expectedSeen = 1
+					}
+					require.Equal(t, expectedSeen, seen)
+					if test.rows == 0 {
+						require.ErrorIs(t, terminalErr, rasql.ErrPrecondition)
+					} else if test.rows == 2 {
+						require.ErrorIs(t, terminalErr, rasql.ErrMultipleRows)
+					} else {
+						require.NoError(t, terminalErr)
+					}
+				case "All":
+					values, err := rasql.All(t.Context(), executor, returned)
+					if test.rows == 0 {
+						require.ErrorIs(t, err, rasql.ErrPrecondition)
+						require.Empty(t, values)
+					} else if test.rows == 2 {
+						require.ErrorIs(t, err, rasql.ErrMultipleRows)
+						require.Empty(t, values)
+					} else {
+						require.NoError(t, err)
+						require.Len(t, values, 1)
+					}
+				case "One":
+					value, err := rasql.One(t.Context(), executor, returned)
+					if test.rows == 0 {
+						require.ErrorIs(t, err, rasql.ErrPrecondition)
+					} else if test.rows == 2 {
+						require.ErrorIs(t, err, rasql.ErrMultipleRows)
+					} else {
+						require.NoError(t, err)
+						require.Equal(t, int64(1), value.ID)
+					}
+				case "Maybe":
+					value, ok, err := rasql.Maybe(t.Context(), executor, returned)
+					if test.rows == 0 {
+						require.ErrorIs(t, err, rasql.ErrPrecondition)
+						require.False(t, ok)
+					} else if test.rows == 2 {
+						require.ErrorIs(t, err, rasql.ErrMultipleRows)
+						require.False(t, ok)
+					} else {
+						require.NoError(t, err)
+						require.True(t, ok)
+						require.Equal(t, int64(1), value.ID)
+					}
 				}
-				require.Zero(t, seen)
-				require.True(t, errors.Is(terminal, rasql.ErrMultipleRows))
-				_, oneErr := rasql.One(t.Context(), executor, returned)
-				require.ErrorIs(t, oneErr, rasql.ErrMultipleRows)
-				_, ok, maybeErr := rasql.Maybe(t.Context(), executor, returned)
-				require.ErrorIs(t, maybeErr, rasql.ErrMultipleRows)
-				require.False(t, ok)
-			}
-		})
+			})
+		}
 	}
+}
+
+func newVersionedReturningAcceptance(t *testing.T, rows int) (rasql.Executor, rasql.Query[mutationRow]) {
+	t.Helper()
+	executor, table, id := mutationFixture(t)
+	value := query.TypedColumnOf[mutationRow, string](table.Column("value"))
+	relation, err := rasql.SourceOf[mutationRow](table, "")
+	require.NoError(t, err)
+	version, err := rasql.BindColumn[mutationRow, int64](relation, "version", "")
+	require.NoError(t, err)
+	for i := int64(1); i <= 2; i++ {
+		create, createErr := rasql.NewCreatePlan(table, rasql.SetField(id, i), rasql.SetField(value, "before"))
+		require.NoError(t, createErr)
+		_, createErr = rasql.ExecMutation(t.Context(), executor, create)
+		require.NoError(t, createErr)
+	}
+	where := query.EqualValue(id, int64(99))
+	if rows == 1 {
+		where = query.EqualValue(id, int64(1))
+	} else if rows == 2 {
+		where = query.GreaterOrEqualValue(id, int64(1))
+	}
+	patch, err := rasql.NewPatchPlan(table, where, rasql.SetField(value, "after"))
+	require.NoError(t, err)
+	patch, err = patch.WithVersion(version, 1)
+	require.NoError(t, err)
+	returned, err := rasql.Returning(patch, mutationProjection(t, table))
+	require.NoError(t, err)
+	return executor, returned
 }
 
 func TestMutationVersionedPatchCanonicalizesAliasedVersionColumn(t *testing.T) {
