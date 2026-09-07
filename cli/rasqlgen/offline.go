@@ -83,7 +83,7 @@ func (c command) runOfflineGenerate(settings config, configPath string, check bo
 	}
 	generation := compilerir.GoConfig{Package: settings.Package, Output: settings.Output, Emitter: emitter, Prune: prune, Scalars: mappings.Scalars}
 	if generation.Emitter == "" {
-		generation.Emitter = "legacy"
+		generation.Emitter = "compact"
 	}
 	for _, object := range lock.Generation.Objects {
 		generation.Objects = append(generation.Objects, compilerir.ObjectGoName{ID: compilerir.ObjectID(object.ID), Source: object.Source, Row: object.Row, Create: object.Create, Patch: object.Patch, File: object.File})

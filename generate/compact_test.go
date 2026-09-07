@@ -268,6 +268,36 @@ func TestCompactImportsOnlyUsedMappings(t *testing.T) {
 	}
 }
 
+func TestCompactEmitsGraphAndPageFactories(t *testing.T) {
+	catalog := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "sqlite", Version: "3"}, Objects: []compilerir.PhysicalObject{
+		{ID: "users", Kind: "table", Name: "users", Columns: []compilerir.PhysicalColumn{
+			{Name: "id", LogicalKind: "integer"}, {Name: "deleted_at", Ordinal: 1, LogicalKind: "text", Nullable: true},
+		}, Constraints: []compilerir.PhysicalConstraint{{Kind: "primary_key", Columns: []string{"id"}}}},
+	}}
+	semantic, diagnostics := compilerir.BuildSemantic(catalog, compilerir.MappingConfig{}, nil)
+	require.Empty(t, diagnostics)
+	config := compilerir.GoConfig{Package: "store", Output: "generated", Emitter: "compact", Objects: []compilerir.ObjectGoName{{ID: "users", File: "users_gen.go"}}}
+	model, diagnostics := compilerir.BuildGo(semantic, config)
+	require.Empty(t, diagnostics)
+	in, err := generate.NewEmitterInput(catalog, semantic, model, config, compilerir.MappingConfig{})
+	require.NoError(t, err)
+	store, err := generate.RenderCompact(in)
+	require.NoError(t, err)
+	store.Root, store.Dir = t.TempDir(), "generated"
+	plan, err := store.Plan()
+	require.NoError(t, err)
+	var source string
+	for _, file := range plan.Files() {
+		if filepath.Base(file.Path) == "users_gen.go" {
+			source = string(file.Source)
+		}
+	}
+	require.Contains(t, source, "func UsersGraphKey()")
+	require.Contains(t, source, "func UsersIDPageKey(direction rasql.PageDirection)")
+	require.Contains(t, source, "func UsersDeletedAtPageKey(direction rasql.PageDirection, nulls rasql.NullOrder)")
+	require.Contains(t, source, "rasqlgenNullablePageKey")
+}
+
 func repoRoot(t *testing.T) string {
 	t.Helper()
 	root, err := filepath.Abs("..")

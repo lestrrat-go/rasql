@@ -21,6 +21,17 @@ type CompactObject struct {
 	Generation compilerir.ObjectGoName
 	Table      schema.TableDef
 	Mappings   []compilerir.ScalarMapping
+	Targets    map[compilerir.ObjectID]CompactObjectRef
+}
+
+// CompactObjectRef carries the canonical names and relation facts needed by
+// declarations that connect one generated object to another.
+type CompactObjectRef struct {
+	Catalog    compilerir.PhysicalObject
+	Semantic   compilerir.SemanticObject
+	Go         compilerir.GoObject
+	Generation compilerir.ObjectGoName
+	Table      schema.TableDef
 }
 
 // CompactObjectSource emits the compact table or view declarations for one
@@ -138,6 +149,8 @@ func CompactObjectSource(packageName string, object CompactObject) ([]byte, erro
 		writeCompactDecoder(&b, object, accessor, row, true)
 	}
 	writeCompactProjections(&b, object, accessor, row, len(marker) > 0)
+	writeCompactKeys(&b, object, accessor, row, marker)
+	writeCompactRelations(&b, object, accessor, row)
 	if object.Catalog.Kind != "view" {
 		writeCompactMutations(&b, object, accessor, row)
 	}
@@ -496,6 +509,229 @@ func writeCompactProjections(b *bytes.Buffer, object CompactObject, accessor, ro
 	writeProjection(accessor+"Projection", false)
 	if optional {
 		writeProjection("Optional"+accessor+"Projection", true)
+	}
+}
+
+func compactPageColumns(object CompactObject) []compilerir.GoColumn {
+	result := make([]compilerir.GoColumn, 0, len(object.Go.Columns))
+	for _, column := range object.Go.Columns {
+		if columnReadable(object.Semantic, column.Name) && !compactCustomNullable(object, column) {
+			result = append(result, column)
+		}
+	}
+	return result
+}
+
+func compactRelations(object CompactObject) []compilerir.GoRelation {
+	result := make([]compilerir.GoRelation, 0, len(object.Go.Relations))
+	for _, relation := range object.Go.Relations {
+		if _, ok := object.Targets[relation.Target]; ok {
+			result = append(result, relation)
+		}
+	}
+	return result
+}
+
+func writeCompactKeys(b *bytes.Buffer, object CompactObject, accessor, row string, marker []string) {
+	expressions := compactKeyExpressions(object, accessor)
+	if len(marker) > 0 || len(compactPageColumns(object)) > 0 || len(compactRelations(object)) > 0 {
+		if object.Catalog.Kind == "view" {
+			b.WriteString("var ")
+			b.WriteString(expressions)
+			b.WriteString(" = func() ")
+			b.WriteString(accessor)
+			b.WriteString("Expressions { source, err := ")
+			b.WriteString(accessor)
+			b.WriteString("().Source(\"\"); if err != nil { panic(err) }; value, err := (")
+			b.WriteString(accessor)
+			b.WriteString("Columns{}).Bind(source); if err != nil { panic(err) }; return value }()\n\n")
+		}
+		if len(marker) > 0 {
+			b.WriteString("func ")
+			b.WriteString(accessor)
+			b.WriteString("GraphKey() (rasql.GraphKey[")
+			b.WriteString(row)
+			b.WriteString("], error) { return rasql.NewGraphKey[")
+			b.WriteString(row)
+			b.WriteString("](")
+			writeCompactGraphParts(b, object, accessor, row, marker, expressions)
+			b.WriteString(") }\n\n")
+		}
+	}
+	for _, column := range compactPageColumns(object) {
+		field := exportedCompact(column.Name)
+		valueType := compactColumnValueType(object, column)
+		b.WriteString("func ")
+		b.WriteString(accessor)
+		b.WriteString(field)
+		b.WriteString("PageKey(direction rasql.PageDirection")
+		if column.Nullable {
+			b.WriteString(", nulls rasql.NullOrder")
+		}
+		b.WriteString(") (rasql.PageKey[")
+		b.WriteString(row)
+		b.WriteString("], error) { return rasqlgen")
+		if column.Nullable {
+			b.WriteString("NullablePageKey(direction, ")
+		} else {
+			b.WriteString("PageKey(direction, ")
+		}
+		b.WriteString(expressions)
+		b.WriteString(".")
+		b.WriteString(field)
+		if column.Nullable {
+			b.WriteString(".NullExpr(), func(row ")
+			b.WriteString(row)
+			b.WriteString(") rasql.Nullable[")
+			b.WriteString(valueType)
+			b.WriteString("] { return row.")
+			b.WriteString(field)
+			b.WriteString(" }, nulls)")
+		} else {
+			b.WriteString(".Expr(), func(row ")
+			b.WriteString(row)
+			b.WriteString(") ")
+			b.WriteString(valueType)
+			b.WriteString(" { return row.")
+			b.WriteString(field)
+			b.WriteString(" })")
+		}
+		b.WriteString(" }\n\n")
+	}
+}
+
+func compactKeyExpressions(object CompactObject, accessor string) string {
+	if object.Catalog.Kind != "view" {
+		return compactLowerFirst(accessor) + "MutationColumns"
+	}
+	return compactLowerFirst(accessor) + "GraphColumns"
+}
+
+func writeCompactGraphParts(b *bytes.Buffer, object CompactObject, accessor, row string, columns []string, expressions string) {
+	for i, name := range columns {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		column, ok := goColumnByName(object.Go, name)
+		if !ok {
+			b.WriteString("rasql.GraphKeyPart[")
+			b.WriteString(row)
+			b.WriteString("]{}")
+			continue
+		}
+		field := exportedCompact(name)
+		valueType := compactColumnValueType(object, column)
+		if column.Nullable {
+			b.WriteString("rasql.NullKeyPart[")
+		} else {
+			b.WriteString("rasql.KeyPart[")
+		}
+		b.WriteString(row)
+		b.WriteByte(',')
+		b.WriteString(valueType)
+		b.WriteString("](")
+		b.WriteString(expressions)
+		b.WriteByte('.')
+		b.WriteString(field)
+		if column.Nullable {
+			b.WriteString(", func(row ")
+			b.WriteString(row)
+			b.WriteString(") rasql.Nullable[")
+			b.WriteString(valueType)
+			b.WriteString("] { return row.")
+			b.WriteString(field)
+			b.WriteString(" })")
+		} else {
+			b.WriteString(", func(row ")
+			b.WriteString(row)
+			b.WriteString(") ")
+			b.WriteString(valueType)
+			b.WriteString(" { return row.")
+			b.WriteString(field)
+			b.WriteString(" })")
+		}
+	}
+}
+
+func writeCompactRelations(b *bytes.Buffer, object CompactObject, accessor, row string) {
+	for _, relation := range compactRelations(object) {
+		target := object.Targets[relation.Target]
+		targetAccessor := target.Generation.Source
+		if targetAccessor == "" {
+			targetAccessor = exportedCompact(target.Catalog.Name)
+		}
+		targetRow := target.Generation.Row
+		if targetRow == "" {
+			targetRow = exportedCompact(target.Catalog.Name) + "Row"
+		}
+		name := accessor + exportedCompact(relation.Name) + "Edge"
+		b.WriteString("func ")
+		b.WriteString(name)
+		b.WriteString("[G, CG any](children rasql.GraphPlan[")
+		b.WriteString(targetRow)
+		b.WriteString(", CG], options rasql.EdgeOptions, attach func(*G, rasql.Loaded")
+		if relation.Kind == "belongs_to" || relation.Kind == "has_one" {
+			b.WriteString("One[")
+		} else {
+			b.WriteString("Many[")
+		}
+		b.WriteString("CG])) (rasql.GraphEdge[")
+		b.WriteString(row)
+		b.WriteString(", G], error) {\n")
+		b.WriteString("\tparent, err := rasql.NewGraphKey[")
+		b.WriteString(row)
+		b.WriteString("](")
+		writeCompactGraphParts(b, object, accessor, row, relation.From, compactKeyExpressions(object, accessor))
+		b.WriteString(")\n\tif err != nil { return nil, err }\n")
+		if relation.Kind == "many_through" && relation.Through != nil {
+			through, ok := object.Targets[relation.Through.Object]
+			if !ok {
+				continue
+			}
+			throughAccessor := through.Generation.Source
+			if throughAccessor == "" {
+				throughAccessor = exportedCompact(through.Catalog.Name)
+			}
+			throughRow := through.Generation.Row
+			if throughRow == "" {
+				throughRow = exportedCompact(through.Catalog.Name) + "Row"
+			}
+			throughColumns := compactKeyExpressions(CompactObject{Catalog: through.Catalog}, throughAccessor)
+			b.WriteString("\tjunctionParent, err := rasql.NewGraphKey[")
+			b.WriteString(throughRow)
+			b.WriteString("](")
+			writeCompactGraphParts(b, CompactObject{Go: through.Go, Mappings: object.Mappings}, throughAccessor, throughRow, relation.Through.SourceFrom, throughColumns)
+			b.WriteString(")\n\tif err != nil { return nil, err }\n")
+			b.WriteString("\tjunctionChild, err := rasql.NewGraphKey[")
+			b.WriteString(throughRow)
+			b.WriteString("](")
+			writeCompactGraphParts(b, CompactObject{Go: through.Go, Mappings: object.Mappings}, throughAccessor, throughRow, relation.Through.TargetFrom, throughColumns)
+			b.WriteString(")\n\tif err != nil { return nil, err }\n")
+			b.WriteString("\tchild, err := rasql.NewGraphKey[")
+			b.WriteString(targetRow)
+			b.WriteString("](")
+			writeCompactGraphParts(b, CompactObject{Catalog: target.Catalog, Go: target.Go, Mappings: object.Mappings}, targetAccessor, targetRow, relation.To, compactKeyExpressions(CompactObject{Catalog: target.Catalog}, targetAccessor))
+			b.WriteString(")\n\tif err != nil { return nil, err }\n")
+			b.WriteString("\tjunction, err := ")
+			b.WriteString(throughAccessor)
+			b.WriteString("().Source(\"\")\n\tif err != nil { return nil, err }\n\treturn rasql.ManyThrough(\"")
+			b.WriteString(relation.Name)
+			b.WriteString("\", parent, junctionParent, junctionChild, child, junction, children, options, attach)\n}\n\n")
+			continue
+		}
+		b.WriteString("\tchild, err := rasql.NewGraphKey[")
+		b.WriteString(targetRow)
+		b.WriteString("](")
+		writeCompactGraphParts(b, CompactObject{Catalog: target.Catalog, Go: target.Go, Mappings: object.Mappings}, targetAccessor, targetRow, relation.To, compactKeyExpressions(CompactObject{Catalog: target.Catalog}, targetAccessor))
+		b.WriteString(")\n\tif err != nil { return nil, err }\n\treturn rasql.")
+		if relation.Kind == "belongs_to" || relation.Kind == "has_one" {
+			b.WriteString("HasOne")
+		} else {
+			b.WriteString("HasMany")
+		}
+		b.WriteString("(\"")
+		b.WriteString(relation.Name)
+		b.WriteString("\", parent, child, children, options, attach)\n}\n\n")
 	}
 }
 

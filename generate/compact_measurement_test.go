@@ -76,7 +76,7 @@ func measurementEmitterFixture(t *testing.T) generate.EmitterInput {
 	for _, diagnostic := range diagnostics {
 		require.NotEqual(t, compilerir.DiagnosticError, diagnostic.Level, diagnostic.Message)
 	}
-	in, err := generate.NewEmitterInput(catalog, semantic, model, config)
+	in, err := generate.NewEmitterInput(catalog, semantic, model, config, compilerir.MappingConfig{})
 	require.NoError(t, err)
 	return in
 }

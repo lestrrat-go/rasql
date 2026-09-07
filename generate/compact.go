@@ -80,6 +80,19 @@ func RenderCompact(in EmitterInput) (Store, error) {
 	for _, config := range copy.Generation.Objects {
 		configs[config.ID] = config
 	}
+	tablesByID := make(map[compilerir.ObjectID]schema.TableDef, len(copy.Catalog.Objects))
+	for _, object := range copy.Catalog.Objects {
+		if table, ok := findCompactTable(tables, object); ok {
+			tablesByID[object.ID] = table
+		}
+	}
+	targets := make(map[compilerir.ObjectID]schemagen.CompactObjectRef, len(copy.Catalog.Objects))
+	for _, object := range copy.Catalog.Objects {
+		targets[object.ID] = schemagen.CompactObjectRef{
+			Catalog: object, Semantic: semantic[object.ID], Go: goObjects[object.ID],
+			Generation: configs[object.ID], Table: tablesByID[object.ID],
+		}
+	}
 	files := make([]compactFile, 0, len(copy.Catalog.Objects)+2)
 	seenFiles := make(map[string]string)
 	seenDecls := make(map[string]string)
@@ -94,7 +107,7 @@ func RenderCompact(in EmitterInput) (Store, error) {
 		}
 		source, err := schemagen.CompactObjectSource(copy.Generation.Package, schemagen.CompactObject{
 			Catalog: object, Semantic: semantic[object.ID], Go: goObjects[object.ID],
-			Generation: config, Table: table, Mappings: copy.Generation.Scalars,
+			Generation: config, Table: table, Mappings: copy.Generation.Scalars, Targets: targets,
 		})
 		if err != nil {
 			return Store{}, err
@@ -147,7 +160,11 @@ func RenderCompact(in EmitterInput) (Store, error) {
 func compactMetadataSource(packageName string) string {
 	return genfile.Marker + "\n\npackage " + packageName + `
 
-import "github.com/lestrrat-go/rasql"
+import (
+	"fmt"
+
+	"github.com/lestrrat-go/rasql"
+)
 
 func rasqlgenBind[S, C any](sticky *error, source S, name, codec string, bind func(S, string, string) (C, error)) C {
 	if *sticky != nil {
@@ -185,6 +202,31 @@ func rasqlgenOptionalResultSchema(columns []rasql.ResultColumn) rasql.ResultSche
 func rasqlgenAssignNullable[T any](source rasql.Nullable[T], target *T) {
 	if source.Valid {
 		*target = source.Value
+	}
+}
+
+func rasqlgenPageKey[R, T comparable](direction rasql.PageDirection, value rasql.Expr[T], extract func(R) T) (rasql.PageKey[R], error) {
+	switch direction {
+	case rasql.PageAscending:
+		return rasql.AscKey(value, extract), nil
+	case rasql.PageDescending:
+		return rasql.DescKey(value, extract), nil
+	default:
+		return nil, fmt.Errorf("invalid page direction %d", direction)
+	}
+}
+
+func rasqlgenNullablePageKey[R, T comparable](direction rasql.PageDirection, value rasql.NullExpr[T], extract func(R) rasql.Nullable[T], nulls rasql.NullOrder) (rasql.PageKey[R], error) {
+	if nulls == rasql.NullOrderDefault {
+		return nil, fmt.Errorf("nullable page keys require explicit NULL order")
+	}
+	switch direction {
+	case rasql.PageAscending:
+		return rasql.AscNullKey(value, extract, nulls), nil
+	case rasql.PageDescending:
+		return rasql.DescNullKey(value, extract, nulls), nil
+	default:
+		return nil, fmt.Errorf("invalid page direction %d", direction)
 	}
 }
 `
@@ -270,10 +312,42 @@ func compactManifest(in EmitterInput, tables []schema.TableDef, declarations map
 		return nil, fmt.Errorf("generate: compact manifest: %w", err)
 	}
 	legacy := resolved.PackageLevelNames()
+	compactNames := make(map[string]struct{}, len(in.Generation.Objects)*8)
+	for _, object := range in.Catalog.Objects {
+		config := configsForObject(in.Generation.Objects, object.ID)
+		accessor := config.Source
+		if accessor == "" {
+			accessor = schemagenObjectName(object.Name)
+		}
+		row := config.Row
+		if row == "" {
+			row = accessor + "Row"
+		}
+		create, patch := config.Create, config.Patch
+		if create == "" {
+			create = accessor + "Create"
+		}
+		if patch == "" {
+			patch = accessor + "Patch"
+		}
+		for _, name := range []string{accessor, row, accessor + "Table", create, patch, "New" + create, "New" + patch} {
+			if name != "" {
+				compactNames[name] = struct{}{}
+			}
+		}
+	}
 	result := make([]APIMapping, 0, len(legacy))
+	seenLegacy := make(map[string]struct{}, len(legacy))
 	for _, name := range legacy {
-		if _, exists := declarations[name]; exists {
-			result = append(result, APIMapping{Legacy: name, Compact: name, Status: "replacement"})
+		if _, duplicate := seenLegacy[name]; duplicate {
+			return nil, fmt.Errorf("generate: compact manifest duplicate legacy symbol %q", name)
+		}
+		seenLegacy[name] = struct{}{}
+		if _, intended := compactNames[name]; intended {
+			if _, exists := declarations[name]; !exists {
+				return nil, fmt.Errorf("generate: compact manifest replacement %q is not emitted", name)
+			}
+			result = append(result, APIMapping{Legacy: name, Compact: in.Generation.Package + "." + name, Status: "replacement"})
 			continue
 		}
 		result = append(result, APIMapping{Legacy: name, Status: "removed"})
@@ -285,6 +359,36 @@ func compactManifest(in EmitterInput, tables []schema.TableDef, declarations map
 		return result[i].Compact < result[j].Compact
 	})
 	return result, nil
+}
+
+func configsForObject(configs []compilerir.ObjectGoName, id compilerir.ObjectID) compilerir.ObjectGoName {
+	for _, config := range configs {
+		if config.ID == id {
+			return config
+		}
+	}
+	return compilerir.ObjectGoName{}
+}
+
+func schemagenObjectName(name string) string {
+	var result strings.Builder
+	upper := true
+	for _, r := range name {
+		if r == '_' || r == '-' || r == ' ' || r == '.' {
+			upper = true
+			continue
+		}
+		if upper {
+			result.WriteString(strings.ToUpper(string(r)))
+			upper = false
+		} else {
+			result.WriteRune(r)
+		}
+	}
+	if result.Len() == 0 {
+		return "Object"
+	}
+	return result.String()
 }
 
 func (s Store) planCompactContext(ctx context.Context) (Plan, error) {
