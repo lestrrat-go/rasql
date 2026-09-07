@@ -27,7 +27,49 @@ type File struct {
 	Queries    []QueryRecord    `json:"queries"`
 	Generation GenerationRecord `json:"generation"`
 	Digests    Digests          `json:"digests"`
+	Mappings   MappingRecord    `json:"mappings,omitempty"`
 }
+type MappingRecord struct {
+	Scalars   []ScalarMappingRecord   `json:"scalars,omitempty"`
+	Relations []RelationMappingRecord `json:"relations,omitempty"`
+}
+type ScalarMappingRecord struct {
+	Name           string                 `json:"name"`
+	Match          compilerir.NativeMatch `json:"match"`
+	GoType         string                 `json:"go_type"`
+	NullableGoType string                 `json:"nullable_go_type,omitempty"`
+	Imports        []compilerir.GoImport  `json:"imports,omitempty"`
+	Codec          string                 `json:"codec"`
+}
+type RelationMappingRecord struct {
+	Name    string               `json:"name"`
+	Source  string               `json:"source"`
+	From    []string             `json:"from"`
+	Target  string               `json:"target"`
+	To      []string             `json:"to"`
+	Through ThroughMappingRecord `json:"through"`
+}
+type ThroughMappingRecord struct {
+	Object     string   `json:"object"`
+	SourceFrom []string `json:"source_from"`
+	SourceTo   []string `json:"source_to"`
+	TargetFrom []string `json:"target_from"`
+	TargetTo   []string `json:"target_to"`
+}
+
+func (f File) MarshalJSON() ([]byte, error) {
+	type fileAlias File
+	var mappings *MappingRecord
+	if len(f.Mappings.Scalars) != 0 || len(f.Mappings.Relations) != 0 {
+		m := f.Mappings
+		mappings = &m
+	}
+	return json.Marshal(struct {
+		fileAlias
+		Mappings *MappingRecord `json:"mappings,omitempty"`
+	}{fileAlias: fileAlias(f), Mappings: mappings})
+}
+
 type GenerationRecord struct {
 	Package string             `json:"package"`
 	Output  string             `json:"output"`
@@ -630,6 +672,20 @@ func cloneFile(f File) File {
 	}
 	o.Generation.Objects = cloneSlice(f.Generation.Objects)
 	o.Generation.Queries = cloneSlice(f.Generation.Queries)
+	o.Mappings.Scalars = cloneSlice(f.Mappings.Scalars)
+	for i := range o.Mappings.Scalars {
+		o.Mappings.Scalars[i].Imports = cloneSlice(f.Mappings.Scalars[i].Imports)
+	}
+	o.Mappings.Relations = cloneSlice(f.Mappings.Relations)
+	for i := range o.Mappings.Relations {
+		x := &o.Mappings.Relations[i]
+		x.From = cloneSlice(f.Mappings.Relations[i].From)
+		x.To = cloneSlice(f.Mappings.Relations[i].To)
+		x.Through.SourceFrom = cloneSlice(f.Mappings.Relations[i].Through.SourceFrom)
+		x.Through.SourceTo = cloneSlice(f.Mappings.Relations[i].Through.SourceTo)
+		x.Through.TargetFrom = cloneSlice(f.Mappings.Relations[i].Through.TargetFrom)
+		x.Through.TargetTo = cloneSlice(f.Mappings.Relations[i].Through.TargetTo)
+	}
 	return o
 }
 func cloneValueRecord(v ValueRecord) ValueRecord {

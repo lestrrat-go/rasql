@@ -41,6 +41,12 @@ type GoRelation struct {
 	Target   ObjectID
 	Kind     string
 	Nullable bool
+	From, To []string
+	Through  *GoThrough
+}
+type GoThrough struct {
+	Object                                     ObjectID
+	SourceFrom, SourceTo, TargetFrom, TargetTo []string
 }
 type GoQuery struct {
 	ID                          QueryID
@@ -125,7 +131,11 @@ func BuildGo(model SemanticModel, config GoConfig) (GoModel, []Diagnostic) {
 			}
 		}
 		for _, relation := range object.Relations {
-			goObject.Relations = append(goObject.Relations, GoRelation{Name: relation.Name, Target: relation.Target, Kind: relation.Kind, Nullable: relation.Nullable})
+			gr := GoRelation{Name: relation.Name, Target: relation.Target, Kind: relation.Kind, Nullable: relation.Nullable, From: append([]string(nil), relation.From...), To: append([]string(nil), relation.To...)}
+			if relation.Through != nil {
+				gr.Through = &GoThrough{Object: relation.Through.Object, SourceFrom: append([]string(nil), relation.Through.SourceFrom...), SourceTo: append([]string(nil), relation.Through.SourceTo...), TargetFrom: append([]string(nil), relation.Through.TargetFrom...), TargetTo: append([]string(nil), relation.Through.TargetTo...)}
+			}
+			goObject.Relations = append(goObject.Relations, gr)
 		}
 		out.Objects = append(out.Objects, goObject)
 	}

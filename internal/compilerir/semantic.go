@@ -1,6 +1,9 @@
 package compilerir
 
-import "slices"
+import (
+	"fmt"
+	"slices"
+)
 
 type SemanticModel struct {
 	Objects     []SemanticObject
@@ -27,6 +30,11 @@ type SemanticRelation struct {
 	Target     ObjectID
 	To         []string
 	Nullable   bool
+	Through    *SemanticThrough
+}
+type SemanticThrough struct {
+	Object                                     ObjectID
+	SourceFrom, SourceTo, TargetFrom, TargetTo []string
 }
 type SemanticQuery struct {
 	ID          QueryID
@@ -44,7 +52,22 @@ type SemanticValue struct {
 	Integer                             *IntegerTypeFacts
 }
 type NativeMatch struct{ Dialect, Schema, Name, Kind, LogicalKind string }
-type MappingConfig struct{ Scalars []ScalarMapping }
+type MappingConfig struct {
+	Scalars   []ScalarMapping
+	Relations []RelationMapping
+}
+type RelationMapping struct {
+	Name    string
+	Source  ObjectID
+	From    []string
+	Target  ObjectID
+	To      []string
+	Through ThroughMapping
+}
+type ThroughMapping struct {
+	Object                                     ObjectID
+	SourceFrom, SourceTo, TargetFrom, TargetTo []string
+}
 type ScalarMapping struct {
 	Name                   string
 	Match                  NativeMatch
@@ -64,6 +87,9 @@ type QueryAnalysis struct {
 
 func BuildSemantic(c PhysicalCatalog, mappings MappingConfig, queries []QueryAnalysis) (SemanticModel, []Diagnostic) {
 	model := SemanticModel{}
+	if err := ValidateMappingConfig(MappingConfig{Relations: mappings.Relations}, ""); err != nil {
+		model.Diagnostics = append(model.Diagnostics, Diagnostic{Level: DiagnosticError, Code: "invalid_mapping", Path: "mappings", Message: err.Error()})
+	}
 	if err := ValidatePhysical(c); err != nil {
 		model.Diagnostics = append(model.Diagnostics, Diagnostic{Level: DiagnosticError, Code: "invalid_physical", Path: "physical", Message: err.Error()})
 	}
@@ -141,8 +167,16 @@ func BuildSemantic(c PhysicalCatalog, mappings MappingConfig, queries []QueryAna
 			}
 			so.Relations = append(so.Relations, relation)
 		}
+		for _, mapping := range mappings.Relations {
+			if mapping.Source != object.ID {
+				continue
+			}
+			through := mapping.Through
+			so.Relations = append(so.Relations, SemanticRelation{Name: mapping.Name, Kind: "many_through", From: append([]string(nil), mapping.From...), Target: mapping.Target, To: append([]string(nil), mapping.To...), Through: &SemanticThrough{Object: through.Object, SourceFrom: append([]string(nil), through.SourceFrom...), SourceTo: append([]string(nil), through.SourceTo...), TargetFrom: append([]string(nil), through.TargetFrom...), TargetTo: append([]string(nil), through.TargetTo...)}})
+		}
 		model.Objects = append(model.Objects, so)
 	}
+	model.Diagnostics = append(model.Diagnostics, validateRelationMappings(c, mappings)...)
 	for _, query := range queries {
 		model.Queries = append(model.Queries, SemanticQuery{ID: query.ID, Name: query.Name, Parameters: cloneValues(query.Parameters), Results: cloneValues(query.Results), Cardinality: query.Cardinality})
 		model.Diagnostics = append(model.Diagnostics, query.Diagnostics...)
@@ -153,6 +187,62 @@ func BuildSemantic(c PhysicalCatalog, mappings MappingConfig, queries []QueryAna
 		model.Diagnostics = sortDiagnostics(model.Diagnostics)
 	}
 	return model, append([]Diagnostic(nil), model.Diagnostics...)
+}
+
+func validateRelationMappings(c PhysicalCatalog, mappings MappingConfig) []Diagnostic {
+	objects := make(map[ObjectID]PhysicalObject, len(c.Objects))
+	for _, object := range c.Objects {
+		objects[object.ID] = object
+	}
+	var diagnostics []Diagnostic
+	for i, mapping := range mappings.Relations {
+		path := fmt.Sprintf("mappings.relations[%d]", i)
+		source, sourceOK := objects[mapping.Source]
+		target, targetOK := objects[mapping.Target]
+		through, throughOK := objects[mapping.Through.Object]
+		if !sourceOK || !targetOK || !throughOK {
+			diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "unresolved_mapping_object", Path: path, Message: "source, target, and through objects must exist"})
+			continue
+		}
+		if source.Kind == "view" || target.Kind == "view" || through.Kind == "view" {
+			diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "invalid_mapping_object", Path: path, Message: "many-through mappings require physical tables"})
+		}
+		if !hasColumns(source, mapping.From) || !hasColumns(target, mapping.To) || !hasColumns(through, mapping.Through.SourceFrom) || !hasColumns(through, mapping.Through.SourceTo) || !hasColumns(through, mapping.Through.TargetFrom) || !hasColumns(through, mapping.Through.TargetTo) {
+			diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "unresolved_mapping_column", Path: path, Message: "mapping references an unknown column"})
+		}
+		if !hasForeignKey(through, mapping.Through.SourceTo, source, mapping.Through.SourceFrom) {
+			diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "missing_mapping_foreign_key", Path: path, Message: "through source path does not reference the source object"})
+		}
+		if !hasForeignKey(through, mapping.Through.TargetTo, target, mapping.Through.TargetFrom) {
+			diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "missing_mapping_foreign_key", Path: path, Message: "through target path does not reference the target object"})
+		}
+	}
+	return diagnostics
+}
+
+func hasColumns(object PhysicalObject, names []string) bool {
+	columns := make(map[string]struct{}, len(object.Columns))
+	for _, column := range object.Columns {
+		columns[column.Name] = struct{}{}
+	}
+	for _, name := range names {
+		if _, ok := columns[name]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func hasForeignKey(through PhysicalObject, columns []string, target PhysicalObject, targetColumns []string) bool {
+	for _, constraint := range through.Constraints {
+		if constraint.Kind != "foreign_key" || constraint.Reference == nil || !slices.Equal(constraint.Columns, columns) || !slices.Equal(constraint.Reference.Columns, targetColumns) {
+			continue
+		}
+		if constraint.Reference.Object == target.Name && (constraint.Reference.Schema == "" || constraint.Reference.Schema == target.Schema) {
+			return true
+		}
+	}
+	return false
 }
 
 func scalarFor(column PhysicalColumn, config MappingConfig) (string, bool, bool) {

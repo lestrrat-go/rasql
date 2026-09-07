@@ -1,0 +1,32 @@
+package compilerlock_test
+
+import (
+	"reflect"
+	"testing"
+
+	"github.com/lestrrat-go/rasql/internal/compilerir"
+	"github.com/lestrrat-go/rasql/internal/compilerlock"
+)
+
+func TestManyThroughMappingRoundTripPreservesOrderedPaths(t *testing.T) {
+	want := compilerir.MappingConfig{Relations: []compilerir.RelationMapping{{
+		Name: "roles", Source: "users", From: []string{"tenant_id", "id"}, Target: "roles", To: []string{"tenant_id", "id"},
+		Through: compilerir.ThroughMapping{Object: "user_roles", SourceFrom: []string{"tenant_id", "id"}, SourceTo: []string{"user_tenant", "user_id"}, TargetFrom: []string{"tenant_id", "id"}, TargetTo: []string{"role_tenant", "role_id"}},
+	}}}
+	record := compilerlock.FromMappings(want)
+	got, err := record.MappingConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("mapping changed during round trip: %#v", got)
+	}
+	hash := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	encoded, err := compilerlock.Encode(compilerlock.File{Format: 1, Compiler: "test", Source: compilerlock.SourceRecord{Kind: "external", Identity: "x"}, Engine: compilerlock.EngineRecord{Dialect: "sqlite", Profile: "sqlite-3"}, Catalog: compilerlock.CatalogRecord{Objects: []compilerlock.ObjectRecord{}}, Mappings: record, Queries: []compilerlock.QueryRecord{}, Generation: compilerlock.GenerationRecord{Package: "p", Output: "out", Emitter: "compact", Objects: []compilerlock.ObjectNameRecord{}}, Digests: compilerlock.Digests{Source: hash, Mappings: hash, Queries: hash, Generation: hash}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) == 0 {
+		t.Fatal("mapping lock encoding was empty")
+	}
+}
