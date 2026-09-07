@@ -3,8 +3,8 @@
   "compiler": "test",
   "source": {"kind": "external", "identity": "fixture"},
   "engine": {"dialect": "mysql", "version": "8.0", "profile": "mysql-8"},
-  "catalog": {"objects": []},
-  "queries": [],
-  "generation": {"package": "store", "output": "gen", "emitter": "compact", "prune": false, "objects": []},
-  "digests": {"source": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "mappings": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "queries": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "generation": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}
+  "catalog": {"objects": [{"id":"t","kind":"table","name":"users","columns":[{"name":"id","ordinal":0,"logical_kind":"integer","nullable":false}],"constraints":[{"name":"pk","kind":"primary_key","columns":["id"]}],"indexes":[{"name":"users_id","key_form":"columns","parts":[{"column":"id"}]}]}]},
+  "queries": [{"id":"q","name":"GetUser","sql":{"path":"queries/get.sql","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"operation":"select","parameters":[],"results":[{"name":"id","scalar":"integer","nullable":false,"type_certainty":"known","nullability_certainty":"known"}],"cardinality":"one","evidence":{"dialect":"mysql","profile":"mysql-8","parameters":[],"results":[{"name":"id","scalar":"integer","nullable":false,"type_certainty":"known","nullability_certainty":"known"}]}}],
+  "generation": {"package":"store","output":"gen","emitter":"compact","prune":false,"objects":[{"id":"t","source":"Users","row":"UserRow","create":"UserCreate","patch":"UserPatch","file":"users_gen.go"}],"queries":[{"id":"q","function":"GetUser","result":"GetUserResult","projection":"GetUserProjection","decoder":"decodeGetUser","file":"queries_gen.go"}]},
+  "digests":{"source":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","mappings":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","queries":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","generation":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}
 }

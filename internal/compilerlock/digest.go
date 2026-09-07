@@ -67,6 +67,9 @@ func BuildDigests(in DigestInputs) (Digests, error) {
 		}
 	}
 	g := in.Generation.Clone()
+	if err := validateGoGeneration(g); err != nil {
+		return Digests{}, err
+	}
 	sort.Slice(g.Objects, func(i, j int) bool { return g.Objects[i].ID < g.Objects[j].ID })
 	sort.Slice(g.Queries, func(i, j int) bool { return g.Queries[i].ID < g.Queries[j].ID })
 	gen := struct {
@@ -76,6 +79,20 @@ func BuildDigests(in DigestInputs) (Digests, error) {
 		Queries                  []compilerir.QueryGoName
 	}{g.Package, g.Output, g.Emitter, g.Prune, g.Objects, g.Queries}
 	return Digests{Source: hash(source), Mappings: hash(normalizedMappings(in.Mappings)), Queries: hash(q), Generation: hash(gen)}, nil
+}
+func validateGoGeneration(g compilerir.GoConfig) error {
+	r := GenerationRecord{Package: g.Package, Output: g.Output, Emitter: g.Emitter, Prune: g.Prune}
+	c := CatalogRecord{}
+	qs := []QueryRecord{}
+	for _, o := range g.Objects {
+		r.Objects = append(r.Objects, ObjectNameRecord{ID: string(o.ID), Source: o.Source, Row: o.Row, Create: o.Create, Patch: o.Patch, File: o.File})
+		c.Objects = append(c.Objects, ObjectRecord{ID: string(o.ID)})
+	}
+	for _, q := range g.Queries {
+		r.Queries = append(r.Queries, QueryNameRecord{ID: string(q.ID), Function: q.Function, Result: q.Result, Projection: q.Projection, Decoder: q.Decoder, File: q.File})
+		qs = append(qs, QueryRecord{ID: q.ID})
+	}
+	return validateGeneration(r, c, qs)
 }
 func normalizedMappings(m compilerir.MappingConfig) compilerir.MappingConfig {
 	m = m.Clone()

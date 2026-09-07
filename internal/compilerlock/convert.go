@@ -46,7 +46,11 @@ func FromPhysical(c compilerir.PhysicalCatalog) CatalogRecord {
 	r := CatalogRecord{}
 	r.Objects = make([]ObjectRecord, len(c.Objects))
 	for i, o := range c.Objects {
-		x := ObjectRecord{ID: string(o.ID), Kind: o.Kind, Schema: o.Schema, Name: o.Name, Strict: o.Strict, WithoutRowID: o.WithoutRowID, PrimaryKeyAutoincrement: o.PrimaryKeyAutoincrement, PrimaryKeyOnConflict: o.PrimaryKeyOnConflict, VirtualTableModule: o.VirtualTableModule, VirtualTableModuleArguments: append([]string(nil), o.VirtualTableModuleArguments...)}
+		x := ObjectRecord{ID: string(o.ID), Kind: o.Kind, Schema: o.Schema, Name: o.Name, Strict: o.Strict, WithoutRowID: o.WithoutRowID, PrimaryKeyAutoincrement: o.PrimaryKeyAutoincrement, PrimaryKeyOnConflict: o.PrimaryKeyOnConflict, VirtualTableModule: o.VirtualTableModule, VirtualTableModuleArguments: cloneStrings(o.VirtualTableModuleArguments)}
+		x.Columns = make([]ColumnRecord, 0, len(o.Columns))
+		x.Constraints = make([]ConstraintRecord, 0, len(o.Constraints))
+		x.Indexes = make([]IndexRecord, 0, len(o.Indexes))
+		x.ExclusionConstraints = make([]ExclusionConstraintRecord, 0, len(o.ExclusionConstraints))
 		for _, c := range o.Columns {
 			x.Columns = append(x.Columns, column(c))
 		}
@@ -130,8 +134,23 @@ func cloneMap(m map[string]string) map[string]string {
 
 func ToPhysical(f File) compilerir.PhysicalCatalog {
 	c := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: f.Engine.Dialect, Version: f.Engine.Version, Profile: f.Engine.Profile}}
+	if f.Catalog.Objects != nil {
+		c.Objects = make([]compilerir.PhysicalObject, 0, len(f.Catalog.Objects))
+	}
 	for _, o := range f.Catalog.Objects {
-		x := compilerir.PhysicalObject{ID: compilerir.ObjectID(o.ID), Kind: o.Kind, Schema: o.Schema, Name: o.Name, Strict: o.Strict, WithoutRowID: o.WithoutRowID, PrimaryKeyAutoincrement: o.PrimaryKeyAutoincrement, PrimaryKeyOnConflict: o.PrimaryKeyOnConflict, VirtualTableModule: o.VirtualTableModule, VirtualTableModuleArguments: append([]string(nil), o.VirtualTableModuleArguments...)}
+		x := compilerir.PhysicalObject{ID: compilerir.ObjectID(o.ID), Kind: o.Kind, Schema: o.Schema, Name: o.Name, Strict: o.Strict, WithoutRowID: o.WithoutRowID, PrimaryKeyAutoincrement: o.PrimaryKeyAutoincrement, PrimaryKeyOnConflict: o.PrimaryKeyOnConflict, VirtualTableModule: o.VirtualTableModule, VirtualTableModuleArguments: cloneStrings(o.VirtualTableModuleArguments), Columns: make([]compilerir.PhysicalColumn, 0, len(o.Columns)), Constraints: make([]compilerir.PhysicalConstraint, 0, len(o.Constraints)), Indexes: make([]compilerir.PhysicalIndex, 0, len(o.Indexes)), ExclusionConstraints: make([]compilerir.PhysicalExclusionConstraint, 0, len(o.ExclusionConstraints))}
+		if o.Columns == nil {
+			x.Columns = nil
+		}
+		if o.Constraints == nil {
+			x.Constraints = nil
+		}
+		if o.Indexes == nil {
+			x.Indexes = nil
+		}
+		if o.ExclusionConstraints == nil {
+			x.ExclusionConstraints = nil
+		}
 		for _, v := range o.Columns {
 			x.Columns = append(x.Columns, toColumn(v))
 		}
@@ -143,6 +162,9 @@ func ToPhysical(f File) compilerir.PhysicalCatalog {
 		}
 		for _, v := range o.ExclusionConstraints {
 			e := compilerir.PhysicalExclusionConstraint{Name: v.Name, Method: v.Method, PredicateSQL: v.PredicateSQL, Deferrability: v.Deferrability}
+			if v.Elements != nil {
+				e.Elements = make([]compilerir.ExclusionElement, 0, len(v.Elements))
+			}
 			for _, z := range v.Elements {
 				e.Elements = append(e.Elements, compilerir.ExclusionElement{ExpressionSQL: z.ExpressionSQL, Operator: z.Operator})
 			}
@@ -182,9 +204,12 @@ func toNative(n *NativeTypeRecord) *compilerir.NativeType {
 	return r
 }
 func toConstraint(c ConstraintRecord) compilerir.PhysicalConstraint {
-	r := compilerir.PhysicalConstraint{Name: c.Name, Kind: c.Kind, Columns: append([]string(nil), c.Columns...), ExpressionSQL: c.ExpressionSQL, Deferrability: c.Deferrability, OnUpdate: c.OnUpdate, OnDelete: c.OnDelete, Match: c.Match, NullsNotDistinct: c.NullsNotDistinct, IncludeColumns: append([]string(nil), c.IncludeColumns...), OnConflict: c.OnConflict, Keys: make([]compilerir.IndexPart, 0, len(c.Keys)), Temporal: c.Temporal, StorageParameters: cloneMap(c.StorageParameters), Tablespace: c.Tablespace, ReplicaIdentity: c.ReplicaIdentity, Collations: cloneMap(c.Collations), NoInherit: c.NoInherit, NotValid: c.NotValid, NotEnforced: c.NotEnforced, DeleteSetColumns: append([]string(nil), c.DeleteSetColumns...)}
+	r := compilerir.PhysicalConstraint{Name: c.Name, Kind: c.Kind, Columns: cloneStrings(c.Columns), ExpressionSQL: c.ExpressionSQL, Deferrability: c.Deferrability, OnUpdate: c.OnUpdate, OnDelete: c.OnDelete, Match: c.Match, NullsNotDistinct: c.NullsNotDistinct, IncludeColumns: cloneStrings(c.IncludeColumns), OnConflict: c.OnConflict, Temporal: c.Temporal, StorageParameters: cloneMap(c.StorageParameters), Tablespace: c.Tablespace, ReplicaIdentity: c.ReplicaIdentity, Collations: cloneMap(c.Collations), NoInherit: c.NoInherit, NotValid: c.NotValid, NotEnforced: c.NotEnforced, DeleteSetColumns: cloneStrings(c.DeleteSetColumns)}
 	if c.Reference != nil {
-		r.Reference = &compilerir.ForeignReference{Schema: c.Reference.Schema, Object: c.Reference.Object, Columns: append([]string(nil), c.Reference.Columns...)}
+		r.Reference = &compilerir.ForeignReference{Schema: c.Reference.Schema, Object: c.Reference.Object, Columns: cloneStrings(c.Reference.Columns)}
+	}
+	if c.Keys != nil {
+		r.Keys = make([]compilerir.IndexPart, 0, len(c.Keys))
 	}
 	for _, p := range c.Keys {
 		r.Keys = append(r.Keys, compilerir.IndexPart{Column: p.Column, ExpressionSQL: p.ExpressionSQL, Direction: p.Direction, Nulls: p.Nulls, Collation: p.Collation, OperatorClass: p.OperatorClass, PrefixLength: p.PrefixLength})
@@ -193,8 +218,17 @@ func toConstraint(c ConstraintRecord) compilerir.PhysicalConstraint {
 }
 func toIndex(i IndexRecord) compilerir.PhysicalIndex {
 	r := compilerir.PhysicalIndex{Name: i.Name, Unique: i.Unique, Method: i.Method, KeyForm: i.KeyForm, PredicateSQL: i.PredicateSQL, IncludeColumns: append([]string(nil), i.IncludeColumns...), Invisible: i.Invisible, NotValid: i.NotValid, StorageParameters: cloneMap(i.StorageParameters), Tablespace: i.Tablespace, ReplicaIdentity: i.ReplicaIdentity, NullsNotDistinct: i.NullsNotDistinct}
+	if i.Parts != nil {
+		r.Parts = make([]compilerir.IndexPart, 0, len(i.Parts))
+	}
 	for _, p := range i.Parts {
 		r.Parts = append(r.Parts, compilerir.IndexPart{Column: p.Column, ExpressionSQL: p.ExpressionSQL, Direction: p.Direction, Nulls: p.Nulls, Collation: p.Collation, OperatorClass: p.OperatorClass, PrefixLength: p.PrefixLength})
 	}
 	return r
+}
+func cloneStrings(v []string) []string {
+	if v == nil {
+		return nil
+	}
+	return append(make([]string, 0, len(v)), v...)
 }

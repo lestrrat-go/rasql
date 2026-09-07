@@ -60,7 +60,7 @@ func TestDecodeRejectsUnknownAndTrailingJSON(t *testing.T) {
 }
 
 func TestBuildDigestsStable(t *testing.T) {
-	in := compilerlock.DigestInputs{Source: compilerlock.SourceDigestInput{Record: compilerlock.SourceRecord{Kind: "migrations", Identity: "x", Files: []compilerlock.SourceFile{{Path: "b.sql", SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, {Path: "a.sql", SHA256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}}, Engine: compilerlock.EngineRecord{Dialect: "sqlite", Profile: "sqlite-3"}, Materializer: []compilerlock.KeyValue{{Key: "z", Value: "2"}, {Key: "a", Value: "1"}}}}
+	in := compilerlock.DigestInputs{Source: compilerlock.SourceDigestInput{Record: compilerlock.SourceRecord{Kind: "migrations", Identity: "x", Files: []compilerlock.SourceFile{{Path: "b.sql", SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, {Path: "a.sql", SHA256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}}, Engine: compilerlock.EngineRecord{Dialect: "sqlite", Profile: "sqlite-3"}, Materializer: []compilerlock.KeyValue{{Key: "z", Value: "2"}, {Key: "a", Value: "1"}}}, Generation: compilerir.GoConfig{Package: "p", Output: "o", Emitter: "compact"}}
 	a, err := compilerlock.BuildDigests(in)
 	if err != nil {
 		t.Fatal(err)

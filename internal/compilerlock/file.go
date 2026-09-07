@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/token"
 	"io"
 	"os"
 	"sort"
@@ -338,6 +339,12 @@ func validateFile(f File) error {
 		if _, ok := ids[string(q.ID)]; ok {
 			return fmt.Errorf("compilerlock: duplicate query ID %q", q.ID)
 		}
+		if q.Name == "" {
+			return fmt.Errorf("compilerlock: query %s has empty name", q.ID)
+		}
+		if q.Operation != "select" && q.Operation != "insert" && q.Operation != "update" && q.Operation != "delete" && q.Operation != "exec" {
+			return fmt.Errorf("compilerlock: query %s has invalid operation", q.ID)
+		}
 		if err := validateSource(SourceRecord{Files: []SourceFile{q.SQL}}); err != nil {
 			return err
 		}
@@ -361,7 +368,7 @@ func validateFile(f File) error {
 			return err
 		}
 	}
-	return validateGeneration(f.Generation, f.Catalog)
+	return validateGeneration(f.Generation, f.Catalog, f.Queries)
 }
 func validateValues(v []ValueRecord) error {
 	seen := map[string]struct{}{}
@@ -397,14 +404,22 @@ func validateEvidence(q QueryRecord) error {
 		}
 	}
 	for _, v := range append(append([]ValueRecord{}, q.Parameters...), q.Results...) {
-		if v.TypeCertainty == "unknown" && len(q.Evidence.Diagnostics) == 0 {
+		if (v.TypeCertainty == "unknown" || v.NullabilityCertainty == "unknown") && !hasDiagnostic(q.Evidence.Diagnostics) {
 			return fmt.Errorf("compilerlock: unknown query fact lacks diagnostic")
 		}
 	}
 	return nil
 }
-func validateGeneration(g GenerationRecord, c CatalogRecord) error {
-	if g.Package == "" || g.Emitter != "compact" && g.Emitter != "legacy" {
+func hasDiagnostic(d []string) bool {
+	for _, code := range d {
+		if code != "" {
+			return true
+		}
+	}
+	return false
+}
+func validateGeneration(g GenerationRecord, c CatalogRecord, queries []QueryRecord) error {
+	if g.Package == "" || !token.IsIdentifier(g.Package) || g.Package == "_" || g.Emitter != "compact" && g.Emitter != "legacy" {
 		return errors.New("compilerlock: invalid generation policy")
 	}
 	if _, err := NormalizePath(g.Output); err != nil {
@@ -439,6 +454,10 @@ func validateGeneration(g GenerationRecord, c CatalogRecord) error {
 		files[o.File] = struct{}{}
 	}
 	qids := map[string]struct{}{}
+	queryIDs := map[string]struct{}{}
+	for _, q := range queries {
+		queryIDs[string(q.ID)] = struct{}{}
+	}
 	for _, q := range g.Queries {
 		if q.ID == "" {
 			return errors.New("compilerlock: empty generation query ID")
@@ -447,6 +466,12 @@ func validateGeneration(g GenerationRecord, c CatalogRecord) error {
 			return fmt.Errorf("compilerlock: duplicate generation query %q", q.ID)
 		}
 		qids[q.ID] = struct{}{}
+		if _, ok := queryIDs[q.ID]; !ok {
+			return fmt.Errorf("compilerlock: unknown generation query %q", q.ID)
+		}
+		if q.Function == "" || q.Result == "" || q.Projection == "" || q.Decoder == "" {
+			return fmt.Errorf("compilerlock: incomplete generation query %q", q.ID)
+		}
 		if _, err := NormalizePath(q.File); err != nil {
 			return err
 		}
@@ -506,20 +531,23 @@ func normalize(f File) File {
 	}
 	sort.Slice(f.Generation.Objects, func(i, j int) bool { return f.Generation.Objects[i].ID < f.Generation.Objects[j].ID })
 	sort.Slice(f.Generation.Queries, func(i, j int) bool { return f.Generation.Queries[i].ID < f.Generation.Queries[j].ID })
+	for i := range f.Queries {
+		sort.Strings(f.Queries[i].Evidence.Diagnostics)
+	}
 	return f
 }
 
 func cloneFile(f File) File {
 	o := f
-	o.Source.Files = append([]SourceFile(nil), f.Source.Files...)
-	o.Catalog.Objects = append([]ObjectRecord(nil), f.Catalog.Objects...)
+	o.Source.Files = cloneSlice(f.Source.Files)
+	o.Catalog.Objects = cloneSlice(f.Catalog.Objects)
 	for i := range o.Catalog.Objects {
 		x := &o.Catalog.Objects[i]
-		x.Columns = append([]ColumnRecord(nil), x.Columns...)
-		x.Constraints = append([]ConstraintRecord(nil), x.Constraints...)
-		x.Indexes = append([]IndexRecord(nil), x.Indexes...)
-		x.ExclusionConstraints = append([]ExclusionConstraintRecord(nil), x.ExclusionConstraints...)
-		x.VirtualTableModuleArguments = append([]string(nil), x.VirtualTableModuleArguments...)
+		x.Columns = cloneSlice(x.Columns)
+		x.Constraints = cloneSlice(x.Constraints)
+		x.Indexes = cloneSlice(x.Indexes)
+		x.ExclusionConstraints = cloneSlice(x.ExclusionConstraints)
+		x.VirtualTableModuleArguments = cloneSlice(x.VirtualTableModuleArguments)
 		for j := range x.Columns {
 			x.Columns[j] = cloneColumn(x.Columns[j])
 		}
@@ -534,17 +562,23 @@ func cloneFile(f File) File {
 			x.ExclusionConstraints[j].Elements = append([]ExclusionElementRecord(nil), x.ExclusionConstraints[j].Elements...)
 		}
 	}
-	o.Queries = append([]QueryRecord(nil), f.Queries...)
+	o.Queries = cloneSlice(f.Queries)
 	for i := range o.Queries {
-		o.Queries[i].Parameters = append([]ValueRecord(nil), f.Queries[i].Parameters...)
-		o.Queries[i].Results = append([]ValueRecord(nil), f.Queries[i].Results...)
-		o.Queries[i].Evidence.Parameters = append([]ValueRecord(nil), f.Queries[i].Evidence.Parameters...)
-		o.Queries[i].Evidence.Results = append([]ValueRecord(nil), f.Queries[i].Evidence.Results...)
-		o.Queries[i].Evidence.Diagnostics = append([]string(nil), f.Queries[i].Evidence.Diagnostics...)
+		o.Queries[i].Parameters = cloneSlice(f.Queries[i].Parameters)
+		o.Queries[i].Results = cloneSlice(f.Queries[i].Results)
+		o.Queries[i].Evidence.Parameters = cloneSlice(f.Queries[i].Evidence.Parameters)
+		o.Queries[i].Evidence.Results = cloneSlice(f.Queries[i].Evidence.Results)
+		o.Queries[i].Evidence.Diagnostics = cloneSlice(f.Queries[i].Evidence.Diagnostics)
 	}
-	o.Generation.Objects = append([]ObjectNameRecord(nil), f.Generation.Objects...)
-	o.Generation.Queries = append([]QueryNameRecord(nil), f.Generation.Queries...)
+	o.Generation.Objects = cloneSlice(f.Generation.Objects)
+	o.Generation.Queries = cloneSlice(f.Generation.Queries)
 	return o
+}
+func cloneSlice[T any](v []T) []T {
+	if v == nil {
+		return nil
+	}
+	return append(make([]T, 0, len(v)), v...)
 }
 func cloneColumn(c ColumnRecord) ColumnRecord {
 	o := c
