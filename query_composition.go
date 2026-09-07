@@ -314,11 +314,7 @@ func queryBody(plan QueryPlan) (query.QueryBody, error) {
 		for i, predicate := range plan.where {
 			nodes[i] = predicate.node
 		}
-		where := nodes[0]
-		if len(nodes) > 1 {
-			where = query.And(nodes...)
-		}
-		selectBody, err = selectBody.WithWhere(where)
+		selectBody, err = selectBody.WithWhere(graphCombinePredicates(nodes))
 		if err != nil {
 			return nil, err
 		}
@@ -328,11 +324,7 @@ func queryBody(plan QueryPlan) (query.QueryBody, error) {
 		for i, predicate := range plan.having {
 			nodes[i] = predicate.node
 		}
-		having := nodes[0]
-		if len(nodes) > 1 {
-			having = query.And(nodes...)
-		}
-		selectBody, err = selectBody.WithHaving(having)
+		selectBody, err = selectBody.WithHaving(graphCombinePredicates(nodes))
 		if err != nil {
 			return nil, err
 		}
@@ -396,6 +388,13 @@ func queryBody(plan QueryPlan) (query.QueryBody, error) {
 	return selectBody, nil
 }
 
+func graphCombinePredicates(expressions []query.Expression) query.Expression {
+	if len(expressions) == 1 {
+		return expressions[0]
+	}
+	return query.And(expressions...)
+}
+
 func lowerOrder(expression query.Expression, descending bool, nulls NullOrder) query.Order {
 	placement := query.NullPlacementDefault
 	switch nulls {
@@ -425,8 +424,9 @@ func resultColumns(items []ProjectionItem) []ResultColumn {
 }
 
 type bindSlot struct {
-	id    bindID
-	codec string
+	id         bindID
+	codec      string
+	preEncoded bool
 }
 type compiledQuery struct {
 	statement stmt.Statement
@@ -525,7 +525,10 @@ func unwrapBindTokens(statement stmt.Statement) (compiledQuery, error) {
 			if token.copy == nil {
 				return compiledQuery{}, planError("unsnapshotable_bind", fmt.Sprintf("args[%d]", i), "missing bind copier")
 			}
-			slots[i] = bindSlot{id: token.id, codec: token.codec}
+			if token.id == 0 || token.copy == nil || (token.codec != "" && !codecPattern.MatchString(token.codec)) || !token.preEncoded && token.value == nil && token.copy == nil {
+				return compiledQuery{}, planError("internal_plan", fmt.Sprintf("binds[%d]", i), "invalid bind token")
+			}
+			slots[i] = bindSlot{id: token.id, codec: token.codec, preEncoded: token.preEncoded}
 			copyArgs[i] = token.copy
 			value, err := token.copy()
 			if err != nil {
@@ -542,7 +545,10 @@ func unwrapBindTokens(statement stmt.Statement) (compiledQuery, error) {
 				if token.copy == nil {
 					return compiledQuery{}, planError("unsnapshotable_bind", fmt.Sprintf("args[%d]", i), "missing bind copier")
 				}
-				slots[i] = bindSlot{id: token.id, codec: token.codec}
+				if token.id == 0 || token.copy == nil || (token.codec != "" && !codecPattern.MatchString(token.codec)) {
+					return compiledQuery{}, planError("internal_plan", fmt.Sprintf("binds[%d]", i), "invalid bind token")
+				}
+				slots[i] = bindSlot{id: token.id, codec: token.codec, preEncoded: token.preEncoded}
 				name, tokenCopy := named.Name, token.copy
 				copyArgs[i] = func() (any, error) {
 					value, err := tokenCopy()

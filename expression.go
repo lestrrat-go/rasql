@@ -2,7 +2,9 @@ package rasql
 
 import (
 	"database/sql"
+	"database/sql/driver"
 	"errors"
+	"fmt"
 	"reflect"
 	"sync/atomic"
 	"time"
@@ -146,11 +148,34 @@ var nextBindID uint64
 type bindID uint64
 type bindValueCopy func() (any, error)
 type bindToken struct {
-	id    bindID
-	value any
-	codec string
-	err   error
-	copy  bindValueCopy
+	id         bindID
+	value      any
+	codec      string
+	err        error
+	copy       bindValueCopy
+	preEncoded bool
+}
+
+func graphEncodedBind(value driver.Value, codec string) (query.Expression, error) {
+	if codec != "" && !codecPattern.MatchString(codec) {
+		return nil, planError("internal_plan", "bind", "malformed codec identifier")
+	}
+	if err := validateDriverValue(value); err != nil {
+		return nil, planError("internal_plan", "bind", err.Error())
+	}
+	id := bindID(atomic.AddUint64(&nextBindID, 1))
+	snapshot, copier, err := adoptBind(value, false)
+	if err != nil {
+		return nil, err
+	}
+	return query.Bind(bindToken{id: id, value: snapshot, codec: codec, copy: copier, preEncoded: true}), nil
+}
+
+func validateDriverValue(value driver.Value) error {
+	if value == nil || driver.IsValue(value) {
+		return nil
+	}
+	return fmt.Errorf("value %T is not a legal driver value", value)
 }
 
 func Value[T any](value T) Expr[T] {

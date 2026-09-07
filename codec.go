@@ -200,13 +200,27 @@ func encodeStatement(statement stmt.Statement, slots []bindSlot, reg CodecRegist
 		if err != nil {
 			return stmt.Statement{}, err
 		}
-		if codec == nil {
-			continue
-		}
 		value := args[i]
 		name := ""
 		if named, ok := value.(sql.NamedArg); ok {
 			name, value = named.Name, named.Value
+		}
+		if slot.preEncoded {
+			if err := validateDriverValue(value); err != nil {
+				return stmt.Statement{}, &PlanError{Code: "internal_plan", Path: fmt.Sprintf("binds[%d]", i), Detail: err.Error()}
+			}
+			if b, ok := value.([]byte); ok {
+				value = append([]byte(nil), b...)
+			}
+			if name != "" {
+				args[i] = sql.Named(name, value)
+			} else {
+				args[i] = value
+			}
+			continue
+		}
+		if codec == nil {
+			continue
 		}
 		encoded, err := codec.Encode(value)
 		if err != nil {
