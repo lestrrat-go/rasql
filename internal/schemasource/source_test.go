@@ -17,19 +17,20 @@ import (
 )
 
 type fakeFactory struct {
-	db         *sql.DB
-	dsn        string
-	noClose    bool
-	create     int
-	cleanup    int
-	cleanupErr error
+	db            *sql.DB
+	dsn           string
+	noClose       bool
+	create        int
+	cleanup       int
+	cleanupErr    error
+	cleanupCtxErr error
 }
 
 func (f *fakeFactory) Create(context.Context, schemasource.FactoryRequest) (schemasource.DisposableDatabase, error) {
 	f.create++
 	var cleanup func(context.Context) error
 	if !f.noClose {
-		cleanup = func(context.Context) error { f.cleanup++; return f.cleanupErr }
+		cleanup = func(ctx context.Context) error { f.cleanup++; f.cleanupCtxErr = ctx.Err(); return f.cleanupErr }
 	}
 	return schemasource.DisposableDatabase{DB: f.db, DSN: f.dsn, CloseAndDrop: cleanup}, nil
 }
@@ -47,11 +48,12 @@ func (f *fakeProfile) Resolve(context.Context, *sql.DB, schemasource.EngineConfi
 type fakeCatalog struct {
 	calls  int
 	result catalogread.Result
+	err    error
 }
 
 func (f *fakeCatalog) Read(context.Context, catalogread.DB, engineprofile.Profile, catalogread.Scope) (catalogread.Result, error) {
 	f.calls++
-	return f.result, nil
+	return f.result, f.err
 }
 
 type fakeMigration struct{ calls int }
@@ -168,6 +170,35 @@ func TestMaterializeJoinsCleanupError(t *testing.T) {
 	}
 	if f.cleanup != 1 {
 		t.Fatalf("cleanup calls=%d", f.cleanup)
+	}
+}
+
+func TestMaterializeJoinsPrimaryAndDetachedCleanupErrors(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "schema.sql"), []byte("schema"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	p, _ := engineprofile.Builtin("sqlite-3.35", engineprofile.Version{Known: true, Major: 3, Minor: 40})
+	primaryErr := errors.New("primary")
+	cleanupErr := errors.New("cleanup")
+	factory := &fakeFactory{db: db, dsn: "owned", cleanupErr: cleanupErr}
+	r := schemasource.Request{ModuleRoot: root, Engine: schemasource.EngineConfig{Dialect: "sqlite", Profile: "sqlite-3.35"}, Source: schemasource.SchemaSourceConfig{Kind: "external", Identity: "x", Inputs: []string{"schema.sql"}, Command: []string{"tool"}}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = schemasource.Materialize(ctx, r, schemasource.Dependencies{Factory: factory, Profiles: &fakeProfile{p: p}, Catalogs: &fakeCatalog{err: primaryErr}, Processes: &fakeProcess{}})
+	if !errors.Is(err, primaryErr) || !errors.Is(err, cleanupErr) {
+		t.Fatalf("error=%v, want both primary and cleanup causes", err)
+	}
+	if factory.cleanup != 1 {
+		t.Fatalf("cleanup calls=%d, want one", factory.cleanup)
+	}
+	if factory.cleanupCtxErr != nil {
+		t.Fatalf("cleanup context was canceled: %v", factory.cleanupCtxErr)
 	}
 }
 
