@@ -14,7 +14,7 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 )
 
-func openTx(t *testing.T) (store.Repository, rasql.DB, rasql.Executor) {
+func openTx(t *testing.T) (store.Repository, rasql.Executor) {
 	t.Helper()
 	dsn := os.Getenv("TASKBOARD_TEST_DSN")
 	if dsn == "" {
@@ -43,28 +43,34 @@ func openTx(t *testing.T) (store.Repository, rasql.DB, rasql.Executor) {
 	if err != nil {
 		t.Fatalf("create the rasql executor: %s", err)
 	}
-	return store.New(executor), db, executor
+	return store.New(executor), executor
 }
 
-func seed(ctx context.Context, t *testing.T, db rasql.DB) (int64, int64) {
+func seed(ctx context.Context, t *testing.T, repository store.Repository, executor rasql.Executor) (int64, int64) {
 	t.Helper()
 	memberPlan, err := store.NewMembersCreate().Name("D3 test member").Plan()
 	if err != nil {
 		t.Fatalf("plan member: %s", err)
 	}
-	member, err := rasql.QueryCreate(ctx, db, memberPlan)
-	if err != nil {
+	if _, err := rasql.ExecMutation(ctx, executor, memberPlan); err != nil {
 		t.Fatalf("create member: %s", err)
+	}
+	members, err := repository.AllMembers(ctx)
+	if err != nil || len(members) == 0 {
+		t.Fatalf("read created member: rows=%d err=%v", len(members), err)
 	}
 	projectPlan, err := store.NewProjectsCreate().Name("D3 test project").Plan()
 	if err != nil {
 		t.Fatalf("plan project: %s", err)
 	}
-	project, err := rasql.QueryCreate(ctx, db, projectPlan)
-	if err != nil {
+	if _, err := rasql.ExecMutation(ctx, executor, projectPlan); err != nil {
 		t.Fatalf("create project: %s", err)
 	}
-	return project.ID, member.ID
+	projects, err := repository.AllProjects(ctx)
+	if err != nil || len(projects) == 0 {
+		t.Fatalf("read created project: rows=%d err=%v", len(projects), err)
+	}
+	return projects[len(projects)-1].ID, members[len(members)-1].ID
 }
 
 func addTaskDueOn(ctx context.Context, t *testing.T, executor rasql.Executor, projectID, assigneeID int64, title string, dueOn time.Time) {
@@ -116,8 +122,8 @@ func countOpenTasks(page store.OpenProjectsPage) int {
 
 func TestAddTaskAndCloseTask(t *testing.T) {
 	ctx := t.Context()
-	repository, db, executor := openTx(t)
-	projectID, memberID := seed(ctx, t, db)
+	repository, executor := openTx(t)
+	projectID, memberID := seed(ctx, t, repository, executor)
 	before := openProjects(ctx, t, repository)
 	if err := repository.AddTask(ctx, projectID, &memberID, "Owned task"); err != nil {
 		t.Fatalf("add an owned task: %s", err)
@@ -203,7 +209,7 @@ func readTaskByTitle(ctx context.Context, t *testing.T, executor rasql.Executor,
 }
 
 func TestCloseTaskOnAMissingTaskIsNotAnError(t *testing.T) {
-	repository, _, _ := openTx(t)
+	repository, _ := openTx(t)
 	if err := repository.CloseTask(t.Context(), -1); err != nil {
 		t.Fatalf("close a task that does not exist: %s", err)
 	}
@@ -211,8 +217,8 @@ func TestCloseTaskOnAMissingTaskIsNotAnError(t *testing.T) {
 
 func TestCountOverdueCountsATaskOnlyAfterItsDueDate(t *testing.T) {
 	ctx := t.Context()
-	repository, db, executor := openTx(t)
-	projectID, memberID := seed(ctx, t, db)
+	repository, executor := openTx(t)
+	projectID, memberID := seed(ctx, t, repository, executor)
 	zone := time.FixedZone("UTC-9", -9*60*60)
 	on := time.Date(2026, 3, 16, 20, 0, 0, 0, zone)
 	today := time.Date(2026, 3, 16, 0, 0, 0, 0, zone)
