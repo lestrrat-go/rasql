@@ -70,16 +70,44 @@ func sqlTokens(source string) ([]string, error) {
 			continue
 		}
 		if i+1 < len(source) && source[i:i+2] == "/*" {
-			end := strings.Index(source[i+2:], "*/")
-			if end < 0 {
+			depth := 1
+			i += 2
+			for i < len(source) && depth > 0 {
+				if i+1 < len(source) && source[i:i+2] == "/*" {
+					depth++
+					i += 2
+					continue
+				}
+				if i+1 < len(source) && source[i:i+2] == "*/" {
+					depth--
+					i += 2
+					continue
+				}
+				i++
+			}
+			if depth != 0 {
 				return nil, fmt.Errorf("compilerquery: unterminated comment")
 			}
-			i += end + 4
 			continue
+		}
+		if source[i] == '$' {
+			endTag := strings.IndexByte(source[i+1:], '$')
+			if endTag >= 0 {
+				tag := source[i : i+endTag+2]
+				if tag == "$$" || validDollarTag(tag[1:len(tag)-1]) {
+					end := strings.Index(source[i+len(tag):], tag)
+					if end < 0 {
+						return nil, fmt.Errorf("compilerquery: unterminated dollar string")
+					}
+					i += len(tag) + end + len(tag)
+					continue
+				}
+			}
 		}
 		if strings.ContainsRune("'\"`", rune(source[i])) {
 			quote := source[i]
 			i++
+			closed := false
 			for i < len(source) {
 				if source[i] == quote {
 					if i+1 < len(source) && source[i+1] == quote {
@@ -87,9 +115,13 @@ func sqlTokens(source string) ([]string, error) {
 						continue
 					}
 					i++
+					closed = true
 					break
 				}
 				i++
+			}
+			if !closed {
+				return nil, fmt.Errorf("compilerquery: unterminated quoted string")
 			}
 			continue
 		}
@@ -105,4 +137,16 @@ func sqlTokens(source string) ([]string, error) {
 		out = append(out, source[start:i])
 	}
 	return out, nil
+}
+
+func validDollarTag(tag string) bool {
+	for i, r := range tag {
+		if i == 0 && r != '_' && !(r >= 'a' && r <= 'z') && !(r >= 'A' && r <= 'Z') {
+			return false
+		}
+		if i > 0 && r != '_' && !(r >= 'a' && r <= 'z') && !(r >= 'A' && r <= 'Z') && !(r >= '0' && r <= '9') {
+			return false
+		}
+	}
+	return true
 }

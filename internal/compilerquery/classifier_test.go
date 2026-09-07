@@ -15,6 +15,15 @@ func TestClassifySQLRejectsUnsafeStatements(t *testing.T) {
 	}
 }
 
+func TestClassifySQLIgnoresNestedCommentsAndDollarStrings(t *testing.T) {
+	for _, sqlText := range []string{"/* outer /* inner */ */ SELECT '$$; CREATE TABLE x'", "SELECT $$; CREATE TABLE x$$", "SELECT $tag$; DELETE FROM x$tag$"} {
+		got, err := ClassifySQL(sqlText)
+		if err != nil || got.Operation != "select" {
+			t.Fatalf("SQL=%q classification=%#v err=%v", sqlText, got, err)
+		}
+	}
+}
+
 func TestAnalyzerUsesNamedSQLRepeatedPositions(t *testing.T) {
 	template, err := namedsql.Parse("q", `SELECT * FROM t WHERE a = {{bind "id" t.a}} OR b = {{bind "id" t.a}}`)
 	if err != nil {
