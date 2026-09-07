@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -39,12 +40,14 @@ func (d PostgreSQLDescriber) Describe(ctx context.Context, request queryevidence
 func (d PostgreSQLDescriber) describe(ctx context.Context, request queryevidence.DescribeRequest) (queryevidence.Description, error) {
 	conn, err := d.connector(ctx, request.DSN)
 	if err != nil {
-		return queryevidence.Description{}, err
+		return queryevidence.Description{}, redactPGError(err, request.DSN)
 	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
 	name := "rasql_describe_" + strings.ReplaceAll(request.Name, "-", "_")
 	description, err := conn.Prepare(ctx, name, request.SQL)
 	if err != nil {
-		return queryevidence.Description{}, errors.Join(err, conn.Close(ctx))
+		return queryevidence.Description{}, errors.Join(err, conn.Close(cleanupCtx))
 	}
 	result := queryevidence.Description{Parameters: make([]queryevidence.ValueEvidence, len(description.ParamOIDs)), Results: make([]queryevidence.ValueEvidence, len(description.Fields))}
 	for i, oid := range description.ParamOIDs {
@@ -53,7 +56,21 @@ func (d PostgreSQLDescriber) describe(ctx context.Context, request queryevidence
 	for i, field := range description.Fields {
 		result.Results[i] = queryevidence.ValueEvidence{Name: field.Name, Type: pgTypeEvidence(conn.TypeMap(), field.DataTypeOID)}
 	}
-	return result, errors.Join(conn.Deallocate(ctx, name), conn.Close(ctx))
+	return result, errors.Join(conn.Deallocate(cleanupCtx, name), conn.Close(cleanupCtx))
+}
+
+type redactedPGError struct {
+	message string
+	cause   error
+}
+
+func (e *redactedPGError) Error() string { return e.message }
+func (e *redactedPGError) Unwrap() error { return e.cause }
+func redactPGError(err error, dsn string) error {
+	if dsn == "" {
+		return err
+	}
+	return &redactedPGError{message: strings.ReplaceAll(err.Error(), dsn, "[redacted]"), cause: err}
 }
 
 func pgTypeEvidence(m *pgtype.Map, oid uint32) queryevidence.TypeEvidence {

@@ -15,17 +15,27 @@ type fakePGConn struct {
 	description                         *pgconn.StatementDescription
 	prepares, deallocates, closes       int
 	typemap                             *pgtype.Map
+	cleanupCanceled                     bool
 }
 
 func (f *fakePGConn) Prepare(context.Context, string, string) (*pgconn.StatementDescription, error) {
 	f.prepares++
 	return f.description, f.prepareErr
 }
-func (f *fakePGConn) Deallocate(context.Context, string) error {
+func (f *fakePGConn) Deallocate(ctx context.Context, _ string) error {
 	f.deallocates++
+	if ctx.Err() != nil {
+		f.cleanupCanceled = true
+	}
 	return f.deallocateErr
 }
-func (f *fakePGConn) Close(context.Context) error { f.closes++; return f.closeErr }
+func (f *fakePGConn) Close(ctx context.Context) error {
+	f.closes++
+	if ctx.Err() != nil {
+		f.cleanupCanceled = true
+	}
+	return f.closeErr
+}
 func (f *fakePGConn) TypeMap() *pgtype.Map {
 	if f.typemap != nil {
 		return f.typemap
@@ -84,5 +94,16 @@ func TestPostgreSQLDescribeMapsKnownAndUnknownOID(t *testing.T) {
 	}
 	if got.Parameters[0].Type.LogicalKind != "integer" || got.Parameters[1].Type.Certainty != "unknown" || got.Results[0].Type.LogicalKind != "integer" {
 		t.Fatalf("description=%#v", got)
+	}
+}
+
+func TestPostgreSQLDescribeCleanupIgnoresCanceledCaller(t *testing.T) {
+	conn := &fakePGConn{description: &pgconn.StatementDescription{}}
+	d := PostgreSQLDescriber{connector: func(context.Context, string) (postgresDescribeConn, error) { return conn, nil }}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, _ = d.Describe(ctx, queryevidence.DescribeRequest{DSN: "owned", Name: "q", SQL: "SELECT 1"})
+	if conn.cleanupCanceled {
+		t.Fatal("cleanup used canceled caller context")
 	}
 }
