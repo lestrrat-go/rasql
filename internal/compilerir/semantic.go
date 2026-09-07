@@ -3,6 +3,9 @@ package compilerir
 import (
 	"fmt"
 	"slices"
+	"sort"
+	"strings"
+	"unicode"
 )
 
 type SemanticModel struct {
@@ -85,6 +88,14 @@ type QueryAnalysis struct {
 	Diagnostics              []Diagnostic
 }
 
+type relationCandidate struct {
+	source, target               ObjectID
+	sourceName, targetName       QualifiedName
+	from, to                     []string
+	nullable                     bool
+	directName, physicalIdentity string
+}
+
 func BuildSemantic(c PhysicalCatalog, mappings MappingConfig, queries []QueryAnalysis) (SemanticModel, []Diagnostic) {
 	model := SemanticModel{}
 	if err := ValidateMappingConfig(MappingConfig{Relations: mappings.Relations}, ""); err != nil {
@@ -104,9 +115,10 @@ func BuildSemantic(c PhysicalCatalog, mappings MappingConfig, queries []QueryAna
 		}
 		objectColumns[q] = columns
 	}
+	semanticIndexes := make(map[ObjectID]int, len(c.Objects))
+	relationNames := make(map[ObjectID]map[string]struct{}, len(c.Objects))
 	for _, object := range c.Objects {
 		so := SemanticObject{ID: object.ID, Kind: object.Kind, PhysicalName: QualifiedName{Schema: object.Schema, Name: object.Name}}
-		relationNames := make(map[string]struct{}, len(object.Constraints)+len(mappings.Relations))
 		for _, column := range object.Columns {
 			scalar, found, ambiguous := scalarFor(column, mappings)
 			if ambiguous {
@@ -143,49 +155,50 @@ func BuildSemantic(c PhysicalCatalog, mappings MappingConfig, queries []QueryAna
 			}
 			so.Columns = append(so.Columns, SemanticColumn{Name: column.Name, Scalar: scalar, Nullable: column.Nullable, Readable: !column.Hidden, InsertState: state, PatchState: patchState, Certainty: certaintyFor(column)})
 		}
-		for _, constraint := range object.Constraints {
-			if constraint.Kind != "foreign_key" || constraint.Reference == nil {
-				continue
-			}
-			q, _, resolved := resolveForeignReference(c.Engine, object.Schema, *constraint.Reference, objectColumns)
-			if !resolved {
-				model.Diagnostics = append(model.Diagnostics, Diagnostic{Level: DiagnosticError, Code: "ambiguous_relation_target", Path: object.Name + "." + constraint.Name, Message: "foreign key target is unresolved or ambiguous"})
-			}
-			if _, ok := objectIDs[q]; !ok {
-				model.Diagnostics = append(model.Diagnostics, Diagnostic{Level: DiagnosticError, Code: "unresolved_relation_target", Path: object.Name + "." + constraint.Name, Message: "foreign key target does not exist"})
-			}
-			name := constraint.Name
-			if name == "" {
-				name = relationName(object.Name, constraint.Columns, q.Name)
-			}
-			relation := SemanticRelation{Name: name, Kind: "belongs_to", Target: objectIDs[q], From: append([]string(nil), constraint.Columns...), To: append([]string(nil), constraint.Reference.Columns...), Nullable: false}
-			for _, column := range object.Columns {
-				for _, from := range constraint.Columns {
-					if column.Name == from && column.Nullable {
-						relation.Nullable = true
-					}
-				}
-			}
-			if _, exists := relationNames[name]; exists {
-				model.Diagnostics = append(model.Diagnostics, Diagnostic{Level: DiagnosticError, Code: "relation_name_collision", Path: object.Name + ".relations." + name, Message: "relation name is duplicated"})
-			} else {
-				relationNames[name] = struct{}{}
-			}
-			so.Relations = append(so.Relations, relation)
-		}
-		for mappingIndex, mapping := range mappings.Relations {
-			if mapping.Source != object.ID {
-				continue
-			}
-			if _, exists := relationNames[mapping.Name]; exists {
-				model.Diagnostics = append(model.Diagnostics, Diagnostic{Level: DiagnosticError, Code: "relation_name_collision", Path: fmt.Sprintf("mappings.relations[%d].name", mappingIndex), Message: "relation name collides with another relation on the source object"})
-			} else {
-				relationNames[mapping.Name] = struct{}{}
-			}
-			through := mapping.Through
-			so.Relations = append(so.Relations, SemanticRelation{Name: mapping.Name, Kind: "many_through", From: append([]string(nil), mapping.From...), Target: mapping.Target, To: append([]string(nil), mapping.To...), Through: &SemanticThrough{Object: through.Object, SourceFrom: append([]string(nil), through.SourceFrom...), SourceTo: append([]string(nil), through.SourceTo...), TargetFrom: append([]string(nil), through.TargetFrom...), TargetTo: append([]string(nil), through.TargetTo...)}})
-		}
+		semanticIndexes[object.ID] = len(model.Objects)
+		relationNames[object.ID] = make(map[string]struct{}, len(object.Constraints)+len(mappings.Relations))
 		model.Objects = append(model.Objects, so)
+	}
+	candidates := relationCandidates(c, objectIDs, objectColumns, &model)
+	pairCounts := make(map[string]int, len(candidates))
+	for _, candidate := range candidates {
+		pairCounts[relationPairKey(candidate.source, candidate.target)]++
+	}
+	for _, candidate := range candidates {
+		appendSemanticRelation(&model, semanticIndexes, relationNames, candidate.source, SemanticRelation{
+			Name: candidate.directName, Kind: "belongs_to", Target: candidate.target,
+			From: append([]string(nil), candidate.from...), To: append([]string(nil), candidate.to...), Nullable: candidate.nullable,
+		}, relationPath(candidate.sourceName, candidate.directName))
+	}
+	for _, candidate := range candidates {
+		if _, ok := semanticIndexes[candidate.target]; !ok {
+			continue
+		}
+		inverseName := relationshipGoName(candidate.sourceName.Name)
+		if pairCounts[relationPairKey(candidate.source, candidate.target)] > 1 {
+			inverseName = candidate.directName + relationshipGoName(candidate.sourceName.Name)
+		}
+		kind := "has_many"
+		if child, ok := physicalObjectByID(c.Objects, candidate.source); ok && completeUniqueConstraint(child, candidate.from) {
+			kind = "has_one"
+		}
+		appendSemanticRelation(&model, semanticIndexes, relationNames, candidate.target, SemanticRelation{
+			Name: inverseName, Kind: kind, Target: candidate.source,
+			From: append([]string(nil), candidate.to...), To: append([]string(nil), candidate.from...),
+		}, relationPath(candidate.targetName, inverseName))
+	}
+	for mappingIndex, mapping := range mappings.Relations {
+		index, ok := semanticIndexes[mapping.Source]
+		if !ok {
+			continue
+		}
+		if _, exists := relationNames[mapping.Source][mapping.Name]; exists {
+			model.Diagnostics = append(model.Diagnostics, Diagnostic{Level: DiagnosticError, Code: "relation_name_collision", Path: fmt.Sprintf("mappings.relations[%d].name", mappingIndex), Message: "relation name collides with another relation on the source object"})
+		} else {
+			relationNames[mapping.Source][mapping.Name] = struct{}{}
+		}
+		through := mapping.Through
+		model.Objects[index].Relations = append(model.Objects[index].Relations, SemanticRelation{Name: mapping.Name, Kind: "many_through", From: append([]string(nil), mapping.From...), Target: mapping.Target, To: append([]string(nil), mapping.To...), Through: &SemanticThrough{Object: through.Object, SourceFrom: append([]string(nil), through.SourceFrom...), SourceTo: append([]string(nil), through.SourceTo...), TargetFrom: append([]string(nil), through.TargetFrom...), TargetTo: append([]string(nil), through.TargetTo...)}})
 	}
 	model.Diagnostics = append(model.Diagnostics, validateRelationMappings(c, mappings)...)
 	for _, query := range queries {
@@ -198,6 +211,56 @@ func BuildSemantic(c PhysicalCatalog, mappings MappingConfig, queries []QueryAna
 		model.Diagnostics = sortDiagnostics(model.Diagnostics)
 	}
 	return model, append([]Diagnostic(nil), model.Diagnostics...)
+}
+
+func relationCandidates(c PhysicalCatalog, objectIDs map[QualifiedName]ObjectID, objectColumns map[QualifiedName]map[string]struct{}, model *SemanticModel) []relationCandidate {
+	var candidates []relationCandidate
+	for _, object := range c.Objects {
+		for constraintIndex, constraint := range object.Constraints {
+			if constraint.Kind != "foreign_key" || constraint.Reference == nil {
+				continue
+			}
+			q, _, resolved := resolveForeignReference(c.Engine, object.Schema, *constraint.Reference, objectColumns)
+			path := fmt.Sprintf("%s.constraints[%d]", object.Name, constraintIndex)
+			if !resolved {
+				model.Diagnostics = append(model.Diagnostics, Diagnostic{Level: DiagnosticError, Code: "ambiguous_relation_target", Path: path, Message: "foreign key target is unresolved or ambiguous"})
+			}
+			target, ok := objectIDs[q]
+			if !ok {
+				model.Diagnostics = append(model.Diagnostics, Diagnostic{Level: DiagnosticError, Code: "unresolved_relation_target", Path: path, Message: "foreign key target does not exist"})
+			}
+			nullable := false
+			for _, column := range object.Columns {
+				if column.Nullable && slices.Contains(constraint.Columns, column.Name) {
+					nullable = true
+					break
+				}
+			}
+			candidates = append(candidates, relationCandidate{
+				source: object.ID, target: target,
+				sourceName: QualifiedName{Schema: object.Schema, Name: object.Name}, targetName: q,
+				from: append([]string(nil), constraint.Columns...), to: append([]string(nil), constraint.Reference.Columns...),
+				nullable:         nullable,
+				directName:       relationName(object.Name, constraint.Columns, q.Name),
+				physicalIdentity: relationPhysicalIdentity(object, constraint, constraintIndex, q),
+			})
+		}
+	}
+	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].physicalIdentity < candidates[j].physicalIdentity })
+	return candidates
+}
+
+func appendSemanticRelation(model *SemanticModel, indexes map[ObjectID]int, names map[ObjectID]map[string]struct{}, source ObjectID, relation SemanticRelation, path string) {
+	index, ok := indexes[source]
+	if !ok {
+		return
+	}
+	if _, exists := names[source][relation.Name]; exists {
+		model.Diagnostics = append(model.Diagnostics, Diagnostic{Level: DiagnosticError, Code: "relation_name_collision", Path: path, Message: "relation name is duplicated"})
+	} else {
+		names[source][relation.Name] = struct{}{}
+	}
+	model.Objects[index].Relations = append(model.Objects[index].Relations, relation)
 }
 
 func validateRelationMappings(c PhysicalCatalog, mappings MappingConfig) []Diagnostic {
@@ -287,10 +350,72 @@ func scalarFor(column PhysicalColumn, config MappingConfig) (string, bool, bool)
 	return selection.scalar, selection.found, selection.ambiguous
 }
 func relationName(source string, columns []string, target string) string {
-	if len(columns) == 0 {
-		return source + "To" + target
+	name := ""
+	if len(columns) > 0 {
+		name = strings.TrimSuffix(columns[0], "_id")
 	}
-	return source + "To" + target + "By" + columns[0]
+	name = relationshipGoName(name)
+	if name == "" {
+		name = relationshipGoName(target)
+	}
+	if name == "" {
+		return relationshipGoName(source)
+	}
+	return name
+}
+func relationshipGoName(name string) string {
+	parts := strings.FieldsFunc(name, func(r rune) bool { return r == '_' })
+	var result strings.Builder
+	for _, part := range parts {
+		switch strings.ToLower(part) {
+		case "api":
+			result.WriteString("API")
+		case "id":
+			result.WriteString("ID")
+		case "json":
+			result.WriteString("JSON")
+		case "url":
+			result.WriteString("URL")
+		case "uuid":
+			result.WriteString("UUID")
+		default:
+			for index, r := range part {
+				if index == 0 {
+					result.WriteRune(unicode.ToUpper(r))
+					continue
+				}
+				result.WriteRune(r)
+			}
+		}
+	}
+	return result.String()
+}
+func relationPhysicalIdentity(object PhysicalObject, constraint PhysicalConstraint, index int, target QualifiedName) string {
+	return strings.Join([]string{
+		object.Schema, object.Name, target.Schema, target.Name,
+		strings.Join(constraint.Columns, "\x00"), strings.Join(constraint.Reference.Columns, "\x00"),
+		constraint.Name, fmt.Sprintf("%08d", index),
+	}, "\x00")
+}
+func relationPairKey(source, target ObjectID) string { return string(source) + "\x00" + string(target) }
+func relationPath(object QualifiedName, name string) string {
+	return object.Name + ".relations." + name
+}
+func physicalObjectByID(objects []PhysicalObject, id ObjectID) (PhysicalObject, bool) {
+	for _, object := range objects {
+		if object.ID == id {
+			return object, true
+		}
+	}
+	return PhysicalObject{}, false
+}
+func completeUniqueConstraint(object PhysicalObject, columns []string) bool {
+	for _, constraint := range object.Constraints {
+		if (constraint.Kind == "primary_key" || constraint.Kind == "unique") && slices.Equal(constraint.Columns, columns) {
+			return true
+		}
+	}
+	return false
 }
 func certaintyFor(c PhysicalColumn) Certainty {
 	if c.Native == nil || c.Native.Name == "" {

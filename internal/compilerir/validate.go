@@ -333,7 +333,7 @@ func ValidateSemantic(m SemanticModel) error {
 				return err
 			}
 			switch relation.Kind {
-			case "belongs_to":
+			case "belongs_to", "has_one", "has_many":
 				if relation.Through != nil || len(relation.From) != len(relation.To) {
 					return invalid(path, "invalid belongs-to metadata")
 				}
@@ -586,7 +586,7 @@ func ValidateGo(m GoModel) error {
 				return err
 			}
 			switch relation.Kind {
-			case "belongs_to":
+			case "belongs_to", "has_one", "has_many":
 				if relation.Through != nil || len(relation.From) != len(relation.To) {
 					return invalid(path, "invalid belongs-to metadata")
 				}

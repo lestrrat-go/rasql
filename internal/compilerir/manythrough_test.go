@@ -24,7 +24,13 @@ func TestManyThroughMappingBuildsSemanticAndGoModels(t *testing.T) {
 	if len(diagnostics) != 0 {
 		t.Fatalf("unexpected diagnostics: %#v", diagnostics)
 	}
-	relation := model.Objects[0].Relations[0]
+	var relation compilerir.SemanticRelation
+	for _, candidate := range model.Objects[0].Relations {
+		if candidate.Name == "roles" {
+			relation = candidate
+			break
+		}
+	}
 	if relation.Kind != "many_through" || relation.Through == nil || relation.Through.Object != "user_roles" {
 		t.Fatalf("many-through relation was not retained: %#v", relation)
 	}
@@ -32,8 +38,15 @@ func TestManyThroughMappingBuildsSemanticAndGoModels(t *testing.T) {
 	if len(diagnostics) != 0 {
 		t.Fatalf("unexpected Go diagnostics: %#v", diagnostics)
 	}
-	if goModel.Objects[0].Relations[0].Through == nil || goModel.Objects[0].Relations[0].Through.Object != "user_roles" {
-		t.Fatalf("Go relation lost through metadata: %#v", goModel.Objects[0].Relations[0])
+	var goRelation compilerir.GoRelation
+	for _, candidate := range goModel.Objects[0].Relations {
+		if candidate.Name == "roles" {
+			goRelation = candidate
+			break
+		}
+	}
+	if goRelation.Through == nil || goRelation.Through.Object != "user_roles" {
+		t.Fatalf("Go relation lost through metadata: %#v", goModel.Objects[0].Relations)
 	}
 }
 
@@ -98,7 +111,7 @@ func TestManyThroughMappingRejectsDerivedRelationNameCollision(t *testing.T) {
 			{Kind: "foreign_key", Name: "links_role", Columns: []string{"role_id"}, Reference: &compilerir.ForeignReference{Object: "roles", Columns: []string{"id"}}},
 		}},
 	}}
-	mapping := compilerir.MappingConfig{Relations: []compilerir.RelationMapping{{Name: "Roles", Source: "users", From: []string{"id"}, Target: "roles", To: []string{"id"}, Through: compilerir.ThroughMapping{Object: "links", SourceFrom: []string{"user_id"}, SourceTo: []string{"id"}, TargetFrom: []string{"role_id"}, TargetTo: []string{"id"}}}}}
+	mapping := compilerir.MappingConfig{Relations: []compilerir.RelationMapping{{Name: "ID", Source: "users", From: []string{"id"}, Target: "roles", To: []string{"id"}, Through: compilerir.ThroughMapping{Object: "links", SourceFrom: []string{"user_id"}, SourceTo: []string{"id"}, TargetFrom: []string{"role_id"}, TargetTo: []string{"id"}}}}}
 	_, diagnostics := compilerir.BuildSemantic(catalog, mapping, nil)
 	for _, diagnostic := range diagnostics {
 		if diagnostic.Code == "relation_name_collision" && diagnostic.Path == "mappings.relations[0].name" {
@@ -120,7 +133,7 @@ func TestManyThroughMappingSupportsSelfTableWithTwoJunctionRoles(t *testing.T) {
 	if len(diagnostics) != 0 {
 		t.Fatalf("self-table mapping was rejected: %#v", diagnostics)
 	}
-	if len(model.Objects[0].Relations) != 1 || model.Objects[0].Relations[0].Through == nil {
+	if len(model.Objects[0].Relations) == 0 || model.Objects[0].Relations[len(model.Objects[0].Relations)-1].Through == nil {
 		t.Fatalf("self-table relation was not retained: %#v", model.Objects[0].Relations)
 	}
 }

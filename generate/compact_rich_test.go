@@ -18,6 +18,13 @@ func TestCompactRichExternalConsumer(t *testing.T) {
 	require.NoError(t, err)
 	root := t.TempDir()
 	store.Root, store.Dir = root, "generated"
+	store.TypedQueries = []generate.TypedQuery{{
+		Function: "RichQuery", Output: "query_gen.go", Engine: "sqlite", SQL: "SELECT id, balance FROM users WHERE id = ?",
+		Operation: "select", Cardinality: "many", Result: "RichResult", Decoder: "RichDecoder",
+		Parameters: []querygen.TypedValue{{Go: compilerir.GoField{Name: "after", Type: "int64"}}}, ArgumentNames: []string{"after"},
+		Results: []querygen.TypedValue{{Go: compilerir.GoField{Name: "id", Type: "int64"}, Semantic: compilerir.SemanticValue{Name: "id", LogicalKind: "integer"}}, {Go: compilerir.GoField{Name: "balance", Type: "domain.Money", Codec: "money"}, Semantic: compilerir.SemanticValue{Name: "balance", LogicalKind: "integer"}}},
+		Imports: []compilerir.GoImport{{Path: "example.com/domain", Alias: "domain"}},
+	}}
 	plan, err := store.Plan()
 	require.NoError(t, err)
 	var usersSource, projectsSource, viewSource string
@@ -32,7 +39,8 @@ func TestCompactRichExternalConsumer(t *testing.T) {
 		}
 	}
 	require.Contains(t, usersSource, "func AccountRolesEdge")
-	require.Contains(t, projectsSource, "func ProjectProjectsOwnerFkEdge")
+	require.Contains(t, usersSource, "func AccountProjectsEdge")
+	require.Contains(t, projectsSource, "func ProjectOwnerEdge")
 	require.Contains(t, projectsSource, "func (v ProjectCreate) DefaultTitle")
 	require.NotContains(t, viewSource, "ActiveUsersCreate")
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "generated"), 0o755))
@@ -42,15 +50,6 @@ func TestCompactRichExternalConsumer(t *testing.T) {
 	require.NoError(t, os.MkdirAll(domainDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(domainDir, "go.mod"), []byte("module example.com/domain\n\ngo 1.26\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(domainDir, "money.go"), []byte(richDomainSource), 0o600))
-	querySource, err := querygen.TypedGoSource(querygen.TypedInput{
-		Package: "store", Function: "RichQuery", Engine: "sqlite", SQL: "SELECT id, balance FROM users WHERE id = ?",
-		Operation: "select", Cardinality: "many", Result: "RichResult", Decoder: "RichDecoder",
-		Parameters: []querygen.TypedValue{{Go: compilerir.GoField{Name: "after", Type: "int64"}}}, ArgumentNames: []string{"after"},
-		Results: []querygen.TypedValue{{Go: compilerir.GoField{Name: "id", Type: "int64"}, Semantic: compilerir.SemanticValue{Name: "id", LogicalKind: "integer"}}, {Go: compilerir.GoField{Name: "balance", Type: "domain.Money", Codec: "money"}, Semantic: compilerir.SemanticValue{Name: "balance", LogicalKind: "integer"}}},
-		Imports: []compilerir.GoImport{{Path: "example.com/domain", Alias: "domain"}},
-	})
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(root, "generated", "query_gen.go"), querySource, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "generated", "consumer_test.go"), []byte(richConsumerSource), 0o600))
 	command := exec.Command("go", "test", "-mod=mod", "./generated")
 	command.Dir = root
@@ -122,6 +121,7 @@ import (
 type userGraph struct { ID int64 }
 type roleGraph struct { ID int64 }
 type userWithRoles struct { Roles rasql.LoadedMany[roleGraph] }
+type userWithProjects struct { Projects rasql.LoadedMany[projectGraph] }
 type projectGraph struct { Owner rasql.LoadedOne[userGraph] }
 
 func TestRichCompactRuntime(t *testing.T) {
@@ -141,7 +141,8 @@ func TestRichCompactRuntime(t *testing.T) {
  key, err := store.AccountIDPageKey(source, rasql.PageAscending); if err != nil { t.Fatal(err) }; if _, err = rasql.NewPageSpec([]rasql.PageKey[store.AccountRecord]{key}, key); err != nil { t.Fatal(err) }
 	 rich, err := store.RichQuery(1); if err != nil { t.Fatal(err) }; richRows, err := rasql.All(ctx, executor, rich); if err != nil || len(richRows) != 1 || richRows[0].Balance != domain.Money(7) { t.Fatalf("rich=%#v err=%v", richRows, err) }
  derived, err := rasql.Derive(rich, "d"); if err != nil { t.Fatal(err) }; if _, err = (store.RichQueryBindings{}).Bind(derived); err != nil { t.Fatal(err) }; cte, err := rasql.CTEOf("rich_values", rich); if err != nil { t.Fatal(err) }; cteSource, err := cte.Source("r"); if err != nil { t.Fatal(err) }; if _, err = (store.RichQueryBindings{}).Bind(cteSource); err != nil { t.Fatal(err) }
- projectSource, err := store.Project().Source("p"); if err != nil { t.Fatal(err) }; projectExpressions, err := (store.ProjectColumns{}).Bind(projectSource); if err != nil { t.Fatal(err) }; projectProjection, err := store.ProjectProjection(projectExpressions); if err != nil { t.Fatal(err) }; projectQuery := rasql.Select(projectSource.Source(), projectProjection); childSource, err := store.Account().Source("u2"); if err != nil { t.Fatal(err) }; childExpressions, err := (store.AccountColumns{}).Bind(childSource); if err != nil { t.Fatal(err) }; childProjection, err := store.AccountProjection(childExpressions); if err != nil { t.Fatal(err) }; childQuery := rasql.Select(childSource.Source(), childProjection); childPlan, err := rasql.NewGraphPlan(childQuery, func(row store.AccountRecord) userGraph { return userGraph{ID: row.ID} }); if err != nil { t.Fatal(err) }; edge, err := store.ProjectProjectsOwnerFkEdge(projectSource, childSource, childPlan, rasql.EdgeOptions{Order: []rasql.OrderTerm{rasql.AscExpr(childExpressions.ID.Expr())}, PerParentLimit: 2}, func(graph *projectGraph, value rasql.LoadedOne[userGraph]) { graph.Owner = value }); if err != nil { t.Fatal(err) }; graphPlan, err := rasql.NewGraphPlan(projectQuery, func(store.ProjectRecord) projectGraph { return projectGraph{} }, edge); if err != nil { t.Fatal(err) }; if _, err = rasql.LoadGraph(ctx, executor, graphPlan); err != nil { t.Fatal(err) }
+ projectSource, err := store.Project().Source("p"); if err != nil { t.Fatal(err) }; projectExpressions, err := (store.ProjectColumns{}).Bind(projectSource); if err != nil { t.Fatal(err) }; projectProjection, err := store.ProjectProjection(projectExpressions); if err != nil { t.Fatal(err) }; projectQuery := rasql.Select(projectSource.Source(), projectProjection); childSource, err := store.Account().Source("u2"); if err != nil { t.Fatal(err) }; childExpressions, err := (store.AccountColumns{}).Bind(childSource); if err != nil { t.Fatal(err) }; childProjection, err := store.AccountProjection(childExpressions); if err != nil { t.Fatal(err) }; childQuery := rasql.Select(childSource.Source(), childProjection); childPlan, err := rasql.NewGraphPlan(childQuery, func(row store.AccountRecord) userGraph { return userGraph{ID: row.ID} }); if err != nil { t.Fatal(err) }; edge, err := store.ProjectOwnerEdge(projectSource, childSource, childPlan, rasql.EdgeOptions{Order: []rasql.OrderTerm{rasql.AscExpr(childExpressions.ID.Expr())}, PerParentLimit: 2}, func(graph *projectGraph, value rasql.LoadedOne[userGraph]) { graph.Owner = value }); if err != nil { t.Fatal(err) }; graphPlan, err := rasql.NewGraphPlan(projectQuery, func(store.ProjectRecord) projectGraph { return projectGraph{} }, edge); if err != nil { t.Fatal(err) }; if _, err = rasql.LoadGraph(ctx, executor, graphPlan); err != nil { t.Fatal(err) }
+ inverseEdge, err := store.AccountProjectsEdge(source, projectSource, graphPlan, rasql.EdgeOptions{Order: []rasql.OrderTerm{rasql.AscExpr(projectExpressions.ID.Expr())}}, func(graph *userWithProjects, value rasql.LoadedMany[projectGraph]) { graph.Projects = value }); if err != nil { t.Fatal(err) }; inversePlan, err := rasql.NewGraphPlan(query, func(store.AccountRecord) userWithProjects { return userWithProjects{} }, inverseEdge); if err != nil { t.Fatal(err) }; if _, err = rasql.LoadGraph(ctx, executor, inversePlan); err != nil { t.Fatal(err) }
  if _, err = sqlDB.ExecContext(ctx, "INSERT INTO roles (id) VALUES (9); INSERT INTO user_roles (user_id, role_id) VALUES (1, 9)"); err != nil { t.Fatal(err) }
  rootSource, err := store.Account().Source("u3"); if err != nil { t.Fatal(err) }; rootExpressions, err := (store.AccountColumns{}).Bind(rootSource); if err != nil { t.Fatal(err) }; rootProjection, err := store.AccountProjection(rootExpressions); if err != nil { t.Fatal(err) }; rootQuery := rasql.Select(rootSource.Source(), rootProjection)
  junctionSource, err := store.Membership().Source("ur"); if err != nil { t.Fatal(err) }; junctionExpressions, err := (store.MembershipColumns{}).Bind(junctionSource); if err != nil { t.Fatal(err) }
