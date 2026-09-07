@@ -56,6 +56,119 @@ The engine enforces the rest at apply time, against the history table rather tha
 
 ## Create and review a migration
 
+Schema diffs show typed operations and decisions before publication. Supply repeatable `-backfill decision-id=sql-file` and `-rename decision-id=baseline-column` flags to `diff` or `diff-live`. Unresolved plans cannot create an output directory, so review every generated forward and reverse source before applying it.
+
+PostgreSQL and MySQL caller-supplied native backfills are irreversible. Review a separate no-backfill round trip when a reversible migration is required. SQLite groups supported changes into a rebuild and writes the safe reverse order after live catalog facts are attached.
+
+<!-- INCLUDE(examples/schema_evolution_example_test.go#schemaEvolution) -->
+```go
+ctx := context.Background()
+if err := os.MkdirAll(".tmp", 0o700); err != nil {
+	fmt.Println(err)
+	return
+}
+root, err := os.MkdirTemp(".tmp", "schema-evolution-*")
+if err != nil {
+	fmt.Println(err)
+	return
+}
+defer func() { _ = os.RemoveAll(root) }()
+database, err := sql.Open("sqlite", filepath.Join(root, "schema.sqlite"))
+if err != nil {
+	fmt.Println(err)
+	return
+}
+defer func() { _ = database.Close() }()
+if _, err := database.ExecContext(ctx, "CREATE TABLE members (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"); err != nil {
+	fmt.Println(err)
+	return
+}
+if _, err := database.ExecContext(ctx, "INSERT INTO members (name) VALUES ('Ada')"); err != nil {
+	fmt.Println(err)
+	return
+}
+connection, err := database.Conn(ctx)
+if err != nil {
+	fmt.Println(err)
+	return
+}
+defer func() { _ = connection.Close() }()
+analyzer := sqlite.New()
+inspector, err := inspect.New(connection, dialect.SQLite())
+if err != nil {
+	fmt.Println(err)
+	return
+}
+table, err := inspector.Table(ctx, "members")
+if err != nil {
+	fmt.Println(err)
+	return
+}
+baselineSources, err := analyzer.LiveSources(table)
+if err != nil {
+	fmt.Println(err)
+	return
+}
+baseline, err := analyzer.Parse(baselineSources)
+if err != nil {
+	fmt.Println(err)
+	return
+}
+facts, err := sqlite.InspectLiveCatalog(ctx, connection, "members")
+if err != nil {
+	fmt.Println(err)
+	return
+}
+baseline, err = analyzer.AttachLiveCatalog(baseline, facts)
+if err != nil {
+	fmt.Println(err)
+	return
+}
+target, err := analyzer.Parse([]diff.Source{{Path: "schema.sql", SQL: sqltext.Text("CREATE TABLE members (id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL)")}})
+if err != nil {
+	fmt.Println(err)
+	return
+}
+plan, err := analyzer.Diff(baseline, target)
+if err != nil {
+	fmt.Println(err)
+	return
+}
+for _, operation := range plan.Operations {
+	fmt.Printf("operation %s (%s): %s\n", operation.ID, operation.Kind, operation.Summary)
+}
+for _, decision := range plan.Decisions {
+	fmt.Printf("decision %s (%s): %s\n", decision.ID, decision.Kind, decision.Reason)
+}
+fmt.Println("executable:", plan.Executable())
+if len(plan.Decisions) != 1 {
+	fmt.Printf("expected one decision, got %d\n", len(plan.Decisions))
+	return
+}
+resolved, err := plan.Resolve(diff.Resolution{DecisionID: plan.Decisions[0].ID, BackfillSQL: "UPDATE members SET email = name || '@example.test' WHERE email IS NULL;"})
+if err != nil {
+	fmt.Println(err)
+	return
+}
+if err := diff.WriteMigration(filepath.Join(root, "migrations", "001_schema_evolution"), resolved); err != nil {
+	fmt.Println(err)
+	return
+}
+migrations, err := migrationdir.Load(filepath.Join(root, "migrations"))
+if err != nil {
+	fmt.Println(err)
+	return
+}
+for _, statement := range migrations[0].Statements {
+	fmt.Printf("up: %s %q\n", statement.Source, statement.SQL)
+}
+for _, statement := range migrations[0].Down {
+	fmt.Printf("down: %s %q\n", statement.Source, statement.SQL)
+}
+```
+source: [examples/schema_evolution_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/schema_evolution_example_test.go)
+<!-- END INCLUDE -->
+
 Create the directory and add numbered SQL source files:
 
 ```sh

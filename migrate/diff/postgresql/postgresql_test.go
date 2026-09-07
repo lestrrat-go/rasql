@@ -600,23 +600,25 @@ func TestDiffGeneratesAdditiveColumnsAndIndexes(t *testing.T) {
 
 	plan, err := analyzer.Diff(baseline, target)
 	require.NoError(t, err)
-	require.Equal(t, diff.Plan{
-		Dialect: "postgresql",
-		Statements: []diff.PlannedStatement{
-			{
-				Source:     "001_add_column_members_email.sql",
-				SQL:        "ALTER TABLE members ADD COLUMN email text;\n",
-				ReverseSQL: "ALTER TABLE members DROP COLUMN email;\n",
-				Summary:    "add column members.email",
-			},
-			{
-				Source:     "002_create_index_members_email_idx.sql",
-				SQL:        "CREATE INDEX members_email_idx ON members (email);\n",
-				ReverseSQL: "DROP INDEX members_email_idx;\n",
-				Summary:    "create index members_email_idx",
-			},
+	require.Equal(t, []diff.PlannedStatement{
+		{
+			Source:     "001_add_column_members_email.sql",
+			SQL:        "ALTER TABLE members ADD COLUMN email text;\n",
+			ReverseSQL: "ALTER TABLE members DROP COLUMN email;\n",
+			Summary:    "add column members.email",
 		},
-	}, plan)
+		{
+			Source:     "002_create_index_members_email_idx.sql",
+			SQL:        "CREATE INDEX members_email_idx ON members (email);\n",
+			ReverseSQL: "DROP INDEX members_email_idx;\n",
+			Summary:    "create index members_email_idx",
+		},
+	}, plan.Statements)
+	require.Len(t, plan.Operations, 2)
+	require.Equal(t, []diff.ProposedOperation{
+		{ID: "add_column_postgresql_members_email", Table: "members", Column: "email", Kind: diff.OperationAddColumn},
+		{ID: "replace_constraint_postgresql_members_members_email_idx", Table: "members", Constraint: "members_email_idx", Kind: diff.OperationReplaceConstraint},
+	}, []diff.ProposedOperation{{ID: plan.Operations[0].ID, Table: plan.Operations[0].Table, Column: plan.Operations[0].Column, Kind: plan.Operations[0].Kind}, {ID: plan.Operations[1].ID, Table: plan.Operations[1].Table, Constraint: plan.Operations[1].Constraint, Kind: plan.Operations[1].Kind}})
 }
 
 func TestDiffGeneratesNewTable(t *testing.T) {
@@ -654,8 +656,9 @@ func TestDiffRejectsNewRequiredColumnWithoutBackfill(t *testing.T) {
 	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY);")
 	target := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY, email text NOT NULL);")
 
-	_, err := analyzer.Diff(baseline, target)
-	require.ErrorContains(t, err, "new required column members.email needs an application-specific backfill")
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Equal(t, "backfill_postgresql_members_email", plan.Decisions[0].ID)
 }
 
 func TestDiffGeneratesNewRequiredColumnWithDefault(t *testing.T) {
@@ -679,7 +682,7 @@ func TestDiffRejectsNewRequiredPrimaryKeyColumnWithDefaultWhenPrimaryKeyFollowsN
 	target := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY, active integer NOT NULL DEFAULT 1 PRIMARY KEY);")
 
 	_, err := analyzer.Diff(baseline, target)
-	require.ErrorContains(t, err, "new required column members.active needs an application-specific backfill")
+	require.ErrorContains(t, err, "table members constraints changed")
 }
 
 func TestDiffRejectsNewRequiredColumnWithNullDefault(t *testing.T) {
@@ -692,8 +695,9 @@ func TestDiffRejectsNewRequiredColumnWithNullDefault(t *testing.T) {
 			baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY);")
 			target := parseSnapshot(t, analyzer, "CREATE TABLE members (id bigint PRIMARY KEY, "+columnDefinition+");")
 
-			_, err := analyzer.Diff(baseline, target)
-			require.ErrorContains(t, err, "new required column members.email needs an application-specific backfill")
+			plan, err := analyzer.Diff(baseline, target)
+			require.NoError(t, err)
+			require.Equal(t, "backfill_postgresql_members_email", plan.Decisions[0].ID)
 		})
 	}
 }
@@ -724,6 +728,301 @@ func TestDiffDistinguishesMixedCaseIdentifiers(t *testing.T) {
 
 	_, err := analyzer.Diff(baseline, target)
 	require.ErrorContains(t, err, "column members.Members was removed")
+}
+
+func TestDiffProposesConfirmedCompatibleRename(t *testing.T) {
+	analyzer := postgresql.New()
+	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (name text);")
+	target := parseSnapshot(t, analyzer, "CREATE TABLE members (display_name text);")
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	require.Len(t, plan.Decisions, 1)
+	require.Equal(t, diff.DecisionRename, plan.Decisions[0].Kind)
+	require.Equal(t, "name", plan.Decisions[0].Baseline)
+	resolved, err := plan.Resolve(diff.Resolution{DecisionID: plan.Decisions[0].ID, RenameFrom: "name"})
+	require.NoError(t, err)
+	require.Contains(t, resolved.Statements[0].SQL, "name TO display_name")
+	require.Contains(t, resolved.Statements[0].ReverseSQL, "display_name TO name")
+}
+
+func TestDiffLowersQuotedRenameFromIndependentASTNames(t *testing.T) {
+	analyzer := postgresql.New()
+	baseline := parseSnapshot(t, analyzer, `CREATE TABLE "members" ("Old Name" text);`)
+	target := parseSnapshot(t, analyzer, `CREATE TABLE "members" ("New Name" text);`)
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	resolved, err := plan.Resolve(diff.Resolution{DecisionID: plan.Decisions[0].ID, RenameFrom: "Old Name"})
+	require.NoError(t, err)
+	expected := diff.ProposedOperation{
+		ID: "add_column_postgresql_members_new name", Table: "members", Column: "New Name",
+		Summary: "rename column members.New Name", Kind: diff.OperationAddColumn,
+		Forward: []diff.PlannedStatement{{
+			Source:     "001_rename_column_members.sql",
+			SQL:        "ALTER TABLE \"members\" RENAME COLUMN \"Old Name\" TO \"New Name\";\n",
+			ReverseSQL: "ALTER TABLE \"members\" RENAME COLUMN \"New Name\" TO \"Old Name\";\n",
+			Summary:    "rename column members.New Name",
+		}},
+		Reverse: []diff.PlannedStatement{{
+			Source:     "001_rename_column_members.sql",
+			SQL:        "ALTER TABLE \"members\" RENAME COLUMN \"New Name\" TO \"Old Name\";\n",
+			ReverseSQL: "ALTER TABLE \"members\" RENAME COLUMN \"Old Name\" TO \"New Name\";\n",
+			Summary:    "rename column members.New Name",
+		}},
+	}
+	require.Equal(t, expected, resolved.Operations[0])
+	require.Equal(t, expected.Forward[0], resolved.Statements[0])
+}
+
+func TestDiffLowersPostgreSQLBackfillInNativeOrder(t *testing.T) {
+	analyzer := postgresql.New()
+	baseline := parseSnapshot(t, analyzer, `CREATE TABLE tasks (id bigint PRIMARY KEY, owner_id bigint);`)
+	target := parseSnapshot(t, analyzer, `CREATE TABLE tasks (id bigint PRIMARY KEY, owner_id bigint, owner_label text NOT NULL);`)
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	first, err := plan.Resolve(diff.Resolution{DecisionID: plan.Decisions[0].ID, BackfillSQL: `UPDATE "tasks" SET "owner_label" = 'owner-' || "owner_id";`})
+	require.NoError(t, err)
+	require.Equal(t, diff.OperationAddColumn, first.Operations[0].Kind)
+	require.Equal(t, "add_column_postgresql_tasks_owner_label", first.Operations[0].ID)
+	require.Equal(t, "tasks", first.Operations[0].Table)
+	require.Equal(t, "owner_label", first.Operations[0].Column)
+	require.Equal(t, "add column tasks.owner_label", first.Operations[0].Summary)
+	require.Equal(t, []diff.PlannedStatement{{
+		Source:     "001_add_column_tasks_owner_label.sql",
+		SQL:        "ALTER TABLE tasks ADD COLUMN owner_label text;\nUPDATE \"tasks\" SET \"owner_label\" = 'owner-' || \"owner_id\";\nALTER TABLE tasks ALTER COLUMN owner_label SET NOT NULL;\n",
+		ReverseSQL: "ALTER TABLE tasks DROP COLUMN owner_label;\n",
+		Summary:    "add column tasks.owner_label",
+	}}, first.Operations[0].Forward)
+	require.Equal(t, []diff.PlannedStatement{{
+		Source:     "001_add_column_tasks_owner_label.sql",
+		SQL:        "ALTER TABLE tasks DROP COLUMN owner_label;\n",
+		ReverseSQL: "ALTER TABLE tasks ADD COLUMN owner_label text;\nUPDATE \"tasks\" SET \"owner_label\" = 'owner-' || \"owner_id\";\nALTER TABLE tasks ALTER COLUMN owner_label SET NOT NULL;\n",
+		Summary:    "add column tasks.owner_label",
+	}}, first.Operations[0].Reverse)
+	require.Equal(t, first.Operations[0].Forward, first.Operations[0].Forward)
+	require.Equal(t, first.Operations[0].Forward, first.Operations[0].Forward)
+	require.Equal(t, first.Operations[0].Forward[0], first.Statements[0])
+	require.Equal(t, "caller-supplied backfill has no inferred reverse", first.IrreversibleReason)
+}
+
+func TestDiffLowersExistingColumnNullabilityBothDirections(t *testing.T) {
+	analyzer := postgresql.New()
+	base := parseSnapshot(t, analyzer, "CREATE TABLE users (name text NOT NULL);")
+	target := parseSnapshot(t, analyzer, "CREATE TABLE users (name text);")
+	plan, err := analyzer.Diff(base, target)
+	require.NoError(t, err)
+	require.Equal(t, []diff.ProposedOperation{{ID: "alter_nullability_postgresql_users_name", Table: "users", Column: "name", Summary: "alter nullability users.name", Kind: diff.OperationAlterNullability, Forward: []diff.PlannedStatement{{Source: "001_alter_nullability_users_name.sql", SQL: "ALTER TABLE users ALTER COLUMN name DROP NOT NULL;\n", ReverseSQL: "ALTER TABLE users ALTER COLUMN name SET NOT NULL;\n", Summary: "alter nullability users.name"}}, Reverse: []diff.PlannedStatement{{Source: "001_alter_nullability_users_name.sql", SQL: "ALTER TABLE users ALTER COLUMN name SET NOT NULL;\n", ReverseSQL: "ALTER TABLE users ALTER COLUMN name DROP NOT NULL;\n", Summary: "alter nullability users.name"}}}}, plan.Operations)
+	base = parseSnapshot(t, analyzer, "CREATE TABLE users (name text);")
+	target = parseSnapshot(t, analyzer, "CREATE TABLE users (name text NOT NULL);")
+	plan, err = analyzer.Diff(base, target)
+	require.NoError(t, err)
+	require.Equal(t, diff.OperationAlterNullability, plan.Operations[0].Kind)
+	resolved := plan.Operations[0]
+	require.Equal(t, "ALTER TABLE users ALTER COLUMN name SET NOT NULL;\n", resolved.Forward[0].SQL)
+	require.Equal(t, "ALTER TABLE users ALTER COLUMN name DROP NOT NULL;\n", resolved.Reverse[0].SQL)
+}
+
+func TestDiffRefusesIdentityModeAlterationsPrecisely(t *testing.T) {
+	tests := []struct {
+		name, baseline, target, diagnostic string
+	}{
+		{"always to default", "GENERATED ALWAYS AS IDENTITY", "GENERATED BY DEFAULT AS IDENTITY", "column users.id identity mode changed from GENERATED ALWAYS AS IDENTITY to GENERATED BY DEFAULT AS IDENTITY; manual migration required"},
+		{"default to absent", "GENERATED BY DEFAULT AS IDENTITY", "", "column users.id identity mode changed from GENERATED BY DEFAULT AS IDENTITY to absent; manual migration required"},
+		{"absent to always", "", "GENERATED ALWAYS AS IDENTITY", "column users.id identity mode changed from absent to GENERATED ALWAYS AS IDENTITY; manual migration required"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			analyzer := postgresql.New()
+			base := parseSnapshot(t, analyzer, "CREATE TABLE users (id bigint "+test.baseline+");")
+			target := parseSnapshot(t, analyzer, "CREATE TABLE users (id bigint "+test.target+");")
+			plan, err := analyzer.Diff(base, target)
+			require.Equal(t, diff.Plan{}, plan)
+			require.EqualError(t, err, "postgresql schema diff requires manual migration:\n- "+test.diagnostic)
+		})
+	}
+}
+
+func TestTaskboardNullabilityAndForeignKeyReplacement(t *testing.T) {
+	analyzer := postgresql.New()
+	baseline := parseSnapshot(t, analyzer, `CREATE TABLE "tasks" (
+  "id" BIGINT NOT NULL GENERATED ALWAYS AS IDENTITY,
+  "project_id" BIGINT NOT NULL,
+  "assignee_id" BIGINT NOT NULL,
+  "title" TEXT NOT NULL,
+  "is_open" BOOLEAN NOT NULL DEFAULT true,
+  "created_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY ("id"),
+  CONSTRAINT "tasks_assignee_id_fkey" FOREIGN KEY ("assignee_id") REFERENCES "members" ("id") ON DELETE NO ACTION ON UPDATE NO ACTION,
+  CONSTRAINT "tasks_project_id_fkey" FOREIGN KEY ("project_id") REFERENCES "projects" ("id") ON DELETE CASCADE ON UPDATE NO ACTION
+);`)
+	target := parseSnapshot(t, analyzer, `CREATE TABLE "tasks" (
+  "id" BIGINT NOT NULL GENERATED ALWAYS AS IDENTITY,
+  "project_id" BIGINT NOT NULL,
+  "assignee_id" BIGINT,
+  "title" TEXT NOT NULL,
+  "is_open" BOOLEAN NOT NULL DEFAULT true,
+  "created_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY ("id"),
+  CONSTRAINT "tasks_assignee_id_fkey" FOREIGN KEY ("assignee_id") REFERENCES "members" ("id") ON DELETE SET NULL ON UPDATE NO ACTION,
+  CONSTRAINT "tasks_project_id_fkey" FOREIGN KEY ("project_id") REFERENCES "projects" ("id") ON DELETE CASCADE ON UPDATE NO ACTION
+);`)
+	plan, err := analyzer.Diff(baseline, target)
+	require.NoError(t, err)
+	resolved, err := plan.Resolve()
+	require.NoError(t, err)
+	name := "replace constraint tasks.tasks_assignee_id_fkey"
+	dropForward := diff.PlannedStatement{Source: "001_drop_constraint_tasks_tasks_assignee_id_fkey.sql", SQL: "ALTER TABLE \"tasks\" DROP CONSTRAINT \"tasks_assignee_id_fkey\";\n", ReverseSQL: "ALTER TABLE \"tasks\" ADD CONSTRAINT \"tasks_assignee_id_fkey\" FOREIGN KEY (\"assignee_id\") REFERENCES \"members\" (\"id\") ON DELETE NO ACTION ON UPDATE NO ACTION;\n", Summary: name}
+	alterForward := diff.PlannedStatement{Source: "002_alter_nullability_tasks_assignee_id.sql", SQL: "ALTER TABLE \"tasks\" ALTER COLUMN \"assignee_id\" DROP NOT NULL;\n", ReverseSQL: "ALTER TABLE \"tasks\" ALTER COLUMN \"assignee_id\" SET NOT NULL;\n", Summary: "alter nullability tasks.assignee_id"}
+	addForward := diff.PlannedStatement{Source: "003_add_constraint_tasks_tasks_assignee_id_fkey.sql", SQL: "ALTER TABLE \"tasks\" ADD CONSTRAINT \"tasks_assignee_id_fkey\" FOREIGN KEY (\"assignee_id\") REFERENCES \"members\" (\"id\") ON DELETE SET NULL ON UPDATE NO ACTION;\n", ReverseSQL: "ALTER TABLE \"tasks\" DROP CONSTRAINT \"tasks_assignee_id_fkey\";\n", Summary: name}
+	expectedOperations := []diff.ProposedOperation{
+		{ID: "alter_nullability_postgresql_tasks_assignee_id", Table: "tasks", Column: "assignee_id", Summary: "alter nullability tasks.assignee_id", Kind: diff.OperationAlterNullability, Forward: []diff.PlannedStatement{alterForward}, Reverse: []diff.PlannedStatement{{Source: alterForward.Source, SQL: alterForward.ReverseSQL, ReverseSQL: alterForward.SQL, Summary: alterForward.Summary}}},
+		{ID: "replace_constraint_postgresql_tasks_tasks_assignee_id_fkey", Table: "tasks", Constraint: "tasks_assignee_id_fkey", Summary: name, Kind: diff.OperationReplaceConstraint, Forward: []diff.PlannedStatement{dropForward, addForward}, Reverse: []diff.PlannedStatement{{Source: addForward.Source, SQL: addForward.ReverseSQL, ReverseSQL: addForward.SQL, Summary: name}, {Source: dropForward.Source, SQL: dropForward.ReverseSQL, ReverseSQL: dropForward.SQL, Summary: name}}},
+	}
+	require.Equal(t, expectedOperations, resolved.Operations)
+	operation := resolved.Operations[1]
+	require.Equal(t, addForward.Source, operation.Reverse[0].Source)
+	require.Equal(t, addForward.ReverseSQL, operation.Reverse[0].SQL)
+	require.Equal(t, addForward.SQL, operation.Reverse[0].ReverseSQL)
+	require.Equal(t, dropForward.Source, operation.Reverse[1].Source)
+	require.Equal(t, dropForward.ReverseSQL, operation.Reverse[1].SQL)
+	require.Equal(t, dropForward.SQL, operation.Reverse[1].ReverseSQL)
+	require.Equal(t, []diff.PlannedStatement{dropForward, alterForward, addForward}, resolved.Statements)
+	root := t.TempDir()
+	require.NoError(t, diff.WriteMigration(filepath.Join(root, "001_taskboard"), resolved))
+	loaded, err := migrationdir.Load(root)
+	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+	require.Equal(t, []string{"001_drop_constraint_tasks_tasks_assignee_id_fkey.up.sql", "002_alter_nullability_tasks_assignee_id.up.sql", "003_add_constraint_tasks_tasks_assignee_id_fkey.up.sql"}, []string{loaded[0].Statements[0].Source, loaded[0].Statements[1].Source, loaded[0].Statements[2].Source})
+	require.Equal(t, []string{"003_add_constraint_tasks_tasks_assignee_id_fkey.down.sql", "002_alter_nullability_tasks_assignee_id.down.sql", "001_drop_constraint_tasks_tasks_assignee_id_fkey.down.sql"}, []string{loaded[0].Down[0].Source, loaded[0].Down[1].Source, loaded[0].Down[2].Source})
+	for index, statement := range resolved.Statements {
+		require.Equal(t, statement.SQL, string(loaded[0].Statements[index].SQL))
+	}
+	require.Equal(t, resolved.Operations[1].Reverse[0].SQL, string(loaded[0].Down[0].SQL))
+	require.Equal(t, resolved.Operations[0].Reverse[0].SQL, string(loaded[0].Down[1].SQL))
+	require.Equal(t, resolved.Operations[1].Reverse[1].SQL, string(loaded[0].Down[2].SQL))
+}
+
+func TestDiffRefusesAnonymousAndInlineForeignKeyChanges(t *testing.T) {
+	analyzer := postgresql.New()
+	base := parseSnapshot(t, analyzer, "CREATE TABLE child (parent_id bigint REFERENCES parent (id) ON DELETE NO ACTION);")
+	target := parseSnapshot(t, analyzer, "CREATE TABLE child (parent_id bigint REFERENCES parent (id) ON DELETE CASCADE);")
+	_, err := analyzer.Diff(base, target)
+	require.EqualError(t, err, "postgresql schema diff requires manual migration:\n- table child constraints changed")
+
+	base = parseSnapshot(t, analyzer, "CREATE TABLE things (id bigint, UNIQUE (id));")
+	target = parseSnapshot(t, analyzer, "CREATE TABLE things (id bigint, PRIMARY KEY (id));")
+	_, err = analyzer.Diff(base, target)
+	require.EqualError(t, err, "postgresql schema diff requires manual migration:\n- table things constraints changed")
+}
+
+func TestDiffLowersNamedConstraintReplacements(t *testing.T) {
+	tests := []struct {
+		name, baseline, target, constraint, baselineFragment, targetFragment string
+	}{
+		{
+			name:             "unique",
+			baseline:         `CREATE TABLE things (id bigint, code text, label text, CONSTRAINT things_code_key UNIQUE (code));`,
+			target:           `CREATE TABLE things (id bigint, code text, label text, CONSTRAINT things_code_key UNIQUE (label));`,
+			constraint:       "things_code_key",
+			baselineFragment: `CONSTRAINT things_code_key UNIQUE (code)`,
+			targetFragment:   `CONSTRAINT things_code_key UNIQUE (label)`,
+		},
+		{
+			name:             "check",
+			baseline:         `CREATE TABLE things (id bigint, quantity integer, CONSTRAINT things_quantity_check CHECK (quantity > 0));`,
+			target:           `CREATE TABLE things (id bigint, quantity integer, CONSTRAINT things_quantity_check CHECK (quantity >= 0));`,
+			constraint:       "things_quantity_check",
+			baselineFragment: `CONSTRAINT things_quantity_check CHECK (quantity > 0)`,
+			targetFragment:   `CONSTRAINT things_quantity_check CHECK (quantity >= 0)`,
+		},
+		{
+			name:             "primary key",
+			baseline:         `CREATE TABLE things (id bigint, code text, CONSTRAINT things_pkey PRIMARY KEY (id, code));`,
+			target:           `CREATE TABLE things (id bigint, code text, CONSTRAINT things_pkey PRIMARY KEY (code, id));`,
+			constraint:       "things_pkey",
+			baselineFragment: `CONSTRAINT things_pkey PRIMARY KEY (id, code)`,
+			targetFragment:   `CONSTRAINT things_pkey PRIMARY KEY (code, id)`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			analyzer := postgresql.New()
+			baseline := parseSnapshot(t, analyzer, test.baseline)
+			target := parseSnapshot(t, analyzer, test.target)
+			plan, err := analyzer.Diff(baseline, target)
+			require.NoError(t, err)
+			resolved, err := plan.Resolve()
+			require.NoError(t, err)
+			require.Equal(t, []diff.ProposedOperation{{
+				ID:    "replace_constraint_postgresql_things_" + test.constraint,
+				Table: "things", Constraint: test.constraint,
+				Summary: "replace constraint things." + test.constraint, Kind: diff.OperationReplaceConstraint,
+				Forward: []diff.PlannedStatement{
+					{Source: "001_drop_constraint_things_" + test.constraint + ".sql", SQL: "ALTER TABLE things DROP CONSTRAINT " + test.constraint + ";\n", ReverseSQL: "ALTER TABLE things ADD " + test.baselineFragment + ";\n", Summary: "replace constraint things." + test.constraint},
+					{Source: "002_add_constraint_things_" + test.constraint + ".sql", SQL: "ALTER TABLE things ADD " + test.targetFragment + ";\n", ReverseSQL: "ALTER TABLE things DROP CONSTRAINT " + test.constraint + ";\n", Summary: "replace constraint things." + test.constraint},
+				},
+				Reverse: []diff.PlannedStatement{
+					{Source: "002_add_constraint_things_" + test.constraint + ".sql", SQL: "ALTER TABLE things DROP CONSTRAINT " + test.constraint + ";\n", ReverseSQL: "ALTER TABLE things ADD " + test.targetFragment + ";\n", Summary: "replace constraint things." + test.constraint},
+					{Source: "001_drop_constraint_things_" + test.constraint + ".sql", SQL: "ALTER TABLE things ADD " + test.baselineFragment + ";\n", ReverseSQL: "ALTER TABLE things DROP CONSTRAINT " + test.constraint + ";\n", Summary: "replace constraint things." + test.constraint},
+				},
+			}}, resolved.Operations)
+			require.Equal(t, resolved.Operations[0].Forward, resolved.Statements)
+			root := t.TempDir()
+			require.NoError(t, diff.WriteMigration(filepath.Join(root, "001_constraint"), resolved))
+			loaded, err := migrationdir.Load(root)
+			require.NoError(t, err)
+			require.Len(t, loaded, 1)
+			require.Len(t, loaded[0].Statements, 2)
+			require.Len(t, loaded[0].Down, 2)
+			expectedDown := resolved.Operations[0].Reverse
+			for index, statement := range resolved.Statements {
+				require.Equal(t, statement.Source[:len(statement.Source)-len(".sql")]+".up.sql", loaded[0].Statements[index].Source)
+				require.Equal(t, statement.SQL, string(loaded[0].Statements[index].SQL))
+			}
+			for index, statement := range expectedDown {
+				require.Equal(t, statement.Source[:len(statement.Source)-len(".sql")]+".down.sql", loaded[0].Down[index].Source)
+				require.Equal(t, statement.SQL, string(loaded[0].Down[index].SQL))
+			}
+		})
+	}
+}
+
+func TestDiffDoesNotPublishPartialPlanForAnonymousConstraintChange(t *testing.T) {
+	analyzer := postgresql.New()
+	baseline := parseSnapshot(t, analyzer, `CREATE TABLE things (id bigint, parent_id bigint, CONSTRAINT things_parent_fkey FOREIGN KEY (parent_id) REFERENCES parents (id), UNIQUE (id));`)
+	target := parseSnapshot(t, analyzer, `CREATE TABLE things (id bigint, parent_id bigint, CONSTRAINT things_parent_fkey FOREIGN KEY (parent_id) REFERENCES parents (id) ON DELETE CASCADE, CHECK (id > 0));`)
+	plan, err := analyzer.Diff(baseline, target)
+	require.Equal(t, diff.Plan{}, plan)
+	require.EqualError(t, err, "postgresql schema diff requires manual migration:\n- table things constraints changed")
+}
+
+func TestCreateIndexSchedulesWithoutConstraintReplacementPanic(t *testing.T) {
+	analyzer := postgresql.New()
+	base := parseSnapshot(t, analyzer, "CREATE TABLE users (id bigint);")
+	target := parseSnapshot(t, analyzer, "CREATE TABLE users (id bigint); CREATE INDEX users_id_idx ON users (id);")
+	plan, err := analyzer.Diff(base, target)
+	require.NoError(t, err)
+	resolved, err := plan.Resolve()
+	require.NoError(t, err)
+	require.Len(t, resolved.Statements, 1)
+	require.Equal(t, "001_create_index_users_id_idx.sql", resolved.Statements[0].Source)
+	require.Equal(t, "CREATE INDEX users_id_idx ON users (id);\n", resolved.Statements[0].SQL)
+	require.Equal(t, "DROP INDEX users_id_idx;\n", resolved.Statements[0].ReverseSQL)
+}
+
+func TestDiffRefusesIncompatibleRenameCandidate(t *testing.T) {
+	analyzer := postgresql.New()
+	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (name text);")
+	target := parseSnapshot(t, analyzer, "CREATE TABLE members (display_name integer);")
+	_, err := analyzer.Diff(baseline, target)
+	require.Error(t, err)
+}
+
+func TestDiffRefusesAmbiguousRenameCandidates(t *testing.T) {
+	analyzer := postgresql.New()
+	baseline := parseSnapshot(t, analyzer, "CREATE TABLE members (first text, second text);")
+	target := parseSnapshot(t, analyzer, "CREATE TABLE members (given text, family text);")
+	_, err := analyzer.Diff(baseline, target)
+	require.Error(t, err)
 }
 
 func TestParseRejectsUnsupportedDesiredSchemaStatement(t *testing.T) {

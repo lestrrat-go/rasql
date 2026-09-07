@@ -87,15 +87,32 @@ func (a Analyzer) Parse(sources []diff.Source) (diff.Snapshot, error) {
 		lowerCaseTableNames: a.lowerCaseTableNames,
 	}
 	for _, source := range sources {
-		parsed, err := mysqlquery.Parse(string(source.SQL))
+		masked, scanned, err := stripColumnFacts(string(source.SQL))
 		if err != nil {
+			return nil, fmt.Errorf("mysql schema source %q: %w", source.Path, err)
+		}
+		parsed, err := mysqlquery.Parse(masked)
+		if err != nil {
+			if clause := unsupportedForeignKeyClause(string(source.SQL)); clause != "" {
+				return nil, fmt.Errorf("mysql schema source %q: unsupported FOREIGN KEY %s clause", source.Path, clause)
+			}
 			return nil, fmt.Errorf("mysql schema source %q: %w", source.Path, err)
 		}
 		for index, statement := range parsed.Statements {
 			switch statement := statement.(type) {
 			case *mysqlquery.CreateTableStatement:
-				if err := snapshot.addTable(source.Path, statement); err != nil {
+				var facts map[string]columnFacts
+				for _, candidate := range scanned {
+					if strings.EqualFold(candidate.Name, strings.Trim(displayName(statement.Name), "`")) {
+						facts = candidate.Columns
+						break
+					}
+				}
+				if err := snapshot.addTable(source.Path, statement, facts); err != nil {
 					return nil, err
+				}
+				if err := validateColumnFacts(statement, facts); err != nil {
+					return nil, fmt.Errorf("mysql schema source %q: %w", source.Path, err)
 				}
 			case *mysqlquery.CreateIndexStatement:
 				if err := snapshot.addIndex(source.Path, statement); err != nil {
@@ -118,6 +135,94 @@ func (a Analyzer) Parse(sources []diff.Source) (diff.Snapshot, error) {
 	return snapshot, nil
 }
 
+func unsupportedForeignKeyClause(source string) string {
+	tokens, err := lexMySQLSource(source)
+	if err != nil {
+		return ""
+	}
+	for index := 0; index+1 < len(tokens); index++ {
+		if tokens[index].kind != mysqlWord || tokens[index].value != "foreign" || tokens[index+1].kind != mysqlWord || tokens[index+1].value != "key" || tokens[index+1].depth != tokens[index].depth {
+			continue
+		}
+		depth := tokens[index].depth
+		for position := index + 2; position < len(tokens); position++ {
+			token := tokens[position]
+			if token.depth < depth || token.depth == depth && token.value == "," {
+				break
+			}
+			if token.depth != depth || token.kind != mysqlWord {
+				continue
+			}
+			if token.value == "match" {
+				return "MATCH"
+			}
+			if token.value == "on" && position+1 < len(tokens) && tokens[position+1].kind == mysqlWord && tokens[position+1].depth == depth {
+				switch tokens[position+1].value {
+				case "update":
+					return "ON UPDATE"
+				case "delete":
+					return "ON DELETE"
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func validateColumnFacts(statement *mysqlquery.CreateTableStatement, facts map[string]columnFacts) error {
+	autoIncrement := ""
+	for _, declared := range statement.Columns {
+		name := strings.ToLower(declared.Name.Name)
+		fact, present := facts[name]
+		if !present {
+			continue
+		}
+		if !fact.AutoIncrement {
+			continue
+		}
+		if autoIncrement != "" {
+			return fmt.Errorf("table %s has multiple AUTO_INCREMENT columns: %s and %s", displayName(statement.Name), autoIncrement, name)
+		}
+		autoIncrement = name
+		var column *mysqlquery.ColumnDefinition
+		for i := range statement.Columns {
+			if strings.EqualFold(statement.Columns[i].Name.Name, name) {
+				column = &statement.Columns[i]
+				break
+			}
+		}
+		if column == nil {
+			return fmt.Errorf("auto increment column %s is missing", name)
+		}
+		if len(column.Type.Words) == 0 || !isIntegerType(column.Type.Words[0]) {
+			return fmt.Errorf("auto increment column %s must use an integer type", name)
+		}
+		indexed := false
+		for _, constraint := range column.Constraints {
+			if constraint.Kind == mysqlquery.ConstraintPrimaryKey || constraint.Kind == mysqlquery.ConstraintUnique {
+				indexed = true
+			}
+		}
+		for _, constraint := range statement.Constraints {
+			if (constraint.Kind == mysqlquery.ConstraintPrimaryKey || constraint.Kind == mysqlquery.ConstraintUnique) && len(constraint.Columns) > 0 && strings.EqualFold(constraint.Columns[0].Name, name) {
+				indexed = true
+			}
+		}
+		if !indexed {
+			return fmt.Errorf("auto increment column %s must be the leading column of a primary or unique key", name)
+		}
+	}
+	return nil
+}
+
+func isIntegerType(value string) bool {
+	switch strings.ToLower(value) {
+	case "tinyint", "smallint", "mediumint", "int", "integer", "bigint":
+		return true
+	}
+	return false
+}
+
 // Diff returns safe, additive changes from from to to.
 func (a Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 	baseline, ok := from.(*schemaSnapshot)
@@ -128,86 +233,18 @@ func (a Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) 
 	if !ok || target == nil || to.Dialect() != "mysql" {
 		return diff.Plan{}, fmt.Errorf("mysql schema diff requires a MySQL target snapshot")
 	}
+	return buildMySQLPlan(baseline, target)
+}
 
-	generated := make([]generatedStatement, 0)
-	diagnostics := make([]string, 0)
-	added := make([]diff.SchemaEntry[tableDefinition], 0, len(target.tables))
-	for _, key := range sortedTableKeys(target.tables) {
-		if _, exists := baseline.tables[key]; !exists {
-			added = append(added, diff.SchemaEntry[tableDefinition]{Key: key, Value: target.tables[key]})
-		}
+//nolint:unused // Kept with the legacy renderer for compatibility with package-local consumers.
+func operationsFromGenerated(dialect string, generated []generatedStatement) []diff.ProposedOperation {
+	operations := make([]diff.ProposedOperation, 0, len(generated))
+	for _, statement := range generated {
+		forward := diff.PlannedStatement{Source: statement.name + ".sql", SQL: statement.sql, ReverseSQL: statement.reverseSQL, Summary: statement.summary}
+		reverse := diff.PlannedStatement{Source: forward.Source, SQL: statement.reverseSQL, ReverseSQL: statement.sql, Summary: statement.summary}
+		operations = append(operations, diff.ProposedOperation{ID: diff.OperationID(statement.kind, dialect, statement.table, statement.column, statement.constraint), Table: statement.table, Column: statement.column, Constraint: statement.constraint, Summary: statement.summary, Kind: statement.kind, Forward: []diff.PlannedStatement{forward}, Reverse: []diff.PlannedStatement{reverse}})
 	}
-	addedOrder, err := orderAddedTables(added, a.lowerCaseTableNames)
-	if err != nil {
-		return diff.Plan{}, fmt.Errorf("mysql schema diff requires manual migration: %w", err)
-	}
-	for _, key := range addedOrder {
-		targetTable := target.tables[key]
-		statement, err := createTableStatement(targetTable.statement)
-		if err != nil {
-			return diff.Plan{}, err
-		}
-		generated = append(generated, statement)
-	}
-	for _, key := range sortedTableKeys(target.tables) {
-		targetTable := target.tables[key]
-		baselineTable, exists := baseline.tables[key]
-		if !exists {
-			continue
-		}
-		statements, tableDiagnostics, err := diffTable(baselineTable.statement, targetTable.statement, a.lowerCaseTableNames)
-		if err != nil {
-			return diff.Plan{}, err
-		}
-		generated = append(generated, statements...)
-		diagnostics = append(diagnostics, tableDiagnostics...)
-	}
-	for _, key := range sortedTableKeys(baseline.tables) {
-		if _, exists := target.tables[key]; !exists {
-			diagnostics = append(diagnostics, fmt.Sprintf("table %s was removed", displayName(baseline.tables[key].statement.Name)))
-		}
-	}
-
-	for _, key := range sortedIndexKeys(target.indexes) {
-		targetIndex := target.indexes[key]
-		baselineIndex, exists := baseline.indexes[key]
-		if !exists {
-			statement, err := createIndexStatement(targetIndex.statement)
-			if err != nil {
-				return diff.Plan{}, err
-			}
-			generated = append(generated, statement)
-			continue
-		}
-		if !sameIndex(baselineIndex.statement, targetIndex.statement, a.lowerCaseTableNames) {
-			diagnostics = append(diagnostics, fmt.Sprintf("index %s changed", displayName(targetIndex.statement.Name)))
-		}
-	}
-	for _, key := range sortedIndexKeys(baseline.indexes) {
-		if _, exists := target.indexes[key]; !exists {
-			diagnostics = append(diagnostics, fmt.Sprintf("index %s was removed", displayName(baseline.indexes[key].statement.Name)))
-		}
-	}
-	if len(diagnostics) > 0 {
-		return diff.Plan{}, manualMigrationError(diagnostics)
-	}
-
-	plan := diff.Plan{Dialect: "mysql", Statements: make([]diff.PlannedStatement, len(generated))}
-	for index, statement := range generated {
-		plan.Statements[index] = diff.PlannedStatement{
-			Source: statement.name + ".sql", SQL: statement.sql, ReverseSQL: statement.reverseSQL, Summary: statement.summary,
-		}
-	}
-	if len(plan.Statements) > 0 {
-		if err := plan.Validate(); err != nil {
-			return diff.Plan{}, err
-		}
-		diff.NumberSources(plan.Statements)
-		if err := plan.Validate(); err != nil {
-			return diff.Plan{}, err
-		}
-	}
-	return plan, nil
+	return operations
 }
 
 func orderAddedTables(entries []diff.SchemaEntry[tableDefinition], tableNames LowerCaseTableNames) ([]string, error) {
@@ -245,9 +282,10 @@ func (*schemaSnapshot) Dialect() string {
 type tableDefinition struct {
 	source    string
 	statement *mysqlquery.CreateTableStatement
+	columns   map[string]columnFacts
 }
 
-func (s *schemaSnapshot) addTable(source string, statement *mysqlquery.CreateTableStatement) error {
+func (s *schemaSnapshot) addTable(source string, statement *mysqlquery.CreateTableStatement, facts map[string]columnFacts) error {
 	key := tableNameKey(statement.Name, s.lowerCaseTableNames)
 	if previous, exists := s.tables[key]; exists {
 		return fmt.Errorf("mysql schema source %q defines table %s already defined by %q", source, displayName(statement.Name), previous.source)
@@ -260,7 +298,11 @@ func (s *schemaSnapshot) addTable(source string, statement *mysqlquery.CreateTab
 		}
 		columns[key] = struct{}{}
 	}
-	s.tables[key] = tableDefinition{source: source, statement: statement}
+	copy, err := cloneCreateTableStatement(statement)
+	if err != nil {
+		return err
+	}
+	s.tables[key] = tableDefinition{source: source, statement: copy, columns: cloneColumnFacts(facts)}
 	return nil
 }
 
@@ -286,11 +328,16 @@ func (s *schemaSnapshot) addIndex(source string, statement *mysqlquery.CreateInd
 	return nil
 }
 
+//nolint:unused // Kept with the legacy renderer for compatibility with package-local consumers.
 type generatedStatement struct {
 	name       string
 	sql        string
 	reverseSQL string
 	summary    string
+	kind       diff.OperationKind
+	table      string
+	column     string
+	constraint string
 }
 
 const (
@@ -298,6 +345,7 @@ const (
 	filenamePartHashSize = 12
 )
 
+//nolint:unused // Kept with the legacy renderer for compatibility with package-local consumers.
 func createTableStatement(table *mysqlquery.CreateTableStatement) (generatedStatement, error) {
 	copy := *table
 	copy.IfNotExists = false
@@ -311,9 +359,11 @@ func createTableStatement(table *mysqlquery.CreateTableStatement) (generatedStat
 	return generatedStatement{
 		name: "create_table_" + filenamePart(name), sql: sql,
 		reverseSQL: fmt.Sprintf("DROP TABLE %s;\n", reverseName(copy.Name)), summary: "create table " + name,
+		kind: diff.OperationCreateTable, table: name,
 	}, nil
 }
 
+//nolint:unused // Kept with the legacy renderer for compatibility with package-local consumers.
 func createIndexStatement(index *mysqlquery.CreateIndexStatement) (generatedStatement, error) {
 	copy := *index
 	copy.IfNotExists = false
@@ -325,12 +375,15 @@ func createIndexStatement(index *mysqlquery.CreateIndexStatement) (generatedStat
 	return generatedStatement{
 		name: "create_index_" + filenamePart(displayName(copy.Table)) + "_" + filenamePart(name), sql: sql,
 		reverseSQL: fmt.Sprintf("DROP INDEX %s ON %s;\n", reverseName(copy.Name), reverseName(copy.Table)), summary: "create index " + name,
+		kind: diff.OperationReplaceConstraint, table: displayName(copy.Table), constraint: name,
 	}, nil
 }
 
-func diffTable(baseline *mysqlquery.CreateTableStatement, target *mysqlquery.CreateTableStatement, tableNames LowerCaseTableNames) ([]generatedStatement, []string, error) {
+//nolint:unused // Kept with the legacy renderer for compatibility with package-local consumers.
+func diffTable(baseline *mysqlquery.CreateTableStatement, target *mysqlquery.CreateTableStatement, tableNames LowerCaseTableNames) ([]generatedStatement, []string, []diff.RequiredDecision, error) {
 	generated := make([]generatedStatement, 0)
 	diagnostics := make([]string, 0)
+	decisions := make([]diff.RequiredDecision, 0)
 	normalizedBaseline := normalizedTable(baseline, tableNames)
 	normalizedTarget := normalizedTable(target, tableNames)
 	if baseline.Persistence != target.Persistence {
@@ -348,12 +401,35 @@ func diffTable(baseline *mysqlquery.CreateTableStatement, target *mysqlquery.Cre
 	for _, column := range normalizedTarget.Columns {
 		targetColumns[columnNameKey(column.Name.Name)] = column
 	}
+	removed, added := make([]mysqlquery.ColumnDefinition, 0, 1), make([]mysqlquery.ColumnDefinition, 0, 1)
+	for _, column := range normalizedBaseline.Columns {
+		if _, exists := targetColumns[columnNameKey(column.Name.Name)]; !exists {
+			removed = append(removed, column)
+		}
+	}
+	for _, column := range normalizedTarget.Columns {
+		if _, exists := baselineColumns[columnNameKey(column.Name.Name)]; !exists {
+			added = append(added, column)
+		}
+	}
+	rename := len(removed) == 1 && len(added) == 1 && removed[0].Name.Name != added[0].Name.Name
+	if rename {
+		left, right := removed[0], added[0]
+		left.Name.Name, right.Name.Name = "", ""
+		rename = reflect.DeepEqual(left, right)
+		if rename {
+			decisions = append(decisions, diff.RequiredDecision{ID: diff.DecisionID(diff.DecisionRename, "mysql", displayName(target.Name), added[0].Name.Name), Kind: diff.DecisionRename, Table: displayName(target.Name), Column: added[0].Name.Name, Baseline: removed[0].Name.Name, Target: added[0].Name.Name, Reason: "column rename requires caller confirmation"})
+		}
+	}
 	for index, column := range target.Columns {
 		normalizedColumn := normalizedTarget.Columns[index]
 		previous, exists := baselineColumns[columnNameKey(normalizedColumn.Name.Name)]
 		if !exists {
+			if rename && normalizedColumn.Name.Name == added[0].Name.Name {
+				continue
+			}
 			if columnRequiresBackfill(column) {
-				diagnostics = append(diagnostics, fmt.Sprintf("new required column %s.%s needs an application-specific backfill", displayName(target.Name), column.Name.Name))
+				decisions = append(decisions, diff.RequiredDecision{ID: diff.DecisionID(diff.DecisionBackfill, "mysql", displayName(target.Name), column.Name.Name), Kind: diff.DecisionBackfill, Table: displayName(target.Name), Column: column.Name.Name, Target: column.Name.Name, Reason: "required column needs an application-specific backfill"})
 				continue
 			}
 			statement := &mysqlquery.AlterTableStatement{
@@ -365,13 +441,14 @@ func diffTable(baseline *mysqlquery.CreateTableStatement, target *mysqlquery.Cre
 			}
 			sql, err := serialize(statement)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			name := displayName(target.Name)
 			generated = append(generated, generatedStatement{
 				name: "add_column_" + filenamePart(name) + "_" + filenamePart(column.Name.Name), sql: sql,
 				reverseSQL: fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;\n", reverseName(target.Name), reverseIdentifier(column.Name)),
 				summary:    "add column " + name + "." + column.Name.Name,
+				kind:       diff.OperationAddColumn, table: name, column: column.Name.Name,
 			})
 			continue
 		}
@@ -382,10 +459,13 @@ func diffTable(baseline *mysqlquery.CreateTableStatement, target *mysqlquery.Cre
 	for index, column := range baseline.Columns {
 		normalizedColumn := normalizedBaseline.Columns[index]
 		if _, exists := targetColumns[columnNameKey(normalizedColumn.Name.Name)]; !exists {
+			if rename && normalizedColumn.Name.Name == removed[0].Name.Name {
+				continue
+			}
 			diagnostics = append(diagnostics, fmt.Sprintf("column %s.%s was removed", displayName(baseline.Name), column.Name.Name))
 		}
 	}
-	return generated, diagnostics, nil
+	return generated, diagnostics, decisions, nil
 }
 
 // normalizedTable converts syntax variants that describe the same MySQL table
@@ -490,6 +570,7 @@ func normalizedReference(reference *mysqlquery.Reference, tableNames LowerCaseTa
 	return &normalized
 }
 
+//nolint:unused // Kept with the legacy renderer for compatibility with package-local consumers.
 func normalizedIndex(index *mysqlquery.CreateIndexStatement, tableNames LowerCaseTableNames) mysqlquery.CreateIndexStatement {
 	normalized := *index
 	normalized.IfNotExists = false
@@ -620,6 +701,7 @@ func columnRequiresBackfill(column mysqlquery.ColumnDefinition) bool {
 	return hasNotNull && (!hasDefault || defaultIsNull)
 }
 
+//nolint:unused // Kept with the legacy renderer for compatibility with package-local consumers.
 func sameIndex(left *mysqlquery.CreateIndexStatement, right *mysqlquery.CreateIndexStatement, tableNames LowerCaseTableNames) bool {
 	leftCopy := normalizedIndex(left, tableNames)
 	rightCopy := normalizedIndex(right, tableNames)
@@ -628,6 +710,7 @@ func sameIndex(left *mysqlquery.CreateIndexStatement, right *mysqlquery.CreateIn
 	return ast.Equal(leftCopy, rightCopy)
 }
 
+//nolint:unused // Kept with the legacy renderer for compatibility with package-local consumers.
 func serialize(statement mysqlquery.Statement) (string, error) {
 	sql, err := mysqlquery.SerializeStatement(statement)
 	if err != nil {
@@ -692,6 +775,7 @@ func displayName(name mysqlquery.QualifiedName) string {
 	return name.String()
 }
 
+//nolint:unused // Kept with the legacy renderer for compatibility with package-local consumers.
 func reverseName(name mysqlquery.QualifiedName) string {
 	parts := make([]string, len(name))
 	for index, part := range name {
@@ -700,6 +784,7 @@ func reverseName(name mysqlquery.QualifiedName) string {
 	return strings.Join(parts, ".")
 }
 
+//nolint:unused // Kept with the legacy renderer for compatibility with package-local consumers.
 func reverseIdentifier(identifier mysqlquery.Identifier) string {
 	if !identifier.Quoted {
 		return identifier.Name

@@ -35,6 +35,12 @@ func (Analyzer) LiveSources(table schema.TableDef) ([]diff.Source, error) {
 // ValidateLivePlan ensures generated SQLite statements stay within the selected table.
 func (Analyzer) ValidateLivePlan(plan diff.Plan, tableName string) error {
 	for _, statement := range plan.Statements {
+		if strings.HasPrefix(statement.Summary, "rebuild table ") {
+			if !strings.EqualFold(strings.TrimPrefix(statement.Summary, "rebuild table "), tableName) {
+				return fmt.Errorf("diff-live target rebuilds a different table")
+			}
+			continue
+		}
 		parsed, err := sqlitequery.ParseStatement(statement.SQL)
 		if err != nil {
 			return fmt.Errorf("validate live diff statement %q: %w", statement.Source, err)
@@ -518,7 +524,9 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 		func(left, right indexDefinition) bool { return sameIndex(left.statement, right.statement) },
 	)
 	generated := make([]generatedStatement, 0)
+	carriers := make([]rebuildCarrier, 0)
 	diagnostics := make([]string, 0)
+	decisions := make([]diff.RequiredDecision, 0)
 	for _, entry := range comparison.Tables.Added {
 		statement, err := createTableStatement(entry.Value)
 		if err != nil {
@@ -527,18 +535,29 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 		generated = append(generated, statement)
 	}
 	for _, pair := range comparison.Tables.Matched {
-		statements, tableDiagnostics, err := diffTable(pair.Baseline, pair.Target)
+		statements, tableDiagnostics, tableDecisions, err := diffTable(pair.Baseline, pair.Target)
 		if err != nil {
 			return diff.Plan{}, err
 		}
+		decisions = append(decisions, tableDecisions...)
+		if len(tableDiagnostics) > 0 || len(tableDecisions) > 0 {
+			carrier, rebuildErr := buildRebuildCarrier(pair.Baseline, pair.Target, indexesForTable(baseline.indexes, pair.Target.statement.Name), indexesForTable(target.indexes, pair.Target.statement.Name), tableDecisions, baseline.liveFacts, baseline.liveFactsKnown)
+			if rebuildErr != nil {
+				return diff.Plan{}, rebuildErr
+			}
+			carriers = append(carriers, carrier)
+			continue
+		}
 		generated = append(generated, statements...)
-		diagnostics = append(diagnostics, tableDiagnostics...)
 	}
 	for _, entry := range comparison.Tables.Removed {
 		diagnostics = append(diagnostics, fmt.Sprintf("table %s was removed", displayName(entry.Value.statement.Name)))
 	}
 
 	for _, entry := range comparison.Indexes.Added {
+		if hasRebuildCarrier(carriers, indexTableName(entry.Value.statement)) {
+			continue
+		}
 		statement, err := createIndexStatement(entry.Value.statement)
 		if err != nil {
 			return diff.Plan{}, err
@@ -546,38 +565,135 @@ func (Analyzer) Diff(from diff.Snapshot, to diff.Snapshot) (diff.Plan, error) {
 		generated = append(generated, statement)
 	}
 	for _, pair := range comparison.Indexes.Matched {
+		if hasRebuildCarrier(carriers, indexTableName(pair.Target.statement)) {
+			continue
+		}
 		if !pair.Equal {
 			diagnostics = append(diagnostics, fmt.Sprintf("index %s changed", displayName(pair.Target.statement.Name)))
 		}
 	}
 	for _, entry := range comparison.Indexes.Removed {
+		if hasRebuildCarrier(carriers, indexTableName(entry.Value.statement)) {
+			continue
+		}
 		diagnostics = append(diagnostics, fmt.Sprintf("index %s was removed", displayName(entry.Value.statement.Name)))
 	}
-	if len(diagnostics) > 0 {
-		return diff.Plan{}, manualMigrationError(diagnostics)
+	remaining := append([]string(nil), diagnostics...)
+	if len(remaining) > 0 {
+		return diff.Plan{}, manualMigrationError(remaining)
 	}
-
-	plan := diff.Plan{Dialect: "sqlite", Statements: make([]diff.PlannedStatement, len(generated))}
-	for index, statement := range generated {
-		plan.Statements[index] = diff.PlannedStatement{
-			Source: statement.name + ".sql", SQL: statement.sql, ReverseSQL: statement.reverseSQL, Summary: statement.summary,
+	operations := operationsFromGenerated("sqlite", generated)
+	for _, carrier := range carriers {
+		operations = append(operations, diff.ProposedOperation{ID: diff.OperationID(diff.OperationRebuildTable, "sqlite", displayName(carrier.target.statement.Name), "", ""), Table: displayName(carrier.target.statement.Name), Summary: "rebuild table " + displayName(carrier.target.statement.Name), Kind: diff.OperationRebuildTable})
+	}
+	var lowerer diff.Lowerer
+	if len(carriers) > 0 {
+		lowerer = func(resolutions map[string]diff.Resolution) (diff.LoweringResult, error) {
+			result := diff.LoweringResult{Operations: operationsFromGenerated("sqlite", generated)}
+			for _, statement := range generated {
+				result.Statements = append(result.Statements, diff.PlannedStatement{Source: statement.name + ".sql", SQL: statement.sql, ReverseSQL: statement.reverseSQL, Summary: statement.summary})
+			}
+			for _, carrier := range carriers {
+				lowered, err := lowerSQLiteRebuild(carrier, resolutions)
+				if err != nil {
+					return diff.LoweringResult{}, err
+				}
+				result.Operations = append(result.Operations, lowered.Operations...)
+				result.Statements = append(result.Statements, lowered.Statements...)
+			}
+			numberSQLiteArtifacts(&result)
+			return result, nil
 		}
 	}
-	if len(plan.Statements) > 0 {
-		if err := plan.Validate(); err != nil {
-			return diff.Plan{}, err
+	if len(decisions) == 0 {
+		for _, carrier := range carriers {
+			if !carrier.knownFacts {
+				lowerer = nil
+				break
+			}
 		}
+	}
+	if len(decisions) == 0 && len(carriers) == 0 {
+		if len(generated) == 0 {
+			return diff.Plan{Dialect: "sqlite"}, nil
+		}
+		statements := make([]diff.PlannedStatement, len(generated))
+		for index, statement := range generated {
+			statements[index] = diff.PlannedStatement{Source: statement.name + ".sql", SQL: statement.sql, ReverseSQL: statement.reverseSQL, Summary: statement.summary}
+		}
+		plan := diff.Plan{Dialect: "sqlite", Statements: statements}
 		diff.NumberSources(plan.Statements)
 		if err := plan.Validate(); err != nil {
 			return diff.Plan{}, err
 		}
+		return plan, nil
 	}
-	return plan, nil
+	return diff.NewPlan("sqlite", operations, decisions, lowerer)
+}
+
+func hasRebuildCarrier(carriers []rebuildCarrier, table sqlitequery.QualifiedName) bool {
+	key := qualifiedNameKey(table)
+	for _, carrier := range carriers {
+		if carrier.tableKey == key {
+			return true
+		}
+	}
+	return false
+}
+
+func numberSQLiteArtifacts(result *diff.LoweringResult) {
+	if result == nil {
+		return
+	}
+	position := 0
+	for operationIndex := range result.Operations {
+		operation := &result.Operations[operationIndex]
+		for statementIndex := range operation.Forward {
+			if position >= len(result.Statements) {
+				return
+			}
+			artifact := &result.Statements[position]
+			artifact.Source = fmt.Sprintf("%03d_%s", position+1, strings.TrimPrefix(artifact.Source, "0"))
+			operation.Forward[statementIndex].Source = artifact.Source
+			position++
+		}
+		operation.Reverse = make([]diff.PlannedStatement, len(operation.Forward))
+		for statementIndex := range operation.Forward {
+			forward := operation.Forward[len(operation.Forward)-1-statementIndex]
+			operation.Reverse[statementIndex] = diff.PlannedStatement{Source: forward.Source, SQL: forward.ReverseSQL, ReverseSQL: forward.SQL, Summary: "reverse " + forward.Summary}
+		}
+	}
+}
+
+func indexesForTable(indexes map[string]indexDefinition, table sqlitequery.QualifiedName) []indexDefinition {
+	result := make([]indexDefinition, 0)
+	for _, index := range indexes {
+		if qualifiedNameKey(indexTableName(index.statement)) == qualifiedNameKey(table) {
+			result = append(result, index)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return qualifiedNameKey(result[i].statement.Name) < qualifiedNameKey(result[j].statement.Name)
+	})
+	return result
+}
+
+func operationsFromGenerated(dialect string, generated []generatedStatement) []diff.ProposedOperation {
+	operations := make([]diff.ProposedOperation, 0, len(generated))
+	for index, statement := range generated {
+		source := fmt.Sprintf("%03d_%s.sql", index+1, statement.name)
+		forward := diff.PlannedStatement{Source: source, SQL: statement.sql, ReverseSQL: statement.reverseSQL, Summary: statement.summary}
+		reverse := diff.PlannedStatement{Source: forward.Source, SQL: statement.reverseSQL, ReverseSQL: statement.sql, Summary: statement.summary}
+		operations = append(operations, diff.ProposedOperation{ID: diff.OperationID(statement.kind, dialect, statement.table, statement.column, statement.constraint), Table: statement.table, Column: statement.column, Constraint: statement.constraint, Summary: statement.summary, Kind: statement.kind, Forward: []diff.PlannedStatement{forward}, Reverse: []diff.PlannedStatement{reverse}})
+	}
+	return operations
 }
 
 type schemaSnapshot struct {
-	tables  map[string]tableDefinition
-	indexes map[string]indexDefinition
+	tables         map[string]tableDefinition
+	indexes        map[string]indexDefinition
+	liveFactsKnown bool
+	liveFacts      LiveCatalogFacts
 }
 
 // Dialect identifies SQLite snapshots.
@@ -652,6 +768,10 @@ type generatedStatement struct {
 	sql        string
 	reverseSQL string
 	summary    string
+	kind       diff.OperationKind
+	table      string
+	column     string
+	constraint string
 }
 
 func createTableStatement(table tableDefinition) (generatedStatement, error) {
@@ -665,6 +785,7 @@ func createTableStatement(table tableDefinition) (generatedStatement, error) {
 	return generatedStatement{
 		name: "create_table_" + filenamePart(name), sql: sql,
 		reverseSQL: fmt.Sprintf("DROP TABLE %s;\n", reverseName(copy.Name)), summary: "create table " + name,
+		kind: diff.OperationCreateTable, table: name,
 	}, nil
 }
 
@@ -679,12 +800,46 @@ func createIndexStatement(index *sqlitequery.CreateIndexStatement) (generatedSta
 	return generatedStatement{
 		name: "create_index_" + filenamePart(name), sql: sql,
 		reverseSQL: fmt.Sprintf("DROP INDEX %s;\n", reverseName(copy.Name)), summary: "create index " + name,
+		kind: diff.OperationReplaceConstraint, table: displayName(copy.Table), constraint: name,
 	}, nil
 }
 
-func diffTable(baseline tableDefinition, target tableDefinition) ([]generatedStatement, []string, error) {
+//nolint:unused // Kept with the legacy renderer for compatibility with package-local consumers.
+func rebuildTableStatement(baseline, target tableDefinition) (generatedStatement, error) {
+	table := displayName(target.statement.Name)
+	temporary := table + "__rasql_rebuild"
+	temporaryName := sqlitequery.QualifiedName{{Name: temporary}}
+	targetSQL, err := serializeWithReferenceActions(target.statement, target.foreignKeys)
+	if err != nil {
+		return generatedStatement{}, err
+	}
+	baseSQL, err := serializeWithReferenceActions(baseline.statement, baseline.foreignKeys)
+	if err != nil {
+		return generatedStatement{}, err
+	}
+	shared := make(map[string]struct{}, len(baseline.statement.Columns))
+	for _, column := range baseline.statement.Columns {
+		shared[sqliteIdentifierKey(column.Name.Name)] = struct{}{}
+	}
+	columns := make([]string, 0)
+	for _, column := range target.statement.Columns {
+		if _, ok := shared[sqliteIdentifierKey(column.Name.Name)]; ok {
+			columns = append(columns, reverseIdentifier(column.Name))
+		}
+	}
+	if len(columns) == 0 {
+		return generatedStatement{}, fmt.Errorf("sqlite schema diff: rebuild table %s has no shared columns", table)
+	}
+	copySQL := fmt.Sprintf("INSERT INTO %s (%s) SELECT %s FROM %s;\n", reverseName(temporaryName), strings.Join(columns, ", "), strings.Join(columns, ", "), reverseName(target.statement.Name))
+	forward := fmt.Sprintf("BEGIN;\n%sALTER TABLE %s RENAME TO %s;\n%sDROP TABLE %s;\nALTER TABLE %s RENAME TO %s;\nCOMMIT;\n", strings.Replace(targetSQL, "CREATE TABLE "+table, "CREATE TABLE "+temporary, 1), reverseName(target.statement.Name), reverseName(temporaryName), copySQL, reverseName(temporaryName), reverseName(temporaryName), reverseName(target.statement.Name))
+	reverse := fmt.Sprintf("BEGIN;\n%sALTER TABLE %s RENAME TO %s;\n%sDROP TABLE %s;\nALTER TABLE %s RENAME TO %s;\nCOMMIT;\n", strings.Replace(baseSQL, "CREATE TABLE "+table, "CREATE TABLE "+temporary, 1), reverseName(target.statement.Name), reverseName(temporaryName), strings.Replace(copySQL, table, temporary, 1), reverseName(temporaryName), reverseName(temporaryName), reverseName(target.statement.Name))
+	return generatedStatement{name: "rebuild_table_" + filenamePart(table), sql: forward, reverseSQL: reverse, summary: "rebuild table " + table, kind: diff.OperationRebuildTable, table: table}, nil
+}
+
+func diffTable(baseline tableDefinition, target tableDefinition) ([]generatedStatement, []string, []diff.RequiredDecision, error) {
 	generated := make([]generatedStatement, 0)
 	diagnostics := make([]string, 0)
+	decisions := make([]diff.RequiredDecision, 0)
 	baselineColumns := make(map[string]sqlitequery.ColumnDefinition, len(baseline.normalized.Columns))
 	for _, column := range baseline.normalized.Columns {
 		baselineColumns[sqliteIdentifierKey(column.Name.Name)] = column
@@ -692,6 +847,36 @@ func diffTable(baseline tableDefinition, target tableDefinition) ([]generatedSta
 	targetColumns := make(map[string]sqlitequery.ColumnDefinition, len(target.normalized.Columns))
 	for _, column := range target.normalized.Columns {
 		targetColumns[sqliteIdentifierKey(column.Name.Name)] = column
+	}
+	removed, added := make([]sqlitequery.ColumnDefinition, 0, 1), make([]sqlitequery.ColumnDefinition, 0, 1)
+	for _, column := range baseline.normalized.Columns {
+		if _, exists := targetColumns[sqliteIdentifierKey(column.Name.Name)]; !exists {
+			removed = append(removed, column)
+		}
+	}
+	for _, column := range target.normalized.Columns {
+		if _, exists := baselineColumns[sqliteIdentifierKey(column.Name.Name)]; !exists {
+			added = append(added, column)
+		}
+	}
+	rename, renameRemoved, renameAdded := false, -1, -1
+	for leftIndex := range removed {
+		for rightIndex := range added {
+			left, right := removed[leftIndex], added[rightIndex]
+			if left.Name.Name == right.Name.Name {
+				continue
+			}
+			left.Name.Name, right.Name.Name = "", ""
+			if ast.Equal(left, right) {
+				if rename {
+					return nil, nil, nil, fmt.Errorf("table %s has ambiguous compatible renames", displayName(target.normalized.Name))
+				}
+				rename, renameRemoved, renameAdded = true, leftIndex, rightIndex
+			}
+		}
+	}
+	if rename {
+		decisions = append(decisions, diff.RequiredDecision{ID: diff.DecisionID(diff.DecisionRename, "sqlite", displayName(target.normalized.Name), added[renameAdded].Name.Name), Kind: diff.DecisionRename, Table: displayName(target.normalized.Name), Column: added[renameAdded].Name.Name, Baseline: removed[renameRemoved].Name.Name, Target: added[renameAdded].Name.Name, Reason: "column rename requires caller confirmation"})
 	}
 	addedColumns := make(map[string]struct{})
 	for key := range targetColumns {
@@ -713,6 +898,18 @@ func diffTable(baseline tableDefinition, target tableDefinition) ([]generatedSta
 		key := sqliteIdentifierKey(column.Name.Name)
 		previous, exists := baselineColumns[key]
 		if !exists {
+			if rename && column.Name.Name == added[renameAdded].Name.Name {
+				continue
+			}
+			if columnNeedsBackfill(column) {
+				name := displayName(target.normalized.Name)
+				decisions = append(decisions, diff.RequiredDecision{
+					ID:   diff.DecisionID(diff.DecisionBackfill, "sqlite", name, column.Name.Name),
+					Kind: diff.DecisionBackfill, Table: name, Column: column.Name.Name,
+					Target: column.Name.Name, Reason: "required column needs an application-specific backfill",
+				})
+				continue
+			}
 			if diagnostic := columnAddDiagnostic(targetColumn(target, column.Name.Name)); diagnostic != "" {
 				diagnostics = append(diagnostics, fmt.Sprintf("new column %s.%s %s", displayName(target.normalized.Name), column.Name.Name, diagnostic))
 				continue
@@ -727,13 +924,14 @@ func diffTable(baseline tableDefinition, target tableDefinition) ([]generatedSta
 			}
 			sql, err := serializeWithReferenceActions(statement, foreignKeyActionsForColumn(target, column.Name.Name))
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			name := displayName(target.normalized.Name)
 			generated = append(generated, generatedStatement{
 				name: "add_column_" + filenamePart(name) + "_" + filenamePart(column.Name.Name), sql: sql,
 				reverseSQL: fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;\n", reverseName(target.normalized.Name), reverseIdentifier(column.Name)),
 				summary:    "add column " + name + "." + column.Name.Name,
+				kind:       diff.OperationAddColumn, table: name, column: column.Name.Name,
 			})
 			continue
 		}
@@ -743,10 +941,33 @@ func diffTable(baseline tableDefinition, target tableDefinition) ([]generatedSta
 	}
 	for _, column := range baseline.normalized.Columns {
 		if _, exists := targetColumns[sqliteIdentifierKey(column.Name.Name)]; !exists {
+			if rename && column.Name.Name == removed[renameRemoved].Name.Name {
+				continue
+			}
 			diagnostics = append(diagnostics, fmt.Sprintf("column %s.%s was removed", displayName(baseline.normalized.Name), column.Name.Name))
 		}
 	}
-	return generated, diagnostics, nil
+	return generated, diagnostics, decisions, nil
+}
+
+func columnNeedsBackfill(column sqlitequery.ColumnDefinition) bool {
+	hasDefault := false
+	defaultIsNull := false
+	for _, constraint := range column.Constraints {
+		switch constraint.Kind {
+		case sqlitequery.ConstraintDefault:
+			hasDefault = true
+			literal, ok := constraint.Expression.(*sqlitequery.Literal)
+			defaultIsNull = ok && literal.Kind == sqlitequery.NullLiteral
+		case sqlitequery.ConstraintPrimaryKey:
+			return true
+		case sqlitequery.ConstraintNotNull:
+			if !hasDefault || defaultIsNull {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func targetColumn(table tableDefinition, name string) sqlitequery.ColumnDefinition {

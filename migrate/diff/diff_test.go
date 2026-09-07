@@ -91,6 +91,14 @@ func TestWriteMigrationCreatesNewDirectory(t *testing.T) {
 	require.Error(t, diff.WriteMigration(directory, plan))
 }
 
+func TestWriteMigrationRejectsPreviewPlanBeforeCreatingParent(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "missing", "001_preview")
+	plan := diff.Plan{Dialect: "postgresql", Operations: []diff.ProposedOperation{{ID: "add_column_postgresql_users_email", Kind: diff.OperationAddColumn, Table: "users", Column: "email"}}}
+	require.ErrorContains(t, diff.WriteMigration(directory, plan), "plan is not executable")
+	_, err := os.Stat(filepath.Dir(directory))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func TestPlanValidateReportsBothConflictingObjects(t *testing.T) {
 	plan := diff.Plan{
 		Dialect: "sqlite",
