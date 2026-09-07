@@ -138,8 +138,8 @@ func consumePreparedPage[R any](ctx context.Context, executor Executor, page pre
 	if callback == nil {
 		callback = func(R, bool) error { return nil }
 	}
-	terminal := new(rowTerminal)
-	ctx = context.WithValue(ctx, rowTerminalKey{}, terminal)
+	var terminal rowTerminal
+	ctx = context.WithValue(ctx, rowTerminalKey{}, &terminal)
 	rows, err := rowsPrepared(ctx, executor, page.prepared)
 	if err != nil {
 		return result, err
