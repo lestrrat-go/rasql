@@ -26,7 +26,7 @@ func TestCompactGeneratedSizeGates(t *testing.T) {
 		metric := metrics[columns]
 		t.Logf("compact columns=%d public=%d private=%d imports=%d declarations=%d lines=%d bytes=%d", columns, metric.publicDeclarations, metric.privateDeclarations, metric.imports, metric.declarations, metric.lines, metric.bytes)
 		require.LessOrEqual(t, metric.privateDeclarations, 7+14, "private declarations for one object")
-		t.Logf("private lines=%d; contract budget=%d", metric.privateLines, 55+40+5*(columns+1))
+		require.LessOrEqual(t, metric.privateLines, 55+40+5*(columns+1), "private lines for one object")
 	}
 	require.LessOrEqual(t, metrics[31].lines-metrics[3].lines, 25*28+12)
 	require.LessOrEqual(t, metrics[100].lines-metrics[31].lines, 25*69+12)
@@ -126,6 +126,7 @@ func generatedSurfaceMetrics(t *testing.T, store generate.Store) generatedSurfac
 						result.publicDeclarations++
 					} else {
 						result.privateDeclarations++
+						t.Logf("private spec lines=%d", fileSet.Position(spec.End()).Line-fileSet.Position(spec.Pos()).Line+1)
 						markPrivate(spec)
 					}
 				}

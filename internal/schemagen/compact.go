@@ -460,7 +460,11 @@ func writeCompactDecoder(b *bytes.Buffer, object CompactObject, accessor, row st
 			b.WriteByte('\n')
 		}
 	}
-	b.WriteString("\tif err := source.Scan(")
+	if optional {
+		b.WriteString("\tif err := source.Scan(")
+	} else {
+		b.WriteString("\treturn source.Scan(")
+	}
 	first := true
 	for _, column := range object.Go.Columns {
 		if !columnReadable(object.Semantic, column.Name) {
@@ -484,7 +488,17 @@ func writeCompactDecoder(b *bytes.Buffer, object CompactObject, accessor, row st
 			b.WriteString(exportedCompact(column.Name))
 		}
 	}
-	b.WriteString("); err != nil { return err }\n")
+	if optional {
+		b.WriteString("); err != nil { return err }\n")
+	} else {
+		b.WriteString(")\n}\n\n")
+		b.WriteString("func (row *")
+		b.WriteString(row)
+		b.WriteString(") ScanRow(source rasql.ScanSource) error { return ")
+		b.WriteString(name)
+		b.WriteString("{}.DecodeRow(source, row) }\n\n")
+		return
+	}
 	if optional {
 		for _, column := range object.Go.Columns {
 			if !columnReadable(object.Semantic, column.Name) {
@@ -501,13 +515,6 @@ func writeCompactDecoder(b *bytes.Buffer, object CompactObject, accessor, row st
 		}
 	}
 	b.WriteString("\treturn nil\n}\n\n")
-	if !optional {
-		b.WriteString("func (row *")
-		b.WriteString(row)
-		b.WriteString(") ScanRow(source rasql.ScanSource) error { return ")
-		b.WriteString(name)
-		b.WriteString("{}.DecodeRow(source, row) }\n\n")
-	}
 }
 
 func writeCompactProjections(b *bytes.Buffer, object CompactObject, accessor, row string, optional bool) {
