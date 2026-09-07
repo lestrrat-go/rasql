@@ -4,24 +4,29 @@ import (
 	"database/sql"
 	"reflect"
 	"sync/atomic"
+	"time"
 
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 )
 
 type Expr[T any] struct {
-	node   query.Expression
-	codec  string
-	source string
+	node    query.Expression
+	codec   string
+	source  string
+	bindErr error
 }
+type BindSnapshotter[T any] interface{ SnapshotBind() (T, error) }
 type NullExpr[T any] struct {
-	node   query.Expression
-	codec  string
-	source string
+	node    query.Expression
+	codec   string
+	source  string
+	bindErr error
 }
 type Predicate struct {
-	node   query.Expression
-	source string
+	node    query.Expression
+	source  string
+	bindErr error
 }
 type Column[Row, T any] struct {
 	ref   query.ColumnRef
@@ -108,21 +113,27 @@ type bindSlot struct {
 
 func Value[T any](value T) Expr[T] {
 	id := bindID(atomic.AddUint64(&nextBindID, 1))
-	return Expr[T]{node: query.Bind(bindToken{id: id, value: cloneBindValue(value)})}
+	snapshot, err := snapshotBind(value)
+	return Expr[T]{node: query.Bind(bindToken{id: id, value: snapshot}), bindErr: err}
 }
 func ValueWithCodec[T any](value T, codec string) (Expr[T], error) {
 	if codec != "" && !codecPattern.MatchString(codec) {
 		return Expr[T]{}, planError("invalid_schema", "codec", "malformed codec identifier")
 	}
 	id := bindID(atomic.AddUint64(&nextBindID, 1))
-	return Expr[T]{node: query.Bind(bindToken{id: id, value: cloneBindValue(value), codec: codec}), codec: codec}, nil
+	snapshot, err := snapshotBind(value)
+	if err != nil {
+		return Expr[T]{}, err
+	}
+	return Expr[T]{node: query.Bind(bindToken{id: id, value: snapshot, codec: codec}), codec: codec}, nil
 }
 func EqualExpr[T comparable](left, right Expr[T]) Predicate {
 	return Predicate{node: query.Equal(left.node, right.node), source: left.source}
 }
 func EqualValue[T comparable](left Expr[T], right T) Predicate {
 	id := bindID(atomic.AddUint64(&nextBindID, 1))
-	return Predicate{node: query.Equal(left.node, query.Bind(bindToken{id: id, value: cloneBindValue(right), codec: left.codec})), source: left.source}
+	snapshot, err := snapshotBind(right)
+	return Predicate{node: query.Equal(left.node, query.Bind(bindToken{id: id, value: snapshot, codec: left.codec})), source: left.source, bindErr: err}
 }
 func EqualNullable[T comparable](left, right NullExpr[T]) Predicate {
 	return Predicate{node: query.Equal(left.node, right.node), source: left.source}
@@ -215,6 +226,111 @@ func cloneBindValue[T any](value T) any {
 		return nil
 	}
 	return cloned.Interface()
+}
+
+func snapshotBind[T any](value T) (any, error) {
+	if snapshotter, ok := any(value).(BindSnapshotter[T]); ok {
+		return snapshotter.SnapshotBind()
+	}
+	return snapshotReflectValue(reflect.ValueOf(value), make(map[uintptr]bool))
+}
+func snapshotReflectValue(value reflect.Value, active map[uintptr]bool) (any, error) {
+	if !value.IsValid() {
+		return nil, nil
+	}
+	if value.Type() == reflect.TypeOf(time.Time{}) {
+		return value.Interface(), nil
+	}
+	if value.Kind() == reflect.Interface {
+		if value.IsNil() {
+			return nil, nil
+		}
+		return snapshotReflectValue(value.Elem(), active)
+	}
+	if value.Kind() == reflect.Pointer || value.Kind() == reflect.Map || value.Kind() == reflect.Slice {
+		if value.IsNil() {
+			return reflect.Zero(value.Type()).Interface(), nil
+		}
+		key := value.Pointer()
+		if active[key] {
+			return nil, planError("unsnapshotable_bind", "bind", "cycle detected")
+		}
+		active[key] = true
+		defer delete(active, key)
+	}
+	if value.Kind() == reflect.Func || value.Kind() == reflect.Chan || value.Kind() == reflect.UnsafePointer {
+		return nil, planError("unsnapshotable_bind", "bind", "mutable value is unsupported")
+	}
+	switch value.Kind() {
+	case reflect.Pointer:
+		cloned, err := snapshotReflectValue(value.Elem(), active)
+		if err != nil {
+			return nil, err
+		}
+		p := reflect.New(value.Type().Elem())
+		p.Elem().Set(reflect.ValueOf(cloned))
+		return p.Interface(), nil
+	case reflect.Slice:
+		result := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+		for i := 0; i < value.Len(); i++ {
+			v, err := snapshotReflectValue(value.Index(i), active)
+			if err != nil {
+				return nil, err
+			}
+			result.Index(i).Set(reflect.ValueOf(v))
+		}
+		return result.Interface(), nil
+	case reflect.Array:
+		result := reflect.New(value.Type()).Elem()
+		for i := 0; i < value.Len(); i++ {
+			v, err := snapshotReflectValue(value.Index(i), active)
+			if err != nil {
+				return nil, err
+			}
+			result.Index(i).Set(reflect.ValueOf(v))
+		}
+		return result.Interface(), nil
+	case reflect.Map:
+		result := reflect.MakeMapWithSize(value.Type(), value.Len())
+		iter := value.MapRange()
+		for iter.Next() {
+			if iter.Key().Kind() == reflect.Pointer || iter.Key().Kind() == reflect.Map || iter.Key().Kind() == reflect.Slice {
+				return nil, planError("unsnapshotable_bind", "bind", "mutable map key")
+			}
+			v, err := snapshotReflectValue(iter.Value(), active)
+			if err != nil {
+				return nil, err
+			}
+			result.SetMapIndex(iter.Key(), reflect.ValueOf(v))
+		}
+		return result.Interface(), nil
+	case reflect.Struct:
+		if value.Type() == reflect.TypeOf(sql.NamedArg{}) {
+			arg := value.Interface().(sql.NamedArg)
+			v, err := snapshotReflectValue(reflect.ValueOf(arg.Value), active)
+			if err != nil {
+				return nil, err
+			}
+			arg.Value = v
+			return arg, nil
+		}
+		result := reflect.New(value.Type()).Elem()
+		result.Set(value)
+		for i := 0; i < value.NumField(); i++ {
+			field := value.Field(i)
+			if value.Type().Field(i).PkgPath != "" {
+				return nil, planError("unsnapshotable_bind", "bind", "unexported field")
+			}
+			v, err := snapshotReflectValue(field, active)
+			if err != nil {
+				return nil, err
+			}
+			result.Field(i).Set(reflect.ValueOf(v))
+		}
+		return result.Interface(), nil
+	default:
+		return value.Interface(), nil
+	}
 }
 func cloneReflectValue(value reflect.Value) reflect.Value {
 	if !value.IsValid() {

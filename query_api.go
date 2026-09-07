@@ -105,13 +105,14 @@ type ProjectionItem struct {
 	expression query.Expression
 	column     ResultColumn
 	source     string
+	bindErr    error
 }
 
 func Item[T any](name string, value Expr[T], logical schema.ColumnType, codec string) ProjectionItem {
-	return ProjectionItem{expression: value.node, source: value.source, column: ResultColumn{Name: name, Type: logical, Codec: codec}}
+	return ProjectionItem{expression: value.node, source: value.source, bindErr: value.bindErr, column: ResultColumn{Name: name, Type: logical, Codec: codec}}
 }
 func NullItem[T any](name string, value NullExpr[T], logical schema.ColumnType, codec string) ProjectionItem {
-	return ProjectionItem{expression: value.node, source: value.source, column: ResultColumn{Name: name, Type: logical, Nullable: true, Codec: codec}}
+	return ProjectionItem{expression: value.node, source: value.source, bindErr: value.bindErr, column: ResultColumn{Name: name, Type: logical, Nullable: true, Codec: codec}}
 }
 
 type Projection[R any] struct {
@@ -238,6 +239,9 @@ func (p QueryPlan) Validate() error {
 	}
 	allowed := seen
 	for i, item := range p.projection {
+		if item.bindErr != nil {
+			return planError("unsnapshotable_bind", fmt.Sprintf("plan.projection[%d]", i), item.bindErr.Error())
+		}
 		if item.expression == nil {
 			return planError("invalid_projection", fmt.Sprintf("plan.projection[%d]", i), "expression is zero")
 		}
@@ -258,6 +262,9 @@ func (p QueryPlan) Validate() error {
 	for i, predicate := range append(append([]Predicate(nil), p.where...), p.having...) {
 		if predicate.node == nil {
 			return planError("invalid_projection", fmt.Sprintf("plan.predicates[%d]", i), "predicate is zero")
+		}
+		if predicate.bindErr != nil {
+			return planError("unsnapshotable_bind", fmt.Sprintf("plan.predicates[%d]", i), predicate.bindErr.Error())
 		}
 		if predicate.source != "" {
 			if _, ok := allowed[predicate.source]; !ok {
