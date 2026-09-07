@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/lestrrat-go/rasql/query"
 )
@@ -212,6 +213,7 @@ func LoadGraph[R, G any](ctx context.Context, executor Executor, plan GraphPlan[
 	graphs := make([]G, len(rootRows))
 	queue := make([]graphWork, len(rootRows))
 	deferred := make([]graphDeferred, 0)
+	cache := make(map[string][]graphRow)
 	for i, row := range rootRows {
 		graphs[i] = row.graph.(G)
 		queue[i] = graphWork{node: plan.node, parent: &graphs[i], row: row.row}
@@ -220,7 +222,7 @@ func LoadGraph[R, G any](ctx context.Context, executor Executor, plan GraphPlan[
 		current := queue
 		queue = nil
 		for _, edge := range planEdges(current) {
-			next, err := executeGraphEdge(callCtx, observed, edge.edge, edge.parents, &observedRows, &deferred)
+			next, err := executeGraphEdge(callCtx, observed, edge.edge, edge.parents, &observedRows, &deferred, cache)
 			if err != nil {
 				finalErr = err
 				return nil, err
@@ -256,6 +258,16 @@ type graphEdgeWork struct {
 type graphDeferred struct {
 	depth int
 	fn    func()
+}
+
+func graphInvocationKey(edge *graphEdgeSpec, stage string, tuples []keyTuple) string {
+	var key strings.Builder
+	fmt.Fprintf(&key, "%p:%s:", edge, stage)
+	for _, tuple := range tuples {
+		key.WriteString(tuple.identity)
+		key.WriteByte(0)
+	}
+	return key.String()
 }
 
 type graphJunctionRow struct{ values []any }
@@ -387,9 +399,9 @@ func buildGraphMembership(key *graphKeySpec, tuples []keyTuple) (Predicate, erro
 	return Predicate{node: query.Or(branches...)}, nil
 }
 
-func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpec, parents []graphWork, rowCount *int64, deferred *[]graphDeferred) ([]graphWork, error) {
+func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpec, parents []graphWork, rowCount *int64, deferred *[]graphDeferred, cache map[string][]graphRow) ([]graphWork, error) {
 	if edge.kind == graphManyThrough {
-		return executeManyThrough(ctx, executor, edge, parents, rowCount, deferred)
+		return executeManyThrough(ctx, executor, edge, parents, rowCount, deferred, cache)
 	}
 	codecs := graphCodecs(executor)
 	tuples := make([]keyTuple, 0, len(parents))
@@ -476,9 +488,14 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 		} else if len(compiled.bindSlots) > budget || (profile.MaxBind > 0 && len(compiled.bindSlots) > profile.MaxBind) {
 			return nil, planError("bind_limit", "graph."+edge.name, "compiled query exceeds bind budget")
 		}
-		rows, err := childQuery.run(ctx, executor, func() (int64, error) { *rowCount++; return *rowCount, nil })
-		if err != nil {
-			return nil, err
+		cacheKey := graphInvocationKey(edge, "child", tuples[start:end])
+		rows, cached := cache[cacheKey]
+		if !cached {
+			rows, err = childQuery.run(ctx, executor, func() (int64, error) { *rowCount++; return *rowCount, nil })
+			if err != nil {
+				return nil, err
+			}
+			cache[cacheKey] = rows
 		}
 		for _, row := range rows {
 			tuple, present, err := edge.childKey.tuple(row.row, codecs)
@@ -539,7 +556,7 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 	return next, nil
 }
 
-func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeSpec, parents []graphWork, rowCount *int64, deferred *[]graphDeferred) ([]graphWork, error) {
+func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeSpec, parents []graphWork, rowCount *int64, deferred *[]graphDeferred, cache map[string][]graphRow) ([]graphWork, error) {
 	codecs := graphCodecs(executor)
 	parentTuples := make([]keyTuple, 0, len(parents))
 	parentIndex := make(map[string][]int)
@@ -616,9 +633,14 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 		} else if len(compiled.bindSlots) > budget || (profile.MaxBind > 0 && len(compiled.bindSlots) > profile.MaxBind) {
 			return nil, planError("bind_limit", "graph."+edge.name, "compiled junction query exceeds bind budget")
 		}
-		rows, err := limited.run(ctx, executor, func() (int64, error) { *rowCount++; return *rowCount, nil })
-		if err != nil {
-			return nil, err
+		cacheKey := graphInvocationKey(edge, "junction", parentTuples[start:end])
+		rows, cached := cache[cacheKey]
+		if !cached {
+			rows, err = limited.run(ctx, executor, func() (int64, error) { *rowCount++; return *rowCount, nil })
+			if err != nil {
+				return nil, err
+			}
+			cache[cacheKey] = rows
 		}
 		for _, row := range rows {
 			junctionRow, ok := row.row.(graphJunctionRow)
@@ -694,9 +716,14 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 			} else if len(compiled.bindSlots) > budget || (profile.MaxBind > 0 && len(compiled.bindSlots) > profile.MaxBind) {
 				return nil, planError("bind_limit", "graph."+edge.name, "compiled target query exceeds bind budget")
 			}
-			rows, err := childQuery.run(ctx, executor, func() (int64, error) { *rowCount++; return *rowCount, nil })
-			if err != nil {
-				return nil, err
+			cacheKey := graphInvocationKey(edge, "target", targetOrder[start:end])
+			rows, cached := cache[cacheKey]
+			if !cached {
+				rows, err = childQuery.run(ctx, executor, func() (int64, error) { *rowCount++; return *rowCount, nil })
+				if err != nil {
+					return nil, err
+				}
+				cache[cacheKey] = rows
 			}
 			for _, row := range rows {
 				tuple, present, err := edge.childKey.tuple(row.row, codecs)
