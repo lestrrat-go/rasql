@@ -17,9 +17,35 @@ type EventKind uint8
 const (
 	EventScope EventKind = iota + 1
 	EventStatement
+	EventMutationBatch
+	EventGraph
 	EventKindScope     = EventScope
 	EventKindStatement = EventStatement
+	EventKindMutationBatch = EventMutationBatch
+	EventKindGraph         = EventGraph
 )
+
+type logicalInvocationProvider interface {
+	beginLogicalInvocation(context.Context, EventKind) (context.Context, Executor, logicalInvocationCompletion)
+}
+
+type logicalInvocationCompletion interface {
+	completeLogicalInvocation(error, int64, bool)
+}
+
+type noLogicalInvocationCompletion struct{}
+
+func (noLogicalInvocationCompletion) completeLogicalInvocation(error, int64, bool) {}
+
+var noLogicalInvocation noLogicalInvocationCompletion
+
+func beginLogicalInvocation(ctx context.Context, executor Executor, kind EventKind) (context.Context, Executor, logicalInvocationCompletion) {
+	provider, ok := executor.(logicalInvocationProvider)
+	if !ok {
+		return ctx, executor, noLogicalInvocation
+	}
+	return provider.beginLogicalInvocation(ctx, kind)
+}
 
 // EventPhase identifies the start or terminal half of an event.
 type EventPhase uint8
@@ -103,6 +129,37 @@ type eventExecutor struct {
 	scopeCtx  context.Context
 }
 
+type observedLogicalCompletion struct {
+	e          eventExecutor
+	ctx        context.Context
+	completion EventCompletion
+	event      Event
+	done       atomic.Bool
+}
+
+func (c *observedLogicalCompletion) completeLogicalInvocation(err error, rows int64, early bool) {
+	if !c.done.CompareAndSwap(false, true) {
+		return
+	}
+	c.event.Err = err
+	c.event.Rows = rows
+	c.event.EarlyClose = early
+	c.e.complete(c.ctx, c.completion, c.event)
+}
+
+func (e eventExecutor) beginLogicalInvocation(ctx context.Context, kind EventKind) (context.Context, Executor, logicalInvocationCompletion) {
+	if len(e.observers) == 0 {
+		return ctx, e.Executor, noLogicalInvocation
+	}
+	logicalID := nextEventID()
+	callCtx, completion := e.start(ctx, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: kind, Phase: EventStart})
+	child := e.childScope(e.Executor, callCtx, logicalID, &atomic.Int64{})
+	return callCtx, child, &observedLogicalCompletion{
+		e: e, ctx: callCtx, completion: completion,
+		event: Event{LogicalID: logicalID, ParentID: e.parentID, Kind: kind, Phase: EventTerminal},
+	}
+}
+
 type eventScopedExecutor struct{ eventExecutor }
 type eventCompilerExecutor struct{ eventExecutor }
 type eventCodecExecutor struct{ eventExecutor }
@@ -128,6 +185,9 @@ func WithEventObservers(executor Executor, handler ExtensionErrorHandler, observ
 		if observer == nil || isNilEventObserver(observer) {
 			return nil, fmt.Errorf("rasql: event observer must not be nil")
 		}
+	}
+	if len(observers) == 0 {
+		return executor, nil
 	}
 	base := eventExecutor{Executor: executor, handler: handler, observers: append([]EventObserver(nil), observers...), parentID: "", statement: &atomic.Int64{}}
 	return wrapEventExecutor(base), nil

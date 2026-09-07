@@ -188,6 +188,26 @@ func (e profiledExecutor) queryCompiler() *querycompile.Compiler { return e.comp
 
 type profiledCodecExecutor struct{ profiledExecutor }
 
+type logicalProfiledExecutor struct{ profiledExecutor }
+type logicalProfiledCodecExecutor struct{ profiledCodecExecutor }
+
+func beginLogicalFrom(executor Executor, ctx context.Context, kind EventKind) (context.Context, Executor, logicalInvocationCompletion) {
+	provider, ok := executor.(logicalInvocationProvider)
+	if !ok {
+		return ctx, executor, noLogicalInvocation
+	}
+	return provider.beginLogicalInvocation(ctx, kind)
+}
+
+func (e logicalProfiledExecutor) beginLogicalInvocation(ctx context.Context, kind EventKind) (context.Context, Executor, logicalInvocationCompletion) {
+	callCtx, child, completion := beginLogicalFrom(e.Executor, ctx, kind)
+	return callCtx, wrapProfiledChild(child, e.compiler), completion
+}
+func (e logicalProfiledCodecExecutor) beginLogicalInvocation(ctx context.Context, kind EventKind) (context.Context, Executor, logicalInvocationCompletion) {
+	callCtx, child, completion := beginLogicalFrom(e.Executor, ctx, kind)
+	return callCtx, wrapProfiledChildWithCodecs(child, e.compiler, e.Codecs()), completion
+}
+
 func (e profiledCodecExecutor) Codecs() CodecRegistry {
 	provider, _ := e.Executor.(CodecProvider)
 	if provider == nil {
@@ -208,20 +228,40 @@ func WithEngineProfile(executor Executor, profile EngineProfile) (Executor, erro
 		return nil, err
 	}
 	base := profiledExecutor{Executor: executor, compiler: c}
+	logical, hasLogical := executor.(logicalInvocationProvider)
+	_ = logical
 	if _, scope := executor.(transactionBeginner); scope {
 		if _, evidence := executor.(executionDurabilityProvider); evidence {
 			if _, codecs := executor.(CodecProvider); codecs {
+				if hasLogical {
+					return logicalProfiledCodecScopedEvidenceExecutor{profiledCodecScopedEvidenceExecutor{profiledCodecScopedExecutor{profiledScopedExecutor{base}}}}, nil
+				}
 				return profiledCodecScopedEvidenceExecutor{profiledCodecScopedExecutor: profiledCodecScopedExecutor{profiledScopedExecutor: profiledScopedExecutor{profiledExecutor: base}}}, nil
+			}
+			if hasLogical {
+				return logicalProfiledScopedEvidenceExecutor{profiledScopedEvidenceExecutor{profiledScopedExecutor{base}}}, nil
 			}
 			return profiledScopedEvidenceExecutor{profiledScopedExecutor: profiledScopedExecutor{profiledExecutor: base}}, nil
 		}
 		if _, codecs := executor.(CodecProvider); codecs {
+			if hasLogical {
+				return logicalProfiledCodecScopedExecutor{profiledCodecScopedExecutor{profiledScopedExecutor{base}}}, nil
+			}
 			return profiledCodecScopedExecutor{profiledScopedExecutor: profiledScopedExecutor{profiledExecutor: base}}, nil
+		}
+		if hasLogical {
+			return logicalProfiledScopedExecutor{profiledScopedExecutor{base}}, nil
 		}
 		return profiledScopedExecutor{profiledExecutor: base}, nil
 	}
 	if _, codecs := executor.(CodecProvider); codecs {
+		if hasLogical {
+			return logicalProfiledCodecExecutor{profiledCodecExecutor{base}}, nil
+		}
 		return profiledCodecExecutor{profiledExecutor: base}, nil
+	}
+	if hasLogical {
+		return logicalProfiledExecutor{base}, nil
 	}
 	return base, nil
 }

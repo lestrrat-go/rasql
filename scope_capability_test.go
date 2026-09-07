@@ -72,6 +72,39 @@ func TestScopeWrappersPreserveCapabilitiesConditionally(t *testing.T) {
 	require.NoError(t, finalizer.Rollback(t.Context()))
 }
 
+func TestLogicalInvocationCapabilityForwardsOnlyFromObservedExecutors(t *testing.T) {
+	profile, err := EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+	require.NoError(t, err)
+	handler := ExtensionErrorHandlerFunc(func(context.Context, ExtensionError) {})
+	custom, err := WithEngineProfile(capabilityTestExecutor{}, profile)
+	require.NoError(t, err)
+	custom, err = WithCodecs(custom, codecRegistry{})
+	require.NoError(t, err)
+	_, hasProvider := custom.(logicalInvocationProvider)
+	require.False(t, hasProvider)
+
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	db, err := New(database, dialect.SQLite())
+	require.NoError(t, err)
+	base, err := AsExecutor(db, profile)
+	require.NoError(t, err)
+	observed, err := WithEventObservers(base, handler, EventObserverFunc(func(ctx context.Context, event Event) (context.Context, EventCompletion) { return ctx, nil }))
+	require.NoError(t, err)
+	profiled, err := WithEngineProfile(observed, profile)
+	require.NoError(t, err)
+	profiled, err = WithCodecs(profiled, codecRegistry{})
+	require.NoError(t, err)
+	_, hasProvider = profiled.(logicalInvocationProvider)
+	require.True(t, hasProvider)
+
+	withoutObservers, err := WithEventObservers(base, handler)
+	require.NoError(t, err)
+	_, hasProvider = withoutObservers.(logicalInvocationProvider)
+	require.False(t, hasProvider)
+}
+
 func TestProfiledScopeChildRetainsCompilerIdentity(t *testing.T) {
 	profile, err := EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
 	require.NoError(t, err)
