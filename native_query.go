@@ -57,11 +57,11 @@ func Native[R any](statement NativeStatement, projection Projection[R], cardinal
 		if arg.Codec != "" && !codecPattern.MatchString(arg.Codec) {
 			return Query[R]{}, planError("invalid_schema", fmt.Sprintf("native.args[%d].codec", i), "malformed codec identifier")
 		}
-		snapshot, err := snapshotBind(arg.Value)
+		snapshot, copier, err := adoptBind(arg.Value, true)
 		if err != nil {
 			return Query[R]{}, planError("unsnapshotable_bind", fmt.Sprintf("native.args[%d]", i), err.Error())
 		}
-		args[i] = bindToken{id: bindID(atomic.AddUint64(&nextBindID, 1)), value: snapshot, codec: arg.Codec}
+		args[i] = bindToken{id: bindID(atomic.AddUint64(&nextBindID, 1)), value: snapshot, codec: arg.Codec, copy: copier}
 	}
 	return Query[R]{
 		plan:              QueryPlan{native: &nativeQueryPlan{engine: engine, statement: stmt.New(sqltext.Text(statement.SQL), args...)}, projection: cloneItems(projection.items)},
