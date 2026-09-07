@@ -239,15 +239,15 @@ func executorCompilerProfile(executor Executor) engineProfileSnapshot {
 		return engineProfileSnapshot{}
 	}
 	p := provider.queryCompiler().EngineProfile()
-	return engineProfileSnapshot{ID: p.ID, Engine: uint8(p.Engine), Capabilities: p.Capabilities, MaxBind: p.Limits.MaxBindParameters}
+	return engineProfileSnapshot{ID: p.ID, Engine: p.Engine, CustomName: p.CustomName, Version: p.Version, Limits: p.Limits, Capabilities: p.Capabilities, MaxBind: p.Limits.MaxBindParameters}
 }
 
 type engineProfileSnapshot struct {
 	ID           string
-	Engine       uint8
-	VersionMajor int
-	VersionMinor int
-	VersionPatch int
+	Engine       EngineID
+	CustomName   string
+	Version      EngineVersion
+	Limits       EngineLimits
 	Capabilities EngineCapabilities
 	MaxBind      int
 }
@@ -344,7 +344,7 @@ type graphCacheFingerprint struct {
 	digest [sha256.Size]byte
 }
 
-func graphInvocationFingerprint(edge *graphEdgeSpec, stage string, compiled compiledQuery) (graphCacheFingerprint, error) {
+func graphInvocationFingerprint(edge *graphEdgeSpec, stage string, compiled compiledQuery, profile engineProfileSnapshot) (graphCacheFingerprint, error) {
 	var key strings.Builder
 	writeGraphFingerprintPart := func(value string) {
 		var size [binary.MaxVarintLen64]byte
@@ -353,6 +353,13 @@ func graphInvocationFingerprint(edge *graphEdgeSpec, stage string, compiled comp
 		key.WriteString(value)
 	}
 	writeGraphFingerprintPart(string([]byte{stage[0]}))
+	writeGraphFingerprintPart(profile.ID)
+	writeGraphFingerprintPart(strconv.Itoa(int(profile.Engine)))
+	writeGraphFingerprintPart(profile.CustomName)
+	writeGraphFingerprintPart(strconv.Itoa(int(profile.Version.Major)))
+	writeGraphFingerprintPart(strconv.Itoa(int(profile.Version.Minor)))
+	writeGraphFingerprintPart(strconv.Itoa(int(profile.Version.Patch)))
+	writeGraphFingerprintPart(strconv.Itoa(profile.Limits.MaxBindParameters))
 	writeGraphFingerprintPart(edge.child.query.sourceName())
 	writeGraphFingerprintPart(compiled.statement.SQL())
 	writeGraphFingerprintPart(strconv.FormatInt(int64(edge.options.PerParentLimit), 10))
@@ -646,7 +653,7 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 	batchSize := (budget - fixed) / width
 	fingerprintCompiled := probeCompiled
 	fingerprintCompiled.statement = basePrepared.statement
-	childFingerprint, err := graphInvocationFingerprint(edge, "child", fingerprintCompiled)
+	childFingerprint, err := graphInvocationFingerprint(edge, "child", fingerprintCompiled, profile)
 	if err != nil {
 		return nil, err
 	}
@@ -838,7 +845,7 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 	fixed = len(compiled.bindSlots)
 	fingerprintCompiled := compiled
 	fingerprintCompiled.statement = junctionPrepared.statement
-	junctionFingerprint, err := graphInvocationFingerprint(edge, "junction", fingerprintCompiled)
+	junctionFingerprint, err := graphInvocationFingerprint(edge, "junction", fingerprintCompiled, profile)
 	if err != nil {
 		return nil, err
 	}
@@ -1000,7 +1007,7 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 		fixed = len(compiled.bindSlots)
 		fingerprintCompiled := compiled
 		fingerprintCompiled.statement = targetPrepared.statement
-		targetFingerprint, err := graphInvocationFingerprint(edge, "target", fingerprintCompiled)
+		targetFingerprint, err := graphInvocationFingerprint(edge, "target", fingerprintCompiled, profile)
 		if err != nil {
 			return nil, err
 		}
