@@ -242,7 +242,7 @@ func validateWriteCapabilities(p engineprofile.Profile, statement query.WriteSta
 		}
 	case query.Update:
 		for _, assignment := range statement.Assignments() {
-			if query.IsDefaultExpression(assignment.Value()) && p.Capabilities.UpdateDefault != engineprofile.UpdateDefaultExpression {
+			if assignment.IsDefault() && p.Capabilities.UpdateDefault != engineprofile.UpdateDefaultExpression {
 				return unsupported(p, "UPDATE DEFAULT")
 			}
 			if err := validateExpressionCapabilities(p, assignment.Value()); err != nil {

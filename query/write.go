@@ -184,8 +184,9 @@ func (s Upsert) clone() Upsert {
 // Assignment sets column to expression in an INSERT, an UPDATE, or an upsert
 // conflict-update list.
 type Assignment struct {
-	column ColumnRef
-	value  Expression
+	column       ColumnRef
+	value        Expression
+	defaultValue bool
 }
 
 // Set assigns value to column. value may be a plain Go value, which is
@@ -197,8 +198,11 @@ func Set(column ColumnRef, value any) Assignment {
 }
 
 func SetDefault(column ColumnRef) Assignment {
-	return Assignment{column: column, value: SetDefaultExpression()}
+	return Assignment{column: column, value: defaultExpression{}, defaultValue: true}
 }
+
+// IsDefault reports whether the assignment writes the target column's default.
+func (a Assignment) IsDefault() bool { return a.defaultValue }
 
 // Column returns the assigned column.
 func (a Assignment) Column() ColumnRef {

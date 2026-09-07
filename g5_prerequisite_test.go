@@ -69,6 +69,32 @@ func TestG5PatchPredicateBridgePreservesBindSnapshotError(t *testing.T) {
 	require.ErrorIs(t, err, errG5Snapshot)
 }
 
+func TestG5PatchPredicateRejectsWrongTableAndStickyError(t *testing.T) {
+	table, id, name := g5MutationTable(t)
+	other, err := TableOf[g5MutationRow](schema.TableDef{Name: "g5_other", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "name", Type: schema.IntegerType{}}}})
+	require.NoError(t, err)
+	wrongPredicate := query.EqualValue(query.TypedColumnOf[g5MutationRow, int64](other.Column("id")), int64(1))
+	wrongPlan, err := NewPatchPlan(table, wrongPredicate, SetField(name, int64(3)))
+	require.NoError(t, err)
+	_, err = wrongPlan.lower()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "outside the statement")
+	bad := Predicate{node: query.Equal(id.Expr(), query.Bind(int64(1))), bindErr: errG5Snapshot}
+	plan, err := NewPatchPlan(table, bad, SetField(name, int64(3)))
+	require.ErrorIs(t, err, errG5Snapshot)
+	_, err = plan.lower()
+	require.ErrorIs(t, err, errG5Snapshot)
+}
+
+func TestG5CustomProfileRejectsDefaultBeforeExecution(t *testing.T) {
+	table, id, name := g5MutationTable(t)
+	_, err := NewPatchPlan(table, EqualValue(id.Expr(), int64(1)), DefaultField(name))
+	require.NoError(t, err)
+	profile, err := NewCustomEngineProfile("g5", EngineVersion{Known: true, Major: 1}, EngineCapabilities{}, EngineLimits{MaxBindParameters: 10})
+	require.NoError(t, err)
+	require.Equal(t, EngineUpdateDefaultUnsupported, profile.Capabilities().UpdateDefault)
+}
+
 func TestG5UpdateDefaultCapabilityAndRendering(t *testing.T) {
 	table, id, name := g5MutationTable(t)
 	plan, err := NewPatchPlan(table, EqualValue(id.Expr(), int64(1)), DefaultField(name), SetField(id, int64(2)))

@@ -16,13 +16,6 @@ type defaultExpression struct{}
 
 func (defaultExpression) ExpressionNode() {}
 
-func SetDefaultExpression() Expression { return defaultExpression{} }
-
-func IsDefaultExpression(expression Expression) bool {
-	_, ok := expression.(defaultExpression)
-	return ok
-}
-
 // CustomExpression identifies an external expression with a descriptive name.
 // The renderer does not require this marker when a dialect compiler recognizes
 // an Expression directly.

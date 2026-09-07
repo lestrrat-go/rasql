@@ -321,7 +321,7 @@ func (r *renderer) writeUpsertAssignments(assignments []query.Assignment, style 
 		}
 		r.builder.WriteString(column)
 		r.builder.WriteString(" = ")
-		if query.IsDefaultExpression(assignment.Value()) {
+		if assignment.IsDefault() {
 			r.builder.WriteString("DEFAULT")
 			continue
 		}
@@ -366,7 +366,7 @@ func (r *renderer) writeUpdate(s query.Update) error {
 		}
 		r.builder.WriteString(column)
 		r.builder.WriteString(" = ")
-		if query.IsDefaultExpression(assignment.Value()) {
+		if assignment.IsDefault() {
 			r.builder.WriteString("DEFAULT")
 			continue
 		}
