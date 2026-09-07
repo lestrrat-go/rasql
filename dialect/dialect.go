@@ -1,4 +1,6 @@
-// Package dialect defines SQL rendering rules for supported databases.
+// Package dialect defines SQL rendering rules for supported databases. A
+// dialect may optionally implement CompilerProvider to extend pagination and
+// expression rendering through the common renderer emitter.
 package dialect
 
 import (
@@ -76,6 +78,8 @@ const (
 	CapabilitySelectLockSkipLocked
 	CapabilityUpsertConflictWhere
 	CapabilityUpsertUpdateWhere
+	// CapabilitySavepoint reports whether the dialect supports transactional savepoints.
+	CapabilitySavepoint
 )
 
 // UpsertStyle identifies a dialect's conflict-handling syntax.
@@ -129,7 +133,7 @@ func PostgreSQL() Dialect {
 		quote:        '"',
 		placeholder:  dollarPlaceholder,
 		upsert:       UpsertOnConflict,
-		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilityDefaultValuesUpsert | CapabilitySubqueryLimit | CapabilityWriteSubqueryTarget | CapabilityQualifiedReference | CapabilityQualifiedIndexTarget | CapabilityPartialIndex | CapabilityAggregateFilter | CapabilitySelectForUpdate | CapabilitySelectForShare | CapabilitySelectLockOf | CapabilitySelectLockNoWait | CapabilitySelectLockSkipLocked | CapabilityUpsertConflictWhere | CapabilityUpsertUpdateWhere,
+		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilityDefaultValuesUpsert | CapabilitySubqueryLimit | CapabilityWriteSubqueryTarget | CapabilityQualifiedReference | CapabilityQualifiedIndexTarget | CapabilityPartialIndex | CapabilityAggregateFilter | CapabilitySelectForUpdate | CapabilitySelectForShare | CapabilitySelectLockOf | CapabilitySelectLockNoWait | CapabilitySelectLockSkipLocked | CapabilityUpsertConflictWhere | CapabilityUpsertUpdateWhere | CapabilitySavepoint,
 		decimalName:  "NUMERIC",
 		maxPrecision: 1000,
 		maxScale:     1000,
@@ -159,7 +163,7 @@ func MySQL() Dialect {
 		quote:        '`',
 		placeholder:  questionPlaceholder,
 		upsert:       UpsertDuplicateKey,
-		capabilities: CapabilityUpsert | CapabilityDefaultValuesUpsert | CapabilityEmptyInsert | CapabilityQualifiedReference | CapabilityQualifiedIndexTarget | CapabilitySelectForUpdate | CapabilitySelectForShare | CapabilitySelectLockOf | CapabilitySelectLockNoWait | CapabilitySelectLockSkipLocked,
+		capabilities: CapabilityUpsert | CapabilityDefaultValuesUpsert | CapabilityEmptyInsert | CapabilityQualifiedReference | CapabilityQualifiedIndexTarget | CapabilitySelectForUpdate | CapabilitySelectForShare | CapabilitySelectLockOf | CapabilitySelectLockNoWait | CapabilitySelectLockSkipLocked | CapabilitySavepoint,
 		decimalName:  "DECIMAL",
 		maxPrecision: 65,
 		maxScale:     30,
@@ -193,7 +197,7 @@ func SQLite() Dialect {
 		quote:        '"',
 		placeholder:  questionPlaceholder,
 		upsert:       UpsertOnConflict,
-		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilitySubqueryLimit | CapabilityWriteSubqueryTarget | CapabilityQualifiedIndexName | CapabilityPartialIndex | CapabilityMatchOperator | CapabilityAggregateFilter | CapabilityUpsertConflictWhere | CapabilityUpsertUpdateWhere,
+		capabilities: CapabilityReturning | CapabilityUpsert | CapabilityConflictTarget | CapabilityDefaultValues | CapabilitySubqueryLimit | CapabilityWriteSubqueryTarget | CapabilityQualifiedIndexName | CapabilityPartialIndex | CapabilityMatchOperator | CapabilityAggregateFilter | CapabilityUpsertConflictWhere | CapabilityUpsertUpdateWhere | CapabilitySavepoint,
 		decimalName:  "TEXT",
 		// varcharText is left false: SQLite already drops schema.DecimalType's
 		// Precision and Scale for the same reason (see decimalTypeName below),

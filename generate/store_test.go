@@ -41,7 +41,7 @@ func TestStoreExtendedDefaultOutputCompatibilityGolden(t *testing.T) {
 	store := generate.Store{Package: "store", Root: root, Dir: "generated", Dialect: dialect.PostgreSQL(), Tables: []schema.TableDef{parent, child}, Queries: []generate.Query{{Input: "event_by_id.sql", Function: "EventByID", Output: "event_by_id_gen.go"}}}
 	plan, err := store.Plan()
 	require.NoError(t, err)
-	want := map[string]string{"event_by_id_gen.go": "8f7f59f3cded22263d220cbece9092e914304983c49423ccd8a77b39ece19f4e", "event_items_gen.go": "6a520bfc954525d33aac2cf8fef578d726168f303e877773c7e9f6875e9123ba", "events_gen.go": "97bf083b0c173a22e9a3799e55de794869916f794773a6b4be1437bd284fcab4", "schema_gen.go": "5694e41e46a297acddecf8055d16407f61c65518bb3bcd14bc538f11993ee50b", "schema_gen_test.go": "9455ecd97f415ae72dcba77d4129a26d718f3b08fa66a1d8f30c253b7773023b"}
+	want := map[string]string{"event_by_id_gen.go": "8f7f59f3cded22263d220cbece9092e914304983c49423ccd8a77b39ece19f4e", "event_items_gen.go": "d27c7bff56f6abf3d2cac7c8e00d54fafcbf9b2961009ebc58efa76913399729", "events_gen.go": "7ea64e14218eac0f4deadf1149e6666f497b285763ee140dc298f07016e6e6ab", "schema_gen.go": "5694e41e46a297acddecf8055d16407f61c65518bb3bcd14bc538f11993ee50b", "schema_gen_test.go": "9455ecd97f415ae72dcba77d4129a26d718f3b08fa66a1d8f30c253b7773023b"}
 	for _, file := range plan.Files() {
 		name := filepath.Base(file.Path)
 		hash := sha256.Sum256(file.Source)

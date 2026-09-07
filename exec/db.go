@@ -50,9 +50,11 @@ type DB struct {
 	handle                Handle
 	dialect               dialect.Dialect
 	hooks                 []Hook
+	relationshipBindLimit int
 	observers             []Observer
 	extensionErrorHandler ExtensionErrorHandler
 	invocationObservers   []InvocationObserver
+	savepointScoped       bool
 	// tx is the transaction this DB runs in, and is nil when it runs directly
 	// on handle. When it is set it is the same value as handle.
 	tx *sql.Tx
@@ -64,14 +66,28 @@ type DB struct {
 // Handle. New opens no connection and starts no transaction.
 //
 // A DB built from a *sql.Tx is a transaction: its Commit and Rollback finish
-// that transaction, and its Begin reports an error rather than nesting. That
-// is how an application already holding a *sql.Tx hands it to this package
-// without a second type.
+// that transaction, and its Begin reports an error rather than nesting. Use
+// Atomic when work must compose inside an existing transaction.
 //
-// Optional hooks and observers observe every statement run through the returned
-// DB and, unless narrowed or extended by WithHooks, WithObservers, or by Begin's
-// own hooks parameter, every transaction Begin starts from it.
-func New(handle Handle, d dialect.Dialect, hooks ...Hook) (DB, error) {
+// Optional hooks and observers configure the returned DB and observe every
+// statement run through it and, unless narrowed or extended by WithHooks,
+// WithObservers, or by Begin's own hooks parameter, every transaction Begin
+// starts from it.
+type Option interface{ apply(*DB) error }
+
+type relationshipBindLimitOption int
+
+func (o relationshipBindLimitOption) apply(db *DB) error {
+	if o < 1 {
+		return fmt.Errorf("rasql: relationship bind limit must be positive")
+	}
+	db.relationshipBindLimit = int(o)
+	return nil
+}
+
+func WithRelationshipBindLimit(limit int) Option { return relationshipBindLimitOption(limit) }
+
+func New(handle Handle, d dialect.Dialect, options ...any) (DB, error) {
 	if nilcheck.Is(handle) {
 		return DB{}, fmt.Errorf("rasql: handle must not be nil")
 	}
@@ -82,8 +98,27 @@ func New(handle Handle, d dialect.Dialect, hooks ...Hook) (DB, error) {
 	if transaction, ok := handle.(*sql.Tx); ok {
 		db.tx = transaction
 	}
-	return db.WithHooks(hooks...)
+	for _, option := range options {
+		switch value := option.(type) {
+		case Hook:
+			var err error
+			db, err = db.WithHooks(value)
+			if err != nil {
+				return DB{}, err
+			}
+		case Option:
+			if err := value.apply(&db); err != nil {
+				return DB{}, err
+			}
+		default:
+			return DB{}, fmt.Errorf("rasql: unsupported database option %T", option)
+		}
+	}
+	return db, nil
 }
+
+// RelationshipBindLimit returns the configured application bind budget.
+func (db DB) RelationshipBindLimit() int { return db.relationshipBindLimit }
 
 // WithHooks returns a copy of db that runs hooks around rendered queries and
 // mutations, appended after the hooks db already carries. Every transaction
@@ -159,7 +194,8 @@ func (db DB) Handle() Handle {
 //
 // The handle must be able to start a transaction. *sql.DB and *sql.Conn can;
 // *sql.Tx cannot, so Begin on a DB that is already a transaction reports an
-// error rather than quietly opening a savepoint.
+// error rather than quietly opening a savepoint. Atomic uses a savepoint for
+// that case.
 //
 // The returned DB inherits db's hooks, with hooks appended after them, the
 // same way WithHooks appends rather than replaces. A hook registered on db
@@ -220,6 +256,9 @@ func (db DB) Begin(ctx context.Context, opts *sql.TxOptions, hooks ...Hook) (DB,
 // transaction is finished. Every later Commit or Rollback finds it finished: a
 // later Commit reports that, and a later Rollback reports nothing.
 func (db DB) Commit() error {
+	if db.savepointScoped {
+		return fmt.Errorf("rasql: atomic savepoint DB cannot commit its outer transaction")
+	}
 	if db.tx == nil {
 		return fmt.Errorf("rasql: this DB is not a transaction: Commit needs one from Begin")
 	}
@@ -243,6 +282,9 @@ func (db DB) Commit() error {
 // It reports an error when db is not a transaction, which is every DB except
 // one from Begin and one built by New from a *sql.Tx.
 func (db DB) Rollback() error {
+	if db.savepointScoped {
+		return fmt.Errorf("rasql: atomic savepoint DB cannot roll back its outer transaction")
+	}
 	if db.tx == nil {
 		return fmt.Errorf("rasql: this DB is not a transaction: Rollback needs one from Begin")
 	}

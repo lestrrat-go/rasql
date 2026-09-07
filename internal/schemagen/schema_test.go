@@ -275,7 +275,7 @@ func TestSchemaIsDeterministicAndCompiles(t *testing.T) {
 	// A nullable column is a pointer field, and the generated scan methods
 	// assign through it.
 	require.Contains(t, string(source), "\tEmail     *string\n")
-	require.NotContains(t, string(source), "\"github.com/lestrrat-go/rasql/query\"")
+	require.Contains(t, string(source), "\"github.com/lestrrat-go/rasql/query\"")
 	require.NotContains(t, string(source), "github.com/lestrrat-go/rasql/row")
 	// PackageSource returns a whole package, descriptors included, so it
 	// names the schema package its descriptor literals are written in.
@@ -444,6 +444,10 @@ func TestGeneratedRelationships(t *testing.T) {
 	_, err := belongsTo.Load(t.Context(), belongsToDB, []generated.OrdersRow{{UserID: 7}})
 	require.ErrorContains(t, err, "query recorded")
 	require.Equal(t, "SELECT \"tenant\".\"users\".\"id\" FROM \"tenant\".\"users\" WHERE (\"tenant\".\"users\".\"id\" IN ($1))", belongsToHandle.query)
+	belongsToDB, belongsToHandle = recordingDB(t)
+	_, err = belongsTo.LoadWith(t.Context(), belongsToDB, []generated.OrdersRow{{UserID: 7}}, rasql.RelationshipLoadOptions{Where: query.Equal(belongsTo.ParentKey, 7), OrderBy: []query.Order{query.Desc(belongsTo.ParentKey)}, BindLimit: 2})
+	require.ErrorContains(t, err, "query recorded")
+	require.Contains(t, belongsToHandle.query, "ORDER BY")
 
 	hasMany := users.Orders()
 	require.Equal(t, "id", hasMany.ParentKey.Name())
@@ -455,6 +459,10 @@ func TestGeneratedRelationships(t *testing.T) {
 	_, err = hasMany.Load(t.Context(), hasManyDB, []generated.UsersRow{{ID: 7}})
 	require.ErrorContains(t, err, "query recorded")
 	require.Equal(t, "SELECT \"tenant\".\"orders\".\"id\", \"tenant\".\"orders\".\"user_id\" FROM \"tenant\".\"orders\" WHERE (\"tenant\".\"orders\".\"user_id\" IN ($1))", hasManyHandle.query)
+	hasManyDB, hasManyHandle = recordingDB(t)
+	_, err = hasMany.LoadWith(t.Context(), hasManyDB, []generated.UsersRow{{ID: 7}}, rasql.RelationshipLoadOptions{Where: query.Equal(hasMany.ChildKey, 7), OrderBy: []query.Order{query.Asc(hasMany.ChildKey)}, PerParentLimit: 1, BindLimit: 2})
+	require.ErrorContains(t, err, "query recorded")
+	require.Contains(t, hasManyHandle.query, "ORDER BY")
 
 	aliasedUsers, err := users.As("u")
 	require.NoError(t, err)
