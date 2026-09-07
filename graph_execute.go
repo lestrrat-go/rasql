@@ -603,17 +603,21 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 	} else {
 		return nil, err
 	}
-	basePrepared, err := probe.prepareCompiled(executor, probeCompiled)
-	if err != nil {
-		return nil, err
-	}
-	edgeCache := cache
+	basePrepared := graphPreparedQuery{}
+	cacheable := true
 	for _, slot := range probeCompiled.bindSlots {
 		if slot.id == 0 {
-			basePrepared = graphPreparedQuery{}
+			cacheable = false
 			break
 		}
 	}
+	if cacheable {
+		basePrepared, err = probe.prepareCompiled(executor, probeCompiled)
+		if err != nil {
+			return nil, err
+		}
+	}
+	edgeCache := cache
 	if basePrepared.run == nil {
 		edgeCache = make(map[graphCacheKey]graphCacheEntry)
 	}
@@ -803,15 +807,18 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 	if err != nil {
 		return nil, err
 	}
-	junctionPrepared, err := junctionPlan.prepareCompiled(executor, compiled)
-	if err != nil {
-		return nil, err
-	}
 	junctionCacheable := true
 	for _, slot := range compiled.bindSlots {
 		if slot.id == 0 {
 			junctionCacheable = false
 			break
+		}
+	}
+	junctionPrepared := graphPreparedQuery{}
+	if junctionCacheable {
+		junctionPrepared, err = junctionPlan.prepareCompiled(executor, compiled)
+		if err != nil {
+			return nil, err
 		}
 	}
 	fixed = len(compiled.bindSlots)
@@ -962,15 +969,18 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 		if err != nil {
 			return nil, err
 		}
-		targetPrepared, err := edge.child.query.prepareCompiled(executor, compiled)
-		if err != nil {
-			return nil, err
-		}
 		targetCacheable := true
 		for _, slot := range compiled.bindSlots {
 			if slot.id == 0 {
 				targetCacheable = false
 				break
+			}
+		}
+		targetPrepared := graphPreparedQuery{}
+		if targetCacheable {
+			targetPrepared, err = edge.child.query.prepareCompiled(executor, compiled)
+			if err != nil {
+				return nil, err
 			}
 		}
 		fixed = len(compiled.bindSlots)
