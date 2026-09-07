@@ -63,6 +63,8 @@ func graphContractPlan(t *testing.T, order bool) (Executor, GraphPlan[graphParen
 	childQuery := Select(children.Source(), childProjection)
 	if order {
 		childQuery = childQuery.OrderBy(AscExpr(childRank.Expr()), AscExpr(childID.Expr()))
+	} else {
+		childQuery = childQuery.OrderBy(AscExpr(childRank.Expr()))
 	}
 	parentKey, err := NewGraphKey(KeyPart(parentID, func(row graphParentRow) int64 { return row.ID }), NullKeyPart(parentTenant, func(row graphParentRow) Nullable[int64] { return row.Tenant }))
 	require.NoError(t, err)
