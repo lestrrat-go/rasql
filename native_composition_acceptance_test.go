@@ -262,6 +262,221 @@ func (r *nativeCompositionSpyRegistry) Lookup(rasql.CodecID) (rasql.ValueCodec, 
 	return nil, false
 }
 
+type nativeCompositionLifecycleRows struct {
+	values       [][]any
+	columns      []string
+	index        int
+	scanErr      error
+	iterationErr error
+	finishErr    error
+	finishCalls  int
+	closeCalls   int
+	recorded     int
+	primary      error
+	early        bool
+}
+
+func (r *nativeCompositionLifecycleRows) Columns() ([]string, error) {
+	return append([]string(nil), r.columns...), nil
+}
+
+func (r *nativeCompositionLifecycleRows) Next() bool {
+	return r.index < len(r.values)
+}
+
+func (r *nativeCompositionLifecycleRows) Scan(destinations ...any) error {
+	if r.scanErr != nil {
+		return r.scanErr
+	}
+	if r.index >= len(r.values) {
+		return errors.New("scan past end")
+	}
+	values := r.values[r.index]
+	if len(values) != len(destinations) {
+		return errors.New("lifecycle row column mismatch")
+	}
+	for i, destination := range destinations {
+		value, ok := destination.(*any)
+		if !ok {
+			return errors.New("lifecycle row has unsupported destination")
+		}
+		*value = values[i]
+	}
+	r.index++
+	return nil
+}
+
+func (r *nativeCompositionLifecycleRows) Close() error {
+	r.closeCalls++
+	return nil
+}
+
+func (r *nativeCompositionLifecycleRows) Err() error { return r.iterationErr }
+
+func (r *nativeCompositionLifecycleRows) RecordRow() { r.recorded++ }
+
+func (r *nativeCompositionLifecycleRows) Finish(primary error, early bool) error {
+	r.finishCalls++
+	r.primary = primary
+	r.early = early
+	if r.closeCalls == 0 {
+		_ = r.Close()
+	}
+	return errors.Join(primary, r.finishErr)
+}
+
+type nativeCompositionLifecycleExecutor struct {
+	dialect  dialect.Dialect
+	rows     *nativeCompositionLifecycleRows
+	queryErr error
+	calls    atomic.Int64
+}
+
+func (e *nativeCompositionLifecycleExecutor) Dialect() dialect.Dialect { return e.dialect }
+func (e *nativeCompositionLifecycleExecutor) Query(context.Context, stmt.Statement) (rasql.ResultRows, error) {
+	e.calls.Add(1)
+	if e.queryErr != nil {
+		return nil, e.queryErr
+	}
+	return e.rows, nil
+}
+func (e *nativeCompositionLifecycleExecutor) Exec(context.Context, stmt.Statement) (sql.Result, error) {
+	return driver.RowsAffected(0), nil
+}
+
+func nativeCompositionLifecycleQuery(t *testing.T, cte bool) rasql.Query[int64] {
+	t.Helper()
+	resultSchema, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "value", Type: schema.IntegerType{}})
+	require.NoError(t, err)
+	projection, err := rasql.NativeProjection(nativeCompositionIntDecoder{schema: resultSchema})
+	require.NoError(t, err)
+	base, err := rasql.Native(rasql.NativeStatement{Engine: "sqlite", SQL: "SELECT 1 AS value"}, projection, rasql.Many)
+	require.NoError(t, err)
+	var source rasql.TypedSource[int64]
+	if cte {
+		common, commonErr := rasql.CTEOf("native_values", base)
+		require.NoError(t, commonErr)
+		source, err = common.Source("native_alias")
+		require.NoError(t, err)
+		value, valueErr := rasql.BindResultColumn[int64, int64](source, "value")
+		require.NoError(t, valueErr)
+		outer, outerErr := rasql.Scalar("value", value.Expr(), schema.IntegerType{}, "")
+		require.NoError(t, outerErr)
+		query, queryErr := rasql.With(rasql.Select(source.Source(), outer), common)
+		require.NoError(t, queryErr)
+		return query
+	}
+	source, err = rasql.Derive(base, "native_values")
+	require.NoError(t, err)
+	value, err := rasql.BindResultColumn[int64, int64](source, "value")
+	require.NoError(t, err)
+	outer, err := rasql.Scalar("value", value.Expr(), schema.IntegerType{}, "")
+	require.NoError(t, err)
+	return rasql.Select(source.Source(), outer)
+}
+
+func TestNativeCompositionLifecycleUsesR1RowsForDerivedAndCTE(t *testing.T) {
+	decodeErr := errors.New("native decode failed")
+	decodeFinishErr := errors.New("native decode finish failed")
+	queryErr := errors.New("native executor failed")
+	iterationErr := errors.New("native iteration failed")
+	iterationFinishErr := errors.New("native iteration finish failed")
+	for _, cte := range []bool{false, true} {
+		shape := "derived"
+		if cte {
+			shape = "cte"
+		}
+		t.Run(shape, func(t *testing.T) {
+			t.Run("success", func(t *testing.T) {
+				rows := &nativeCompositionLifecycleRows{columns: []string{"value"}, values: [][]any{{int64(1)}, {int64(2)}}}
+				executor := nativeCompositionLifecycleExecutor{dialect: dialect.SQLite(), rows: rows}
+				profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+				require.NoError(t, err)
+				profiled, err := rasql.WithEngineProfile(&executor, profile)
+				require.NoError(t, err)
+				values, err := rasql.All(t.Context(), profiled, nativeCompositionLifecycleQuery(t, cte))
+				require.NoError(t, err)
+				require.Equal(t, []int64{1, 2}, values)
+				require.Equal(t, 1, rows.finishCalls)
+				require.Equal(t, 1, rows.closeCalls)
+				require.Equal(t, 2, rows.recorded)
+				require.NoError(t, rows.primary)
+				require.False(t, rows.early)
+			})
+			t.Run("decode failure", func(t *testing.T) {
+				rows := &nativeCompositionLifecycleRows{
+					columns: []string{"value"}, values: [][]any{{int64(1)}}, scanErr: decodeErr,
+					finishErr: decodeFinishErr,
+				}
+				executor := nativeCompositionLifecycleExecutor{dialect: dialect.SQLite(), rows: rows}
+				profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+				require.NoError(t, err)
+				profiled, err := rasql.WithEngineProfile(&executor, profile)
+				require.NoError(t, err)
+				_, err = rasql.All(t.Context(), profiled, nativeCompositionLifecycleQuery(t, cte))
+				require.ErrorIs(t, err, decodeErr)
+				require.ErrorIs(t, err, decodeFinishErr)
+				require.Equal(t, 1, rows.finishCalls)
+				require.Equal(t, 1, rows.closeCalls)
+				require.Equal(t, 0, rows.recorded)
+				require.ErrorIs(t, rows.primary, decodeErr)
+				require.True(t, rows.early)
+			})
+			t.Run("executor failure", func(t *testing.T) {
+				rows := &nativeCompositionLifecycleRows{columns: []string{"value"}}
+				executor := nativeCompositionLifecycleExecutor{dialect: dialect.SQLite(), rows: rows, queryErr: queryErr}
+				profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+				require.NoError(t, err)
+				profiled, err := rasql.WithEngineProfile(&executor, profile)
+				require.NoError(t, err)
+				_, err = rasql.All(t.Context(), profiled, nativeCompositionLifecycleQuery(t, cte))
+				require.ErrorIs(t, err, queryErr)
+				require.Equal(t, 0, rows.finishCalls)
+				require.Equal(t, 0, rows.recorded)
+			})
+			t.Run("iteration failure", func(t *testing.T) {
+				rows := &nativeCompositionLifecycleRows{
+					columns: []string{"value"}, values: [][]any{{int64(1)}},
+					iterationErr: iterationErr, finishErr: iterationFinishErr,
+				}
+				executor := nativeCompositionLifecycleExecutor{dialect: dialect.SQLite(), rows: rows}
+				profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+				require.NoError(t, err)
+				profiled, err := rasql.WithEngineProfile(&executor, profile)
+				require.NoError(t, err)
+				_, err = rasql.All(t.Context(), profiled, nativeCompositionLifecycleQuery(t, cte))
+				require.ErrorIs(t, err, iterationErr)
+				require.ErrorIs(t, err, iterationFinishErr)
+				require.Equal(t, 1, rows.finishCalls)
+				require.Equal(t, 1, rows.closeCalls)
+				require.Equal(t, 1, rows.recorded)
+				require.ErrorIs(t, rows.primary, iterationErr)
+				require.False(t, rows.early)
+			})
+			t.Run("early close", func(t *testing.T) {
+				rows := &nativeCompositionLifecycleRows{columns: []string{"value"}, values: [][]any{{int64(1)}, {int64(2)}}}
+				executor := nativeCompositionLifecycleExecutor{dialect: dialect.SQLite(), rows: rows}
+				profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+				require.NoError(t, err)
+				profiled, err := rasql.WithEngineProfile(&executor, profile)
+				require.NoError(t, err)
+				sequence, err := rasql.Rows(t.Context(), profiled, nativeCompositionLifecycleQuery(t, cte))
+				require.NoError(t, err)
+				for value, rowErr := range sequence {
+					require.NoError(t, rowErr)
+					require.Equal(t, int64(1), value)
+					break
+				}
+				require.Equal(t, 1, rows.finishCalls)
+				require.Equal(t, 1, rows.closeCalls)
+				require.Equal(t, 1, rows.recorded)
+				require.NoError(t, rows.primary)
+				require.True(t, rows.early)
+			})
+		})
+	}
+}
+
 func TestNativeCompositionEngineMismatchPrecedesCodecLookupAndHandleUse(t *testing.T) {
 	resultSchema, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "value", Type: schema.IntegerType{}, Codec: "missing"})
 	require.NoError(t, err)

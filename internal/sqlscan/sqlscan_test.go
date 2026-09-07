@@ -79,3 +79,24 @@ func TestValidateSelectChecksEveryCTEBody(t *testing.T) {
 		require.ErrorIs(t, err, sqlscan.ErrNotSelect, sql)
 	}
 }
+
+func TestScanDoesNotApplyPostgresOrMySQLCommentsToOtherEngines(t *testing.T) {
+	scan, err := sqlscan.Scan(`SELECT $tag$; ? $tag$, ?`, "sqlite")
+	require.NoError(t, err)
+	require.Empty(t, scan.Protected)
+	require.Len(t, scan.Placeholders, 2)
+	require.Len(t, scan.Semicolons, 1)
+
+	scan, err = sqlscan.Scan("SELECT 1 --?x\n ?", "mysql")
+	require.NoError(t, err)
+	require.Len(t, scan.Placeholders, 2)
+
+	scan, err = sqlscan.Scan("SELECT 1 # ?\n ?", "postgresql")
+	require.NoError(t, err)
+	require.Len(t, scan.Placeholders, 2)
+
+	_, err = sqlscan.Scan(`SELECT E'\' AS value, ?`, "sqlite")
+	require.NoError(t, err)
+	_, err = sqlscan.Scan(`SELECT E'\' AS value, ?`, "postgresql")
+	require.Error(t, err)
+}

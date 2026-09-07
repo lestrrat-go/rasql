@@ -66,7 +66,7 @@ func Scan(sql string, engine ...string) (Result, error) {
 			}
 			result.Protected = append(result.Protected, Span{Start: i, End: end})
 			i = end
-		case (sql[i] == 'e' || sql[i] == 'E') && i+1 < len(sql) && sql[i+1] == '\'':
+		case engineName == "postgresql" && (sql[i] == 'e' || sql[i] == 'E') && i+1 < len(sql) && sql[i+1] == '\'':
 			end, err := scanQuoted(sql, i+1, '\'', true)
 			if err != nil {
 				return Result{}, err
@@ -87,11 +87,11 @@ func Scan(sql string, engine ...string) (Result, error) {
 			}
 			result.Protected = append(result.Protected, Span{Start: i, End: end})
 			i = end
-		case sql[i] == '-' && i+1 < len(sql) && sql[i+1] == '-':
+		case sql[i] == '-' && i+1 < len(sql) && sql[i+1] == '-' && lineCommentStart(sql, i, engineName):
 			end := scanLineComment(sql, i+2)
 			result.Protected = append(result.Protected, Span{Start: i, End: end})
 			i = end
-		case sql[i] == '#':
+		case sql[i] == '#' && (engineName == "" || engineName == "mysql"):
 			end := scanLineComment(sql, i+1)
 			result.Protected = append(result.Protected, Span{Start: i, End: end})
 			i = end
@@ -103,16 +103,18 @@ func Scan(sql string, engine ...string) (Result, error) {
 			result.Protected = append(result.Protected, Span{Start: i, End: end})
 			i = end
 		case sql[i] == '$':
-			if end, ok := dollarQuoteStart(sql, i); ok {
-				closeStart, closeEnd := strings.Index(sql[end:], sql[i:end]), -1
-				if closeStart < 0 {
-					return Result{}, fmt.Errorf("unterminated dollar-quoted string")
+			if engineName == "" || engineName == "postgresql" {
+				if end, ok := dollarQuoteStart(sql, i); ok {
+					closeStart := strings.Index(sql[end:], sql[i:end])
+					if closeStart < 0 {
+						return Result{}, fmt.Errorf("unterminated dollar-quoted string")
+					}
+					closeStart += end
+					closeEnd := closeStart + (end - i)
+					result.Protected = append(result.Protected, Span{Start: i, End: closeEnd})
+					i = closeEnd
+					continue
 				}
-				closeStart += end
-				closeEnd = closeStart + (end - i)
-				result.Protected = append(result.Protected, Span{Start: i, End: closeEnd})
-				i = closeEnd
-				continue
 			}
 			if number, end, ok, invalid := dollarPlaceholder(sql, i); ok {
 				result.Placeholders = append(result.Placeholders, Placeholder{Start: i, End: end, Kind: Dollar, Number: number, Invalid: invalid})
@@ -131,6 +133,13 @@ func Scan(sql string, engine ...string) (Result, error) {
 		}
 	}
 	return result, nil
+}
+
+func lineCommentStart(sql string, start int, engine string) bool {
+	if engine != "mysql" {
+		return true
+	}
+	return start+2 >= len(sql) || unicode.IsSpace(rune(sql[start+2]))
 }
 
 func scanQuoted(sql string, start int, quote byte, escapes bool) (int, error) {
@@ -183,7 +192,10 @@ func dollarQuoteStart(sql string, start int) (int, bool) {
 	if end < len(sql) && sql[end] == '$' {
 		return end + 1, true
 	}
-	if end >= len(sql) || !(sql[end] == '_' || unicode.IsLetter(rune(sql[end]))) {
+	if end >= len(sql) {
+		return 0, false
+	}
+	if sql[end] != '_' && !unicode.IsLetter(rune(sql[end])) {
 		return 0, false
 	}
 	end++
@@ -333,7 +345,7 @@ func executableTokens(sql string, scan Result) []token {
 	tokens := make([]token, 0)
 	for i := 0; i < len(sql); {
 		if span, ok := protected[i]; ok {
-			if sql[i] != '-' && sql[i] != '#' && !(sql[i] == '/' && i+1 < len(sql) && sql[i+1] == '*') {
+			if sql[i] != '-' && sql[i] != '#' && sql[i] != '/' {
 				tokens = append(tokens, token{kind: tokenOpaque, text: sql[i:span.End]})
 			}
 			i = span.End
