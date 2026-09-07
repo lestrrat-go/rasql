@@ -102,6 +102,39 @@ func Select(d dialect.Dialect, s query.Select) (stmt.Statement, error) {
 	})
 }
 
+// Result renders a reusable result query without changing its relational
+// shape. The supplied metadata is validated by query.ResultOf; the body is
+// emitted directly so ordering and paging remain attached to the body.
+func Result(d dialect.Dialect, s query.ResultQuery) (stmt.Statement, error) {
+	return renderStatement(d, "SELECT", func() error {
+		if s.Body() == nil {
+			return fmt.Errorf("result query body must not be empty")
+		}
+		if err := s.Body().Validate(); err != nil {
+			return err
+		}
+		return nil
+	}, func(r *renderer) error {
+		if body := s.Body(); body != nil {
+			if correlations := bodyCorrelations(body); len(correlations) > 0 {
+				return fmt.Errorf("the statement declares a correlation with table %q and is rendered on its own", correlations[0].QualifiedName())
+			}
+			return r.writeQueryBody(body)
+		}
+		return fmt.Errorf("result query body must not be empty")
+	})
+}
+
+func bodyCorrelations(body query.QueryBody) []query.RelationRef {
+	if s, ok := body.(query.Select); ok {
+		return s.Correlations()
+	}
+	if s, ok := body.(*query.Select); ok && s != nil {
+		return s.Correlations()
+	}
+	return nil
+}
+
 func renderStatement(d dialect.Dialect, operation string, validate func() error, write func(*renderer) error) (stmt.Statement, error) {
 	if isNilDialect(d) {
 		return stmt.Statement{}, &Error{Err: fmt.Errorf("dialect must not be nil")}
