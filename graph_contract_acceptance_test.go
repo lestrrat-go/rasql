@@ -152,8 +152,8 @@ func TestGraphContractIdentityCycleAndSharedDAG(t *testing.T) {
 }
 
 func TestGraphContractCanonicalTupleCodecRunsOnce(t *testing.T) {
-	count := new(atomic.Int64)
-	registry, err := NewCodecRegistry(map[CodecID]ValueCodec{"contract": graphContractCodec{enc: count}})
+	var count atomic.Int64
+	registry, err := NewCodecRegistry(map[CodecID]ValueCodec{"contract": graphContractCodec{enc: &count}})
 	require.NoError(t, err)
 	key := &graphKeySpec{parts: []*graphKeyPartSpec{{typ: reflect.TypeOf(int64(0)), codec: "contract", extract: func(any) (any, bool) { return int64(7), true }}}}
 	first, present, err := key.tuple(struct{}{}, registry)
