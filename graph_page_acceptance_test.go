@@ -211,7 +211,7 @@ func TestPageGraphAfterEmitsOneLogicalGraphEventWithLookaheadRows(t *testing.T) 
 	require.Equal(t, 1, rootStatementTerminals)
 }
 
-func TestPageGraphAfterMapperPanicReportsLogicalEarlyClose(t *testing.T) {
+func TestPageGraphAfterMapperPanicDoesNotReportLogicalEarlyClose(t *testing.T) {
 	base, rootQuery, _, _, _, _, _, _, _, _, _, _, _, _ := pageFixture(t)
 	provider, ok := base.(compilerProvider)
 	require.True(t, ok)
@@ -250,7 +250,7 @@ func TestPageGraphAfterMapperPanicReportsLogicalEarlyClose(t *testing.T) {
 		if event.Kind == EventGraph && event.Phase == EventTerminal {
 			graphTerminals++
 			require.Equal(t, int64(1), event.Rows)
-			require.True(t, event.EarlyClose)
+			require.False(t, event.EarlyClose)
 		}
 	}
 	require.Equal(t, 1, graphTerminals)

@@ -43,10 +43,7 @@ func PageGraphAfter[R, G any](ctx context.Context, executor Executor, plan Graph
 			early = true
 			return nil
 		}
-		early = true
-		mapped := root.mapRow(row)
-		rootRows = append(rootRows, graphRow{row: row, graph: mapped})
-		early = false
+		rootRows = append(rootRows, graphRow{row: row, graph: root.mapRow(row)})
 		return nil
 	})
 	if err != nil {
