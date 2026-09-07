@@ -24,6 +24,7 @@ func mutationValidationTables() (rasql.Table[mutationValidationRow], rasql.Table
 			{Name: "name", Type: schema.TextType{}, Default: "'new'"},
 			{Name: "optional", Type: schema.TextType{}, Nullable: true},
 		},
+		PrimaryKeyAutoincrement: true,
 	})
 	second := rasql.MustTableOf[mutationValidationRow](schema.TableDef{
 		Name:       "second",

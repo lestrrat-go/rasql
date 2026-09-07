@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/lestrrat-go/rasql/internal/mutationcolumn"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 )
@@ -38,6 +39,15 @@ type NullColumn[Row, T any] struct {
 	ref   query.ColumnRef
 	codec string
 }
+
+func (c Column[Row, T]) RasqlMutationColumn() mutationcolumn.NonNull[Row, T] {
+	return mutationcolumn.NonNull[Row, T]{}
+}
+func (c Column[Row, T]) mutationColumnRef() query.ColumnRef { return c.ref }
+func (c NullColumn[Row, T]) RasqlMutationNullColumn() mutationcolumn.Nullable[Row, T] {
+	return mutationcolumn.Nullable[Row, T]{}
+}
+func (c NullColumn[Row, T]) mutationColumnRef() query.ColumnRef { return c.ref }
 
 // BindResultColumn binds a non-null column exposed by a typed derived source.
 func BindResultColumn[R, T any](source TypedSource[R], name string) (Column[R, T], error) {

@@ -115,8 +115,13 @@ func ExecMutation(ctx context.Context, executor Executor, plan MutationPlan) (Mu
 		return MutationOutcome{Durability: DurabilityUnknown}, err
 	}
 	outcome := MutationOutcome{Affected: affected, Durability: executorDurability(executor)}
-	if versioned, ok := plan.(interface{ mutationPrecondition() bool }); ok && versioned.mutationPrecondition() && affected == 0 {
-		return outcome, ErrPrecondition
+	if versioned, ok := plan.(interface{ mutationPrecondition() bool }); ok && versioned.mutationPrecondition() {
+		switch {
+		case affected == 0:
+			return outcome, ErrPrecondition
+		case affected > 1:
+			return outcome, ErrMultipleRows
+		}
 	}
 	return outcome, nil
 }
@@ -213,6 +218,7 @@ func ExecMutationBatch(ctx context.Context, executor Executor, plans []MutationP
 	if options.MaxBindParameters < 0 {
 		return outcome, fmt.Errorf("rasql: mutation batch MaxBindParameters must be positive")
 	}
+	bindLimit := mutationBindLimit(executor, options.MaxBindParameters)
 	var target string
 	for index, plan := range plans {
 		if plan == nil {
@@ -240,15 +246,43 @@ func ExecMutationBatch(ctx context.Context, executor Executor, plans []MutationP
 	if options.Atomic {
 		return execAtomicMutationBatch(ctx, executor, plans, options)
 	}
+	prepared, err := prepareMutationBatches(executor, plans, maxRows, bindLimit)
+	if err != nil {
+		return outcome, err
+	}
+	if err := ctx.Err(); err != nil {
+		return outcome, err
+	}
+	logicalCtx, logicalExecutor, complete := beginLogicalInvocation(ctx, executor, EventMutationBatch)
+	var preparedOutcome MutationBatchOutcome
+	var executionErr error
+	func() {
+		defer func() {
+			if value := recover(); value != nil {
+				complete.completeLogicalInvocation(fmt.Errorf("mutation batch panicked: %v", value), 0, false)
+				panic(value)
+			}
+		}()
+		preparedOutcome, executionErr = execPreparedMutationBatches(logicalCtx, logicalExecutor, prepared, options, outcome)
+	}()
+	completeErr := executionErr
+	complete.completeLogicalInvocation(completeErr, 0, false)
+	return preparedOutcome, executionErr
+}
+
+type preparedMutationBatch struct {
+	start, end int
+	statement  stmt.Statement
+}
+
+func prepareMutationBatches(executor Executor, plans []MutationPlan, maxRows, bindLimit int) ([]preparedMutationBatch, error) {
+	prepared := make([]preparedMutationBatch, 0, len(plans))
 	for i := 0; i < len(plans); {
-		if err := ctx.Err(); err != nil {
-			return outcome, err
-		}
 		if batch, ok := plans[i].(mutationBatchPlan); ok {
 			end := i + 1
 			first, err := batch.mutationInsert()
 			if err != nil {
-				return outcome, err
+				return nil, err
 			}
 			columns := first.Columns()
 			rows := mutationRows(first.Rows())
@@ -261,7 +295,7 @@ func ExecMutationBatch(ctx context.Context, executor Executor, plans []MutationP
 				if insertErr != nil || !sameColumns(columns, insert.Columns()) || insert.UsesDefaultValues() != first.UsesDefaultValues() {
 					break
 				}
-				if options.MaxBindParameters > 0 && (len(rows)+len(insert.Rows()))*len(columns) > options.MaxBindParameters {
+				if bindLimit > 0 && (len(rows)+len(insert.Rows()))*len(columns) > bindLimit {
 					break
 				}
 				rows = append(rows, mutationRows(insert.Rows())...)
@@ -273,60 +307,72 @@ func ExecMutationBatch(ctx context.Context, executor Executor, plans []MutationP
 			} else if len(rows) > 0 {
 				statement, err = query.NewInsertRows(first.Into(), columns, rows)
 				if err != nil {
-					return outcome, err
+					return nil, err
 				}
 			}
 			compiled, compileErr := compileMutation(executor, statement)
 			if compileErr != nil {
-				return outcome, compileErr
+				return nil, compileErr
 			}
-			result, execErr := executor.Exec(ctx, compiled)
-			if execErr == nil && result == nil {
-				execErr = fmt.Errorf("rasql: executor returned nil mutation result")
-			}
-			if execErr == nil {
-				if _, rowsErr := result.RowsAffected(); rowsErr != nil {
-					execErr = rowsErr
-				}
-			}
-			if execErr != nil {
-				certainty := InputUnknown
-				if options.Classifier != nil && options.Classifier.Certainty(execErr) == OutcomeRejected {
-					certainty = InputRejected
-				}
-				for j := i; j < end; j++ {
-					outcome.Inputs[j] = certainty
-				}
-				outcome.FailedBatch = append([]int(nil), makeRange(i, end)...)
-				return outcome, execErr
-			}
-			for j := i; j < end; j++ {
-				outcome.Inputs[j] = InputApplied
-			}
+			prepared = append(prepared, preparedMutationBatch{start: i, end: end, statement: compiled})
 			i = end
 			continue
 		}
-		mutation, err := ExecMutation(ctx, executor, plans[i])
-		if err == nil {
-			outcome.Inputs[i] = InputApplied
-			if mutation.Durability == DurabilityUnknown {
-				outcome.Durability = DurabilityUnknown
+		statement, err := plans[i].mutationPlan()
+		if err != nil {
+			return nil, err
+		}
+		compiled, err := compileMutation(executor, statement)
+		if err != nil {
+			return nil, err
+		}
+		prepared = append(prepared, preparedMutationBatch{start: i, end: i + 1, statement: compiled})
+		i++
+	}
+	return prepared, nil
+}
+
+func execPreparedMutationBatches(ctx context.Context, executor Executor, prepared []preparedMutationBatch, options MutationBatchOptions, outcome MutationBatchOutcome) (MutationBatchOutcome, error) {
+	for _, batch := range prepared {
+		if err := ctx.Err(); err != nil {
+			return outcome, err
+		}
+		result, execErr := executor.Exec(ctx, batch.statement)
+		if execErr == nil && result == nil {
+			execErr = fmt.Errorf("rasql: executor returned nil mutation result")
+		}
+		if execErr == nil {
+			if _, rowsErr := result.RowsAffected(); rowsErr != nil {
+				execErr = rowsErr
 			}
-			i++
-			continue
 		}
-		certainty := InputUnknown
-		if options.Classifier != nil && options.Classifier.Certainty(err) == OutcomeRejected {
-			certainty = InputRejected
+		if execErr != nil {
+			certainty := InputUnknown
+			if options.Classifier != nil && options.Classifier.Certainty(execErr) == OutcomeRejected {
+				certainty = InputRejected
+			}
+			for index := batch.start; index < batch.end; index++ {
+				outcome.Inputs[index] = certainty
+			}
+			outcome.FailedBatch = append([]int(nil), makeRange(batch.start, batch.end)...)
+			return outcome, execErr
 		}
-		outcome.Inputs[i] = certainty
-		outcome.FailedBatch = []int{i}
-		for j := i + 1; j < len(plans); j++ {
-			outcome.Inputs[j] = InputUnattempted
+		for index := batch.start; index < batch.end; index++ {
+			outcome.Inputs[index] = InputApplied
 		}
-		return outcome, err
 	}
 	return outcome, nil
+}
+
+func mutationBindLimit(executor Executor, override int) int {
+	limit := 0
+	if provider, ok := executor.(compilerProvider); ok && provider.queryCompiler() != nil {
+		limit = provider.queryCompiler().EngineProfile().Limits.MaxBindParameters
+	}
+	if override > 0 && (limit == 0 || override < limit) {
+		return override
+	}
+	return limit
 }
 
 func execAtomicMutationBatch(ctx context.Context, executor Executor, plans []MutationPlan, options MutationBatchOptions) (MutationBatchOutcome, error) {
@@ -349,9 +395,39 @@ func execAtomicMutationBatch(ctx context.Context, executor Executor, plans []Mut
 	if err != nil {
 		return MutationBatchOutcome{}, err
 	}
+	if isNilExecutor(child) {
+		return MutationBatchOutcome{}, planError("transaction_scope_invalid", "scope", "scope beginner returned a nil child executor")
+	}
+	if isNilScopeFinalizer(finalizer) {
+		return MutationBatchOutcome{}, planError("transaction_scope_invalid", "scope", "scope beginner returned a nil finalizer")
+	}
 	nonAtomic := options
 	nonAtomic.Atomic = false
-	outcome, executionErr := ExecMutationBatch(ctx, child, plans, nonAtomic)
+	var outcome MutationBatchOutcome
+	var executionErr error
+	var panicked any
+	func() {
+		defer func() { panicked = recover() }()
+		outcome, executionErr = ExecMutationBatch(ctx, child, plans, nonAtomic)
+	}()
+	if panicked != nil {
+		attempted := mutationAttempted(outcome)
+		cleanupCtx, cancel := atomicCleanupContext(ctx)
+		rollbackErr := finalizer.Rollback(cleanupCtx)
+		cancel()
+		if rollbackErr != nil {
+			for _, index := range attempted {
+				outcome.Inputs[index] = InputUnknown
+			}
+			panic(AtomicPanic{Value: panicked, Cleanup: rollbackErr})
+		}
+		for _, index := range attempted {
+			if outcome.Inputs[index] == InputApplied {
+				outcome.Inputs[index] = InputRolledBack
+			}
+		}
+		panic(panicked)
+	}
 	attempted := mutationAttempted(outcome)
 	if executionErr != nil {
 		cleanupCtx, cancel := atomicCleanupContext(ctx)

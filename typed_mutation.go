@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"reflect"
 
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/internal/mutationcolumn"
 	"github.com/lestrrat-go/rasql/internal/nilcheck"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
@@ -27,24 +29,43 @@ type MutationField[T any] struct {
 	value  any
 }
 
-func SetField[T, V any](column query.TypedColumn[T, V], value V) MutationField[T] {
-	return MutationField[T]{column: column.Ref(), state: mutationSet, value: value}
+type mutationColumn[R, V any] interface {
+	RasqlMutationColumn() mutationcolumn.NonNull[R, V]
 }
 
-func SetNullableField[T, V any](column query.NullableColumn[T, V], value V) MutationField[T] {
-	return MutationField[T]{column: column.Ref(), state: mutationSet, value: value}
+type mutationNullColumn[R, V any] interface {
+	RasqlMutationNullColumn() mutationcolumn.Nullable[R, V]
 }
 
-func ClearField[T, V any](column query.NullableColumn[T, V]) MutationField[T] {
-	return MutationField[T]{column: column.Ref(), state: mutationClear}
+func mutationColumnRef[C any](column C) query.ColumnRef {
+	switch value := any(column).(type) {
+	case interface{ mutationColumnRef() query.ColumnRef }:
+		return value.mutationColumnRef()
+	case interface{ Ref() query.ColumnRef }:
+		return value.Ref()
+	default:
+		panic("rasql: unsupported mutation column")
+	}
 }
 
-func DefaultField[T, V any](column query.TypedColumn[T, V]) MutationField[T] {
-	return MutationField[T]{column: column.Ref(), state: mutationDefault}
+func SetField[T, V any, C mutationColumn[T, V]](column C, value V) MutationField[T] {
+	return MutationField[T]{column: mutationColumnRef(column), state: mutationSet, value: value}
 }
 
-func DefaultNullableField[T, V any](column query.NullableColumn[T, V]) MutationField[T] {
-	return MutationField[T]{column: column.Ref(), state: mutationDefault}
+func SetNullableField[T, V any, C mutationNullColumn[T, V]](column C, value V) MutationField[T] {
+	return MutationField[T]{column: mutationColumnRef(column), state: mutationSet, value: value}
+}
+
+func ClearField[T, V any, C mutationNullColumn[T, V]](column C) MutationField[T] {
+	return MutationField[T]{column: mutationColumnRef(column), state: mutationClear}
+}
+
+func DefaultField[T, V any, C mutationColumn[T, V]](column C) MutationField[T] {
+	return MutationField[T]{column: mutationColumnRef(column), state: mutationDefault}
+}
+
+func DefaultNullableField[T, V any, C mutationNullColumn[T, V]](column C) MutationField[T] {
+	return MutationField[T]{column: mutationColumnRef(column), state: mutationDefault}
 }
 
 // CreatePlan is an immutable typed INSERT plan.
@@ -70,23 +91,27 @@ type versionMutation struct {
 
 func (p PatchPlan[T]) WithVersion(column Column[T, int64], expected int64) (PatchPlan[T], error) {
 	if p.version != nil {
-		return PatchPlan[T]{}, fmt.Errorf("rasql: version predicate is already configured")
+		return p, fmt.Errorf("rasql: version predicate is already configured")
 	}
 	if p.err != nil {
-		return PatchPlan[T]{}, p.err
+		return p, p.err
 	}
 	ref := column.ref
 	definition := p.table.Ref().Definition()
+	sourceTable, ok := ref.Source().Table()
+	if !ok || !reflect.DeepEqual(sourceTable.Definition(), definition) {
+		return p, fmt.Errorf("rasql: version column must belong to the patch table")
+	}
 	columnDef, ok := definition.Column(ref.Name())
 	if !ok || ref.Source().Definition().QualifiedName() != definition.QualifiedName() {
-		return PatchPlan[T]{}, fmt.Errorf("rasql: version column %q belongs to another table", ref.Name())
+		return p, fmt.Errorf("rasql: version column %q belongs to another table", ref.Name())
 	}
 	if _, integer := columnDef.Type.(schema.IntegerType); !integer || columnDef.Nullable || columnDef.GeneratedExpression != "" || columnDef.Identity != "" {
-		return PatchPlan[T]{}, fmt.Errorf("rasql: version column %q must be a non-null ordinary integer", ref.Name())
+		return p, fmt.Errorf("rasql: version column %q must be a non-null ordinary integer", ref.Name())
 	}
 	for _, field := range p.fields {
 		if field.column.Name() == ref.Name() {
-			return PatchPlan[T]{}, fmt.Errorf("rasql: version column %q is already assigned", ref.Name())
+			return p, fmt.Errorf("rasql: version column %q is already assigned", ref.Name())
 		}
 	}
 	p.version = &versionMutation{column: ref, expected: expected}
@@ -119,12 +144,23 @@ func validateCreateRequired[T any](table Table[T], fields []MutationField[T]) er
 	}
 	definition := table.Ref().Definition()
 	for _, column := range definition.Columns {
-		if _, ok := seen[column.Name]; ok || column.Default != "" || column.Nullable || column.Identity != "" || column.GeneratedExpression != "" || isPrimaryKeyColumn(definition, column.Name) {
+		if _, ok := seen[column.Name]; ok || createColumnOmissible(definition, column) {
 			continue
 		}
 		return fmt.Errorf("rasql: create plan is missing required column %q", column.Name)
 	}
 	return nil
+}
+
+func createColumnOmissible(definition schema.TableDef, column schema.ColumnDef) bool {
+	if column.Default != "" || column.Nullable || column.Identity != "" || column.GeneratedExpression != "" {
+		return true
+	}
+	if !definition.PrimaryKeyAutoincrement || len(definition.PrimaryKey) != 1 || definition.PrimaryKey[0] != column.Name {
+		return false
+	}
+	_, integer := column.Type.(schema.IntegerType)
+	return integer
 }
 
 func NewPatchPlan[T any](table Table[T], where query.Predicate, fields ...MutationField[T]) (PatchPlan[T], error) {
@@ -195,7 +231,7 @@ func (p CreatePlan[T]) lowerNormalized() (normalizedCreate[T], error) {
 	for _, column := range columns {
 		field, ok := byName[column.Name]
 		if !ok {
-			if column.Default == "" && !column.Nullable && column.Identity == "" && column.GeneratedExpression == "" && !isPrimaryKeyColumn(p.table.Ref().Definition(), column.Name) {
+			if !createColumnOmissible(p.table.Ref().Definition(), column) {
 				return normalizedCreate[T]{}, fmt.Errorf("rasql: create plan is missing required column %q", column.Name)
 			}
 			continue

@@ -18,4 +18,16 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	relation, err := rasql.SourceOf[row](table, "")
+	if err != nil {
+		panic(err)
+	}
+	rootID, err := rasql.BindColumn[row, int64](relation, "id", "")
+	if err != nil {
+		panic(err)
+	}
+	_, err = rasql.NewCreatePlan(table, rasql.SetField(rootID, int64(2)))
+	if err != nil {
+		panic(err)
+	}
 }

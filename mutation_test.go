@@ -3,6 +3,7 @@ package rasql_test
 import (
 	"context"
 	"database/sql"
+	"sync"
 	"testing"
 
 	"github.com/lestrrat-go/rasql"
@@ -124,6 +125,46 @@ func TestMutationBatchGroupsCompatibleCreates(t *testing.T) {
 	outcome, err := rasql.ExecMutationBatch(t.Context(), executor, plans, rasql.MutationBatchOptions{MaxRows: 3})
 	require.NoError(t, err)
 	require.Equal(t, []rasql.InputOutcome{rasql.InputApplied, rasql.InputApplied, rasql.InputApplied, rasql.InputApplied, rasql.InputApplied, rasql.InputApplied}, outcome.Inputs)
+}
+
+func TestMutationBatchEmitsLogicalInvocation(t *testing.T) {
+	executor, table, id := mutationFixture(t)
+	value := query.TypedColumnOf[mutationRow, string](table.Column("value"))
+	plans := make([]rasql.MutationPlan, 0, 6)
+	for i := int64(1); i <= 6; i++ {
+		plan, err := rasql.NewCreatePlan(table, rasql.SetField(id, i), rasql.SetField(value, "event"))
+		require.NoError(t, err)
+		plans = append(plans, plan)
+	}
+	var mu sync.Mutex
+	var events []rasql.Event
+	executor, err := rasql.WithEventObservers(executor, rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), rasql.EventObserverFunc(func(ctx context.Context, event rasql.Event) (context.Context, rasql.EventCompletion) {
+		mu.Lock()
+		events = append(events, event)
+		mu.Unlock()
+		return ctx, rasql.EventCompletionFunc(func(_ context.Context, terminal rasql.Event) error {
+			mu.Lock()
+			events = append(events, terminal)
+			mu.Unlock()
+			return nil
+		})
+	}))
+	require.NoError(t, err)
+	_, err = rasql.ExecMutationBatch(t.Context(), executor, plans, rasql.MutationBatchOptions{MaxRows: 3})
+	require.NoError(t, err)
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, events, 6)
+	require.Equal(t, rasql.EventMutationBatch, events[0].Kind)
+	require.Equal(t, rasql.EventStart, events[0].Phase)
+	require.Equal(t, rasql.EventStatement, events[1].Kind)
+	require.Equal(t, events[0].LogicalID, events[1].ParentID)
+	require.Equal(t, 0, events[1].StatementIndex)
+	require.Equal(t, rasql.EventStatement, events[3].Kind)
+	require.Equal(t, events[0].LogicalID, events[3].ParentID)
+	require.Equal(t, 1, events[3].StatementIndex)
+	require.Equal(t, rasql.EventMutationBatch, events[5].Kind)
+	require.Equal(t, rasql.EventTerminal, events[5].Phase)
 }
 
 func TestMutationBatchReportsRejectedBatchAndUnattemptedInputs(t *testing.T) {

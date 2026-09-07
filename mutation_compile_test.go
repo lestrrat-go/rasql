@@ -20,9 +20,10 @@ func TestMutationCompileFixtures(t *testing.T) {
 	}
 	for _, fixture := range []struct{ name, diagnostic string }{
 		{"wrong_value", "cannot use"},
-		{"wrong_nullable", "does not match"},
-		{"clear_nonnull", "does not match"},
+		{"wrong_nullable", "does not satisfy"},
+		{"clear_nonnull", "does not satisfy"},
 		{"foreign_row", "does not match"},
+		{"version_type", "cannot use"},
 	} {
 		negative, err := filepath.Abs(filepath.Join("testdata", "compile", "mutation_api", fixture.name))
 		if err != nil {
