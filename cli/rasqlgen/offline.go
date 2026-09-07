@@ -95,7 +95,7 @@ func (c command) runOfflineGenerate(settings config, configPath string, check bo
 	if hasErrors(diagnostics) {
 		return fmt.Errorf("generate: Go model failed")
 	}
-	input, err := generate.NewEmitterInput(catalog, semantic, goModel, generation)
+	input, err := generate.NewEmitterInput(catalog, semantic, goModel, generation, mappings)
 	if err != nil {
 		return err
 	}

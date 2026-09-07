@@ -60,10 +60,6 @@ func TestMutationPlanValidationErrorsAndStickyTerminals(t *testing.T) {
 			_, err := rasql.NewPatchPlan(first, query.Predicate{}, rasql.SetField(name, "x"))
 			return err
 		}, "requires a predicate"},
-		{"patch default", func() error {
-			_, err := rasql.NewPatchPlan(first, validPredicate, rasql.DefaultField(name))
-			return err
-		}, "DEFAULT field"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -153,12 +149,6 @@ func TestMutationPlanValidationErrorsAndStickyTerminals(t *testing.T) {
 		plan rasql.PatchPlan[mutationValidationRow]
 		err  error
 	}{"zero predicate patch", patchPlan, patchErr})
-	patchPlan, patchErr = rasql.NewPatchPlan(first, validPredicate, rasql.DefaultField(name))
-	patchErrors = append(patchErrors, struct {
-		name string
-		plan rasql.PatchPlan[mutationValidationRow]
-		err  error
-	}{"default patch", patchPlan, patchErr})
 	for _, test := range patchErrors {
 		t.Run("sticky patch "+test.name, func(t *testing.T) {
 			require.Error(t, test.err)

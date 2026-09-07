@@ -1,6 +1,7 @@
 package compilerlock_test
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -16,6 +17,9 @@ func evidenceFixture(t *testing.T) compilerlock.File {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join("testdata", "v1", "postgresql.json"))
 	require.NoError(t, err)
+	legacyDigest := []byte(`"mappings": "2222222222222222222222222222222222222222222222222222222222222222"`)
+	canonicalDigest := []byte(`"mappings": "2223f019a9501fd1b6f8dfc06c959c67e16eadc4bad78f87c16ee97d5e88cb02"`)
+	b = bytes.Replace(b, legacyDigest, canonicalDigest, 1)
 	f, err := compilerlock.Decode(b)
 	require.NoError(t, err)
 	return f

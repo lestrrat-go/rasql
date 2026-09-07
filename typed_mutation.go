@@ -372,7 +372,7 @@ func (p PatchPlan[T]) lowerRaw() (query.Update, error) {
 	if err != nil {
 		return query.Update{}, err
 	}
-	where := p.where.Expression()
+	where := p.where
 	if p.version != nil {
 		where = query.And(where, query.Equal(p.version.column, p.version.expected))
 	}

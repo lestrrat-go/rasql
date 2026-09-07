@@ -135,7 +135,7 @@ func (c command) runSchemaUpdate(args []string) error {
 			generation.Objects[i].Patch = exportGoName(object.Patch.Name)
 		}
 	}
-	input, err := generate.NewEmitterInput(result.Catalog, semantic, goModel, generation)
+	input, err := generate.NewEmitterInput(result.Catalog, semantic, goModel, generation, mappings)
 	if err != nil {
 		return err
 	}
