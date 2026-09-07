@@ -15,8 +15,7 @@ import (
 )
 
 const FormatVersion = 1
-const MaxSourceFileSize = 64 << 20
-const MaxSourceFileBytes = MaxSourceFileSize
+const MaxSourceFileBytes int64 = 64 << 20
 
 type File struct {
 	Format     int              `json:"format"`
@@ -342,7 +341,7 @@ func validateFile(f File) error {
 		if q.Name == "" {
 			return fmt.Errorf("compilerlock: query %s has empty name", q.ID)
 		}
-		if q.Operation != "select" && q.Operation != "insert" && q.Operation != "update" && q.Operation != "delete" && q.Operation != "exec" {
+		if !validOperation(q.Operation) {
 			return fmt.Errorf("compilerlock: query %s has invalid operation", q.ID)
 		}
 		if err := validateSource(SourceRecord{Files: []SourceFile{q.SQL}}); err != nil {
@@ -369,6 +368,9 @@ func validateFile(f File) error {
 		}
 	}
 	return validateGeneration(f.Generation, f.Catalog, f.Queries)
+}
+func validOperation(op string) bool {
+	return op == "select" || op == "insert" || op == "update" || op == "delete" || op == "exec"
 }
 func validateValues(v []ValueRecord) error {
 	seen := map[string]struct{}{}
@@ -442,7 +444,7 @@ func validateGeneration(g GenerationRecord, c CatalogRecord, queries []QueryReco
 		if _, ok := objects[o.ID]; !ok {
 			return fmt.Errorf("compilerlock: unknown generation object %q", o.ID)
 		}
-		if o.Source == "" || o.Row == "" || o.File == "" {
+		if o.Source == "" || o.Row == "" || o.File == "" || !validGoName(o.Source) || !validGoName(o.Row) || o.Create != "" && !validGoName(o.Create) || o.Patch != "" && !validGoName(o.Patch) {
 			return fmt.Errorf("compilerlock: incomplete generation object %q", o.ID)
 		}
 		if _, err := NormalizePath(o.File); err != nil {
@@ -469,7 +471,7 @@ func validateGeneration(g GenerationRecord, c CatalogRecord, queries []QueryReco
 		if _, ok := queryIDs[q.ID]; !ok {
 			return fmt.Errorf("compilerlock: unknown generation query %q", q.ID)
 		}
-		if q.Function == "" || q.Result == "" || q.Projection == "" || q.Decoder == "" {
+		if q.Function == "" || q.Result == "" || q.Projection == "" || q.Decoder == "" || !validGoName(q.Function) || !validGoName(q.Result) || !validGoName(q.Projection) || !validGoName(q.Decoder) {
 			return fmt.Errorf("compilerlock: incomplete generation query %q", q.ID)
 		}
 		if _, err := NormalizePath(q.File); err != nil {
@@ -481,6 +483,16 @@ func validateGeneration(g GenerationRecord, c CatalogRecord, queries []QueryReco
 		files[q.File] = struct{}{}
 	}
 	return nil
+}
+func validGoName(s string) bool {
+	if s == "" || !token.IsIdentifier(s) || s == "_" {
+		return false
+	}
+	switch s {
+	case "break", "default", "func", "interface", "select", "case", "defer", "go", "map", "struct", "chan", "else", "goto", "package", "switch", "const", "fallthrough", "if", "range", "type", "continue", "for", "import", "return", "var":
+		return false
+	}
+	return true
 }
 func validateSource(s SourceRecord) error {
 	if s.Kind != "" && s.Kind != "migrations" && s.Kind != "external" && s.Kind != "live" {
@@ -656,13 +668,13 @@ func SourceBytes(name string) ([]byte, error) {
 		return nil, err
 	}
 	defer f.Close()
-	r := io.LimitReader(f, MaxSourceFileSize+1)
+	r := io.LimitReader(f, MaxSourceFileBytes+1)
 	b, err := io.ReadAll(r)
 	if err != nil {
 		return nil, err
 	}
-	if len(b) > MaxSourceFileSize {
-		return nil, fmt.Errorf("compilerlock: source exceeds %d bytes", MaxSourceFileSize)
+	if int64(len(b)) > MaxSourceFileBytes {
+		return nil, fmt.Errorf("compilerlock: source exceeds %d bytes", MaxSourceFileBytes)
 	}
 	return b, nil
 }

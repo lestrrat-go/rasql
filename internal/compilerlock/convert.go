@@ -7,6 +7,14 @@ func PhysicalFromCatalog(f File) compilerir.PhysicalCatalog          { return To
 
 func QueryFromAnalysis(q compilerir.QueryAnalysis) QueryRecord {
 	r := QueryRecord{ID: q.ID, Name: q.Name, SQL: SourceFile{Path: q.SQLPath, SHA256: q.SQLSHA256}, Operation: q.Operation, Cardinality: q.Cardinality, Evidence: EngineEvidence{Dialect: q.Engine.Dialect, Profile: q.Engine.Profile}}
+	if q.Parameters != nil {
+		r.Parameters = make([]ValueRecord, 0, len(q.Parameters))
+		r.Evidence.Parameters = make([]ValueRecord, 0, len(q.Parameters))
+	}
+	if q.Results != nil {
+		r.Results = make([]ValueRecord, 0, len(q.Results))
+		r.Evidence.Results = make([]ValueRecord, 0, len(q.Results))
+	}
 	for _, v := range q.Parameters {
 		r.Parameters = append(r.Parameters, value(v))
 		r.Evidence.Parameters = append(r.Evidence.Parameters, value(v))
@@ -23,6 +31,12 @@ func QueryFromAnalysis(q compilerir.QueryAnalysis) QueryRecord {
 
 func AnalysisFromQuery(q QueryRecord) compilerir.QueryAnalysis {
 	r := compilerir.QueryAnalysis{ID: q.ID, Name: q.Name, SQLPath: q.SQL.Path, SQLSHA256: q.SQL.SHA256, Operation: q.Operation, Cardinality: q.Cardinality, Engine: compilerir.EngineIdentity{Dialect: q.Evidence.Dialect, Profile: q.Evidence.Profile}}
+	if q.Parameters != nil {
+		r.Parameters = make([]compilerir.SemanticValue, 0, len(q.Parameters))
+	}
+	if q.Results != nil {
+		r.Results = make([]compilerir.SemanticValue, 0, len(q.Results))
+	}
 	for _, v := range q.Parameters {
 		r.Parameters = append(r.Parameters, toValue(v))
 	}
@@ -44,13 +58,23 @@ func toValue(v ValueRecord) compilerir.SemanticValue {
 
 func FromPhysical(c compilerir.PhysicalCatalog) CatalogRecord {
 	r := CatalogRecord{}
-	r.Objects = make([]ObjectRecord, len(c.Objects))
+	if c.Objects != nil {
+		r.Objects = make([]ObjectRecord, len(c.Objects))
+	}
 	for i, o := range c.Objects {
 		x := ObjectRecord{ID: string(o.ID), Kind: o.Kind, Schema: o.Schema, Name: o.Name, Strict: o.Strict, WithoutRowID: o.WithoutRowID, PrimaryKeyAutoincrement: o.PrimaryKeyAutoincrement, PrimaryKeyOnConflict: o.PrimaryKeyOnConflict, VirtualTableModule: o.VirtualTableModule, VirtualTableModuleArguments: cloneStrings(o.VirtualTableModuleArguments)}
-		x.Columns = make([]ColumnRecord, 0, len(o.Columns))
-		x.Constraints = make([]ConstraintRecord, 0, len(o.Constraints))
-		x.Indexes = make([]IndexRecord, 0, len(o.Indexes))
-		x.ExclusionConstraints = make([]ExclusionConstraintRecord, 0, len(o.ExclusionConstraints))
+		if o.Columns != nil {
+			x.Columns = make([]ColumnRecord, 0, len(o.Columns))
+		}
+		if o.Constraints != nil {
+			x.Constraints = make([]ConstraintRecord, 0, len(o.Constraints))
+		}
+		if o.Indexes != nil {
+			x.Indexes = make([]IndexRecord, 0, len(o.Indexes))
+		}
+		if o.ExclusionConstraints != nil {
+			x.ExclusionConstraints = make([]ExclusionConstraintRecord, 0, len(o.ExclusionConstraints))
+		}
 		for _, c := range o.Columns {
 			x.Columns = append(x.Columns, column(c))
 		}
@@ -62,6 +86,9 @@ func FromPhysical(c compilerir.PhysicalCatalog) CatalogRecord {
 		}
 		for _, e := range o.ExclusionConstraints {
 			y := ExclusionConstraintRecord{Name: e.Name, Method: e.Method, PredicateSQL: e.PredicateSQL, Deferrability: e.Deferrability}
+			if e.Elements != nil {
+				y.Elements = make([]ExclusionElementRecord, 0, len(e.Elements))
+			}
 			for _, z := range e.Elements {
 				y.Elements = append(y.Elements, ExclusionElementRecord{ExpressionSQL: z.ExpressionSQL, Operator: z.Operator})
 			}
@@ -106,13 +133,19 @@ func constraint(c compilerir.PhysicalConstraint) ConstraintRecord {
 	if c.Reference != nil {
 		r.Reference = &ReferenceRecord{Schema: c.Reference.Schema, Object: c.Reference.Object, Columns: append([]string(nil), c.Reference.Columns...)}
 	}
+	if c.Keys != nil {
+		r.Keys = make([]IndexPartRecord, 0, len(c.Keys))
+	}
 	for _, p := range c.Keys {
 		r.Keys = append(r.Keys, part(p))
 	}
 	return r
 }
 func index(i compilerir.PhysicalIndex) IndexRecord {
-	r := IndexRecord{Name: i.Name, Unique: i.Unique, Method: i.Method, KeyForm: i.KeyForm, PredicateSQL: i.PredicateSQL, IncludeColumns: append([]string(nil), i.IncludeColumns...), Invisible: i.Invisible, NotValid: i.NotValid, StorageParameters: cloneMap(i.StorageParameters), Tablespace: i.Tablespace, ReplicaIdentity: i.ReplicaIdentity, NullsNotDistinct: i.NullsNotDistinct}
+	r := IndexRecord{Name: i.Name, Unique: i.Unique, Method: i.Method, KeyForm: i.KeyForm, PredicateSQL: i.PredicateSQL, IncludeColumns: cloneStrings(i.IncludeColumns), Invisible: i.Invisible, NotValid: i.NotValid, StorageParameters: cloneMap(i.StorageParameters), Tablespace: i.Tablespace, ReplicaIdentity: i.ReplicaIdentity, NullsNotDistinct: i.NullsNotDistinct}
+	if i.Parts != nil {
+		r.Parts = make([]IndexPartRecord, 0, len(i.Parts))
+	}
 	for _, p := range i.Parts {
 		r.Parts = append(r.Parts, part(p))
 	}

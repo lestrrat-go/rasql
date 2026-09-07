@@ -53,7 +53,7 @@ func BuildDigests(in DigestInputs) (Digests, error) {
 			return Digests{}, fmt.Errorf("compilerlock: duplicate query ID %q", q[i].ID)
 		}
 		seenQ[q[i].ID] = struct{}{}
-		if q[i].Cardinality != "one" && q[i].Cardinality != "maybe" && q[i].Cardinality != "many" && q[i].Cardinality != "exec" {
+		if !validOperation(q[i].Operation) {
 			return Digests{}, fmt.Errorf("compilerlock: invalid cardinality %q", q[i].Cardinality)
 		}
 		if err := validateValues(q[i].Parameters); err != nil {
