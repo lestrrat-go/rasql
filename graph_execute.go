@@ -76,14 +76,17 @@ func graphValidate(node *graphPlanNode, executor Executor, rootCompiled *compile
 		current.next++
 		edge := current.node.edges[index]
 		path := fmt.Sprintf("%s.edges[%d]", current.path, index)
-		if err := validateGraphEdge(edge, executor, path); err != nil {
-			return err
+		if edge == nil || edge.child == nil {
+			return planError("invalid_graph_plan", path, "edge is incomplete")
 		}
 		if _, ok := done[edge.child.id]; ok {
 			continue
 		}
 		if _, ok := active[edge.child.id]; ok {
 			return planError("graph_cycle", path, "graph plan identity is active")
+		}
+		if err := validateGraphEdge(edge, executor, path); err != nil {
+			return err
 		}
 		stack = append(stack, frame{node: edge.child, path: current.path + "." + edge.name})
 	}
@@ -118,6 +121,9 @@ func validateGraphEdge(edge *graphEdgeSpec, executor Executor, path string) erro
 	if err != nil {
 		return err
 	}
+	if err := edge.child.query.validateCompiled(executor, compiled); err != nil {
+		return err
+	}
 	profile := executorCompilerProfile(executor)
 	budget := edge.options.BindLimit
 	if budget == 0 || budget > profile.MaxBind {
@@ -148,6 +154,9 @@ func validateManyThroughEdge(edge *graphEdgeSpec, executor Executor, path string
 	if err != nil {
 		return err
 	}
+	if err := junction.validateCompiled(executor, junctionCompiled); err != nil {
+		return err
+	}
 	if budget-len(junctionCompiled.bindSlots) < len(edge.junctionParent.parts) {
 		return planError("bind_limit", path, "bind budget cannot fit one junction key")
 	}
@@ -157,6 +166,9 @@ func validateManyThroughEdge(edge *graphEdgeSpec, executor Executor, path string
 	}
 	targetCompiled, err := target.compile(executor)
 	if err != nil {
+		return err
+	}
+	if err := target.validateCompiled(executor, targetCompiled); err != nil {
 		return err
 	}
 	if budget-len(targetCompiled.bindSlots) < len(edge.childKey.parts) {
@@ -785,7 +797,7 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 				}
 			}
 			if exists {
-				return nil, planError("cardinality", "graph."+edge.name, "junction returned duplicate target")
+				continue
 			}
 			byParent[parentTuple.identity] = append(byParent[parentTuple.identity], targetTuple)
 			if _, ok := targetSeen[targetTuple.identity]; !ok {

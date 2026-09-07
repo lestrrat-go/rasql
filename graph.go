@@ -299,8 +299,17 @@ func NewGraphPlan[R, G any](q Query[R], mapper func(R) G, edges ...GraphEdge[R, 
 			return GraphPlan[R, G]{}, planError("invalid_graph_plan", "edges", "key widths differ")
 		}
 		for partIndex := range spec.parentKey.parts {
-			if spec.parentKey.parts[partIndex].typ != spec.childKey.parts[partIndex].typ {
+			parentPart, childPart := spec.parentKey.parts[partIndex], spec.childKey.parts[partIndex]
+			if parentPart.typ != childPart.typ || parentPart.codec != childPart.codec || !reflect.DeepEqual(parentPart.columnType, childPart.columnType) {
 				return GraphPlan[R, G]{}, planError("graph_key_mismatch", "edges", "key component types differ")
+			}
+		}
+		if spec.parentKey.parts[0].source != node.query.sourceName() || spec.childKey.parts[0].source != spec.child.query.sourceName() {
+			return GraphPlan[R, G]{}, planError("graph_key_mismatch", "edges", "key source differs from graph stage")
+		}
+		if spec.kind == graphManyThrough {
+			if spec.junctionParent.parts[0].source != spec.junction.ref.QualifiedName() || spec.junctionChild.parts[0].source != spec.junction.ref.QualifiedName() {
+				return GraphPlan[R, G]{}, planError("graph_key_mismatch", "edges", "junction key source differs from junction")
 			}
 		}
 		optionSource := spec.child.query.sourceName()
@@ -311,6 +320,9 @@ func NewGraphPlan[R, G any](q Query[R], mapper func(R) G, edges ...GraphEdge[R, 
 			if optionSource != "" && spec.options.Where.source != optionSource {
 				return GraphPlan[R, G]{}, planError("invalid_graph_plan", "edge.where", "predicate source differs from child source")
 			}
+		}
+		if spec.options.Where.source2 != "" && optionSource != "" && spec.options.Where.source2 != optionSource {
+			return GraphPlan[R, G]{}, planError("invalid_graph_plan", "edge.where", "predicate source differs from child source")
 		}
 		for _, term := range spec.options.Order {
 			if term.source != "" && optionSource != "" && term.source != optionSource {

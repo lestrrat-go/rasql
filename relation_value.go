@@ -10,14 +10,17 @@ import (
 	"time"
 
 	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/schema"
 )
 
 type graphKeyPartSpec struct {
-	column   query.ColumnRef
-	codec    string
-	typ      reflect.Type
-	nullable bool
-	extract  func(any) (any, bool)
+	column     query.ColumnRef
+	codec      string
+	typ        reflect.Type
+	nullable   bool
+	columnType schema.ColumnType
+	source     string
+	extract    func(any) (any, bool)
 }
 
 type graphKeySpec struct{ parts []*graphKeyPartSpec }
@@ -29,17 +32,26 @@ func KeyPart[R, T comparable](column Column[R, T], extract func(R) T) GraphKeyPa
 	if extract == nil || column.ref.Name() == "" {
 		return GraphKeyPart[R]{}
 	}
-	return GraphKeyPart[R]{part: &graphKeyPartSpec{column: column.ref, codec: column.codec, typ: reflect.TypeOf((*T)(nil)).Elem(), extract: func(row any) (any, bool) { return extract(row.(R)), true }}}
+	return GraphKeyPart[R]{part: &graphKeyPartSpec{column: column.ref, codec: column.codec, typ: reflect.TypeOf((*T)(nil)).Elem(), extract: func(row any) (any, bool) { return extract(row.(R)), true }, columnType: graphColumnType(column.ref), source: column.ref.Source().QualifiedName()}}
 }
 
 func NullKeyPart[R, T comparable](column NullColumn[R, T], extract func(R) Nullable[T]) GraphKeyPart[R] {
 	if extract == nil || column.ref.Name() == "" {
 		return GraphKeyPart[R]{}
 	}
-	return GraphKeyPart[R]{part: &graphKeyPartSpec{column: column.ref, codec: column.codec, typ: reflect.TypeOf((*T)(nil)).Elem(), nullable: true, extract: func(row any) (any, bool) {
+	return GraphKeyPart[R]{part: &graphKeyPartSpec{column: column.ref, codec: column.codec, typ: reflect.TypeOf((*T)(nil)).Elem(), nullable: true, columnType: graphColumnType(column.ref), source: column.ref.Source().QualifiedName(), extract: func(row any) (any, bool) {
 		value := extract(row.(R))
 		return value.Value, value.Valid
 	}}}
+}
+
+func graphColumnType(column query.ColumnRef) schema.ColumnType {
+	for _, value := range column.Source().Columns() {
+		if value.Name == column.Name() {
+			return value.Type
+		}
+	}
+	return nil
 }
 
 func NewGraphKey[R any](parts ...GraphKeyPart[R]) (GraphKey[R], error) {
