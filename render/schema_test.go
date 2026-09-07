@@ -2109,3 +2109,13 @@ func sqls(statements []stmt.Statement) []string {
 	}
 	return sql
 }
+
+func TestCreateTableRendersColumnCollation(t *testing.T) {
+	table := schema.TableDef{
+		Name:    "members",
+		Columns: []schema.ColumnDef{{Name: "name", Type: schema.TextType{}, Collation: "NOCASE"}},
+	}
+	rendered, err := render.CreateTable(dialect.SQLite(), table)
+	require.NoError(t, err)
+	require.Equal(t, `CREATE TABLE "members" ("name" TEXT COLLATE "NOCASE" NOT NULL)`, rendered.SQL())
+}

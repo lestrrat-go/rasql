@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/querydescribe"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/lestrrat-go/rasql/stmt"
@@ -135,7 +136,7 @@ func parseBindAction(action string) (string, columnRef, error) {
 	if err != nil {
 		return "", columnRef{}, fmt.Errorf("parameter name must be quoted")
 	}
-	if err := schema.ValidateIdentifier(name); err != nil {
+	if err := schema.ValidateSimpleIdentifier(name); err != nil {
 		return "", columnRef{}, fmt.Errorf("invalid parameter name: %w", err)
 	}
 	if len(fields) == 2 {
@@ -159,7 +160,7 @@ func parseColumnRef(text string) (columnRef, error) {
 		return columnRef{}, fmt.Errorf("invalid column reference %q: must be table.column or schema.table.column", text)
 	}
 	for _, part := range parts {
-		if err := schema.ValidateIdentifier(part); err != nil {
+		if err := schema.ValidateSimpleIdentifier(part); err != nil {
 			return columnRef{}, fmt.Errorf("invalid column reference %q: %w", text, err)
 		}
 	}
@@ -245,7 +246,9 @@ type QueryDef struct {
 	// passes one argument per placeholder.
 	Parameters []string
 	// Binds describes each distinct parameter once, in first-use order.
-	Binds []BindDef
+	Binds      []BindDef
+	Result     *querydescribe.Description
+	ResultType string
 }
 
 // WithBindings returns a copy with explicit Go parameter bindings overlaid by
@@ -289,6 +292,14 @@ func (d QueryDef) clone() QueryDef {
 			value.Go = *bind.Binding.Go.Clone()
 			clone.Binds[index].Binding = &value
 		}
+	}
+	if d.Result != nil {
+		result := *d.Result
+		result.Columns = append([]querydescribe.Column(nil), d.Result.Columns...)
+		for index := range result.Columns {
+			result.Columns[index].Binding.Imports = append([]schema.GoImport(nil), result.Columns[index].Binding.Imports...)
+		}
+		clone.Result = &result
 	}
 	return clone
 }

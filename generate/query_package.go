@@ -2,6 +2,7 @@ package generate
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 	"github.com/lestrrat-go/rasql/internal/genfile"
 	"github.com/lestrrat-go/rasql/internal/querygen"
 	"github.com/lestrrat-go/rasql/namedsql"
+	"github.com/lestrrat-go/rasql/querydescribe"
 	"github.com/lestrrat-go/rasql/schema"
 )
 
@@ -121,7 +123,10 @@ func (p QueryPlan) Orphans() []string {
 // every existing generated destination must carry the rasqlgen marker. Marked
 // generated files that are not planned outputs are recorded as orphans. No
 // table schema is consulted.
-func (p QueryPackage) Plan() (QueryPlan, error) {
+func (p QueryPackage) Plan() (QueryPlan, error) { return p.PlanContext(context.Background()) }
+
+// PlanContext plans the query package and runs configured result describers.
+func (p QueryPackage) PlanContext(ctx context.Context) (QueryPlan, error) {
 	if p.Package == "" {
 		return QueryPlan{}, errors.New("generate: query package requires Package")
 	}
@@ -174,7 +179,7 @@ func (p QueryPackage) Plan() (QueryPlan, error) {
 	inputs := make(map[string]queryInputData, len(queries))
 	files := make([]File, 0, len(queries))
 	for _, query := range queries {
-		file, err := p.planQuery(root, dir, query, p.Tables, filenames, functions, inputs)
+		file, err := p.planQuery(ctx, root, dir, query, p.Tables, filenames, functions, inputs)
 		if err != nil {
 			return QueryPlan{}, err
 		}
@@ -665,7 +670,7 @@ func isGeneratedOutputName(name string) bool {
 	return strings.HasSuffix(name, "_gen.go") || strings.HasSuffix(name, "_gen_test.go")
 }
 
-func (p QueryPackage) planQuery(root, dir string, query Query, tables []schema.TableDef, filenames, functions map[string]string, inputs map[string]queryInputData) (File, error) {
+func (p QueryPackage) planQuery(ctx context.Context, root, dir string, query Query, tables []schema.TableDef, filenames, functions map[string]string, inputs map[string]queryInputData) (File, error) {
 	if query.Input == "" && query.SQL == "" {
 		return File{}, errors.New("generate: query input or sql is required")
 	}
@@ -692,6 +697,21 @@ func (p QueryPackage) planQuery(root, dir string, query Query, tables []schema.T
 	}
 	if owner, exists := functions[query.Function]; exists {
 		return File{}, fmt.Errorf("generate: query function %q collides with %s", query.Function, owner)
+	}
+	if query.Describer != nil {
+		resultName := query.ResultType
+		if resultName == "" {
+			resultName = query.Function + "Row"
+		}
+		helperName := "Query" + query.Function
+		if query.Cardinality != querydescribe.Many {
+			helperName += "One"
+		}
+		for _, name := range []string{resultName, helperName} {
+			if owner, exists := functions[name]; exists {
+				return File{}, fmt.Errorf("query %q generated identifier %q collides with %s", query.Function, name, owner)
+			}
+		}
 	}
 
 	d := query.Dialect
@@ -730,6 +750,17 @@ func (p QueryPackage) planQuery(root, dir string, query Query, tables []schema.T
 	if err != nil {
 		return File{}, fmt.Errorf("generate: bind query %q: %w", query.Function, err)
 	}
+	if query.Describer != nil {
+		request := snapshotDescriptionRequest(querydescribe.Request{Name: query.Function, SQL: definition.SQL, Parameters: definition.Parameters, Tables: tables, Expected: query.Expected, Cardinality: query.Cardinality})
+		description, err := query.Describer.Describe(ctx, request)
+		if err != nil {
+			return File{}, err
+		}
+		definition.Result = snapshotDescription(&description)
+		definition.ResultType = query.ResultType
+	} else if query.Expected != nil || query.ResultType != "" || query.Cardinality != querydescribe.Many {
+		return File{}, fmt.Errorf("generate: query %q typed result options require a describer", query.Function)
+	}
 	source, err := querygen.GoSourceInDir(dir, definition, p.Package, query.Function, tables...)
 	if err != nil {
 		return File{}, fmt.Errorf("generate: render query %q: %w", query.Function, err)
@@ -737,6 +768,18 @@ func (p QueryPackage) planQuery(root, dir string, query Query, tables []schema.T
 
 	filenames[filenameKey(query.Output)] = fmt.Sprintf("query %q", query.Function)
 	functions[query.Function] = fmt.Sprintf("query output %q", query.Output)
+	if query.Describer != nil {
+		resultName := query.ResultType
+		if resultName == "" {
+			resultName = query.Function + "Row"
+		}
+		helperName := "Query" + query.Function
+		if query.Cardinality != querydescribe.Many {
+			helperName += "One"
+		}
+		functions[resultName] = fmt.Sprintf("query %q result type", query.Function)
+		functions[helperName] = fmt.Sprintf("query %q helper", query.Function)
+	}
 	path := filepath.Join(dir, query.Output)
 	destination, err := genfile.ResolveDestination(path)
 	if err != nil {

@@ -46,8 +46,9 @@ func (k OperationKind) String() string {
 
 // Operation is the immutable, rendered statement passed to a Hook.
 //
-// Args returns a copy, so a hook can inspect bound values without changing
-// what reaches database/sql. Hooks cannot replace the SQL or its arguments.
+// Args returns an inspection copy, including isolated direct and named []byte
+// values, so a hook can inspect bound values without changing what reaches
+// database/sql. Hooks cannot replace the SQL or its arguments.
 type Operation struct {
 	kind OperationKind
 	stmt stmt.Statement
@@ -63,7 +64,8 @@ func (o Operation) SQL() string {
 	return o.stmt.SQL()
 }
 
-// Args returns a copy of the bound arguments in placeholder order.
+// Args returns an inspection copy of the bound arguments in placeholder order.
+// Direct []byte values and []byte values inside sql.NamedArg are isolated.
 func (o Operation) Args() []any {
 	return o.stmt.Args()
 }

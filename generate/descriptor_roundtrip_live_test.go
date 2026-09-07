@@ -37,21 +37,23 @@ func TestLiveDescriptorRoundTripsThroughGeneratedSource(t *testing.T) {
 	t.Run("postgresql", func(t *testing.T) {
 		ctx := t.Context()
 		database := dbtest.PostgreSQLDB(t)
+		tableName := dbtest.UniqueName(t, "rasql_generated_native")
+		enumName := dbtest.UniqueName(t, "rasql_generated_mood")
+		domainName := dbtest.UniqueName(t, "rasql_generated_amount")
+		quote := func(value string) string { return `"` + value + `"` }
+		_, err := database.ExecContext(ctx, "CREATE TYPE "+quote(enumName)+" AS ENUM ('sad', 'happy')")
+		require.NoError(t, err, "create enum")
+		_, err = database.ExecContext(ctx, "CREATE DOMAIN "+quote(domainName)+" AS NUMERIC(10,2)")
+		require.NoError(t, err, "create domain")
 
-		_, err := database.ExecContext(ctx, `CREATE TABLE widgets (
-			id integer PRIMARY KEY,
-			name varchar(255) NOT NULL,
-			amount numeric(10,2) NOT NULL,
-			created_at timestamp NOT NULL DEFAULT now(),
-			CONSTRAINT widgets_amount_check CHECK (amount > 0)
-		)`)
+		_, err = database.ExecContext(ctx, "CREATE TABLE "+quote(tableName)+" (\n"+
+			"id integer PRIMARY KEY, mood "+quote(enumName)+", moods "+quote(enumName)+"[], amount "+quote(domainName)+", arbitrary numeric, payload json, payload_binary jsonb, created_at timestamp(3) with time zone,\n"+
+			"CONSTRAINT "+quote(tableName+"_amount_check")+" CHECK (amount > 0)\n)")
 		require.NoError(t, err, "create table")
-		_, err = database.ExecContext(ctx, `CREATE UNIQUE INDEX widgets_name_idx ON widgets (name)`)
-		require.NoError(t, err, "create index")
 
 		inspector, err := inspect.New(database, dialect.PostgreSQL())
 		require.NoError(t, err, "create inspector")
-		table, err := inspector.Table(ctx, "widgets")
+		table, err := inspector.Table(ctx, tableName)
 		require.NoError(t, err, "inspect table")
 
 		roundTripDescriptors(t, table)
@@ -60,19 +62,15 @@ func TestLiveDescriptorRoundTripsThroughGeneratedSource(t *testing.T) {
 	t.Run("mysql", func(t *testing.T) {
 		ctx := t.Context()
 		database := dbtest.MySQLDB(t)
+		tableName := dbtest.UniqueName(t, "rasql_generated_native")
 
-		_, err := database.ExecContext(ctx, `CREATE TABLE widgets (
-			id INT UNSIGNED PRIMARY KEY,
-			name VARCHAR(255) NOT NULL,
-			amount DECIMAL(10,2) UNSIGNED NOT NULL,
-			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			UNIQUE KEY widgets_name_idx (name)
-		) ENGINE=InnoDB`)
+		_, err := database.ExecContext(ctx, "CREATE TABLE `"+tableName+"` (\n"+
+			"id INT UNSIGNED PRIMARY KEY, mood ENUM('sad','happy'), flags SET('one','two'), amount DECIMAL(10,2) UNSIGNED, payload JSON, created_at TIMESTAMP NULL\n) ENGINE=InnoDB")
 		require.NoError(t, err, "create table")
 
 		inspector, err := inspect.New(database, dialect.MySQL())
 		require.NoError(t, err, "create inspector")
-		table, err := inspector.Table(ctx, "widgets")
+		table, err := inspector.Table(ctx, tableName)
 		require.NoError(t, err, "inspect table")
 
 		roundTripDescriptors(t, table)

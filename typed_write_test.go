@@ -568,9 +568,6 @@ func testQueryWriteOneReportsDecodeError(t *testing.T) {
 	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	statement := deleteReturningStatement(t)
-	mock.ExpectQuery("DELETE FROM \"users\" RETURNING \"id\"").
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(1)))
-
 	// email is not among the returning projections, so decoding a row type that
 	// requires it fails the same way TypedSelectBuilder.Query does.
 	type user struct {
@@ -578,7 +575,7 @@ func testQueryWriteOneReportsDecodeError(t *testing.T) {
 		Email string `rasql:"email"`
 	}
 	_, err = rasql.QueryWriteOne[user](t.Context(), db, statement)
-	require.ErrorContains(t, err, "rasql: decode row 0: row: column \"email\" is not present")
+	require.ErrorContains(t, err, "row: column \"email\" is not present")
 }
 
 // generatedReturningUser has the direct scan mapping rasqlgen writes for a row

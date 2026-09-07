@@ -167,6 +167,12 @@ SQLite's own introspection cannot report `Match` or `Deferrable` through a PRAGM
 
 `TableDef.Validate` accepts an `ExclusionDef`, but `render.CreateTable` and the migrate diff-live path refuse to build DDL for one, returning a `*render.UnsupportedExclusionConstraintError` that names the constraint.
 
+## Column collations
+
+`ColumnDef.Collation` records a column's explicit collation name exactly as the parser or catalog reports it, without SQL quote delimiters. Its empty value means no explicit collation was declared. SQLite inspection preserves this field, and rendering places it immediately after the column type.
+
+SQLite dump publishes only the built-in `BINARY`, `NOCASE`, and `RTRIM` collations, compared case-insensitively. It refuses a table using any other explicit collation because the dump cannot carry the application's collation implementation.
+
 ## Generated columns
 
 `ColumnDef.GeneratedExpression` and `ColumnDef.GeneratedStorage` describe a generated column: one whose value the database computes from an expression over other columns, rather than one an `INSERT` or `UPDATE` can write to directly. `inspect.Table` records both on all three engines. A SQLite column that is genuinely hidden, the kind a virtual table module declares, is a different fact, `ColumnDef.Hidden`: see [SQLite virtual tables](#sqlite-virtual-tables).
@@ -181,8 +187,39 @@ On PostgreSQL and MySQL, `GeneratedExpression` is the server's own re-serialized
 
 A generated column changes nothing about code generation: `rasqlgen` still emits an ordinary row field for it, since a generated column reads back like any other column, and the field's Go type follows the same rules as any other column of its logical type. It is only the write path that treats it differently, and automatically: `rasql.Insert`, `rasql.InsertMany`, `rasql.Update`, and `rasql.UpdateMany` all leave a `GeneratedExpression` column out of the column list they build by default, the same way `rasql.UpdateWithOptions` already leaves the primary key out of a plain `Update`'s assignment list, because a database rejects a statement that targets a generated column explicitly. A caller does not need `rasql.DefaultColumns` or `rasql.UpdateColumns` to get this: those options still work for their existing purpose (a database-default or auto-increment column an ordinary, non-generated column happens to have), but naming a generated column through `rasql.UpdateColumns` is refused up front rather than silently accepted or left to fail against the database.
 
+## Namespaces
+
+`Inspector.TableIn(ctx, namespace, table)` and `TableNamesIn(ctx, namespace)`
+use a PostgreSQL schema, MySQL database, or SQLite attached database as the
+requested namespace. The returned descriptor or table name preserves that
+namespace in `Schema`; the unscoped methods keep their existing default
+behavior. `catalog.Options.Namespaces` sweeps selected namespaces, while
+`IncludeObjects` and `ExcludeObjects` select exact `{Schema, Name}` identities.
+
 ## Next
 
 [Schemas](01-schema.md) covers the descriptor an application writes itself.
 [Migrations](07-migrations.md) covers the `diff-live` command that compares a
 live table with a desired schema.
+# Native type facts
+
+Inspection keeps native ENUM and SET labels and opaque SQLite declarations in `ColumnDef.NativeType`. Portable type
+classification remains available separately, so catalog consumers can choose faithful same-engine DDL or reject a
+cross-dialect operation explicitly.
+
+Native metadata is also carried into generated descriptors and remains available
+to runtime scanners and column valuers. Opaque columns generate `any` fields;
+applications bind concrete enum, set, domain, or array values through explicit
+`sql.Scanner` and `driver.Valuer` implementations. Same-dialect DDL preserves
+the inspected native identity, while a different dialect returns a typed
+unsupported-native error before it emits SQL. SQLite declarations are retained
+only after validation, so incomplete or unsafe declarations are never published
+as descriptors.
+
+# Tables and views
+
+`Inspector.TableNames` continues to enumerate base tables. Use
+`Inspector.ObjectNames` and `Inspector.Object` to enumerate and inspect tables
+and views. Catalog sweeps exclude views unless `catalog.Options.IncludeViews`
+is true. Inspected views default to `schema.OperationRead`; writable view
+operations require explicit authoritative metadata.

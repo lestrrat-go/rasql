@@ -1,6 +1,8 @@
 package generate
 
 import (
+	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"go/token"
@@ -18,6 +20,7 @@ import (
 	"github.com/lestrrat-go/rasql/internal/querygen"
 	"github.com/lestrrat-go/rasql/internal/schemagen"
 	"github.com/lestrrat-go/rasql/namedsql"
+	"github.com/lestrrat-go/rasql/querydescribe"
 	"github.com/lestrrat-go/rasql/schema"
 )
 
@@ -70,6 +73,9 @@ type Store struct {
 	// that store; it does for a run generated from a database.
 	Hints map[string]TableHint
 
+	// Names assigns stable generated Go names by exact physical table identity.
+	Names map[schema.ObjectName]ObjectNames
+
 	// Dialect selects the placeholder style for a Query that does not
 	// name its own. Required when any Query leaves Dialect nil, ignored
 	// otherwise. It is not used to render the tables, which are
@@ -118,6 +124,10 @@ func (hint TableHint) Apply(table schema.TableDef) schema.TableDef {
 // Query is one static SQL template compiled into a generated function
 // inside the store package.
 type Query struct {
+	Describer   querydescribe.Describer
+	Expected    *querydescribe.Description
+	ResultType  string
+	Cardinality querydescribe.Cardinality
 	// Bindings overrides generated Go parameter types by bind name.
 	Bindings map[string]namedsql.ParameterBinding
 
@@ -196,7 +206,10 @@ type Query struct {
 // asked, rather than the two strings compared, and two spellings that fold
 // together while neither of them exists yet -- which nothing on disk tells
 // apart -- are refused rather than planned as two files.
-func (s Store) Plan() (Plan, error) {
+func (s Store) Plan() (Plan, error) { return s.PlanContext(context.Background()) }
+
+// PlanContext plans the store and runs configured result describers.
+func (s Store) PlanContext(ctx context.Context) (Plan, error) {
 	// The blank identifier is checked separately because
 	// token.IsIdentifier accepts it: it is an identifier everywhere else
 	// in Go, but "package _" is not a package clause the compiler
@@ -256,12 +269,22 @@ func (s Store) Plan() (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	sorted := append([]schema.TableDef(nil), tables...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
-
-	if err := Validate(s.Package, sorted...); err != nil {
+	names := cloneObjectNames(s.Names)
+	if err := validateObjectNames(tables, names); err != nil {
 		return Plan{}, err
 	}
+	overrides := toNameOverrides(names)
+	resolved, err := schemagen.ResolveNames(s.Package, tables, overrides)
+	if err != nil {
+		return Plan{}, err
+	}
+	sorted := append([]schema.TableDef(nil), tables...)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].Schema != sorted[j].Schema {
+			return sorted[i].Schema < sorted[j].Schema
+		}
+		return sorted[i].Name < sorted[j].Name
+	})
 
 	// filenames tracks every destination file name (not path) that a
 	// table or the descriptor file already claims, so a query can be
@@ -273,7 +296,7 @@ func (s Store) Plan() (Plan, error) {
 	filenames := make(map[string]string, len(sorted)+1+len(s.Queries))
 	filenames[filenameKey(schemaDescriptorFilename)] = "the schema descriptor file " + schemaDescriptorFilename
 	for _, table := range sorted {
-		filename := schemaOutputFilename(table.Name)
+		filename := resolved.Filename(table)
 		if owner, exists := filenames[filenameKey(filename)]; exists {
 			return Plan{}, fmt.Errorf("generate: table %q generates %q, which collides with %s", table.Name, filename, owner)
 		}
@@ -286,38 +309,36 @@ func (s Store) Plan() (Plan, error) {
 	// query is the only declaration a Store adds that the descriptors do not
 	// explain, which is why this set is built once here and handed to
 	// planQuery rather than derived per query.
-	declared, err := schemagen.PackageLevelNames(s.Package, sorted...)
-	if err != nil {
-		return Plan{}, err
-	}
+	declared := resolved.PackageLevelNames()
 	identifiers := make(map[string]string, len(declared)+len(s.Queries))
 	for _, name := range declared {
 		identifiers[name] = "an identifier the generated store already declares"
 	}
 
 	files := make([]File, 0, len(sorted)+2+len(s.Queries))
+	inputs := make(map[string]queryInputData, len(s.Queries))
 	for _, table := range sorted {
-		source, err := schemagen.TableSurfaceSourceInDir(dir, s.Package, table, sorted...)
+		source, err := schemagen.TableSurfaceSourceWithOptions(s.Package, table, schemagen.SourceOptions{Dir: dir, Names: resolved}, sorted...)
 		if err != nil {
 			return Plan{}, err
 		}
-		files = append(files, File{Path: filepath.Join(dir, schemaOutputFilename(table.Name)), Source: source})
+		files = append(files, File{Path: filepath.Join(dir, resolved.Filename(table)), Source: source})
 	}
 
-	descriptorSource, err := DescriptorSource(s.Package, sorted...)
+	descriptorSource, err := schemagen.DescriptorSourceWithOptions(s.Package, schemagen.SourceOptions{Names: resolved}, sorted...)
 	if err != nil {
 		return Plan{}, err
 	}
 	files = append(files, File{Path: filepath.Join(dir, schemaDescriptorFilename), Source: descriptorSource})
 
-	descriptorTestSource, err := DescriptorTestSource(s.Package, sorted...)
+	descriptorTestSource, err := schemagen.DescriptorTestSourceWithOptions(s.Package, schemagen.SourceOptions{Names: resolved}, sorted...)
 	if err != nil {
 		return Plan{}, err
 	}
 	files = append(files, File{Path: filepath.Join(dir, schemaDescriptorTestFilename), Source: descriptorTestSource})
 
 	for index, q := range s.Queries {
-		file, err := s.planQuery(root, dir, q, sorted, filenames, identifiers)
+		file, err := s.planQuery(ctx, root, dir, q, sorted, filenames, identifiers, inputs)
 		if err != nil {
 			return Plan{}, fmt.Errorf("generate: query[%d]: %w", index, err)
 		}
@@ -325,6 +346,11 @@ func (s Store) Plan() (Plan, error) {
 	}
 
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	inputSnapshots := make([]queryInputSnapshot, 0, len(inputs))
+	for _, input := range inputs {
+		inputSnapshots = append(inputSnapshots, input.snapshot)
+	}
+	sort.Slice(inputSnapshots, func(left, right int) bool { return inputSnapshots[left].path < inputSnapshots[right].path })
 
 	// The resolved destination is kept rather than discarded: it is the
 	// file a commit's bytes actually land in, and it differs from the
@@ -394,7 +420,7 @@ func (s Store) Plan() (Plan, error) {
 		}
 	}
 
-	return Plan{files: files, orphans: orphans, dir: dir, prune: s.Prune, root: checkRoot, anchor: anchor, anchorInfo: anchorInfo}, nil
+	return Plan{files: files, orphans: orphans, inputs: inputSnapshots, dir: dir, prune: s.Prune, packageName: s.Package, root: checkRoot, anchor: anchor, anchorInfo: anchorInfo}, nil
 }
 
 // Write plans the store and commits the plan: it is Plan followed by
@@ -412,8 +438,10 @@ func (s Store) Write() error {
 // Check plans the store and compares the plan with what is on disk, without
 // writing anything. It returns nil when a Write would change nothing at
 // all, an error wrapping ErrStale when the generated package differs from
-// what these inputs produce, and the error Commit itself would return when
-// Commit would refuse the run instead of writing anything. See Plan.Check.
+// what the current inputs produce, and the error Commit itself would return
+// when Commit would refuse the run instead of writing anything. A held Plan
+// guards file-backed query inputs by their captured bytes; a fresh Store.Check
+// evaluates the current inputs. See Plan.Check.
 func (s Store) Check() error {
 	plan, err := s.Plan()
 	if err != nil {
@@ -429,7 +457,7 @@ func (s Store) Check() error {
 // both once they pass, so a later query is checked against them too. tables
 // is the hint-applied, validated, name-sorted set the generated package
 // declares; a bind that names a column resolves against it.
-func (s Store) planQuery(root, dir string, q Query, tables []schema.TableDef, filenames, identifiers map[string]string) (File, error) {
+func (s Store) planQuery(ctx context.Context, root, dir string, q Query, tables []schema.TableDef, filenames, identifiers map[string]string, inputs map[string]queryInputData) (File, error) {
 	if q.Input == "" && q.SQL == "" {
 		return File{}, errors.New("input or sql is required")
 	}
@@ -445,6 +473,21 @@ func (s Store) planQuery(root, dir string, q Query, tables []schema.TableDef, fi
 	if owner, exists := identifiers[q.Function]; exists {
 		return File{}, fmt.Errorf("function %q collides with %s", q.Function, owner)
 	}
+	if q.Describer != nil {
+		resultName := q.ResultType
+		if resultName == "" {
+			resultName = q.Function + "Row"
+		}
+		helperName := "Query" + q.Function
+		if q.Cardinality != querydescribe.Many {
+			helperName += "One"
+		}
+		for _, name := range []string{resultName, helperName} {
+			if owner, exists := identifiers[name]; exists {
+				return File{}, fmt.Errorf("query %q generated identifier %q collides with %s", q.Function, name, owner)
+			}
+		}
+	}
 	if q.Output == "" {
 		return File{}, errors.New("output is required")
 	}
@@ -459,6 +502,18 @@ func (s Store) planQuery(root, dir string, q Query, tables []schema.TableDef, fi
 	}
 	filenames[filenameKey(q.Output)] = fmt.Sprintf("query %q, which generates %s", q.Function, q.Output)
 	identifiers[q.Function] = fmt.Sprintf("query %q", q.Function)
+	if q.Describer != nil {
+		resultName := q.ResultType
+		if resultName == "" {
+			resultName = q.Function + "Row"
+		}
+		helperName := "Query" + q.Function
+		if q.Cardinality != querydescribe.Many {
+			helperName += "One"
+		}
+		identifiers[resultName] = fmt.Sprintf("query %q result type", q.Function)
+		identifiers[helperName] = fmt.Sprintf("query %q helper", q.Function)
+	}
 
 	d := q.Dialect
 	if d == nil {
@@ -471,11 +526,16 @@ func (s Store) planQuery(root, dir string, q Query, tables []schema.TableDef, fi
 		if err != nil {
 			return File{}, fmt.Errorf("resolve Input: %w", err)
 		}
-		data, err := readQueryInput(inputPath)
-		if err != nil {
-			return File{}, fmt.Errorf("read Input %s: %w", inputPath, err)
+		input, exists := inputs[inputPath]
+		if !exists {
+			data, err := readQueryInput(inputPath)
+			if err != nil {
+				return File{}, fmt.Errorf("read Input %s: %w", inputPath, err)
+			}
+			input = queryInputData{snapshot: queryInputSnapshot{path: inputPath, digest: sha256.Sum256(data)}, data: data}
+			inputs[inputPath] = input
 		}
-		text = string(data)
+		text = string(input.data)
 	}
 	parsed, err := namedsql.Parse(q.Function, text)
 	if err != nil {
@@ -488,6 +548,17 @@ func (s Store) planQuery(root, dir string, q Query, tables []schema.TableDef, fi
 	definition, err := compiled.QueryDef().WithBindings(q.Bindings)
 	if err != nil {
 		return File{}, err
+	}
+	if q.Describer != nil {
+		request := snapshotDescriptionRequest(querydescribe.Request{Name: q.Function, SQL: definition.SQL, Parameters: definition.Parameters, Tables: tables, Expected: q.Expected, Cardinality: q.Cardinality})
+		description, err := q.Describer.Describe(ctx, request)
+		if err != nil {
+			return File{}, err
+		}
+		definition.Result = snapshotDescription(&description)
+		definition.ResultType = q.ResultType
+	} else if q.Expected != nil || q.ResultType != "" || q.Cardinality != querydescribe.Many {
+		return File{}, fmt.Errorf("query %q: typed result options require a describer", q.Function)
 	}
 	source, err := querygen.GoSourceInDir(dir, definition, s.Package, q.Function, tables...)
 	if err != nil {

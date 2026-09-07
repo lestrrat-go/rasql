@@ -185,125 +185,71 @@ func (t TasksTable) As(alias string) (TasksTable, error) {
 	return TasksTable{Table: aliased}, nil
 }
 
-type TasksCreate struct {
-	fields []rasql.MutationField[TasksRow]
+// TasksTableAssigneeRelation describes the Assignee relationship from TasksTable.
+type TasksTableAssigneeRelation struct {
+	Parent    MembersTable
+	Child     TasksTable
+	ParentKey rasql.ColumnRef
+	ChildKey  rasql.ColumnRef
 }
 
-func NewTasksCreate() TasksCreate { return TasksCreate{} }
-
-func (p TasksCreate) ProjectID(value int64) TasksCreate {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[TasksRow](Tasks().ProjectID(), value))
-	return TasksCreate{fields: fields}
-}
-func (p TasksCreate) AssigneeID(value *int64) TasksCreate {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.SetNullableField[TasksRow](Tasks().AssigneeID(), value))
-	return TasksCreate{fields: fields}
-}
-func (p TasksCreate) ClearAssigneeID() TasksCreate {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.ClearField[TasksRow](Tasks().AssigneeID()))
-	return TasksCreate{fields: fields}
-}
-func (p TasksCreate) Title(value string) TasksCreate {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[TasksRow](Tasks().Title(), value))
-	return TasksCreate{fields: fields}
-}
-func (p TasksCreate) IsOpen(value bool) TasksCreate {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[TasksRow](Tasks().IsOpen(), value))
-	return TasksCreate{fields: fields}
-}
-func (p TasksCreate) DefaultIsOpen() TasksCreate {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.DefaultField[TasksRow](Tasks().IsOpen()))
-	return TasksCreate{fields: fields}
-}
-func (p TasksCreate) CreatedAt(value time.Time) TasksCreate {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[TasksRow](Tasks().CreatedAt(), value))
-	return TasksCreate{fields: fields}
-}
-func (p TasksCreate) DefaultCreatedAt() TasksCreate {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.DefaultField[TasksRow](Tasks().CreatedAt()))
-	return TasksCreate{fields: fields}
-}
-func (p TasksCreate) DueOn(value *time.Time) TasksCreate {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.SetNullableField[TasksRow](Tasks().DueOn(), value))
-	return TasksCreate{fields: fields}
-}
-func (p TasksCreate) ClearDueOn() TasksCreate {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.ClearField[TasksRow](Tasks().DueOn()))
-	return TasksCreate{fields: fields}
-}
-func (p TasksCreate) Plan() rasql.CreatePlan[TasksRow] {
-	plan, _ := rasql.NewCreatePlan[TasksRow](Tasks(), p.fields...)
-	return plan
+// Assignee returns the generated relationship descriptor.
+func (t TasksTable) Assignee() TasksTableAssigneeRelation {
+	child := t
+	parent := Members()
+	return TasksTableAssigneeRelation{Parent: parent, Child: child, ParentKey: parent.IDRef(), ChildKey: child.AssigneeIDRef()}
 }
 
-type TasksPatch struct {
-	fields []rasql.MutationField[TasksRow]
+// Join returns an INNER JOIN for the relationship.
+func (r TasksTableAssigneeRelation) Join() rasql.Join {
+	return rasql.InnerJoin(r.Parent, rasql.Equal(r.ParentKey, r.ChildKey))
 }
 
-func NewTasksPatch() TasksPatch { return TasksPatch{} }
+// LoadThen loads a scalar relationship and invokes next once.
+func (r TasksTableAssigneeRelation) LoadThen(ctx context.Context, db rasql.DB, sources []TasksRow, options rasql.RelationshipLoadOptions, next func([]MembersRow) error) (map[*int64]MembersRow, error) {
+	loaded, err := r.LoadWith(ctx, db, sources, options)
+	if err != nil || next == nil {
+		return loaded, err
+	}
+	rows := make([]MembersRow, 0)
+	seen := make(map[int64]struct{})
+	for _, source := range sources {
+		key := r.SourceKey(source)
+		if row, ok := loaded[key]; ok {
+			if _, ok := seen[row.ID]; ok {
+				continue
+			}
+			seen[row.ID] = struct{}{}
+			rows = append(rows, row)
+		}
+	}
+	if err := next(rows); err != nil {
+		return loaded, err
+	}
+	return loaded, nil
+}
 
-func (p TasksPatch) ProjectID(value int64) TasksPatch {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[TasksRow](Tasks().ProjectID(), value))
-	return TasksPatch{fields: fields}
+// LoadWith fetches related parents with filtering, ordering, and bind batching.
+func (r TasksTableAssigneeRelation) LoadWith(ctx context.Context, db rasql.DB, children []TasksRow, options rasql.RelationshipLoadOptions) (map[*int64]MembersRow, error) {
+	return rasql.LoadBelongsToPlan[TasksRow, MembersRow, *int64](ctx, db, r.Parent, []query.ColumnRef{r.ParentKey}, children, func(row TasksRow) *int64 { return row.AssigneeID }, func(row MembersRow) *int64 { value := row.ID; return &value }, func(key *int64) ([]any, bool) {
+		if key == nil {
+			return nil, false
+		}
+		return []any{*key}, true
+	}, options)
 }
-func (p TasksPatch) AssigneeID(value *int64) TasksPatch {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.SetNullableField[TasksRow](Tasks().AssigneeID(), value))
-	return TasksPatch{fields: fields}
+
+// Load fetches all related parents for children in one query.
+func (r TasksTableAssigneeRelation) Load(ctx context.Context, db rasql.DB, children []TasksRow) (map[*int64]MembersRow, error) {
+	return r.LoadWith(ctx, db, children, rasql.RelationshipLoadOptions{})
 }
-func (p TasksPatch) ClearAssigneeID() TasksPatch {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.ClearField[TasksRow](Tasks().AssigneeID()))
-	return TasksPatch{fields: fields}
-}
-func (p TasksPatch) Title(value string) TasksPatch {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[TasksRow](Tasks().Title(), value))
-	return TasksPatch{fields: fields}
-}
-func (p TasksPatch) IsOpen(value bool) TasksPatch {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[TasksRow](Tasks().IsOpen(), value))
-	return TasksPatch{fields: fields}
-}
-func (p TasksPatch) DefaultIsOpen() TasksPatch {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.DefaultField[TasksRow](Tasks().IsOpen()))
-	return TasksPatch{fields: fields}
-}
-func (p TasksPatch) CreatedAt(value time.Time) TasksPatch {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[TasksRow](Tasks().CreatedAt(), value))
-	return TasksPatch{fields: fields}
-}
-func (p TasksPatch) DefaultCreatedAt() TasksPatch {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.DefaultField[TasksRow](Tasks().CreatedAt()))
-	return TasksPatch{fields: fields}
-}
-func (p TasksPatch) DueOn(value *time.Time) TasksPatch {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.SetNullableField[TasksRow](Tasks().DueOn(), value))
-	return TasksPatch{fields: fields}
-}
-func (p TasksPatch) ClearDueOn() TasksPatch {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.ClearField[TasksRow](Tasks().DueOn()))
-	return TasksPatch{fields: fields}
-}
-func (p TasksPatch) Where(predicate query.Predicate) (rasql.PatchPlan[TasksRow], error) {
-	return rasql.NewPatchPlan[TasksRow](Tasks(), predicate, p.fields...)
+
+// SourceKey returns the ordered source relationship key.
+func (r TasksTableAssigneeRelation) SourceKey(row TasksRow) *int64 { return row.AssigneeID }
+
+// TargetKey returns the ordered target relationship key.
+func (r TasksTableAssigneeRelation) TargetKey(row MembersRow) *int64 {
+	return func() *int64 { value := row.ID; return &value }()
 }
 
 // TasksTableProjectRelation describes the Project relationship from TasksTable.
@@ -318,7 +264,7 @@ type TasksTableProjectRelation struct {
 func (t TasksTable) Project() TasksTableProjectRelation {
 	child := t
 	parent := Projects()
-	return TasksTableProjectRelation{Parent: parent, Child: child, ParentKey: parent.ID().Ref(), ChildKey: child.ProjectID().Ref()}
+	return TasksTableProjectRelation{Parent: parent, Child: child, ParentKey: parent.IDRef(), ChildKey: child.ProjectIDRef()}
 }
 
 // Join returns an INNER JOIN for the relationship.
@@ -326,7 +272,42 @@ func (r TasksTableProjectRelation) Join() rasql.Join {
 	return rasql.InnerJoin(r.Parent, rasql.Equal(r.ParentKey, r.ChildKey))
 }
 
-// Load fetches all related parents for children in one query and groups them by foreign-key value.
-func (r TasksTableProjectRelation) Load(ctx context.Context, db rasql.DB, children []TasksRow) (map[int64]ProjectsRow, error) {
-	return rasql.LoadBelongsTo[TasksRow, ProjectsRow, int64](ctx, db, r.Parent, r.ParentKey, children, func(row TasksRow) int64 { return row.ProjectID }, func(row ProjectsRow) int64 { return row.ID })
+// LoadThen loads a scalar relationship and invokes next once.
+func (r TasksTableProjectRelation) LoadThen(ctx context.Context, db rasql.DB, sources []TasksRow, options rasql.RelationshipLoadOptions, next func([]ProjectsRow) error) (map[int64]ProjectsRow, error) {
+	loaded, err := r.LoadWith(ctx, db, sources, options)
+	if err != nil || next == nil {
+		return loaded, err
+	}
+	rows := make([]ProjectsRow, 0)
+	seen := make(map[int64]struct{})
+	for _, source := range sources {
+		key := r.SourceKey(source)
+		if row, ok := loaded[key]; ok {
+			if _, ok := seen[row.ID]; ok {
+				continue
+			}
+			seen[row.ID] = struct{}{}
+			rows = append(rows, row)
+		}
+	}
+	if err := next(rows); err != nil {
+		return loaded, err
+	}
+	return loaded, nil
 }
+
+// LoadWith fetches related parents with filtering, ordering, and bind batching.
+func (r TasksTableProjectRelation) LoadWith(ctx context.Context, db rasql.DB, children []TasksRow, options rasql.RelationshipLoadOptions) (map[int64]ProjectsRow, error) {
+	return rasql.LoadBelongsToPlan[TasksRow, ProjectsRow, int64](ctx, db, r.Parent, []query.ColumnRef{r.ParentKey}, children, func(row TasksRow) int64 { return row.ProjectID }, func(row ProjectsRow) int64 { return row.ID }, func(key int64) ([]any, bool) { return []any{key}, true }, options)
+}
+
+// Load fetches all related parents for children in one query.
+func (r TasksTableProjectRelation) Load(ctx context.Context, db rasql.DB, children []TasksRow) (map[int64]ProjectsRow, error) {
+	return r.LoadWith(ctx, db, children, rasql.RelationshipLoadOptions{})
+}
+
+// SourceKey returns the ordered source relationship key.
+func (r TasksTableProjectRelation) SourceKey(row TasksRow) int64 { return row.ProjectID }
+
+// TargetKey returns the ordered target relationship key.
+func (r TasksTableProjectRelation) TargetKey(row ProjectsRow) int64 { return row.ID }
