@@ -44,6 +44,16 @@ func SnapshotSourceFile(root, relative string) (SourceFileSnapshot, error) {
 		return SourceFileSnapshot{}, err
 	}
 	s, _, err := SnapshotSource(filepath.Join(root, filepath.FromSlash(p)))
+	if err == nil {
+		resolved, e := filepath.EvalSymlinks(s.Path)
+		if e != nil {
+			return SourceFileSnapshot{}, e
+		}
+		rel, e := filepath.Rel(root, resolved)
+		if e != nil || rel == ".." || len(rel) >= 3 && rel[:3] == ".."+string(filepath.Separator) {
+			return SourceFileSnapshot{}, fmt.Errorf("%w: source escapes module root", ErrSourceChanged)
+		}
+	}
 	s.Relative = p
 	return s, err
 }
@@ -80,8 +90,16 @@ func (s SourceSnapshot) Revalidate() error {
 	}
 	return nil
 }
-func RevalidateSourceFiles(files []SourceFileSnapshot) error {
+func RevalidateSourceFiles(root string, files []SourceFileSnapshot) error {
 	for _, f := range files {
+		resolved, err := filepath.EvalSymlinks(f.Path)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, resolved)
+		if err != nil || rel == ".." || len(rel) >= 3 && rel[:3] == ".."+string(filepath.Separator) {
+			return fmt.Errorf("%w: source escapes module root", ErrSourceChanged)
+		}
 		if err := f.Revalidate(); err != nil {
 			return err
 		}

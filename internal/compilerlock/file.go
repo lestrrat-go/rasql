@@ -152,6 +152,7 @@ type IndexRecord struct {
 	Name              string            `json:"name"`
 	Unique            bool              `json:"unique,omitempty"`
 	Method            string            `json:"method,omitempty"`
+	KeyForm           string            `json:"key_form"`
 	Parts             []IndexPartRecord `json:"parts"`
 	PredicateSQL      string            `json:"predicate_sql,omitempty"`
 	IncludeColumns    []string          `json:"include_columns,omitempty"`
@@ -609,7 +610,7 @@ func less4(a, b, c, d, e, f, g, h string) bool {
 
 // SourceBytes reads a source file with the lockfile input limit.
 func SourceBytes(name string) ([]byte, error) {
-	st, err := os.Lstat(name)
+	st, err := os.Stat(name)
 	if err != nil {
 		return nil, err
 	}

@@ -108,7 +108,7 @@ func constraint(c compilerir.PhysicalConstraint) ConstraintRecord {
 	return r
 }
 func index(i compilerir.PhysicalIndex) IndexRecord {
-	r := IndexRecord{Name: i.Name, Unique: i.Unique, Method: i.Method, PredicateSQL: i.PredicateSQL, IncludeColumns: append([]string(nil), i.IncludeColumns...), Invisible: i.Invisible, NotValid: i.NotValid, StorageParameters: cloneMap(i.StorageParameters), Tablespace: i.Tablespace, ReplicaIdentity: i.ReplicaIdentity, NullsNotDistinct: i.NullsNotDistinct}
+	r := IndexRecord{Name: i.Name, Unique: i.Unique, Method: i.Method, KeyForm: i.KeyForm, PredicateSQL: i.PredicateSQL, IncludeColumns: append([]string(nil), i.IncludeColumns...), Invisible: i.Invisible, NotValid: i.NotValid, StorageParameters: cloneMap(i.StorageParameters), Tablespace: i.Tablespace, ReplicaIdentity: i.ReplicaIdentity, NullsNotDistinct: i.NullsNotDistinct}
 	for _, p := range i.Parts {
 		r.Parts = append(r.Parts, part(p))
 	}
@@ -192,7 +192,7 @@ func toConstraint(c ConstraintRecord) compilerir.PhysicalConstraint {
 	return r
 }
 func toIndex(i IndexRecord) compilerir.PhysicalIndex {
-	r := compilerir.PhysicalIndex{Name: i.Name, Unique: i.Unique, Method: i.Method, PredicateSQL: i.PredicateSQL, IncludeColumns: append([]string(nil), i.IncludeColumns...), Invisible: i.Invisible, NotValid: i.NotValid, StorageParameters: cloneMap(i.StorageParameters), Tablespace: i.Tablespace, ReplicaIdentity: i.ReplicaIdentity, NullsNotDistinct: i.NullsNotDistinct}
+	r := compilerir.PhysicalIndex{Name: i.Name, Unique: i.Unique, Method: i.Method, KeyForm: i.KeyForm, PredicateSQL: i.PredicateSQL, IncludeColumns: append([]string(nil), i.IncludeColumns...), Invisible: i.Invisible, NotValid: i.NotValid, StorageParameters: cloneMap(i.StorageParameters), Tablespace: i.Tablespace, ReplicaIdentity: i.ReplicaIdentity, NullsNotDistinct: i.NullsNotDistinct}
 	for _, p := range i.Parts {
 		r.Parts = append(r.Parts, compilerir.IndexPart{Column: p.Column, ExpressionSQL: p.ExpressionSQL, Direction: p.Direction, Nulls: p.Nulls, Collation: p.Collation, OperatorClass: p.OperatorClass, PrefixLength: p.PrefixLength})
 	}

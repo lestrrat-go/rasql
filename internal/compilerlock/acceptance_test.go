@@ -32,7 +32,14 @@ func TestGoldenV1FixturesAndUpgrade(t *testing.T) {
 
 func TestEncodeDoesNotMutateInputAndPreservesNativeEmpty(t *testing.T) {
 	empty := []string{}
-	c := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "sqlite", Profile: "sqlite-3"}, Objects: []compilerir.PhysicalObject{{ID: "t", Kind: "table", Name: "t", Columns: []compilerir.PhysicalColumn{{Name: "x", Ordinal: 0, LogicalKind: "native", Native: &compilerir.NativeType{Dialect: "sqlite", Name: "x", Kind: "custom", Arguments: empty}}}}}}
+	c := compilerir.PhysicalCatalog{
+		Engine: compilerir.EngineIdentity{Dialect: "sqlite", Profile: "sqlite-3"},
+		Objects: []compilerir.PhysicalObject{{
+			ID: "t", Kind: "table", Name: "t",
+			Columns: []compilerir.PhysicalColumn{{Name: "x", Ordinal: 0, LogicalKind: "native", Native: &compilerir.NativeType{Dialect: "sqlite", Name: "x", Kind: "custom", Arguments: empty}}},
+			Indexes: []compilerir.PhysicalIndex{{Name: "idx", KeyForm: "keys", Parts: []compilerir.IndexPart{{ExpressionSQL: "x"}}}},
+		}},
+	}
 	f := compilerlock.File{Format: 1, Compiler: "x", Source: compilerlock.SourceRecord{Kind: "external", Identity: "x"}, Engine: compilerlock.EngineRecord{Dialect: "sqlite", Profile: "sqlite-3"}, Catalog: compilerlock.FromPhysical(c), Generation: compilerlock.GenerationRecord{Package: "p", Output: "o", Emitter: "compact"}, Digests: compilerlock.Digests{Source: strings.Repeat("a", 64), Mappings: strings.Repeat("b", 64), Queries: strings.Repeat("c", 64), Generation: strings.Repeat("d", 64)}}
 	before := f
 	encoded, err := compilerlock.Encode(f)
@@ -42,6 +49,7 @@ func TestEncodeDoesNotMutateInputAndPreservesNativeEmpty(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, decoded.Catalog.Objects[0].Columns[0].Native.Arguments)
 	require.Empty(t, *decoded.Catalog.Objects[0].Columns[0].Native.Arguments)
+	require.Equal(t, "keys", decoded.Catalog.Objects[0].Indexes[0].KeyForm)
 }
 
 func TestSourceSnapshotRevalidation(t *testing.T) {
