@@ -328,10 +328,10 @@ func scanSampleAt(t *testing.T, root string, env []string, packagePath, benchmar
 
 func benchmarkMetric(output, name, metric string) (float64, bool) {
 	for _, line := range strings.Split(output, "\n") {
-		if !strings.HasPrefix(strings.TrimSpace(line), name+"-") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 || (fields[0] != name && fields[0] != name+"-1") {
 			continue
 		}
-		fields := strings.Fields(line)
 		for index, field := range fields {
 			if field != metric || index == 0 {
 				continue
@@ -356,9 +356,10 @@ func medianScanMetric(values []scanSample, metric func(scanSample) float64) floa
 
 func benchmarkPackage(t *testing.T, root string, env []string, packagePath, benchmarkName string) []byte {
 	t.Helper()
-	command := exec.Command("go", "test", "-mod=mod", "-run", "^$", "-bench", "^"+benchmarkName+"$", "-benchmem", packagePath)
+	command := exec.Command("go", "test", "-mod=mod", "-run", "^$", "-bench", "^"+benchmarkName+"$", "-benchmem", "-cpu", "1", "-benchtime", "750ms", packagePath)
 	command.Dir = root
 	command.Env = env
+	t.Logf("scan benchmark %s %s: cpu=1 benchtime=750ms", packagePath, benchmarkName)
 	output, err := command.CombinedOutput()
 	require.NoError(t, err, "%s", output)
 	return output
@@ -783,6 +784,163 @@ func TestGeneratedEdgeUsesExactAliasedStage(t *testing.T) {
 	command.Env = append(os.Environ(), "GOCACHE="+filepath.Join(root, "cache"))
 	output, err := command.CombinedOutput()
 	require.NoError(t, err, "%s", output)
+}
+
+func TestCompactGeneratedGraphSourceMismatchMatrix(t *testing.T) {
+	in := compactGraphMismatchInput(t)
+	store, err := generate.RenderCompact(in)
+	require.NoError(t, err)
+	root := t.TempDir()
+	store.Root, store.Dir = root, "generated"
+	plan, err := store.Plan()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "generated"), 0o755))
+	require.NoError(t, plan.Commit())
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/mismatch\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire modernc.org/sqlite v1.55.0\nreplace github.com/lestrrat-go/rasql => "+repoRoot(t)+"\n"), 0o600))
+	consumer := `package store_test
+
+import (
+	"context"
+	"database/sql"
+	"strings"
+	"testing"
+
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/exec"
+	store "example.com/mismatch/generated"
+	_ "modernc.org/sqlite"
+)
+
+type mismatchRoleGraph struct { ID int64 }
+type mismatchAccountGraph struct { Roles rasql.LoadedMany[mismatchRoleGraph] }
+type mismatchProjectGraph struct { ID int64 }
+
+func TestSourceMismatchMatrix(t *testing.T) {
+	parentSource, err := store.Project().Source("p")
+	if err != nil { t.Fatal(err) }
+	parentExpressions, err := (store.ProjectColumns{}).Bind(parentSource)
+	if err != nil { t.Fatal(err) }
+	parentProjection, err := store.ProjectProjection(parentExpressions)
+	if err != nil { t.Fatal(err) }
+	parentQuery := rasql.Select(parentSource.Source(), parentProjection)
+	childSource, err := store.Account().Source("u")
+	if err != nil { t.Fatal(err) }
+	childExpressions, err := (store.AccountColumns{}).Bind(childSource)
+	if err != nil { t.Fatal(err) }
+	childProjection, err := store.AccountProjection(childExpressions)
+	if err != nil { t.Fatal(err) }
+	childQuery := rasql.Select(childSource.Source(), childProjection)
+	childPlan, err := rasql.NewGraphPlan(childQuery, func(row store.AccountRecord) mismatchAccountGraph { return mismatchAccountGraph{} })
+	if err != nil { t.Fatal(err) }
+	validEdge, err := store.ProjectOwnerEdge(parentSource, childSource, childPlan, rasql.EdgeOptions{}, func(*mismatchProjectGraph, rasql.LoadedOne[mismatchAccountGraph]) {})
+	if err != nil { t.Fatal(err) }
+	if _, err = rasql.NewGraphPlan(parentQuery, func(store.ProjectRecord) mismatchProjectGraph { return mismatchProjectGraph{} }, validEdge); err != nil { t.Fatal(err) }
+	wrongChildSource, err := store.Account().Source("u2")
+	if err != nil { t.Fatal(err) }
+	wrongChildEdge, err := store.ProjectOwnerEdge(parentSource, wrongChildSource, childPlan, rasql.EdgeOptions{}, func(*mismatchProjectGraph, rasql.LoadedOne[mismatchAccountGraph]) {})
+	if err != nil { t.Fatal(err) }
+	if _, err = rasql.NewGraphPlan(parentQuery, func(store.ProjectRecord) mismatchProjectGraph { return mismatchProjectGraph{} }, wrongChildEdge); err == nil || !strings.Contains(err.Error(), "graph_key_mismatch") { t.Fatalf("wrong child error = %v", err) }
+
+	rootSource, err := store.Account().Source("u3")
+	if err != nil { t.Fatal(err) }
+	rootExpressions, err := (store.AccountColumns{}).Bind(rootSource)
+	if err != nil { t.Fatal(err) }
+	rootProjection, err := store.AccountProjection(rootExpressions)
+	if err != nil { t.Fatal(err) }
+	rootQuery := rasql.Select(rootSource.Source(), rootProjection)
+	junctionSource, err := store.Membership().Source("ur")
+	if err != nil { t.Fatal(err) }
+	junctionExpressions, err := (store.MembershipColumns{}).Bind(junctionSource)
+	if err != nil { t.Fatal(err) }
+	rolesSource, err := store.Role().Source("r")
+	if err != nil { t.Fatal(err) }
+	rolesExpressions, err := (store.RoleColumns{}).Bind(rolesSource)
+	if err != nil { t.Fatal(err) }
+	rolesProjection, err := store.RoleProjection(rolesExpressions)
+	if err != nil { t.Fatal(err) }
+	rolesPlan, err := rasql.NewGraphPlan(rasql.Select(rolesSource.Source(), rolesProjection), func(row store.RoleRecord) mismatchRoleGraph { return mismatchRoleGraph{ID: row.ID} })
+	if err != nil { t.Fatal(err) }
+	attachRoles := func(graph *mismatchAccountGraph, value rasql.LoadedMany[mismatchRoleGraph]) { graph.Roles = value }
+	// The junctionSource argument selects the through stage, so any valid alias is legal.
+	throughEdge, err := store.AccountRolesEdge(rootSource, junctionSource, rolesSource, rolesPlan, rasql.EdgeOptions{Order: []rasql.OrderTerm{rasql.AscExpr(junctionExpressions.RoleID.Expr())}}, attachRoles)
+	if err != nil { t.Fatal(err) }
+	throughPlan, err := rasql.NewGraphPlan(rootQuery, func(store.AccountRecord) mismatchAccountGraph { return mismatchAccountGraph{} }, throughEdge)
+	if err != nil { t.Fatal(err) }
+	wrongJunctionSource, err := store.Membership().Source("ur2")
+	if err != nil { t.Fatal(err) }
+	wrongJunctionExpressions, err := (store.MembershipColumns{}).Bind(wrongJunctionSource)
+	if err != nil { t.Fatal(err) }
+	wrongThroughEdge, err := store.AccountRolesEdge(rootSource, junctionSource, rolesSource, rolesPlan, rasql.EdgeOptions{Order: []rasql.OrderTerm{rasql.AscExpr(wrongJunctionExpressions.RoleID.Expr())}}, attachRoles)
+	if err != nil { t.Fatal(err) }
+	if _, err = rasql.NewGraphPlan(rootQuery, func(store.AccountRecord) mismatchAccountGraph { return mismatchAccountGraph{} }, wrongThroughEdge); err == nil || !strings.Contains(err.Error(), "order source differs from child source") { t.Fatalf("wrong junction option error = %v", err) }
+
+	sqlDB, err := sql.Open("sqlite", ":memory:")
+	if err != nil { t.Fatal(err) }
+	defer sqlDB.Close()
+	for _, statement := range []string{
+		"CREATE TABLE users (id INTEGER PRIMARY KEY)",
+		"CREATE TABLE roles (id INTEGER PRIMARY KEY)",
+		"CREATE TABLE user_roles (user_id INTEGER NOT NULL, role_id INTEGER NOT NULL)",
+		"INSERT INTO users VALUES (1)",
+		"INSERT INTO roles VALUES (9)",
+		"INSERT INTO user_roles VALUES (1, 9)",
+	} {
+		if _, err = sqlDB.ExecContext(context.Background(), statement); err != nil { t.Fatal(err) }
+	}
+	var statements []string
+	db, err := rasql.New(sqlDB, dialect.SQLite(), exec.HookFunc{BeforeFunc: func(_ context.Context, operation exec.Operation) error { statements = append(statements, operation.SQL()); return nil }})
+	if err != nil { t.Fatal(err) }
+	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 1)
+	if err != nil { t.Fatal(err) }
+	executor, err := rasql.AsExecutor(db, profile)
+	if err != nil { t.Fatal(err) }
+	values, err := rasql.LoadGraph(context.Background(), executor, throughPlan)
+	if err != nil || len(values) != 1 || !values[0].Roles.Loaded || len(values[0].Roles.Values) != 1 || values[0].Roles.Values[0].ID != 9 { t.Fatalf("valid junction alias values=%#v err=%v", values, err) }
+	foundAlias := false
+	for _, statement := range statements { if strings.Contains(statement, "\"user_roles\" AS \"ur\"") { foundAlias = true } }
+	if !foundAlias { t.Fatalf("through SQL did not retain junction alias: %v", statements) }
+
+	pageSource, err := store.Account().Source("u")
+	if err != nil { t.Fatal(err) }
+	pageKey, err := store.AccountIDPageKey(pageSource, rasql.PageAscending)
+	if err != nil { t.Fatal(err) }
+	pageSpec, err := rasql.NewPageSpec([]rasql.PageKey[store.AccountRecord]{pageKey}, pageKey)
+	if err != nil { t.Fatal(err) }
+	statements = nil
+	_, err = rasql.PageGraphAfter(context.Background(), executor, throughPlan, pageSpec, rasql.PagePolicy{DefaultLimit: 1, MaxLimit: 2}, rasql.PageRequest{Limit: 1})
+	if err == nil || !strings.Contains(err.Error(), "expression source is outside plan") { t.Fatalf("wrong page source error = %v", err) }
+	if len(statements) != 0 { t.Fatalf("wrong page source started SQL: %v", statements) }
+}
+`
+	require.NoError(t, os.WriteFile(filepath.Join(root, "generated", "mismatch_test.go"), []byte(consumer), 0o600))
+	command := exec.Command("go", "test", "-mod=mod", "./generated")
+	command.Dir = root
+	command.Env = append(os.Environ(), "GOCACHE="+filepath.Join(root, "cache"))
+	output, err := command.CombinedOutput()
+	require.NoError(t, err, "%s", output)
+}
+
+func compactGraphMismatchInput(t *testing.T) generate.EmitterInput {
+	t.Helper()
+	users := compilerir.PhysicalObject{ID: "users", Kind: "table", Name: "users", Columns: []compilerir.PhysicalColumn{{Name: "id", LogicalKind: "integer"}}, Constraints: []compilerir.PhysicalConstraint{{Kind: "primary_key", Columns: []string{"id"}}}}
+	projects := compilerir.PhysicalObject{ID: "projects", Kind: "table", Name: "projects", Columns: []compilerir.PhysicalColumn{{Name: "id", LogicalKind: "integer"}, {Name: "owner_id", Ordinal: 1, LogicalKind: "integer"}}, Constraints: []compilerir.PhysicalConstraint{{Kind: "primary_key", Columns: []string{"id"}}, {Kind: "foreign_key", Name: "projects_owner_fk", Columns: []string{"owner_id"}, Reference: &compilerir.ForeignReference{Object: "users", Columns: []string{"id"}}}}}
+	roles := compilerir.PhysicalObject{ID: "roles", Kind: "table", Name: "roles", Columns: []compilerir.PhysicalColumn{{Name: "id", LogicalKind: "integer"}}, Constraints: []compilerir.PhysicalConstraint{{Kind: "primary_key", Columns: []string{"id"}}}}
+	links := compilerir.PhysicalObject{ID: "user_roles", Kind: "table", Name: "user_roles", Columns: []compilerir.PhysicalColumn{{Name: "user_id", LogicalKind: "integer"}, {Name: "role_id", Ordinal: 1, LogicalKind: "integer"}}, Constraints: []compilerir.PhysicalConstraint{{Kind: "foreign_key", Name: "user_roles_user_fk", Columns: []string{"user_id"}, Reference: &compilerir.ForeignReference{Object: "users", Columns: []string{"id"}}}, {Kind: "foreign_key", Name: "user_roles_role_fk", Columns: []string{"role_id"}, Reference: &compilerir.ForeignReference{Object: "roles", Columns: []string{"id"}}}}}
+	catalog := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "sqlite", Version: "3"}, Objects: []compilerir.PhysicalObject{users, projects, roles, links}}
+	relations := compilerir.MappingConfig{Relations: []compilerir.RelationMapping{{Name: "Roles", Source: "users", From: []string{"id"}, Target: "roles", To: []string{"id"}, Through: compilerir.ThroughMapping{Object: "user_roles", SourceFrom: []string{"user_id"}, SourceTo: []string{"id"}, TargetFrom: []string{"role_id"}, TargetTo: []string{"id"}}}}}
+	semantic, diagnostics := compilerir.BuildSemantic(catalog, relations, nil)
+	for _, diagnostic := range diagnostics {
+		require.NotEqual(t, compilerir.DiagnosticError, diagnostic.Level, diagnostic.Message)
+	}
+	config := compilerir.GoConfig{Package: "store", Output: "generated", Emitter: "compact", Objects: []compilerir.ObjectGoName{{ID: "users", Source: "Account", Row: "AccountRecord", File: "users_gen.go"}, {ID: "projects", Source: "Project", Row: "ProjectRecord", File: "projects_gen.go"}, {ID: "roles", Source: "Role", Row: "RoleRecord", File: "roles_gen.go"}, {ID: "user_roles", Source: "Membership", Row: "MembershipRecord", File: "user_roles_gen.go"}}}
+	model, diagnostics := compilerir.BuildGo(semantic, config)
+	for _, diagnostic := range diagnostics {
+		require.NotEqual(t, compilerir.DiagnosticError, diagnostic.Level, diagnostic.Message)
+	}
+	in, err := generate.NewEmitterInput(catalog, semantic, model, config, relations)
+	require.NoError(t, err)
+	return in
 }
 
 func repoRoot(t *testing.T) string {
