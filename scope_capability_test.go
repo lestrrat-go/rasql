@@ -264,6 +264,50 @@ func TestObservedFinalizerEmitsOneScopeTerminal(t *testing.T) {
 	require.Equal(t, 1, terminals)
 }
 
+func TestOuterFinalizerRejectsOpenRowsOnCommit(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	db, err := New(database, dialect.SQLite())
+	require.NoError(t, err)
+	profile, err := EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+	require.NoError(t, err)
+	executor, err := AsExecutor(db, profile)
+	require.NoError(t, err)
+	child, finalizer, err := executor.(transactionBeginner).beginScope(context.Background(), nil)
+	require.NoError(t, err)
+	rows, err := child.Query(context.Background(), stmt.New("SELECT 1"))
+	require.NoError(t, err)
+	var planErr *PlanError
+	err = finalizer.Commit(context.Background())
+	require.ErrorAs(t, err, &planErr)
+	require.Equal(t, "transaction_concurrent_use", planErr.Code)
+	require.NoError(t, rows.Finish(nil, true))
+	require.NoError(t, finalizer.Rollback(context.Background()))
+}
+
+func TestOuterFinalizerRejectsOpenRowsOnRollback(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	db, err := New(database, dialect.SQLite())
+	require.NoError(t, err)
+	profile, err := EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+	require.NoError(t, err)
+	executor, err := AsExecutor(db, profile)
+	require.NoError(t, err)
+	child, finalizer, err := executor.(transactionBeginner).beginScope(context.Background(), nil)
+	require.NoError(t, err)
+	rows, err := child.Query(context.Background(), stmt.New("SELECT 1"))
+	require.NoError(t, err)
+	var planErr *PlanError
+	err = finalizer.Rollback(context.Background())
+	require.ErrorAs(t, err, &planErr)
+	require.Equal(t, "transaction_concurrent_use", planErr.Code)
+	require.NoError(t, rows.Finish(nil, true))
+	require.NoError(t, finalizer.Rollback(context.Background()))
+}
+
 func assertScopeCapabilities(t *testing.T, executor Executor, scope, savepoint bool, evidence executionDurabilityEvidence) {
 	t.Helper()
 	_, hasScope := executor.(transactionBeginner)
