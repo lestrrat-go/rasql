@@ -239,7 +239,7 @@ func rowsPreparedRequired[R any](ctx context.Context, executor Executor, prepare
 		for i, column := range expected {
 			codecs[i], _ = codecFor(prepared.codecs, column.Codec)
 		}
-		source := codecScanSource{source: owned, columns: prepared.schema.Columns(), codecs: codecs}
+		source := codecScanSource{source: owned, columns: expected, codecs: codecs}
 		policy := prepared.cardinality
 		if consumer > policy {
 			policy = consumer
