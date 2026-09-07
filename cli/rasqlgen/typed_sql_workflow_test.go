@@ -49,6 +49,17 @@ func TestTypedSQLSchemaUpdateOfflineParity(t *testing.T) {
 	generatedBefore := snapshotGenerated(t, root)
 	lockBefore := workflowRead(t, filepath.Join(root, "rasql.lock.json"))
 	queryPath := filepath.Join(root, "queries", "events.sql")
+	queryOriginal := workflowRead(t, queryPath)
+	offlineCommand := command{program: "rasql", output: &out, diagnostics: &diag, beforePublication: func() {
+		_ = os.WriteFile(queryPath, []byte("SELECT id, amount, occurred_at, note FROM events WHERE id > 0\n"), 0o600)
+	}}
+	err = offlineCommand.run([]string{"generate", "-config", configPath})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "source")
+	require.Equal(t, generatedBefore, snapshotGenerated(t, root))
+	require.Equal(t, lockBefore, workflowRead(t, filepath.Join(root, "rasql.lock.json")))
+	require.NoFileExists(t, filepath.Join(root, ".rasql-update.pending.json"))
+	require.NoError(t, os.WriteFile(queryPath, queryOriginal, 0o600))
 	cmd := command{program: "rasql", output: &out, diagnostics: &diag, beforePublication: func() {
 		_ = os.WriteFile(queryPath, []byte("SELECT id, amount, occurred_at, note FROM events WHERE id > 0\n"), 0o600)
 	}}
