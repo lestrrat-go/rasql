@@ -53,6 +53,17 @@ func TestEvidenceCloneDeepCopiesParameterAndResultFacts(t *testing.T) {
 	require.Equal(t, 8, model.Results[0].Integer.DisplayWidth.Value)
 }
 
+func TestEvidenceBuildSemanticCloneDeepCopiesQueryFacts(t *testing.T) {
+	input := compilerir.QueryAnalysis{ID: "q", Name: "Q", Parameters: []compilerir.SemanticValue{{Name: "p", Scalar: "text", LogicalKind: "text", TypeCertainty: compilerir.CertaintyKnown, NullabilityCertainty: compilerir.CertaintyKnown, Native: &compilerir.NativeType{Dialect: "postgresql", Name: "array", Kind: "array", Element: &compilerir.NativeType{Dialect: "postgresql", Name: "text", Kind: "builtin"}}}}, Results: []compilerir.SemanticValue{{Name: "r", Scalar: "integer", LogicalKind: "integer", TypeCertainty: compilerir.CertaintyKnown, NullabilityCertainty: compilerir.CertaintyKnown, Integer: &compilerir.IntegerTypeFacts{Unsigned: true}}}, Cardinality: "many"}
+	model, diagnostics := compilerir.BuildSemantic(compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "postgresql", Profile: "postgresql-16"}}, compilerir.MappingConfig{}, []compilerir.QueryAnalysis{input})
+	require.Empty(t, diagnostics)
+	clone := model.Clone()
+	clone.Queries[0].Parameters[0].Native.Element.Name = "changed"
+	clone.Queries[0].Results[0].Integer.Unsigned = false
+	require.Equal(t, "text", model.Queries[0].Parameters[0].Native.Element.Name)
+	require.True(t, model.Queries[0].Results[0].Integer.Unsigned)
+}
+
 func TestEvidenceEncodeReportsTypedValidationPaths(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -127,6 +138,11 @@ func TestEvidenceDigestChangesForEveryFact(t *testing.T) {
 		{"native name", func(in *compilerlock.DigestInputs) { in.Queries[0].Parameters[0].Native.Name = "varchar" }},
 		{"native kind", func(in *compilerlock.DigestInputs) { in.Queries[0].Parameters[0].Native.Kind = "domain" }},
 		{"native argument", func(in *compilerlock.DigestInputs) { (*in.Queries[0].Parameters[0].Native.Arguments)[0] = "2" }},
+		{"native arguments empty", func(in *compilerlock.DigestInputs) {
+			empty := []string{}
+			in.Queries[0].Parameters[0].Native.Arguments = &empty
+		}},
+		{"native arguments nil", func(in *compilerlock.DigestInputs) { in.Queries[0].Parameters[0].Native.Arguments = nil }},
 		{"native element", func(in *compilerlock.DigestInputs) { in.Queries[0].Parameters[0].Native.Element.Name = "varchar" }},
 		{"integer unsigned", func(in *compilerlock.DigestInputs) { in.Queries[0].Results[0].Integer.Unsigned = true }},
 		{"integer width", func(in *compilerlock.DigestInputs) {
@@ -141,6 +157,8 @@ func TestEvidenceDigestChangesForEveryFact(t *testing.T) {
 			candidate.Queries[0].Parameters = append([]compilerlock.ValueRecord(nil), base.Queries[0].Parameters...)
 			candidate.Queries[0].Results = append([]compilerlock.ValueRecord(nil), base.Queries[0].Results...)
 			candidate.Queries[0].Parameters[0].Native = &compilerlock.NativeTypeRecord{Dialect: "postgresql", Schema: "public", Name: "text", Kind: "builtin", Arguments: func() *[]string { v := []string{"1"}; return &v }(), Element: &compilerlock.NativeTypeRecord{Dialect: "postgresql", Name: "text", Kind: "builtin"}}
+			integer := *base.Queries[0].Results[0].Integer
+			candidate.Queries[0].Results[0].Integer = &integer
 			tc.mutate(&candidate)
 			got, err := compilerlock.BuildDigests(candidate)
 			require.NoError(t, err)

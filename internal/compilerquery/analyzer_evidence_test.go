@@ -18,7 +18,7 @@ func TestAnalyzePassesAllRepeatedPostgreSQLOccurrencesToDescriber(t *testing.T) 
 	require.NoError(t, os.WriteFile(filepath.Join(root, "q.sql"), []byte(sql), 0o600))
 	nullable := false
 	spy := &occurrenceSpy{}
-	a, err := NewAnalyzer(Config{ModuleRoot: root, Queries: []QueryConfig{{ID: "q", Input: "q.sql", Engine: "postgresql", Function: "Q", Operation: "select", Cardinality: "many", Parameters: []ValueDeclaration{{Name: "x", Scalar: "text", Nullable: &nullable}, {Name: "y", Scalar: "integer", Nullable: &nullable}}, Results: []ValueDeclaration{{Name: "id", Scalar: "integer", Nullable: &nullable}}}}}, Describers{PostgreSQL: spy})
+	a, err := NewAnalyzer(Config{ModuleRoot: root, Queries: []QueryConfig{{ID: "q", Input: "q.sql", Engine: "postgresql", Function: "Q", Operation: "select", Cardinality: "many", Parameters: []ValueDeclaration{{Name: "x", Nullable: &nullable}, {Name: "y", Nullable: &nullable}}, Results: []ValueDeclaration{{Name: "id", Nullable: &nullable}, {Name: "kind", Nullable: &nullable}}}}}, Describers{PostgreSQL: spy})
 	require.NoError(t, err)
 	profile, err := engineprofile.Builtin("postgresql-16", engineprofile.Version{Known: true, Major: 16})
 	require.NoError(t, err)
@@ -26,13 +26,16 @@ func TestAnalyzePassesAllRepeatedPostgreSQLOccurrencesToDescriber(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, []string{"x", "x", "y"}, spy.names)
 	require.Equal(t, []string{"x", "y"}, []string{result.Queries[0].Parameters[0].Name, result.Queries[0].Parameters[1].Name})
+	require.Equal(t, []string{"text", "integer"}, []string{result.Queries[0].Parameters[0].LogicalKind, result.Queries[0].Parameters[1].LogicalKind})
+	require.Equal(t, []string{"id", "kind"}, []string{result.Queries[0].Results[0].Name, result.Queries[0].Results[1].Name})
+	require.Equal(t, []string{"integer", "text"}, []string{result.Queries[0].Results[0].LogicalKind, result.Queries[0].Results[1].LogicalKind})
 }
 
 type occurrenceSpy struct{ names []string }
 
 func (s *occurrenceSpy) Describe(_ context.Context, request DescribeRequest) (Description, error) {
 	s.names = append([]string(nil), request.ParameterNames...)
-	return Description{Parameters: []ValueEvidence{{Name: "x", Type: TypeEvidence{LogicalKind: "text", Certainty: compilerir.CertaintyKnown}}, {Name: "x", Type: TypeEvidence{LogicalKind: "text", Certainty: compilerir.CertaintyKnown}}, {Name: "y", Type: TypeEvidence{LogicalKind: "integer", Certainty: compilerir.CertaintyKnown}}}, Results: []ValueEvidence{{Name: "id", Type: TypeEvidence{LogicalKind: "integer", Certainty: compilerir.CertaintyKnown}}}}, nil
+	return Description{Parameters: []ValueEvidence{{Name: "x", Type: TypeEvidence{LogicalKind: "text", Certainty: compilerir.CertaintyKnown}}, {Name: "x", Type: TypeEvidence{LogicalKind: "text", Certainty: compilerir.CertaintyKnown}}, {Name: "y", Type: TypeEvidence{LogicalKind: "integer", Certainty: compilerir.CertaintyKnown}}}, Results: []ValueEvidence{{Name: "id", Type: TypeEvidence{LogicalKind: "integer", Certainty: compilerir.CertaintyKnown}}, {Name: "kind", Type: TypeEvidence{LogicalKind: "text", Certainty: compilerir.CertaintyKnown}}}}, nil
 }
 
 func TestMergeValuesAcceptsThreeOccurrencesAndKeepsResultsIndependent(t *testing.T) {
@@ -55,9 +58,36 @@ func TestMergeValuesRejectsMissingOccurrenceBeforeCollapse(t *testing.T) {
 }
 
 func TestMergeValuesRejectsCompleteRepeatedFactConflicts(t *testing.T) {
-	fact := ValueEvidence{Name: "x", Type: TypeEvidence{LogicalKind: "text", Certainty: compilerir.CertaintyKnown}}
-	other := fact
-	other.Type.Certainty = compilerir.CertaintyDeclared
-	_, err := mergeValues([]ValueDeclaration{{Name: "x", Scalar: "text"}}, []ValueEvidence{fact, other}, []string{"x", "x"}, compilerir.MappingConfig{})
-	require.ErrorContains(t, err, "conflicting evidence")
+	cases := []struct {
+		name string
+		edit func(*ValueEvidence)
+	}{
+		{"native nested element", func(v *ValueEvidence) {
+			v.Type.Native = &compilerir.NativeType{Dialect: "postgresql", Name: "array", Kind: "array", Element: &compilerir.NativeType{Dialect: "postgresql", Name: "text", Kind: "builtin"}}
+		}},
+		{"native argument", func(v *ValueEvidence) {
+			v.Type.Native = &compilerir.NativeType{Dialect: "postgresql", Name: "text", Kind: "builtin", Arguments: []string{"1"}}
+		}},
+		{"integer unsigned", func(v *ValueEvidence) {
+			v.Type.LogicalKind = "integer"
+			v.Type.Integer = &compilerir.IntegerTypeFacts{Unsigned: true}
+		}},
+		{"integer display width set", func(v *ValueEvidence) {
+			v.Type.LogicalKind = "integer"
+			v.Type.Integer = &compilerir.IntegerTypeFacts{DisplayWidth: compilerir.OptionalInt{Set: true}}
+		}},
+		{"integer display width value", func(v *ValueEvidence) {
+			v.Type.LogicalKind = "integer"
+			v.Type.Integer = &compilerir.IntegerTypeFacts{DisplayWidth: compilerir.OptionalInt{Value: 8}}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fact := ValueEvidence{Name: "x", Type: TypeEvidence{LogicalKind: "text", Certainty: compilerir.CertaintyKnown}}
+			other := fact
+			tc.edit(&other)
+			_, err := mergeValues([]ValueDeclaration{{Name: "x", Scalar: "text"}}, []ValueEvidence{fact, other}, []string{"x", "x"}, compilerir.MappingConfig{})
+			require.ErrorContains(t, err, "conflicting evidence")
+		})
+	}
 }
