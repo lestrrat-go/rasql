@@ -318,10 +318,10 @@ func ValidateSemantic(m SemanticModel) error {
 			if relation.Name == "" || relation.Target == "" || len(relation.From) == 0 || len(relation.To) == 0 {
 				return invalid(path, "incomplete relation")
 			}
-			if _, ok := relationNames[relation.Name]; ok {
+			if _, ok := relationNames[RelationGoName(relation.Name)]; ok {
 				return invalid(path+".name", "duplicate relation name")
 			}
-			relationNames[relation.Name] = struct{}{}
+			relationNames[RelationGoName(relation.Name)] = struct{}{}
 			if _, ok := knownIDs[relation.Target]; !ok {
 				return invalid(path+".target", "unknown target")
 			}
@@ -571,10 +571,10 @@ func ValidateGo(m GoModel) error {
 			if relation.Name == "" || relation.Target == "" {
 				return invalid(path, "invalid relation")
 			}
-			if _, ok := relationNames[relation.Name]; ok {
+			if _, ok := relationNames[RelationGoName(relation.Name)]; ok {
 				return invalid(path+".name", "duplicate relation name")
 			}
-			relationNames[relation.Name] = struct{}{}
+			relationNames[RelationGoName(relation.Name)] = struct{}{}
 			if _, ok := knownObjects[relation.Target]; !ok {
 				return invalid(path+".target", "unknown target")
 			}

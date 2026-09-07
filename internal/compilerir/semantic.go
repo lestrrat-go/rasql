@@ -174,9 +174,9 @@ func BuildSemantic(c PhysicalCatalog, mappings MappingConfig, queries []QueryAna
 		if _, ok := semanticIndexes[candidate.target]; !ok {
 			continue
 		}
-		inverseName := relationshipGoName(candidate.sourceName.Name)
+		inverseName := RelationGoName(candidate.sourceName.Name)
 		if pairCounts[relationPairKey(candidate.source, candidate.target)] > 1 {
-			inverseName = candidate.directName + relationshipGoName(candidate.sourceName.Name)
+			inverseName = candidate.directName + RelationGoName(candidate.sourceName.Name)
 		}
 		kind := "has_many"
 		if child, ok := physicalObjectByID(c.Objects, candidate.source); ok && completeUniqueConstraint(child, candidate.from) {
@@ -192,10 +192,10 @@ func BuildSemantic(c PhysicalCatalog, mappings MappingConfig, queries []QueryAna
 		if !ok {
 			continue
 		}
-		if _, exists := relationNames[mapping.Source][mapping.Name]; exists {
+		if _, exists := relationNames[mapping.Source][RelationGoName(mapping.Name)]; exists {
 			model.Diagnostics = append(model.Diagnostics, Diagnostic{Level: DiagnosticError, Code: "relation_name_collision", Path: fmt.Sprintf("mappings.relations[%d].name", mappingIndex), Message: "relation name collides with another relation on the source object"})
 		} else {
-			relationNames[mapping.Source][mapping.Name] = struct{}{}
+			relationNames[mapping.Source][RelationGoName(mapping.Name)] = struct{}{}
 		}
 		through := mapping.Through
 		model.Objects[index].Relations = append(model.Objects[index].Relations, SemanticRelation{Name: mapping.Name, Kind: "many_through", From: append([]string(nil), mapping.From...), Target: mapping.Target, To: append([]string(nil), mapping.To...), Through: &SemanticThrough{Object: through.Object, SourceFrom: append([]string(nil), through.SourceFrom...), SourceTo: append([]string(nil), through.SourceTo...), TargetFrom: append([]string(nil), through.TargetFrom...), TargetTo: append([]string(nil), through.TargetTo...)}})
@@ -255,10 +255,10 @@ func appendSemanticRelation(model *SemanticModel, indexes map[ObjectID]int, name
 	if !ok {
 		return
 	}
-	if _, exists := names[source][relation.Name]; exists {
+	if _, exists := names[source][RelationGoName(relation.Name)]; exists {
 		model.Diagnostics = append(model.Diagnostics, Diagnostic{Level: DiagnosticError, Code: "relation_name_collision", Path: path, Message: "relation name is duplicated"})
 	} else {
-		names[source][relation.Name] = struct{}{}
+		names[source][RelationGoName(relation.Name)] = struct{}{}
 	}
 	model.Objects[index].Relations = append(model.Objects[index].Relations, relation)
 }
@@ -354,16 +354,20 @@ func relationName(source string, columns []string, target string) string {
 	if len(columns) > 0 {
 		name = strings.TrimSuffix(columns[0], "_id")
 	}
-	name = relationshipGoName(name)
+	name = RelationGoName(name)
 	if name == "" {
-		name = relationshipGoName(target)
+		name = RelationGoName(target)
 	}
 	if name == "" {
-		return relationshipGoName(source)
+		return RelationGoName(source)
 	}
 	return name
 }
-func relationshipGoName(name string) string {
+
+// RelationGoName returns the canonical Go identifier used for a relation's
+// generated method and factory name. Callers retain the original relation
+// label for runtime diagnostics and graph metadata.
+func RelationGoName(name string) string {
 	parts := strings.FieldsFunc(name, func(r rune) bool { return r == '_' })
 	var result strings.Builder
 	for _, part := range parts {

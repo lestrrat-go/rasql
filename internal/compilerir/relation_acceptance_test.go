@@ -96,6 +96,72 @@ func TestBuildSemanticReportsDerivedRelationNameCollision(t *testing.T) {
 	t.Fatalf("derived relation collision was not diagnosed: %#v", diagnostics)
 }
 
+func TestBuildSemanticReportsCanonicalDirectAndManyThroughNameCollision(t *testing.T) {
+	catalog := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "sqlite"}, Objects: []compilerir.PhysicalObject{
+		{ID: "users", Kind: "table", Name: "users", Columns: []compilerir.PhysicalColumn{{Name: "id", LogicalKind: "integer"}, {Name: "role_id", Ordinal: 1, LogicalKind: "integer"}}, Constraints: []compilerir.PhysicalConstraint{{Kind: "primary_key", Columns: []string{"id"}}, {Kind: "foreign_key", Columns: []string{"role_id"}, Reference: &compilerir.ForeignReference{Object: "roles", Columns: []string{"id"}}}}},
+		{ID: "roles", Kind: "table", Name: "roles", Columns: []compilerir.PhysicalColumn{{Name: "id", LogicalKind: "integer"}}, Constraints: []compilerir.PhysicalConstraint{{Kind: "primary_key", Columns: []string{"id"}}}},
+		{ID: "user_roles", Kind: "table", Name: "user_roles", Columns: []compilerir.PhysicalColumn{{Name: "user_id", LogicalKind: "integer"}, {Name: "role_id", Ordinal: 1, LogicalKind: "integer"}}, Constraints: []compilerir.PhysicalConstraint{{Kind: "foreign_key", Columns: []string{"user_id"}, Reference: &compilerir.ForeignReference{Object: "users", Columns: []string{"id"}}}, {Kind: "foreign_key", Columns: []string{"role_id"}, Reference: &compilerir.ForeignReference{Object: "roles", Columns: []string{"id"}}}}},
+	}}
+	mappings := compilerir.MappingConfig{Relations: []compilerir.RelationMapping{{Name: "role", Source: "users", From: []string{"id"}, Target: "roles", To: []string{"id"}, Through: compilerir.ThroughMapping{Object: "user_roles", SourceFrom: []string{"user_id"}, SourceTo: []string{"id"}, TargetFrom: []string{"role_id"}, TargetTo: []string{"id"}}}}}
+	model, diagnostics := compilerir.BuildSemantic(catalog, mappings, nil)
+	if compilerir.RelationGoName("role") != "Role" || relation(relationObject(model, "users"), "role").Name != "role" {
+		t.Fatalf("configured relation label was not preserved: %#v", model)
+	}
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Code == "relation_name_collision" && diagnostic.Path == "mappings.relations[0].name" {
+			return
+		}
+	}
+	t.Fatalf("canonical direct/many-through collision was not diagnosed: %#v", diagnostics)
+}
+
+func TestBuildSemanticReportsCanonicalInverseAndManyThroughNameCollision(t *testing.T) {
+	catalog := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "sqlite"}, Objects: []compilerir.PhysicalObject{
+		{ID: "users", Kind: "table", Name: "users", Columns: []compilerir.PhysicalColumn{{Name: "id", LogicalKind: "integer"}}, Constraints: []compilerir.PhysicalConstraint{{Kind: "primary_key", Columns: []string{"id"}}}},
+		{ID: "tasks", Kind: "table", Name: "tasks", Columns: []compilerir.PhysicalColumn{{Name: "id", LogicalKind: "integer"}, {Name: "user_id", Ordinal: 1, LogicalKind: "integer"}}, Constraints: []compilerir.PhysicalConstraint{{Kind: "primary_key", Columns: []string{"id"}}, {Kind: "foreign_key", Columns: []string{"user_id"}, Reference: &compilerir.ForeignReference{Object: "users", Columns: []string{"id"}}}}},
+		{ID: "user_tasks", Kind: "table", Name: "user_tasks", Columns: []compilerir.PhysicalColumn{{Name: "user_id", LogicalKind: "integer"}, {Name: "task_id", Ordinal: 1, LogicalKind: "integer"}}, Constraints: []compilerir.PhysicalConstraint{{Kind: "foreign_key", Columns: []string{"user_id"}, Reference: &compilerir.ForeignReference{Object: "users", Columns: []string{"id"}}}, {Kind: "foreign_key", Columns: []string{"task_id"}, Reference: &compilerir.ForeignReference{Object: "tasks", Columns: []string{"id"}}}}},
+	}}
+	mappings := compilerir.MappingConfig{Relations: []compilerir.RelationMapping{{Name: "tasks", Source: "users", From: []string{"id"}, Target: "tasks", To: []string{"id"}, Through: compilerir.ThroughMapping{Object: "user_tasks", SourceFrom: []string{"user_id"}, SourceTo: []string{"id"}, TargetFrom: []string{"task_id"}, TargetTo: []string{"id"}}}}}
+	_, diagnostics := compilerir.BuildSemantic(catalog, mappings, nil)
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Code == "relation_name_collision" && diagnostic.Path == "mappings.relations[0].name" {
+			return
+		}
+	}
+	t.Fatalf("canonical inverse/many-through collision was not diagnosed: %#v", diagnostics)
+}
+
+func TestBuildSemanticRelationOrderIgnoresForeignKeyConstraintOrder(t *testing.T) {
+	makeCatalog := func(reverse bool) compilerir.PhysicalCatalog {
+		constraints := []compilerir.PhysicalConstraint{
+			{Kind: "primary_key", Columns: []string{"id"}},
+			{Kind: "foreign_key", Name: "shipping_user_fk", Columns: []string{"shipping_user_id"}, Reference: &compilerir.ForeignReference{Object: "users", Columns: []string{"id"}}},
+			{Kind: "foreign_key", Name: "billing_user_fk", Columns: []string{"billing_user_id"}, Reference: &compilerir.ForeignReference{Object: "users", Columns: []string{"id"}}},
+		}
+		if reverse {
+			constraints[1], constraints[2] = constraints[2], constraints[1]
+		}
+		return compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "sqlite"}, Objects: []compilerir.PhysicalObject{
+			{ID: "tasks", Kind: "table", Name: "tasks", Columns: []compilerir.PhysicalColumn{{Name: "id", LogicalKind: "integer"}, {Name: "shipping_user_id", Ordinal: 1, LogicalKind: "integer"}, {Name: "billing_user_id", Ordinal: 2, LogicalKind: "integer"}}, Constraints: constraints},
+			{ID: "users", Kind: "table", Name: "users", Columns: []compilerir.PhysicalColumn{{Name: "id", LogicalKind: "integer"}}, Constraints: []compilerir.PhysicalConstraint{{Kind: "primary_key", Columns: []string{"id"}}}},
+		}}
+	}
+	left, leftDiagnostics := compilerir.BuildSemantic(makeCatalog(false), compilerir.MappingConfig{}, nil)
+	right, rightDiagnostics := compilerir.BuildSemantic(makeCatalog(true), compilerir.MappingConfig{}, nil)
+	if len(leftDiagnostics) != 0 || len(rightDiagnostics) != 0 {
+		t.Fatalf("reordered foreign keys produced diagnostics: left=%#v right=%#v", leftDiagnostics, rightDiagnostics)
+	}
+	if got, want := relationNames(relationObject(left, "tasks")), []string{"BillingUser", "ShippingUser"}; !equalStrings(got, want) {
+		t.Fatalf("unexpected direct relation order: got=%v want=%v", got, want)
+	}
+	if got, want := relationNames(relationObject(left, "users")), []string{"BillingUserTasks", "ShippingUserTasks"}; !equalStrings(got, want) {
+		t.Fatalf("unexpected inverse relation order: got=%v want=%v", got, want)
+	}
+	if !equalStrings(relationNames(relationObject(left, "tasks")), relationNames(relationObject(right, "tasks"))) || !equalStrings(relationNames(relationObject(left, "users")), relationNames(relationObject(right, "users"))) {
+		t.Fatalf("relation order changed with physical constraint order: left=%#v right=%#v", left, right)
+	}
+}
+
 func relationObject(model compilerir.SemanticModel, id compilerir.ObjectID) compilerir.SemanticObject {
 	for _, object := range model.Objects {
 		if object.ID == id {
@@ -124,6 +190,14 @@ func equalStrings(left, right []string) bool {
 		}
 	}
 	return true
+}
+
+func relationNames(object compilerir.SemanticObject) []string {
+	names := make([]string, 0, len(object.Relations))
+	for _, relation := range object.Relations {
+		names = append(names, relation.Name)
+	}
+	return names
 }
 
 func objectIDName(id compilerir.ObjectID) string {
