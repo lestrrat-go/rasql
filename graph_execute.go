@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/binary"
 	"fmt"
 	"slices"
@@ -11,7 +12,41 @@ import (
 	"strings"
 
 	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/sqltext"
+	"github.com/lestrrat-go/rasql/stmt"
 )
+
+func graphPreencodeBaseOccurrences(base compiledQuery, encoded stmt.Statement, final compiledQuery) (compiledQuery, error) {
+	occurrences, err := matchBaseOccurrences(base, final)
+	if err != nil {
+		return compiledQuery{}, err
+	}
+	args := final.statement.Args()
+	baseArgs := encoded.Args()
+	for i, position := range occurrences {
+		if position >= len(args) || i >= len(baseArgs) {
+			return compiledQuery{}, planError("internal_plan", "binds", "encoded occurrence is out of range")
+		}
+		value := baseArgs[i]
+		args[position] = value
+		final.bindSlots[position].preEncoded = true
+		final.copyArgs[position] = func() (any, error) { return graphCloneEncoded(value), nil }
+	}
+	final.statement = stmt.New(sqltext.Text(final.statement.SQL()), args...)
+	return final, nil
+}
+
+func graphCloneEncoded(value any) any {
+	switch value := value.(type) {
+	case []byte:
+		return append([]byte(nil), value...)
+	case sql.NamedArg:
+		value.Value = graphCloneEncoded(value.Value)
+		return value
+	default:
+		return value
+	}
+}
 
 type graphInvocation struct {
 	codecs CodecRegistry
@@ -582,6 +617,16 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 	} else {
 		return nil, err
 	}
+	basePrepared, err := probe.prepareCompiled(executor, probeCompiled)
+	if err != nil {
+		return nil, err
+	}
+	for _, slot := range probeCompiled.bindSlots {
+		if slot.id == 0 {
+			basePrepared = graphPreparedQuery{}
+			break
+		}
+	}
 	budget := edge.options.BindLimit
 	if budget == 0 || budget > profile.MaxBind {
 		budget = profile.MaxBind
@@ -591,7 +636,9 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 		return nil, planError("bind_limit", "graph."+edge.name, "bind budget cannot fit one key")
 	}
 	batchSize := (budget - fixed) / width
-	childFingerprint := graphInvocationFingerprint(edge, "child", probeCompiled)
+	fingerprintCompiled := probeCompiled
+	fingerprintCompiled.statement = basePrepared.statement
+	childFingerprint := graphInvocationFingerprint(edge, "child", fingerprintCompiled)
 	for start := 0; start < len(tuples); start += batchSize {
 		end := start + batchSize
 		if end > len(tuples) {
@@ -618,13 +665,24 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 		if err != nil {
 			return nil, err
 		}
-		if compiled, err := childQuery.compile(executor); err != nil {
+		compiled, err := childQuery.compile(executor)
+		if err != nil {
 			return nil, err
 		} else if len(compiled.bindSlots) > budget || (profile.MaxBind > 0 && len(compiled.bindSlots) > profile.MaxBind) {
 			return nil, planError("bind_limit", "graph."+edge.name, "compiled query exceeds bind budget")
 		}
 		fingerprint := childFingerprint
-		rows, err := childQuery.run(ctx, executor, func() (int64, error) { *rowCount++; return *rowCount, nil })
+		if basePrepared.run != nil {
+			compiled, err = graphPreencodeBaseOccurrences(probeCompiled, basePrepared.statement, compiled)
+			if err != nil {
+				return nil, err
+			}
+		}
+		prepared, err := edge.child.query.prepareCompiled(executor, compiled)
+		if err != nil {
+			return nil, err
+		}
+		rows, err := prepared.run(ctx, executor, func() (int64, error) { *rowCount++; return *rowCount, nil })
 		if err != nil {
 			return nil, err
 		}

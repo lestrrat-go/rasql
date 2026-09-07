@@ -7,6 +7,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
+	"github.com/lestrrat-go/rasql/stmt"
 )
 
 type LoadedMany[T any] struct {
@@ -76,7 +77,9 @@ type graphRow struct {
 	graph any
 }
 type graphPreparedQuery struct {
-	run func(context.Context, Executor, func() (int64, error)) ([]graphRow, error)
+	statement stmt.Statement
+	compiled  compiledQuery
+	run       func(context.Context, Executor, func() (int64, error)) ([]graphRow, error)
 }
 
 type graphQuery[R, G any] struct {
@@ -104,7 +107,7 @@ func (q graphQuery[R, G]) prepareCompiled(executor Executor, compiled compiledQu
 	if err != nil {
 		return graphPreparedQuery{}, err
 	}
-	return graphPreparedQuery{run: func(ctx context.Context, executor Executor, count func() (int64, error)) ([]graphRow, error) {
+	return graphPreparedQuery{statement: prepared.statement, compiled: compiled, run: func(ctx context.Context, executor Executor, count func() (int64, error)) ([]graphRow, error) {
 		seq, err := rowsPrepared(ctx, executor, prepared)
 		if err != nil {
 			return nil, err
