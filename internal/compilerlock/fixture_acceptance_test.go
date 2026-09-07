@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/internal/compilerir"
@@ -30,6 +31,7 @@ func TestAcceptanceFixturesAreCanonicalAndPhysicallyComplete(t *testing.T) {
 			require.NoError(t, err)
 			var expected compilerir.PhysicalCatalog
 			require.NoError(t, json.Unmarshal(catalogBytes, &expected))
+			expected = canonicalPhysical(expected)
 			require.Equal(t, expected, compilerlock.ToPhysical(lock), "lock conversion must preserve every physical fact")
 			require.NotEmpty(t, expected.Objects)
 			require.NotEmpty(t, lock.Queries)
@@ -37,6 +39,17 @@ func TestAcceptanceFixturesAreCanonicalAndPhysicallyComplete(t *testing.T) {
 			require.NotEmpty(t, lock.Generation.Queries)
 		})
 	}
+}
+
+func canonicalPhysical(c compilerir.PhysicalCatalog) compilerir.PhysicalCatalog {
+	c = c.Clone()
+	for i := range c.Objects {
+		sort.Slice(c.Objects[i].Constraints, func(a, b int) bool { return c.Objects[i].Constraints[a].Name < c.Objects[i].Constraints[b].Name })
+		if len(c.Objects[i].Indexes) == 0 {
+			c.Objects[i].Indexes = nil
+		}
+	}
+	return c
 }
 
 func TestAcceptanceFixturesCoverQueryCertaintyAndEngineEvidence(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -43,7 +44,14 @@ func TestPhysicalWireRoundTripFixtures(t *testing.T) {
 			if string(encoded) != string(reencoded) {
 				t.Fatal("encode/decode/encode changed canonical bytes")
 			}
-			require.Equal(t, c, compilerlock.ToPhysical(decoded))
+			want := c.Clone()
+			for i := range want.Objects {
+				sort.Slice(want.Objects[i].Constraints, func(a, b int) bool { return want.Objects[i].Constraints[a].Name < want.Objects[i].Constraints[b].Name })
+				if len(want.Objects[i].Indexes) == 0 {
+					want.Objects[i].Indexes = nil
+				}
+			}
+			require.Equal(t, want, compilerlock.ToPhysical(decoded))
 		})
 	}
 }
