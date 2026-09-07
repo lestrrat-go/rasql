@@ -85,7 +85,7 @@ func (r *mtCountingRows) Next() bool {
 }
 
 func TestGraphSQLiteManyThroughLimitsBeforePairDedupAndCopiesAttachments(t *testing.T) {
-	executor, parentQuery, parentKey, junctionParent, junctionChild, childKey, junction, childPlan := mtFixture(t)
+	executor, _, parentQuery, parentKey, junctionParent, junctionChild, childKey, junction, childPlan := mtFixture(t)
 	edge1, err := ManyThrough("roles_a", parentKey, junctionParent, junctionChild, childKey, junction, childPlan, EdgeOptions{Order: mtJunctionOrder(junction), PerParentLimit: 2}, func(parent *mtParentGraph, loaded LoadedMany[mtChildGraph]) { parent.Children = loaded })
 	require.NoError(t, err)
 	edge2, err := ManyThrough("roles_b", parentKey, junctionParent, junctionChild, childKey, junction, childPlan, EdgeOptions{Order: mtJunctionOrder(junction), PerParentLimit: 2}, func(parent *mtParentGraph, loaded LoadedMany[mtChildGraph]) { parent.Children = loaded })
@@ -106,7 +106,39 @@ func TestGraphSQLiteManyThroughLimitsBeforePairDedupAndCopiesAttachments(t *test
 	require.Equal(t, int64(10), values[1].Children.Values[0].ID)
 }
 
-func mtFixture(t *testing.T) (*mtCountingExecutor, Query[mtParentRow], GraphKey[mtParentRow], GraphKey[mtJunctionRow], GraphKey[mtJunctionRow], GraphKey[mtChildRow], Source, GraphPlan[mtChildRow, mtChildGraph]) {
+func TestGraphSQLiteManyThroughRejectsForeignJunctionParentWithoutAttachment(t *testing.T) {
+	executor, database, parentQuery, parentKey, junctionParent, junctionChild, childKey, junction, childPlan := mtFixture(t)
+	_, err := database.Exec(`INSERT INTO mt_junctions VALUES (6, 999, 10, 1)`)
+	require.NoError(t, err)
+	var callbacks atomic.Int64
+	edge, err := ManyThrough("roles", parentKey, junctionParent, junctionChild, childKey, junction, childPlan, EdgeOptions{Order: mtJunctionOrder(junction), PerParentLimit: 2}, func(*mtParentGraph, LoadedMany[mtChildGraph]) { callbacks.Add(1) })
+	require.NoError(t, err)
+	plan, err := NewGraphPlan(parentQuery, func(mtParentRow) mtParentGraph { return mtParentGraph{} }, edge)
+	require.NoError(t, err)
+	_, err = LoadGraph(t.Context(), executor, plan)
+	var planErr *PlanError
+	require.ErrorAs(t, err, &planErr)
+	require.Equal(t, "foreign_key_result", planErr.Code)
+	require.Zero(t, callbacks.Load())
+}
+
+func TestGraphSQLiteManyThroughMissingTargetDoesNotPartiallyAttach(t *testing.T) {
+	executor, database, parentQuery, parentKey, junctionParent, junctionChild, childKey, junction, childPlan := mtFixture(t)
+	_, err := database.Exec(`INSERT INTO mt_junctions VALUES (6, 1, 999, 0)`)
+	require.NoError(t, err)
+	var callbacks atomic.Int64
+	edge, err := ManyThrough("roles", parentKey, junctionParent, junctionChild, childKey, junction, childPlan, EdgeOptions{Order: mtJunctionOrder(junction), PerParentLimit: 2}, func(*mtParentGraph, LoadedMany[mtChildGraph]) { callbacks.Add(1) })
+	require.NoError(t, err)
+	plan, err := NewGraphPlan(parentQuery, func(mtParentRow) mtParentGraph { return mtParentGraph{} }, edge)
+	require.NoError(t, err)
+	_, err = LoadGraph(t.Context(), executor, plan)
+	var planErr *PlanError
+	require.ErrorAs(t, err, &planErr)
+	require.Equal(t, "foreign_key_result", planErr.Code)
+	require.Zero(t, callbacks.Load())
+}
+
+func mtFixture(t *testing.T) (*mtCountingExecutor, *sql.DB, Query[mtParentRow], GraphKey[mtParentRow], GraphKey[mtJunctionRow], GraphKey[mtJunctionRow], GraphKey[mtChildRow], Source, GraphPlan[mtChildRow, mtChildGraph]) {
 	t.Helper()
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
@@ -170,7 +202,7 @@ func mtFixture(t *testing.T) (*mtCountingExecutor, Query[mtParentRow], GraphKey[
 	require.NoError(t, err)
 	_ = jid
 	_ = jrank
-	return executor, parentQuery, parentKey, junctionParent, junctionChild, childKey, junctionSource.source, childPlan
+	return executor, database, parentQuery, parentKey, junctionParent, junctionChild, childKey, junctionSource.source, childPlan
 }
 
 func mtJunctionOrder(source Source) []OrderTerm {
