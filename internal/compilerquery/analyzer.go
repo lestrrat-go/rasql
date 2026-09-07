@@ -179,6 +179,23 @@ func validateCardinality(q QueryConfig, c Classification, p engineprofile.Profil
 }
 
 func mergeValues(declarations []ValueDeclaration, observed []ValueEvidence, names []string) ([]compilerir.SemanticValue, error) {
+	if len(names) != 0 {
+		collapsed := make([]ValueEvidence, 0, len(declarations))
+		seen := map[string]struct{}{}
+		for i, name := range names {
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			if i >= len(observed) {
+				break
+			}
+			fact := observed[i]
+			fact.Name = name
+			collapsed = append(collapsed, fact)
+		}
+		observed = collapsed
+	}
 	if len(declarations) != len(observed) && len(observed) != 0 {
 		return nil, fmt.Errorf("declaration count %d differs from observed count %d", len(declarations), len(observed))
 	}
@@ -214,12 +231,21 @@ func mergeValues(declarations []ValueDeclaration, observed []ValueEvidence, name
 }
 
 func compareParameterNames(declarations []ValueDeclaration, names []string) error {
-	if len(declarations) != len(names) {
-		return fmt.Errorf("declared %d parameters, SQL uses %d", len(declarations), len(names))
+	unique := make([]string, 0, len(names))
+	seen := map[string]struct{}{}
+	for _, name := range names {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		unique = append(unique, name)
 	}
-	for i := range names {
-		if declarations[i].Name != names[i] {
-			return fmt.Errorf("parameter %d is %q, declaration is %q", i, names[i], declarations[i].Name)
+	if len(declarations) != len(unique) {
+		return fmt.Errorf("declared %d parameters, SQL uses %d distinct parameters", len(declarations), len(unique))
+	}
+	for i := range unique {
+		if declarations[i].Name != unique[i] {
+			return fmt.Errorf("parameter %d is %q, declaration is %q", i, unique[i], declarations[i].Name)
 		}
 	}
 	return nil
@@ -239,7 +265,6 @@ func cloneConfig(in Config) Config {
 func lowerNamedSQL(source string, d dialect.Dialect) (string, []string, error) {
 	var out strings.Builder
 	var names []string
-	seen := map[string]struct{}{}
 	for pos := 0; pos < len(source); {
 		start := strings.Index(source[pos:], "{{")
 		if start < 0 {
@@ -264,10 +289,7 @@ func lowerNamedSQL(source string, d dialect.Dialect) (string, []string, error) {
 		if len(fields) == 3 && !validColumnReference(fields[2]) {
 			return "", nil, fmt.Errorf("compilerquery: invalid bind column reference")
 		}
-		if _, ok := seen[name]; !ok {
-			seen[name] = struct{}{}
-			names = append(names, name)
-		}
+		names = append(names, name)
 		placeholder, err := d.Placeholder(len(names))
 		if err != nil {
 			return "", nil, err
