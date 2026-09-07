@@ -314,7 +314,11 @@ func queryBody(plan QueryPlan) (query.QueryBody, error) {
 		for i, predicate := range plan.where {
 			nodes[i] = predicate.node
 		}
-		selectBody, err = selectBody.WithWhere(query.And(nodes...))
+		where := nodes[0]
+		if len(nodes) > 1 {
+			where = query.And(nodes...)
+		}
+		selectBody, err = selectBody.WithWhere(where)
 		if err != nil {
 			return nil, err
 		}
@@ -324,7 +328,11 @@ func queryBody(plan QueryPlan) (query.QueryBody, error) {
 		for i, predicate := range plan.having {
 			nodes[i] = predicate.node
 		}
-		selectBody, err = selectBody.WithHaving(query.And(nodes...))
+		having := nodes[0]
+		if len(nodes) > 1 {
+			having = query.And(nodes...)
+		}
+		selectBody, err = selectBody.WithHaving(having)
 		if err != nil {
 			return nil, err
 		}

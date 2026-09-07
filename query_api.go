@@ -596,6 +596,43 @@ func (q Query[R]) Offset(n int) (Query[R], error) {
 	return q, nil
 }
 
+// withKeysetOrder installs the canonical order for keyset pagination. It is
+// intentionally private: generated/runtime page helpers are the only callers.
+func (q Query[R]) withKeysetOrder(order []OrderTerm) (Query[R], error) {
+	if q.plan.limit != nil {
+		return q, planError("keyset_limit_conflict", "query.limit", "base query must not have a limit")
+	}
+	if q.plan.offset != nil {
+		return q, planError("keyset_offset_conflict", "query.offset", "base query must not have an offset")
+	}
+	if len(order) == 0 {
+		return q, planError("invalid_keyset_order", "query.order", "must not be empty")
+	}
+	for i, term := range order {
+		if term.node == nil {
+			return q, planError("invalid_keyset_order", fmt.Sprintf("query.order[%d]", i), "must not be zero")
+		}
+		if term.nulls > NullsLast {
+			return q, planError("invalid_keyset_order", fmt.Sprintf("query.order[%d]", i), "invalid NULL placement")
+		}
+	}
+	if len(q.plan.order) > 0 {
+		if len(q.plan.order) != len(order) {
+			return q, planError("keyset_order_mismatch", "query.order", "existing order differs")
+		}
+		for i := range order {
+			a, b := q.plan.order[i], order[i]
+			if !reflect.DeepEqual(a.node, b.node) || a.source != b.source || a.descending != b.descending || a.nulls != b.nulls {
+				return q, planError("keyset_order_mismatch", "query.order", "existing order differs")
+			}
+		}
+		return q, nil
+	}
+	q.plan = clonePlan(q.plan)
+	q.plan.order = append([]OrderTerm(nil), order...)
+	return q, nil
+}
+
 func (q Query[R]) withPartitionLimit(partition []GroupKey, order []OrderTerm, limit int) (Query[R], error) {
 	if q.plan.native != nil {
 		return q, planError("unsupported_feature", "native", "native plans cannot be composed")
