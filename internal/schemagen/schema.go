@@ -1755,6 +1755,12 @@ func relationshipSpecs(table schema.TableDef, allTables []schema.TableDef, names
 			if !ok {
 				continue
 			}
+			// Inverse synthesis emits a has_many/has_one relationship on table.
+			// Its map key follows the referenced parent key, even when the child
+			// belongs_to field is nullable.
+			if len(parentColumns) == 1 {
+				keyType = keyRef.resolved.For(false)
+			}
 			kind := inverseKind(child, relationship)
 			groupSize := inverseRelationshipGroupSize(child, table, bindings)
 			method := inverseRelationshipMethodName(child, relationship, groupSize)
@@ -2248,6 +2254,10 @@ func writeRelationshipKeyValue(source *bytes.Buffer, relationship relationshipSp
 			source.WriteString("; return &value }()")
 			return
 		}
+		if target && relationship.kind != schema.RelationshipBelongsTo && relationship.childColumn.Nullable {
+			writeNullableRelationshipKeyValue(source, relationship.childColumnTypes[0], fields[0])
+			return
+		}
 		if target && relationship.kind == schema.RelationshipBelongsTo && relationship.childColumn.Nullable {
 			source.WriteString("func() *")
 			source.WriteString(relationship.childColumnTypes[0])
@@ -2267,6 +2277,10 @@ func writeRelationshipKeyValue(source *bytes.Buffer, relationship relationshipSp
 			source.WriteString(" { value := row.")
 			source.WriteString(fields[0])
 			source.WriteString("; return &value }()")
+			return
+		}
+		if target && relationship.kind != schema.RelationshipBelongsTo && relationship.childColumn.Nullable {
+			writeNullableRelationshipKeyValue(source, relationship.childColumnTypes[0], fields[0])
 			return
 		}
 		if target && relationship.kind == schema.RelationshipBelongsTo && relationship.childColumn.Nullable {
@@ -2339,6 +2353,28 @@ func writeRelationshipKeyValue(source *bytes.Buffer, relationship relationshipSp
 	source.WriteString("}")
 }
 
+func writeNullableRelationshipKeyValue(source *bytes.Buffer, valueType, field string) {
+	source.WriteString("func() ")
+	source.WriteString(valueType)
+	source.WriteString(" { var zero ")
+	source.WriteString(valueType)
+	source.WriteString("; nullable, ok := any(row.")
+	source.WriteString(field)
+	source.WriteString(").(rasql.NullableBindValue); if !ok { nullable, ok = any(&row.")
+	source.WriteString(field)
+	source.WriteString(").(rasql.NullableBindValue) }; if ok { value, valid := nullable.NullableBind(); if !valid { return zero }; typed, ok := value.(")
+	source.WriteString(valueType)
+	source.WriteString("); if ok { return typed }; return zero }; if value, ok := any(row.")
+	source.WriteString(field)
+	source.WriteString(").(*")
+	source.WriteString(valueType)
+	source.WriteString("); ok { if value == nil { return zero }; return *value }; if value, ok := any(row.")
+	source.WriteString(field)
+	source.WriteString(").(")
+	source.WriteString(valueType)
+	source.WriteString("); ok { return value }; return zero }()")
+}
+
 func writeGeneratedKeyValue(source *bytes.Buffer, relationship relationshipSpec, index int, field string, dereference bool) {
 	if dereference && index < len(relationship.childColumns) && relationship.childColumns[index].Nullable {
 		source.WriteString("*row.")
@@ -2405,8 +2441,14 @@ func writeRelationshipLoad(source *bytes.Buffer, relationship relationshipSpec) 
 		source.WriteString(relationship.childRow)
 		source.WriteString(") ")
 		source.WriteString(relationship.parentKeyType)
-		source.WriteString(" { return row.")
-		source.WriteString(relationship.childField)
+		source.WriteString(" { ")
+		if relationship.childColumn.Nullable {
+			source.WriteString("return ")
+			writeNullableRelationshipKeyValue(source, relationship.childColumnTypes[0], relationship.childField)
+		} else {
+			source.WriteString("return row.")
+			source.WriteString(relationship.childField)
+		}
 		source.WriteString(" }, func(key ")
 		source.WriteString(relationship.parentKeyType)
 		source.WriteString(") ([]any, bool) { return []any{key}, true }, options)\n}\n\n")

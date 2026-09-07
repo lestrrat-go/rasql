@@ -673,6 +673,87 @@ func TestSchemaGeneratedNullableCompositeLoadsSQLite(t *testing.T) {
 	require.NoErrorf(t, err, "go test output:\n%s", output)
 }
 
+func TestSchemaGeneratedNullableSelfHasManyLoadsSQLite(t *testing.T) {
+	employees := schema.TableDef{
+		Name: "employees",
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "manager_id", Type: schema.IntegerType{}, Nullable: true},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{{
+			Columns:           []string{"manager_id"},
+			ReferencedTable:   "employees",
+			ReferencedColumns: []string{"id"},
+		}},
+	}
+	source, err := schemagen.PackageSource("generated", employees)
+	require.NoError(t, err)
+	require.Contains(t, string(source), "func (t EmployeesTable) Employees() EmployeesTableEmployeesRelation")
+	require.Contains(t, string(source), "func(row EmployeesRow) int64 {\n\t\treturn func() int64")
+
+	directory := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "generated.go"), source, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "usage_test.go"), []byte(generatedNullableSelfHasManySQLiteTest), 0o600))
+	repository, err := filepath.Abs("../..")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte("module example.com/generated\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => "+filepath.ToSlash(repository)+"\n"), 0o600))
+	command := exec.CommandContext(t.Context(), "go", "mod", "tidy")
+	command.Dir = directory
+	output, err := command.CombinedOutput()
+	require.NoErrorf(t, err, "go mod tidy output:\n%s", output)
+	command = exec.CommandContext(t.Context(), "go", "test", ".")
+	command.Dir = directory
+	output, err = command.CombinedOutput()
+	require.NoErrorf(t, err, "go test output:\n%s", output)
+}
+
+const generatedNullableSelfHasManySQLiteTest = `package generated_test
+
+import (
+	"database/sql"
+	"testing"
+
+	"example.com/generated"
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/stretchr/testify/require"
+	_ "modernc.org/sqlite"
+)
+
+func TestNullableSelfHasMany(t *testing.T) {
+	sqlDB, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	db, err := rasql.New(sqlDB, dialect.SQLite())
+	require.NoError(t, err)
+	for _, statement := range []string{
+		"CREATE TABLE employees (id INTEGER PRIMARY KEY, manager_id INTEGER)",
+		"INSERT INTO employees VALUES (1, NULL), (2, 1), (3, NULL)",
+	} {
+		_, err = sqlDB.ExecContext(t.Context(), statement)
+		require.NoError(t, err)
+	}
+	loaded, err := generated.Employees().Employees().Load(t.Context(), db, []generated.EmployeesRow{{ID: 1}, {ID: 3}})
+	require.NoError(t, err)
+	require.Len(t, loaded, 2)
+	require.Len(t, loaded[1], 1)
+	require.Equal(t, int64(2), loaded[1][0].ID)
+	require.Empty(t, loaded[3])
+
+	managerRows, err := generated.Employees().Manager().Load(t.Context(), db, []generated.EmployeesRow{{ID: 2, ManagerID: ptr(int64(1))}})
+	require.NoError(t, err)
+	require.Len(t, managerRows, 1)
+	for key, row := range managerRows {
+		require.NotNil(t, key)
+		require.Equal(t, int64(1), *key)
+		require.Equal(t, int64(1), row.ID)
+	}
+}
+
+func ptr(value int64) *int64 { return &value }
+`
+
 const generatedNullableCompositeSQLiteTest = `package generated_test
 
 import (
