@@ -185,3 +185,16 @@ func TestSQLiteMutationFourStatesAndReturning(t *testing.T) {
 	require.Equal(t, int64(1), outcome.Affected)
 	require.Equal(t, rasql.DurabilityCommitted, outcome.Durability)
 }
+
+func TestMutationBatchCallerLimitSplitsCandidateOverflow(t *testing.T) {
+	f := newMutationAcceptanceFixture(t)
+	plans := make([]rasql.MutationPlan, 0, 2)
+	for _, text := range []string{"first", "second"} {
+		plan, planErr := rasql.NewCreatePlan(f.table, rasql.SetField(f.required, text))
+		require.NoError(t, planErr)
+		plans = append(plans, plan)
+	}
+	outcome, err := rasql.ExecMutationBatch(t.Context(), f.executor, plans, rasql.MutationBatchOptions{MaxRows: 2, MaxBindParameters: 1})
+	require.NoError(t, err)
+	require.Equal(t, []rasql.InputOutcome{rasql.InputApplied, rasql.InputApplied}, outcome.Inputs)
+}

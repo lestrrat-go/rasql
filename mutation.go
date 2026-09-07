@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/stmt"
@@ -373,7 +374,7 @@ func prepareMutationBatches(executor Executor, plans []MutationPlan, maxRows, bi
 
 func isMutationBindLimit(err error) bool {
 	var planErr *PlanError
-	return errors.As(err, &planErr) && planErr.Code == "bind_limit"
+	return errors.Is(err, engineprofile.ErrBindLimit) || (errors.As(err, &planErr) && planErr.Code == "bind_limit")
 }
 
 func encodeCompiledMutation(compiled compiledQuery, executor Executor) (stmt.Statement, error) {
