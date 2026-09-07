@@ -98,6 +98,12 @@ func New(profileID string, engine EngineID, customName string, version Version, 
 	if version.Known && version.Major == 0 {
 		return Profile{}, &ProfileError{Code: ErrInvalidProfile, Engine: engine, Version: version, Detail: "known version has zero major"}
 	}
+	if caps.Returning > ReturningInsertUpdateDelete || caps.Upsert > UpsertDuplicateKey || caps.PerParentLimit > PerParentLimitLateral {
+		return Profile{}, &ProfileError{Code: ErrInvalidProfile, Engine: engine, Version: version, Detail: "unknown capability enum value"}
+	}
+	if engine != Custom && customName != "" {
+		return Profile{}, &ProfileError{Code: ErrInvalidProfile, Engine: engine, Version: version, Detail: "built-in profile cannot have a custom name"}
+	}
 	if !version.Known && engine != Custom {
 		return Profile{}, &ProfileError{Code: ErrInvalidProfile, Engine: engine, Version: version, Detail: "built-in profile requires a known version"}
 	}
@@ -115,6 +121,9 @@ func New(profileID string, engine EngineID, customName string, version Version, 
 		}
 		if known == nil || known.engine != engine || limits.MaxBindParameters != known.binds || caps != known.caps {
 			return Profile{}, &ProfileError{Code: ErrInvalidProfile, Engine: engine, Version: version, Detail: "built-in capabilities or limits do not match profile"}
+		}
+		if version.Major != known.major || version.Minor < known.minMinor || version.Minor > known.maxMinor || version.Patch > known.maxPatch {
+			return Profile{}, &ProfileError{Code: ErrUnsupportedVersion, Engine: engine, Version: version, Detail: "version is outside supported range"}
 		}
 	}
 	if caps.PerParentLimit == PerParentLimitWindow && !caps.WindowFunctions || caps.PerParentLimit == PerParentLimitLateral && !caps.LateralJoins {

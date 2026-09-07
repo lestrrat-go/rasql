@@ -25,11 +25,44 @@ func New(p engineprofile.Profile) (Compiler, error) {
 	}
 	return Compiler{profile: p, dialect: d}, nil
 }
+
+// NewWithDialect retains the caller's validated dialect, including optional
+// compiler and identifier extensions. Profile validation remains independent
+// of the dialect value and is performed before the compiler is returned.
+func NewWithDialect(p engineprofile.Profile, d dialect.Dialect) (Compiler, error) {
+	if p.ID == "" || p.Limits.MaxBindParameters <= 0 {
+		return Compiler{}, fmt.Errorf("%w: invalid profile", engineprofile.ErrInvalidProfile)
+	}
+	if d == nil {
+		return Compiler{}, fmt.Errorf("%w: dialect must not be nil", engineprofile.ErrInvalidProfile)
+	}
+	if p.Engine != engineprofile.Custom && d.Name() != map[engineprofile.EngineID]string{engineprofile.PostgreSQL: "postgresql", engineprofile.MySQL: "mysql", engineprofile.SQLite: "sqlite"}[p.Engine] {
+		return Compiler{}, fmt.Errorf("dialect and profile disagree")
+	}
+	if p.Engine == engineprofile.Custom && p.CustomName != d.Name() {
+		return Compiler{}, fmt.Errorf("dialect and custom profile disagree")
+	}
+	return Compiler{profile: p, dialect: d}, nil
+}
 func (c Compiler) Select(q query.ResultQuery) (stmt.Statement, error) {
-	return render.Result(c.dialect, q)
+	s, err := render.Result(c.dialect, q)
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	if len(s.Args()) > c.profile.Limits.MaxBindParameters {
+		return stmt.Statement{}, fmt.Errorf("%w: %d", engineprofile.ErrBindLimit, len(s.Args()))
+	}
+	return stmt.New(sqltext.Text(s.SQL()), s.Args()...), nil
 }
 func (c Compiler) Write(q query.WriteStatement) (stmt.Statement, error) {
-	return render.Write(c.dialect, q)
+	s, err := render.Write(c.dialect, q)
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	if len(s.Args()) > c.profile.Limits.MaxBindParameters {
+		return stmt.Statement{}, fmt.Errorf("%w: %d", engineprofile.ErrBindLimit, len(s.Args()))
+	}
+	return stmt.New(sqltext.Text(s.SQL()), s.Args()...), nil
 }
 func (c Compiler) Native(s stmt.Statement) (stmt.Statement, error) {
 	if s.SQL() == "" {

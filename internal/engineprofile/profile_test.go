@@ -34,4 +34,7 @@ func TestParseVersion(t *testing.T) {
 	if _, err := parseVersion(SQLite, "3.35"); err == nil {
 		t.Fatal("short sqlite version accepted")
 	}
+	if _, err := parseVersion(PostgreSQL, "655530006"); err == nil {
+		t.Fatal("overflowing PostgreSQL version accepted")
+	}
 }

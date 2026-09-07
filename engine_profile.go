@@ -84,7 +84,7 @@ func (p EngineProfile) queryCompiler(d dialect.Dialect) (*querycompile.Compiler,
 	if p.profile.Engine != engineForDialect(d) {
 		return nil, ErrEngineProfileMismatch
 	}
-	c, err := querycompile.New(p.profile)
+	c, err := querycompile.NewWithDialect(p.profile, d)
 	if err != nil {
 		return nil, err
 	}

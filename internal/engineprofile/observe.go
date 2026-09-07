@@ -97,10 +97,11 @@ func Discover(ctx context.Context, q Queryer, engine EngineID, id string) (Profi
 func parseVersion(engine EngineID, raw string) (Version, error) {
 	if engine == PostgreSQL {
 		n, e := strconv.ParseUint(strings.TrimSpace(raw), 10, 64)
-		if e != nil || n < 100000 || n > uint64(^uint32(0)) {
+		major, minor := n/10000, n%10000
+		if e != nil || n < 100000 || major > 65535 || minor > 65535 {
 			return Version{}, fmt.Errorf("invalid server_version_num")
 		}
-		return Version{Known: true, Major: uint16(n / 10000), Minor: uint16(n % 10000)}, nil
+		return Version{Known: true, Major: uint16(major), Minor: uint16(minor)}, nil
 	}
 	parts := strings.Split(raw, ".")
 	if engine == SQLite && len(parts) != 3 {

@@ -67,19 +67,29 @@ func Read(ctx context.Context, db DB, p engineprofile.Profile, scope Scope) (Res
 		return Result{}, err
 	}
 	selected := selectNames(names, scope)
+	if len(scope.Include) > 0 {
+		seen := make(map[string]bool, len(selected))
+		for _, n := range selected {
+			seen[n.Schema+"\x00"+n.Name] = true
+		}
+		for _, want := range scope.Include {
+			if !seen[objectKey(want)] {
+				_ = tx.Rollback()
+				return Result{}, fmt.Errorf("%w: requested object %s was not found", ErrUnresolvedFact, objectKey(want))
+			}
+		}
+	}
 	tables := make([]schema.TableDef, 0, len(selected))
 	for _, n := range selected {
-		t, err := ins.Object(ctx, n.Name)
+		var t schema.TableDef
+		if n.Schema != "" {
+			t, err = ins.ObjectIn(ctx, n.Schema, n.Name)
+		} else {
+			t, err = ins.Object(ctx, n.Name)
+		}
 		if err != nil {
 			_ = tx.Rollback()
 			return Result{}, err
-		}
-		if n.Schema != "" {
-			t, err = ins.ObjectIn(ctx, n.Schema, n.Name)
-			if err != nil {
-				_ = tx.Rollback()
-				return Result{}, err
-			}
 		}
 		tables = append(tables, t)
 	}

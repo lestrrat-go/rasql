@@ -24,6 +24,11 @@ func FromDialect(id string, d dialect.Dialect, v Version, caps Capabilities, lim
 				return Profile{}, &ProfileError{Code: ErrInvalidProfile, Engine: engine, Feature: c.name, Detail: "dialect and capabilities disagree"}
 			}
 		}
+	} else {
+		if id == "" {
+			return Profile{}, &ProfileError{Code: ErrInvalidProfile, Detail: "custom profile ID is required"}
+		}
+		return New(id, Custom, d.Name(), v, caps, limits)
 	}
 	return New(id, engine, "", v, caps, limits)
 }
