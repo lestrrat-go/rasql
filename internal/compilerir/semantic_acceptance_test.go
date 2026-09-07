@@ -64,6 +64,20 @@ func TestValidatePhysicalDoesNotCrossSQLiteSchemas(t *testing.T) {
 	}
 }
 
+func TestBuildSemanticResolvesSQLiteOmittedMainSchema(t *testing.T) {
+	catalog := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "sqlite"}, Objects: []compilerir.PhysicalObject{
+		{ID: "orders", Kind: "table", Name: "orders", Columns: []compilerir.PhysicalColumn{{Name: "user_id", LogicalKind: "integer"}}, Constraints: []compilerir.PhysicalConstraint{{Kind: "foreign_key", Columns: []string{"user_id"}, Reference: &compilerir.ForeignReference{Object: "users", Columns: []string{"id"}}}}},
+		{ID: "users", Kind: "table", Name: "users", Columns: []compilerir.PhysicalColumn{{Name: "id", LogicalKind: "integer"}}},
+	}}
+	if err := compilerir.ValidatePhysical(catalog); err != nil {
+		t.Fatal(err)
+	}
+	model, diagnostics := compilerir.BuildSemantic(catalog, compilerir.MappingConfig{}, nil)
+	if len(diagnostics) != 0 || len(model.Objects[0].Relations) != 1 || model.Objects[0].Relations[0].Target != "users" {
+		t.Fatalf("omitted SQLite schema was not resolved locally: model=%#v diagnostics=%#v", model, diagnostics)
+	}
+}
+
 func TestValidateGoChecksMapValuesAndParenthesizedTypes(t *testing.T) {
 	bad := compilerir.GoModel{Package: "store", Queries: []compilerir.GoQuery{{ID: "q", Name: "Find", Cardinality: "exec", Parameters: []compilerir.GoField{{Name: "Value", Type: "map[string]missing.Type"}}}}}
 	if err := compilerir.ValidateGo(bad); err == nil {

@@ -249,6 +249,11 @@ func resolveForeignReference(engine EngineIdentity, sourceSchema string, ref For
 	if columns, ok := objects[q]; ok {
 		return q, columns, true
 	}
+	if engine.Dialect == "sqlite" && q.Schema == "main" {
+		if columns, ok := objects[QualifiedName{Name: q.Name}]; ok {
+			return QualifiedName{Name: q.Name}, columns, true
+		}
+	}
 	if ref.Schema != "" {
 		return q, nil, false
 	}
