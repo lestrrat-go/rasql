@@ -214,6 +214,19 @@ func (n *ResolvedNames) Filename(table schema.TableDef) string {
 	return value.FileBase + "_gen.go"
 }
 
+// MutationTypeNames returns the legacy create and patch type names for table.
+func (n *ResolvedNames) MutationTypeNames(table schema.TableDef) (string, string) {
+	object, ok := n.Object(table)
+	if !ok {
+		return "", ""
+	}
+	prefix := object.RowType
+	if strings.HasSuffix(prefix, "Row") {
+		prefix = strings.TrimSuffix(prefix, "Row")
+	}
+	return prefix + "Create", prefix + "Patch"
+}
+
 func (n *ResolvedNames) validateCoverage(tables, allTables []schema.TableDef) error {
 	known := make(map[schema.ObjectName]schema.TableDef, len(allTables))
 	for _, table := range allTables {

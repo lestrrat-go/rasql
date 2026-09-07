@@ -1423,7 +1423,8 @@ func writeMutationFacades(source *bytes.Buffer, table schema.TableDef, names *Re
 func mutationPrefix(table schema.TableDef, optionalNames ...*ResolvedNames) string {
 	row := rowTypeName(table)
 	if len(optionalNames) > 0 && optionalNames[0] != nil {
-		row = resolvedObjectName(optionalNames[0], table).RowType
+		create, _ := optionalNames[0].MutationTypeNames(table)
+		return strings.TrimSuffix(create, "Create")
 	}
 	if strings.HasSuffix(row, "Row") {
 		return strings.TrimSuffix(row, "Row")
