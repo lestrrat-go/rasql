@@ -66,6 +66,8 @@ type graphQueryOps interface {
 	run(context.Context, Executor, func() (int64, error)) ([]graphRow, error)
 	mapRow(any) any
 	sourceName() string
+	hasPredicates() bool
+	withoutPredicates() graphQueryOps
 	with(edge Predicate, key *graphKeySpec, options EdgeOptions, limit int) (graphQueryOps, error)
 	withOptions(options EdgeOptions, key *graphKeySpec, limit int) (graphQueryOps, error)
 }
@@ -145,6 +147,13 @@ func (q graphQuery[R, G]) sourceName() string {
 		return ""
 	}
 	return q.value.plan.sources[0].ref.QualifiedName()
+}
+func (q graphQuery[R, G]) hasPredicates() bool { return len(q.value.plan.where) > 0 }
+func (q graphQuery[R, G]) withoutPredicates() graphQueryOps {
+	value := q.value
+	value.plan = clonePlan(value.plan)
+	value.plan.where = nil
+	return graphQuery[R, G]{value: value, mapFn: q.mapFn}
 }
 func (q graphQuery[R, G]) with(edge Predicate, key *graphKeySpec, options EdgeOptions, limit int) (graphQueryOps, error) {
 	child := q.value.Where(edge)

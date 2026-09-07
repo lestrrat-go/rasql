@@ -3,8 +3,10 @@ package rasql
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/lestrrat-go/rasql/query"
@@ -307,11 +309,17 @@ type graphCacheFingerprint struct {
 
 func graphInvocationFingerprint(edge *graphEdgeSpec, stage string, compiled compiledQuery) graphCacheFingerprint {
 	var key strings.Builder
-	writeGraphFingerprintPart := func(value string) { fmt.Fprintf(&key, "%d:", len(value)); key.WriteString(value) }
+	writeGraphFingerprintPart := func(value string) {
+		var size [binary.MaxVarintLen64]byte
+		n := binary.PutUvarint(size[:], uint64(len(value)))
+		key.Write(size[:n])
+		key.WriteString(value)
+	}
+	writeGraphFingerprintPart(string([]byte{stage[0]}))
 	writeGraphFingerprintPart(edge.child.query.sourceName())
 	writeGraphFingerprintPart(compiled.statement.SQL())
-	writeGraphFingerprintPart(fmt.Sprintf("%d", edge.options.PerParentLimit))
-	writeGraphFingerprintPart(fmt.Sprintf("%d", edge.options.BindLimit))
+	writeGraphFingerprintPart(strconv.FormatInt(int64(edge.options.PerParentLimit), 10))
+	writeGraphFingerprintPart(strconv.FormatInt(int64(edge.options.BindLimit), 10))
 	keySpec := edge.childKey
 	if stage == "junction" {
 		keySpec = edge.junctionParent
@@ -323,12 +331,56 @@ func graphInvocationFingerprint(edge *graphEdgeSpec, stage string, compiled comp
 	}
 	args := compiled.statement.Args()
 	for index, slot := range compiled.bindSlots {
-		writeGraphFingerprintPart(fmt.Sprintf("%d:%s:%t", slot.id, slot.codec, slot.preEncoded))
+		writeGraphFingerprintPart(strconv.FormatInt(int64(slot.id), 10))
+		writeGraphFingerprintPart(slot.codec)
+		writeGraphFingerprintPart(strconv.FormatBool(slot.preEncoded))
 		if index < len(args) {
-			writeGraphFingerprintPart(fmt.Sprintf("%T:%#v", args[index], args[index]))
+			writeGraphFingerprintValue(&key, args[index])
 		}
 	}
 	return graphCacheFingerprint{plan: edge.child.id, stage: stage, data: key.String()}
+}
+
+func writeGraphFingerprintValue(key *strings.Builder, value any) {
+	write := func(tag byte, data []byte) {
+		key.WriteByte(tag)
+		var size [binary.MaxVarintLen64]byte
+		n := binary.PutUvarint(size[:], uint64(len(data)))
+		key.Write(size[:n])
+		key.Write(data)
+	}
+	switch value := value.(type) {
+	case nil:
+		write('n', nil)
+	case string:
+		write('s', []byte(value))
+	case []byte:
+		write('b', value)
+	case int:
+		write('i', []byte(strconv.FormatInt(int64(value), 10)))
+	case int8:
+		write('i', []byte(strconv.FormatInt(int64(value), 10)))
+	case int16:
+		write('i', []byte(strconv.FormatInt(int64(value), 10)))
+	case int32:
+		write('i', []byte(strconv.FormatInt(int64(value), 10)))
+	case int64:
+		write('i', []byte(strconv.FormatInt(value, 10)))
+	case uint:
+		write('u', []byte(strconv.FormatUint(uint64(value), 10)))
+	case uint8:
+		write('u', []byte(strconv.FormatUint(uint64(value), 10)))
+	case uint16:
+		write('u', []byte(strconv.FormatUint(uint64(value), 10)))
+	case uint32:
+		write('u', []byte(strconv.FormatUint(uint64(value), 10)))
+	case uint64:
+		write('u', []byte(strconv.FormatUint(value, 10)))
+	case bool:
+		write('t', []byte(strconv.FormatBool(value)))
+	default:
+		write('x', []byte(fmt.Sprintf("%T", value)))
+	}
 }
 
 type graphCacheKey struct {
@@ -709,6 +761,47 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 	byParent := make(map[string][]keyTuple)
 	targetOrder := make([]keyTuple, 0)
 	targetSeen := make(map[string]struct{})
+	addJunctionRows := func(rows []graphRow) error {
+		for _, row := range rows {
+			junctionRow, ok := row.row.(graphJunctionRow)
+			if !ok {
+				return planError("internal_plan", "graph."+edge.name, "junction row type mismatch")
+			}
+			parentTuple, present, err := graphTupleValues(edge.junctionParent.parts, junctionRow.values[:len(edge.junctionParent.parts)], codecs)
+			if err != nil {
+				return err
+			}
+			if !present {
+				return planError("foreign_key_result", "graph."+edge.name, "junction parent is absent")
+			}
+			if _, requested := parentIndex[parentTuple.identity]; !requested {
+				return planError("foreign_key_result", "graph."+edge.name, "junction parent was not requested")
+			}
+			targetTuple, present, err := graphTupleValues(edge.junctionChild.parts, junctionRow.values[len(edge.junctionParent.parts):], codecs)
+			if err != nil {
+				return err
+			}
+			if !present {
+				return planError("foreign_key_result", "graph."+edge.name, "junction target is absent")
+			}
+			duplicate := false
+			for _, prior := range byParent[parentTuple.identity] {
+				if prior.identity == targetTuple.identity {
+					duplicate = true
+					break
+				}
+			}
+			if duplicate {
+				continue
+			}
+			byParent[parentTuple.identity] = append(byParent[parentTuple.identity], targetTuple)
+			if _, ok := targetSeen[targetTuple.identity]; !ok {
+				targetSeen[targetTuple.identity] = struct{}{}
+				targetOrder = append(targetOrder, targetTuple)
+			}
+		}
+		return nil
+	}
 	for start := 0; start < len(parentTuples); start += batchSize {
 		end := start + batchSize
 		if end > len(parentTuples) {
@@ -720,90 +813,53 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 				missing = append(missing, tuple)
 			}
 		}
-		if len(missing) == 0 {
-			continue
-		}
-		membership, err := buildGraphMembership(edge.junctionParent, missing)
-		if err != nil {
-			return nil, err
-		}
-		limit := edge.options.PerParentLimit
-		if limit == 0 {
-			limit = 0
-		}
-		limited, err := junctionPlan.with(membership, edge.junctionParent, edge.options, limit)
-		if err != nil {
-			return nil, err
-		}
-		if compiled, err := limited.compile(executor); err != nil {
-			return nil, err
-		} else if len(compiled.bindSlots) > budget || (profile.MaxBind > 0 && len(compiled.bindSlots) > profile.MaxBind) {
-			return nil, planError("bind_limit", "graph."+edge.name, "compiled junction query exceeds bind budget")
-		}
-		rows, err := limited.run(ctx, executor, func() (int64, error) { *rowCount++; return *rowCount, nil })
-		if err != nil {
-			return nil, err
-		}
-		for _, tuple := range missing {
-			cache[graphCacheKeyFor(junctionFingerprint, tuple)] = graphCacheEntry{}
-		}
-		for _, row := range rows {
-			junctionRow, ok := row.row.(graphJunctionRow)
-			if !ok {
-				return nil, planError("internal_plan", "graph."+edge.name, "junction row type mismatch")
+		if len(missing) > 0 {
+			membership, err := buildGraphMembership(edge.junctionParent, missing)
+			if err != nil {
+				return nil, err
 			}
-			parentTuple, present, tupleErr := graphTupleValues(edge.junctionParent.parts, junctionRow.values[:len(edge.junctionParent.parts)], codecs)
-			if tupleErr != nil {
-				return nil, tupleErr
+			limited, err := junctionPlan.with(membership, edge.junctionParent, edge.options, edge.options.PerParentLimit)
+			if err != nil {
+				return nil, err
 			}
-			if !present {
-				return nil, planError("foreign_key_result", "graph."+edge.name, "junction parent is absent")
+			if compiled, err := limited.compile(executor); err != nil {
+				return nil, err
+			} else if len(compiled.bindSlots) > budget || (profile.MaxBind > 0 && len(compiled.bindSlots) > profile.MaxBind) {
+				return nil, planError("bind_limit", "graph."+edge.name, "compiled junction query exceeds bind budget")
 			}
-			entry := cache[graphCacheKeyFor(junctionFingerprint, parentTuple)]
-			entry.rows = append(entry.rows, row)
-			cache[graphCacheKeyFor(junctionFingerprint, parentTuple)] = entry
+			rows, err := limited.run(ctx, executor, func() (int64, error) { *rowCount++; return *rowCount, nil })
+			if err != nil {
+				return nil, err
+			}
+			for _, tuple := range missing {
+				cache[graphCacheKeyFor(junctionFingerprint, tuple)] = graphCacheEntry{}
+			}
+			for _, row := range rows {
+				junctionRow, ok := row.row.(graphJunctionRow)
+				if !ok {
+					return nil, planError("internal_plan", "graph."+edge.name, "junction row type mismatch")
+				}
+				parentTuple, present, err := graphTupleValues(edge.junctionParent.parts, junctionRow.values[:len(edge.junctionParent.parts)], codecs)
+				if err != nil {
+					return nil, err
+				}
+				if !present {
+					return nil, planError("foreign_key_result", "graph."+edge.name, "junction parent is absent")
+				}
+				if _, requested := parentIndex[parentTuple.identity]; !requested {
+					return nil, planError("foreign_key_result", "graph."+edge.name, "junction parent was not requested")
+				}
+				entry := cache[graphCacheKeyFor(junctionFingerprint, parentTuple)]
+				entry.rows = append(entry.rows, row)
+				cache[graphCacheKeyFor(junctionFingerprint, parentTuple)] = entry
+			}
 		}
-		rows = rows[:0]
+		rows := make([]graphRow, 0)
 		for _, tuple := range parentTuples[start:end] {
 			rows = append(rows, cache[graphCacheKeyFor(junctionFingerprint, tuple)].rows...)
 		}
-		for _, row := range rows {
-			junctionRow, ok := row.row.(graphJunctionRow)
-			if !ok {
-				return nil, planError("internal_plan", "graph."+edge.name, "junction row type mismatch")
-			}
-			parentTuple, present, err := graphTupleValues(edge.junctionParent.parts, junctionRow.values[:len(edge.junctionParent.parts)], codecs)
-			if err != nil {
-				return nil, err
-			}
-			if !present {
-				return nil, planError("foreign_key_result", "graph."+edge.name, "junction parent is absent")
-			}
-			if _, requested := parentIndex[parentTuple.identity]; !requested {
-				return nil, planError("foreign_key_result", "graph."+edge.name, "junction parent was not requested")
-			}
-			targetTuple, present, err := graphTupleValues(edge.junctionChild.parts, junctionRow.values[len(edge.junctionParent.parts):], codecs)
-			if err != nil {
-				return nil, err
-			}
-			if !present {
-				return nil, planError("foreign_key_result", "graph."+edge.name, "junction target is absent")
-			}
-			exists := false
-			for _, prior := range byParent[parentTuple.identity] {
-				if prior.identity == targetTuple.identity {
-					exists = true
-					break
-				}
-			}
-			if exists {
-				continue
-			}
-			byParent[parentTuple.identity] = append(byParent[parentTuple.identity], targetTuple)
-			if _, ok := targetSeen[targetTuple.identity]; !ok {
-				targetSeen[targetTuple.identity] = struct{}{}
-				targetOrder = append(targetOrder, targetTuple)
-			}
+		if err := addJunctionRows(rows); err != nil {
+			return nil, err
 		}
 	}
 	targets := make(map[string]graphRow)
@@ -871,6 +927,9 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 				if !present {
 					return nil, planError("foreign_key_result", "graph."+edge.name, "target key is absent")
 				}
+				if _, ok := targetSeen[tuple.identity]; !ok {
+					return nil, planError("foreign_key_result", "graph."+edge.name, "target key was not requested")
+				}
 				entry := cache[graphCacheKeyFor(targetFingerprint, tuple)]
 				entry.rows = append(entry.rows, row)
 				cache[graphCacheKeyFor(targetFingerprint, tuple)] = entry
@@ -913,7 +972,10 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 		for _, target := range junctionTargets {
 			row, ok := targets[target.identity]
 			if !ok {
-				return nil, planError("cardinality", "graph."+edge.name, "junction target is missing")
+				if !edge.child.query.hasPredicates() {
+					return nil, planError("foreign_key_result", "graph."+edge.name, "junction target is missing")
+				}
+				continue
 			}
 			values = append(values, row.graph)
 			// The attachment below copies values into the parent's relation slice.
@@ -923,9 +985,14 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 			return nil, err
 		}
 		*deferred = append(*deferred, graphDeferred{depth: parent.depth, fn: callback})
-		for j, target := range junctionTargets {
-			row := targets[target.identity]
-			next = append(next, graphWork{node: edge.child, parent: attached[j], row: row.row, depth: parent.depth + 1})
+		attachedIndex := 0
+		for _, target := range junctionTargets {
+			row, exists := targets[target.identity]
+			if !exists {
+				continue
+			}
+			next = append(next, graphWork{node: edge.child, parent: attached[attachedIndex], row: row.row, depth: parent.depth + 1})
+			attachedIndex++
 		}
 		_ = i
 	}
