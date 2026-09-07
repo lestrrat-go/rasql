@@ -268,7 +268,7 @@ func snapshotReflectValue(value reflect.Value, active map[uintptr]bool) (any, er
 			return nil, err
 		}
 		p := reflect.New(value.Type().Elem())
-		p.Elem().Set(reflect.ValueOf(cloned))
+		setSnapshot(p.Elem(), reflect.ValueOf(cloned))
 		return p.Interface(), nil
 	case reflect.Slice:
 		result := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
@@ -277,7 +277,7 @@ func snapshotReflectValue(value reflect.Value, active map[uintptr]bool) (any, er
 			if err != nil {
 				return nil, err
 			}
-			result.Index(i).Set(reflect.ValueOf(v))
+			setSnapshot(result.Index(i), reflect.ValueOf(v))
 		}
 		return result.Interface(), nil
 	case reflect.Array:
@@ -287,7 +287,7 @@ func snapshotReflectValue(value reflect.Value, active map[uintptr]bool) (any, er
 			if err != nil {
 				return nil, err
 			}
-			result.Index(i).Set(reflect.ValueOf(v))
+			setSnapshot(result.Index(i), reflect.ValueOf(v))
 		}
 		return result.Interface(), nil
 	case reflect.Map:
@@ -301,7 +301,11 @@ func snapshotReflectValue(value reflect.Value, active map[uintptr]bool) (any, er
 			if err != nil {
 				return nil, err
 			}
-			result.SetMapIndex(iter.Key(), reflect.ValueOf(v))
+			if v == nil {
+				result.SetMapIndex(iter.Key(), reflect.Zero(value.Type().Elem()))
+			} else {
+				result.SetMapIndex(iter.Key(), reflect.ValueOf(v))
+			}
 		}
 		return result.Interface(), nil
 	case reflect.Struct:
@@ -325,11 +329,24 @@ func snapshotReflectValue(value reflect.Value, active map[uintptr]bool) (any, er
 			if err != nil {
 				return nil, err
 			}
-			result.Field(i).Set(reflect.ValueOf(v))
+			setSnapshot(result.Field(i), reflect.ValueOf(v))
 		}
 		return result.Interface(), nil
 	default:
 		return value.Interface(), nil
+	}
+}
+func setSnapshot(dst, src reflect.Value) {
+	if !src.IsValid() || (src.Kind() == reflect.Interface && src.IsNil()) {
+		dst.Set(reflect.Zero(dst.Type()))
+		return
+	}
+	if src.Type().AssignableTo(dst.Type()) {
+		dst.Set(src)
+		return
+	}
+	if src.Type().ConvertibleTo(dst.Type()) {
+		dst.Set(src.Convert(dst.Type()))
 	}
 }
 func cloneReflectValue(value reflect.Value) reflect.Value {

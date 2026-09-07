@@ -23,6 +23,33 @@ type queryAPISource struct {
 	destinations int
 }
 
+type dtoResult struct {
+	ID   int64
+	Name Nullable[string]
+}
+type dtoDecoder struct {
+	schema    ResultSchema
+	addresses []*dtoResult
+}
+
+func (d *dtoDecoder) ResultSchema() ResultSchema { return d.schema }
+func (*dtoDecoder) Presence() []Presence         { p, _ := NewPresence("profile", "id"); return []Presence{p} }
+func (d *dtoDecoder) DecodeRow(source ScanSource, result *dtoResult) error {
+	d.addresses = append(d.addresses, result)
+	return source.Scan(&result.ID, &result.Name)
+}
+
+type dtoSource struct {
+	id   int64
+	name any
+}
+
+func (s dtoSource) Scan(dest ...any) error {
+	*dest[0].(*int64) = s.id
+	*dest[1].(*Nullable[string]) = Nullable[string]{Value: s.name.(string), Valid: true}
+	return nil
+}
+
 func (s *queryAPISource) Scan(destinations ...any) error {
 	s.destinations++
 	if len(destinations) != 1 {
@@ -163,5 +190,35 @@ func TestSourceBoundColumnsValidateNullabilityAndMembership(t *testing.T) {
 	}
 	if _, err := BindColumn[int64, int64](relation, "missing", ""); err == nil {
 		t.Fatal("accepted unknown column")
+	}
+}
+
+func TestDTODecoderPreservesOrderNullMetadataAndDestinationOwnership(t *testing.T) {
+	s, err := NewResultSchema(ResultColumn{Name: "id", Type: schema.IntegerType{}, Nullable: true}, ResultColumn{Name: "name", Type: schema.TextType{}, Nullable: true, Codec: "domain.text"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := NewPresence("profile", "id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &dtoDecoder{schema: s}
+	d.Presence()
+	_ = p
+	projection, err := NewProjection([]ProjectionItem{NullItem("id", NullExpr[int64]{node: Value(int64(1)).node}, schema.IntegerType{}, ""), NullItem("name", NullExpr[string]{node: Value("x").node}, schema.TextType{}, "domain.text")}, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, second := dtoResult{}, dtoResult{}
+	source := dtoSource{id: 1, name: "a"}
+	if err := projection.Decoder().DecodeRow(source, &first); err != nil {
+		t.Fatal(err)
+	}
+	source.id = 2
+	if err := projection.Decoder().DecodeRow(source, &second); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.addresses) != 2 || d.addresses[0] == d.addresses[1] || first.ID != 1 || second.ID != 2 {
+		t.Fatalf("decoder ownership/results invalid")
 	}
 }

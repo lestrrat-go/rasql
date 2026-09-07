@@ -21,7 +21,7 @@ func TestQueryAPICompileFixture(t *testing.T) {
 }
 
 func TestQueryAPINegativeCompileFixtures(t *testing.T) {
-	for _, fixture := range []struct{ name, diagnostic string }{{"wrong_value", "cannot use"}, {"is_null_nonnull", "does not match"}} {
+	for _, fixture := range []struct{ name, diagnostic string }{{"wrong_value", "cannot use"}, {"is_null_nonnull", "does not match"}, {"scalar_where", "cannot use"}, {"mismatched_projection", "cannot use"}, {"optional_required", "does not match"}} {
 		directory, err := filepath.Abs(filepath.Join("testdata", "compile", "query_api", fixture.name))
 		if err != nil {
 			t.Fatal(err)
