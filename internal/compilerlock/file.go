@@ -300,6 +300,15 @@ func Decode(b []byte) (File, error) {
 	if f.Format != FormatVersion {
 		return f, fmt.Errorf("compilerlock: unsupported format %d", f.Format)
 	}
+	var envelope struct {
+		Mappings json.RawMessage `json:"mappings"`
+	}
+	if err := json.Unmarshal(b, &envelope); err != nil {
+		return f, err
+	}
+	if len(bytes.TrimSpace(envelope.Mappings)) == 0 || bytes.Equal(bytes.TrimSpace(envelope.Mappings), []byte("null")) {
+		return f, errors.New("compilerlock: format 2 requires a mappings object")
+	}
 	if err := validateFile(f); err != nil {
 		return f, err
 	}

@@ -154,6 +154,9 @@ func (s Upsert) Validate() error {
 			return validationError(path+".column", "duplicates column %q", assignment.column.Name())
 		}
 		assigned[assignment.column.Name()] = struct{}{}
+		if assignment.IsDefault() {
+			return validationError(path+".value", "DEFAULT assignments are only supported by UPDATE")
+		}
 		if err := validateExcludedClauseExpression(assignment.value, sources, "a conflict-update assignment", path+".value"); err != nil {
 			return err
 		}

@@ -106,6 +106,7 @@ func BuildSemantic(c PhysicalCatalog, mappings MappingConfig, queries []QueryAna
 	}
 	for _, object := range c.Objects {
 		so := SemanticObject{ID: object.ID, Kind: object.Kind, PhysicalName: QualifiedName{Schema: object.Schema, Name: object.Name}}
+		relationNames := make(map[string]struct{}, len(object.Constraints)+len(mappings.Relations))
 		for _, column := range object.Columns {
 			scalar, found, ambiguous := scalarFor(column, mappings)
 			if ambiguous {
@@ -165,11 +166,21 @@ func BuildSemantic(c PhysicalCatalog, mappings MappingConfig, queries []QueryAna
 					}
 				}
 			}
+			if _, exists := relationNames[name]; exists {
+				model.Diagnostics = append(model.Diagnostics, Diagnostic{Level: DiagnosticError, Code: "relation_name_collision", Path: object.Name + ".relations." + name, Message: "relation name is duplicated"})
+			} else {
+				relationNames[name] = struct{}{}
+			}
 			so.Relations = append(so.Relations, relation)
 		}
-		for _, mapping := range mappings.Relations {
+		for mappingIndex, mapping := range mappings.Relations {
 			if mapping.Source != object.ID {
 				continue
+			}
+			if _, exists := relationNames[mapping.Name]; exists {
+				model.Diagnostics = append(model.Diagnostics, Diagnostic{Level: DiagnosticError, Code: "relation_name_collision", Path: fmt.Sprintf("mappings.relations[%d].name", mappingIndex), Message: "relation name collides with another relation on the source object"})
+			} else {
+				relationNames[mapping.Name] = struct{}{}
 			}
 			through := mapping.Through
 			so.Relations = append(so.Relations, SemanticRelation{Name: mapping.Name, Kind: "many_through", From: append([]string(nil), mapping.From...), Target: mapping.Target, To: append([]string(nil), mapping.To...), Through: &SemanticThrough{Object: through.Object, SourceFrom: append([]string(nil), through.SourceFrom...), SourceTo: append([]string(nil), through.SourceTo...), TargetFrom: append([]string(nil), through.TargetFrom...), TargetTo: append([]string(nil), through.TargetTo...)}})

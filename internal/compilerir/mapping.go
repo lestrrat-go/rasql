@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/parser"
+	"go/token"
 	"regexp"
 	"strings"
 )
@@ -98,6 +99,9 @@ func ValidateMappingConfig(config MappingConfig, packageName string) error {
 		if relation.Name == "" {
 			return fmt.Errorf("%s.name: must not be empty", path)
 		}
+		if !validGeneratedIdentifier(relation.Name) {
+			return fmt.Errorf("%s.name: must be a valid Go identifier", path)
+		}
 		nameKey := string(relation.Source) + "\x00" + relation.Name
 		if _, ok := relationNames[nameKey]; ok {
 			return fmt.Errorf("%s.name: duplicate relation %q", path, relation.Name)
@@ -139,6 +143,10 @@ func ValidateMappingConfig(config MappingConfig, packageName string) error {
 		}
 	}
 	return nil
+}
+
+func validGeneratedIdentifier(name string) bool {
+	return name != "_" && token.IsIdentifier(name)
 }
 
 type mappingSelection struct {
