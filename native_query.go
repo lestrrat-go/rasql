@@ -33,43 +33,65 @@ type nativeQueryPlan struct {
 	statement stmt.Statement
 }
 
+type nativeMutation struct{ plan nativeQueryPlan }
+
+type nativeMutationPlanAccessor interface {
+	nativeMutationPlan() (nativeQueryPlan, error)
+}
+
 type queryResultRequirement struct {
 	cardinality Cardinality
 	emptyErr    error
 }
 
 func Native[R any](statement NativeStatement, projection Projection[R], cardinality Cardinality) (Query[R], error) {
-	engine := strings.TrimSpace(statement.Engine)
-	if engine == "" {
-		return Query[R]{}, planError("invalid_projection", "native.engine", "must not be empty")
-	}
-	if strings.TrimSpace(statement.SQL) == "" {
-		return Query[R]{}, planError("invalid_projection", "native.sql", "must not be empty")
-	}
 	if cardinality < Many || cardinality > ExactlyOne {
 		return Query[R]{}, planError("invalid_projection", "native.cardinality", "invalid cardinality")
 	}
 	if err := projection.Validate(); err != nil {
 		return Query[R]{}, err
 	}
+	native, err := newNativeQueryPlan(statement)
+	if err != nil {
+		return Query[R]{}, err
+	}
+	return Query[R]{
+		plan:              QueryPlan{native: native, projection: cloneItems(projection.items)},
+		projection:        projection,
+		resultRequirement: queryResultRequirement{cardinality: cardinality, emptyErr: nativeEmptyError(cardinality)},
+	}, nil
+}
+
+func NativeMutation(statement NativeStatement) (MutationPlan, error) {
+	native, err := newNativeQueryPlan(statement)
+	if err != nil {
+		return nil, err
+	}
+	return nativeMutation{plan: *native}, nil
+}
+
+func newNativeQueryPlan(statement NativeStatement) (*nativeQueryPlan, error) {
+	engine := strings.TrimSpace(statement.Engine)
+	if engine == "" {
+		return nil, planError("invalid_projection", "native.engine", "must not be empty")
+	}
+	if strings.TrimSpace(statement.SQL) == "" {
+		return nil, planError("invalid_projection", "native.sql", "must not be empty")
+	}
 	args := make([]any, len(statement.Args))
 	for i, arg := range statement.Args {
 		if arg.Codec != "" && !codecPattern.MatchString(arg.Codec) {
-			return Query[R]{}, planError("invalid_schema", fmt.Sprintf("native.args[%d].codec", i), "malformed codec identifier")
+			return nil, planError("invalid_schema", fmt.Sprintf("native.args[%d].codec", i), "malformed codec identifier")
 		}
 		snapshot, copier, err := adoptBind(arg.Value, true)
 		if err != nil {
 			result := planError("unsnapshotable_bind", fmt.Sprintf("native.args[%d]", i), err.Error())
 			result.cause = err
-			return Query[R]{}, result
+			return nil, result
 		}
 		args[i] = bindToken{id: bindID(atomic.AddUint64(&nextBindID, 1)), value: snapshot, codec: arg.Codec, copy: copier}
 	}
-	return Query[R]{
-		plan:              QueryPlan{native: &nativeQueryPlan{engine: engine, statement: stmt.New(sqltext.Text(statement.SQL), args...)}, projection: cloneItems(projection.items)},
-		projection:        projection,
-		resultRequirement: queryResultRequirement{cardinality: cardinality, emptyErr: nativeEmptyError(cardinality)},
-	}, nil
+	return &nativeQueryPlan{engine: engine, statement: stmt.New(sqltext.Text(statement.SQL), args...)}, nil
 }
 
 func (p Projection[R]) Validate() error {

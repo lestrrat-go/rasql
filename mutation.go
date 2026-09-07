@@ -16,6 +16,14 @@ type MutationPlan interface {
 	mutationPlan() (query.WriteStatement, error)
 }
 
+func (p nativeMutation) mutationPlan() (query.WriteStatement, error) {
+	return nil, planError("unsupported_feature", "native", "native mutations do not have a write statement")
+}
+
+func (p nativeMutation) nativeMutationPlan() (nativeQueryPlan, error) {
+	return p.plan, nil
+}
+
 type mutationBatchPlan interface {
 	MutationPlan
 	mutationInsert() (query.Insert, error)
@@ -93,14 +101,20 @@ func ExecMutation(ctx context.Context, executor Executor, plan MutationPlan) (Mu
 	if plan == nil {
 		return MutationOutcome{}, fmt.Errorf("rasql: mutation plan must not be nil")
 	}
-	statement, err := plan.mutationPlan()
-	if err != nil {
-		return MutationOutcome{}, err
+	var compiled stmt.Statement
+	var err error
+	if native, ok := plan.(nativeMutationPlanAccessor); ok {
+		compiled, err = compileNativeMutation(executor, native)
+	} else {
+		statement, statementErr := plan.mutationPlan()
+		if statementErr != nil {
+			return MutationOutcome{}, statementErr
+		}
+		if len(statement.Returning()) != 0 {
+			return MutationOutcome{}, fmt.Errorf("rasql: mutation has RETURNING projections; use Returning")
+		}
+		compiled, err = compileMutation(executor, statement)
 	}
-	if len(statement.Returning()) != 0 {
-		return MutationOutcome{}, fmt.Errorf("rasql: mutation has RETURNING projections; use Returning")
-	}
-	compiled, err := compileMutation(executor, statement)
 	if err != nil {
 		return MutationOutcome{}, err
 	}
@@ -155,6 +169,30 @@ func compileMutation(executor Executor, statement query.WriteStatement) (stmt.St
 	return encodeStatement(statementCopy, compiledQuery.bindSlots, registry)
 }
 
+func compileNativeMutation(executor Executor, native nativeMutationPlanAccessor) (stmt.Statement, error) {
+	plan, err := native.nativeMutationPlan()
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	dialect := executor.Dialect()
+	if dialect == nil || dialect.Name() != plan.engine {
+		return stmt.Statement{}, planError("engine_mismatch", "native.engine", "executor dialect does not match native SQL")
+	}
+	provider, ok := executor.(compilerProvider)
+	if !ok || provider.queryCompiler() == nil {
+		return stmt.Statement{}, &PlanError{Code: "engine_profile_unavailable", Detail: "executor has no retained compiler"}
+	}
+	compiled, err := provider.queryCompiler().Native(plan.statement)
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	parts, err := unwrapBindTokens(compiled)
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	return encodeCompiledMutation(parts, executor)
+}
+
 func executorDurability(executor Executor) Durability {
 	provider, ok := executor.(executionDurabilityProvider)
 	if !ok {
@@ -174,6 +212,9 @@ func executorDurability(executor Executor) Durability {
 func Returning[R any](plan MutationPlan, projection Projection[R]) (Query[R], error) {
 	if plan == nil {
 		return Query[R]{}, fmt.Errorf("rasql: mutation plan must not be nil")
+	}
+	if _, ok := plan.(nativeMutationPlanAccessor); ok {
+		return Query[R]{}, planError("unsupported_feature", "native", "native mutations cannot return rows")
 	}
 	if len(projection.items) == 0 || projection.decoder == nil {
 		return Query[R]{}, fmt.Errorf("rasql: returning projection must not be zero")
@@ -220,7 +261,7 @@ func ExecMutationBatch(ctx context.Context, executor Executor, plans []MutationP
 	if len(plans) == 0 {
 		return MutationBatchOutcome{}, fmt.Errorf("rasql: mutation batch requires at least one plan")
 	}
-	outcome := MutationBatchOutcome{Inputs: make([]InputOutcome, len(plans)), Durability: executorDurability(executor)}
+	outcome := MutationBatchOutcome{Inputs: make([]InputOutcome, len(plans))}
 	maxRows := options.MaxRows
 	if maxRows == 0 {
 		maxRows = 1000
@@ -231,6 +272,18 @@ func ExecMutationBatch(ctx context.Context, executor Executor, plans []MutationP
 	if options.MaxBindParameters < 0 {
 		return outcome, fmt.Errorf("rasql: mutation batch MaxBindParameters must be positive")
 	}
+	for index, plan := range plans {
+		if plan == nil {
+			return outcome, fmt.Errorf("rasql: mutation batch input %d is nil", index)
+		}
+		if native, ok := plan.(nativeMutationPlanAccessor); ok {
+			if _, err := native.nativeMutationPlan(); err != nil {
+				return outcome, err
+			}
+			return outcome, planError("unsupported_feature", fmt.Sprintf("inputs[%d]", index), "native mutations are not supported in batches")
+		}
+	}
+	outcome.Durability = executorDurability(executor)
 	bindLimit := mutationBindLimit(executor, options.MaxBindParameters)
 	var target string
 	for index, plan := range plans {
