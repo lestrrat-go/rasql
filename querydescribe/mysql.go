@@ -4,11 +4,11 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/lestrrat-go/rasql/internal/compilerquery"
+	"github.com/lestrrat-go/rasql/internal/queryevidence"
 )
 
 type MySQLDescriber struct{ DB *sql.DB }
 
-func (d MySQLDescriber) Describe(ctx context.Context, request compilerquery.DescribeRequest) (compilerquery.Description, error) {
+func (d MySQLDescriber) Describe(ctx context.Context, request queryevidence.DescribeRequest) (queryevidence.Description, error) {
 	return NewDeclared(d.DB).Describe(ctx, request)
 }

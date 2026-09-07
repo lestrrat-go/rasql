@@ -2,49 +2,75 @@ package querydescribe
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
-	"github.com/lestrrat-go/rasql/internal/compilerquery"
+	"github.com/lestrrat-go/rasql/internal/queryevidence"
 )
 
-type PostgreSQLDescriber struct{}
+type postgresDescribeConn interface {
+	Prepare(context.Context, string, string) (*pgconn.StatementDescription, error)
+	Deallocate(context.Context, string) error
+	Close(context.Context) error
+	TypeMap() *pgtype.Map
+}
+type postgresDescribeConnector func(context.Context, string) (postgresDescribeConn, error)
+type PostgreSQLDescriber struct{ connector postgresDescribeConnector }
 
-func NewPostgreSQL() compilerquery.Describer { return PostgreSQLDescriber{} }
+func NewPostgreSQL() queryevidence.Describer {
+	return PostgreSQLDescriber{connector: func(ctx context.Context, dsn string) (postgresDescribeConn, error) { return pgx.Connect(ctx, dsn) }}
+}
 
-func (PostgreSQLDescriber) Describe(ctx context.Context, request compilerquery.DescribeRequest) (compilerquery.Description, error) {
-	if request.DSN == "" {
-		return compilerquery.Description{}, fmt.Errorf("querydescribe: PostgreSQL DSN is required")
+func (d PostgreSQLDescriber) Describe(ctx context.Context, request queryevidence.DescribeRequest) (queryevidence.Description, error) {
+	if strings.TrimSpace(request.DSN) == "" {
+		return queryevidence.Description{}, fmt.Errorf("querydescribe: PostgreSQL DSN is required")
 	}
-	conn, err := pgx.Connect(ctx, request.DSN)
+	if d.connector == nil {
+		d.connector = func(ctx context.Context, dsn string) (postgresDescribeConn, error) { return pgx.Connect(ctx, dsn) }
+	}
+	return d.describe(ctx, request)
+}
+
+func (d PostgreSQLDescriber) describe(ctx context.Context, request queryevidence.DescribeRequest) (queryevidence.Description, error) {
+	conn, err := d.connector(ctx, request.DSN)
 	if err != nil {
-		return compilerquery.Description{}, err
+		return queryevidence.Description{}, err
 	}
-	defer conn.Close(ctx)
 	name := "rasql_describe_" + strings.ReplaceAll(request.Name, "-", "_")
 	description, err := conn.Prepare(ctx, name, request.SQL)
 	if err != nil {
-		return compilerquery.Description{}, err
+		return queryevidence.Description{}, errors.Join(err, conn.Close(ctx))
 	}
-	defer func() { _ = conn.Deallocate(ctx, name) }()
-	result := compilerquery.Description{Parameters: make([]compilerquery.ValueEvidence, len(description.ParamOIDs)), Results: make([]compilerquery.ValueEvidence, len(description.Fields))}
+	result := queryevidence.Description{Parameters: make([]queryevidence.ValueEvidence, len(description.ParamOIDs)), Results: make([]queryevidence.ValueEvidence, len(description.Fields))}
 	for i, oid := range description.ParamOIDs {
-		kind := ""
-		if typ, ok := conn.TypeMap().TypeForOID(oid); ok {
-			kind = pgLogicalKind(typ.Name)
-		}
-		result.Parameters[i] = compilerquery.ValueEvidence{Name: parameterName(request.ParameterNames, i), Type: compilerquery.TypeEvidence{LogicalKind: kind, Certainty: certainty(kind)}}
+		result.Parameters[i] = queryevidence.ValueEvidence{Name: parameterName(request.ParameterNames, i), Type: pgTypeEvidence(conn.TypeMap(), oid)}
 	}
 	for i, field := range description.Fields {
-		kind := ""
-		if typ, ok := conn.TypeMap().TypeForOID(field.DataTypeOID); ok {
-			kind = pgLogicalKind(typ.Name)
-		}
-		result.Results[i] = compilerquery.ValueEvidence{Name: field.Name, Type: compilerquery.TypeEvidence{LogicalKind: kind, Certainty: certainty(kind)}}
+		result.Results[i] = queryevidence.ValueEvidence{Name: field.Name, Type: pgTypeEvidence(conn.TypeMap(), field.DataTypeOID)}
 	}
-	return result, nil
+	return result, errors.Join(conn.Deallocate(ctx, name), conn.Close(ctx))
+}
+
+func pgTypeEvidence(m *pgtype.Map, oid uint32) queryevidence.TypeEvidence {
+	typ, ok := m.TypeForOID(oid)
+	if !ok {
+		return queryevidence.TypeEvidence{Certainty: compilerir.CertaintyUnknown}
+	}
+	name := strings.ToLower(typ.Name)
+	kind := pgLogicalKind(name)
+	evidence := queryevidence.TypeEvidence{LogicalKind: kind, Native: &compilerir.NativeType{Dialect: "postgresql", Name: typ.Name, Kind: "builtin"}, Certainty: certainty(kind)}
+	if kind == "integer" {
+		evidence.Integer = &compilerir.IntegerTypeFacts{}
+	}
+	if kind == "" {
+		evidence.Native.Kind = "other"
+	}
+	return evidence
 }
 
 func parameterName(names []string, index int) string {

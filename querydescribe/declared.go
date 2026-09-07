@@ -5,24 +5,24 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/lestrrat-go/rasql/internal/compilerquery"
+	"github.com/lestrrat-go/rasql/internal/queryevidence"
 )
 
-type declaredDescriber struct{ db *sql.DB }
+type declaredDescriber struct{}
 
-func NewDeclared(db *sql.DB) compilerquery.Describer { return declaredDescriber{db: db} }
-func NewMySQL(db *sql.DB) compilerquery.Describer    { return declaredDescriber{db: db} }
+func NewDeclared(_ *sql.DB) queryevidence.Describer { return declaredDescriber{} }
+func NewMySQL(_ *sql.DB) queryevidence.Describer    { return declaredDescriber{} }
 
-func (d declaredDescriber) Describe(ctx context.Context, request compilerquery.DescribeRequest) (compilerquery.Description, error) {
+func (d declaredDescriber) Describe(ctx context.Context, request queryevidence.DescribeRequest) (queryevidence.Description, error) {
 	if request.DB == nil {
-		return compilerquery.Description{}, fmt.Errorf("querydescribe: nil database")
+		return queryevidence.Description{}, fmt.Errorf("querydescribe: nil database")
 	}
 	stmt, err := request.DB.PrepareContext(ctx, request.SQL)
 	if err != nil {
-		return compilerquery.Description{}, err
+		return queryevidence.Description{}, err
 	}
 	if err := stmt.Close(); err != nil {
-		return compilerquery.Description{}, err
+		return queryevidence.Description{}, err
 	}
-	return compilerquery.Description{}, nil
+	return queryevidence.Description{}, nil
 }

@@ -3,57 +3,24 @@ package compilerquery
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"fmt"
-	"strconv"
-	"strings"
-	"unicode"
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/compilerlock"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
+	"github.com/lestrrat-go/rasql/internal/queryevidence"
 	"github.com/lestrrat-go/rasql/internal/schemasource"
+	"github.com/lestrrat-go/rasql/namedsql"
 )
 
-type DescribeRequest struct {
-	Name           string
-	Engine         compilerir.EngineIdentity
-	Operation      string
-	SQL            string
-	ParameterNames []string
-	DB             *sql.DB
-	DSN            string
-}
-
-type TypeEvidence struct {
-	LogicalKind string
-	Native      *compilerir.NativeType
-	Integer     *compilerir.IntegerTypeFacts
-	Certainty   compilerir.Certainty
-}
-
-type ValueEvidence struct {
-	Name     string
-	Type     TypeEvidence
-	Nullable *bool
-}
-
-type Description struct {
-	Parameters []ValueEvidence
-	Results    []ValueEvidence
-}
-
-type Describer interface {
-	Describe(context.Context, DescribeRequest) (Description, error)
-}
-
-type Describers struct {
-	PostgreSQL Describer
-	MySQL      Describer
-	SQLite     Describer
-}
+type DescribeRequest = queryevidence.DescribeRequest
+type TypeEvidence = queryevidence.TypeEvidence
+type ValueEvidence = queryevidence.ValueEvidence
+type Description = queryevidence.Description
+type Describer = queryevidence.Describer
+type Describers = queryevidence.Describers
 
 type analyzer struct {
 	config     Config
@@ -81,10 +48,18 @@ func (a analyzer) Analyze(ctx context.Context, request schemasource.AnalysisRequ
 		}
 		snapshots = append(snapshots, snapshot)
 		sqlText := string(snapshot.Bytes())
-		loweredSQL, parameterNames, err := lowerNamedSQL(sqlText, engineDialect(request.Profile.Engine))
+		template, err := namedsql.Parse(string(query.ID), sqlText)
 		if err != nil {
 			return schemasource.AnalysisResult{}, err
 		}
+		compiled, err := template.Compile(engineDialect(request.Profile.Engine))
+		if err != nil {
+			return schemasource.AnalysisResult{}, err
+		}
+		loweredSQL := compiled.SQL()
+		definition := compiled.QueryDef()
+		parameterNames := make([]string, len(definition.Parameters))
+		copy(parameterNames, definition.Parameters)
 		classification, err := ClassifySQL(loweredSQL)
 		if err != nil {
 			return schemasource.AnalysisResult{}, fmt.Errorf("query %q: %w", query.ID, err)
@@ -298,73 +273,4 @@ func cloneConfig(in Config) Config {
 		out.Queries[i].Results = append([]ValueDeclaration(nil), in.Queries[i].Results...)
 	}
 	return out
-}
-
-func lowerNamedSQL(source string, d dialect.Dialect) (string, []string, error) {
-	var out strings.Builder
-	var names []string
-	refs := map[string]string{}
-	for pos := 0; pos < len(source); {
-		start := strings.Index(source[pos:], "{{")
-		if start < 0 {
-			out.WriteString(source[pos:])
-			break
-		}
-		start += pos
-		out.WriteString(source[pos:start])
-		end := strings.Index(source[start+2:], "}}")
-		if end < 0 {
-			return "", nil, fmt.Errorf("compilerquery: unclosed bind action")
-		}
-		end += start + 2
-		fields := strings.Fields(source[start+2 : end])
-		if len(fields) < 2 || len(fields) > 3 || fields[0] != "bind" {
-			return "", nil, fmt.Errorf("compilerquery: invalid bind action")
-		}
-		name, err := strconv.Unquote(fields[1])
-		if err != nil || !validIdentifier(name) {
-			return "", nil, fmt.Errorf("compilerquery: invalid bind name")
-		}
-		if len(fields) == 3 && !validColumnReference(fields[2]) {
-			return "", nil, fmt.Errorf("compilerquery: invalid bind column reference")
-		}
-		ref := ""
-		if len(fields) == 3 {
-			ref = fields[2]
-		}
-		if prior, ok := refs[name]; ok && prior != ref {
-			return "", nil, fmt.Errorf("compilerquery: bind %q names conflicting columns", name)
-		}
-		refs[name] = ref
-		names = append(names, name)
-		placeholder, err := d.Placeholder(len(names))
-		if err != nil {
-			return "", nil, err
-		}
-		out.WriteString(placeholder)
-		pos = end + 2
-	}
-	return out.String(), names, nil
-}
-
-func validIdentifier(name string) bool {
-	for i, r := range name {
-		if i == 0 && !(r == '_' || unicode.IsLetter(r)) || i > 0 && !(r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r)) {
-			return false
-		}
-	}
-	return name != ""
-}
-
-func validColumnReference(value string) bool {
-	parts := strings.Split(value, ".")
-	if len(parts) != 2 && len(parts) != 3 {
-		return false
-	}
-	for _, part := range parts {
-		if !validIdentifier(part) {
-			return false
-		}
-	}
-	return true
 }
