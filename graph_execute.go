@@ -342,7 +342,7 @@ type graphCacheFingerprint struct {
 	digest [sha256.Size]byte
 }
 
-func graphInvocationFingerprint(edge *graphEdgeSpec, stage string, compiled compiledQuery) graphCacheFingerprint {
+func graphInvocationFingerprint(edge *graphEdgeSpec, stage string, compiled compiledQuery) (graphCacheFingerprint, error) {
 	var key strings.Builder
 	writeGraphFingerprintPart := func(value string) {
 		var size [binary.MaxVarintLen64]byte
@@ -369,13 +369,27 @@ func graphInvocationFingerprint(edge *graphEdgeSpec, stage string, compiled comp
 		writeGraphFingerprintPart(slot.codec)
 		writeGraphFingerprintPart(strconv.FormatBool(slot.preEncoded))
 		if index < len(args) {
-			writeGraphFingerprintValue(&key, args[index])
+			if err := writeGraphFingerprintValue(&key, args[index]); err != nil {
+				return graphCacheFingerprint{}, err
+			}
 		}
 	}
-	return graphCacheFingerprint{stage: stage, digest: sha256.Sum256([]byte(key.String()))}
+	return graphCacheFingerprint{stage: stage, digest: sha256.Sum256([]byte(key.String()))}, nil
 }
 
-func writeGraphFingerprintValue(key *strings.Builder, value any) {
+func writeGraphFingerprintValue(key *strings.Builder, value any) error {
+	if named, ok := value.(sql.NamedArg); ok {
+		writeGraphFingerprintValue(key, named.Name)
+		value = named.Value
+	}
+	normalized, err := normalizeGraphValue(value)
+	if err != nil {
+		return err
+	}
+	frame, err := frameGraphValue(normalized)
+	if err != nil {
+		return err
+	}
 	write := func(tag byte, data []byte) {
 		key.WriteByte(tag)
 		var size [binary.MaxVarintLen64]byte
@@ -383,38 +397,8 @@ func writeGraphFingerprintValue(key *strings.Builder, value any) {
 		key.Write(size[:n])
 		key.Write(data)
 	}
-	switch value := value.(type) {
-	case nil:
-		write('n', nil)
-	case string:
-		write('s', []byte(value))
-	case []byte:
-		write('b', value)
-	case int:
-		write('i', []byte(strconv.FormatInt(int64(value), 10)))
-	case int8:
-		write('i', []byte(strconv.FormatInt(int64(value), 10)))
-	case int16:
-		write('i', []byte(strconv.FormatInt(int64(value), 10)))
-	case int32:
-		write('i', []byte(strconv.FormatInt(int64(value), 10)))
-	case int64:
-		write('i', []byte(strconv.FormatInt(value, 10)))
-	case uint:
-		write('u', []byte(strconv.FormatUint(uint64(value), 10)))
-	case uint8:
-		write('u', []byte(strconv.FormatUint(uint64(value), 10)))
-	case uint16:
-		write('u', []byte(strconv.FormatUint(uint64(value), 10)))
-	case uint32:
-		write('u', []byte(strconv.FormatUint(uint64(value), 10)))
-	case uint64:
-		write('u', []byte(strconv.FormatUint(value, 10)))
-	case bool:
-		write('t', []byte(strconv.FormatBool(value)))
-	default:
-		write('x', []byte(fmt.Sprintf("%T", value)))
-	}
+	write('v', frame)
+	return nil
 }
 
 type graphCacheKey struct {
@@ -638,7 +622,10 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 	batchSize := (budget - fixed) / width
 	fingerprintCompiled := probeCompiled
 	fingerprintCompiled.statement = basePrepared.statement
-	childFingerprint := graphInvocationFingerprint(edge, "child", fingerprintCompiled)
+	childFingerprint, err := graphInvocationFingerprint(edge, "child", fingerprintCompiled)
+	if err != nil {
+		return nil, err
+	}
 	for start := 0; start < len(tuples); start += batchSize {
 		end := start + batchSize
 		if end > len(tuples) {
@@ -651,7 +638,9 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 				missing = append(missing, tuple)
 				continue
 			}
-			loaded[tuple.identity] = append(loaded[tuple.identity], entry.rows...)
+			for _, row := range entry.rows {
+				loaded[tuple.identity] = append(loaded[tuple.identity], graphRow{row: row.row, graph: edge.child.query.mapRow(row.row)})
+			}
 		}
 		if len(missing) == 0 {
 			continue
@@ -818,7 +807,10 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 	fixed = len(compiled.bindSlots)
 	fingerprintCompiled := compiled
 	fingerprintCompiled.statement = junctionPrepared.statement
-	junctionFingerprint := graphInvocationFingerprint(edge, "junction", fingerprintCompiled)
+	junctionFingerprint, err := graphInvocationFingerprint(edge, "junction", fingerprintCompiled)
+	if err != nil {
+		return nil, err
+	}
 	budget := edge.options.BindLimit
 	if budget == 0 {
 		budget = profile.MaxBind
@@ -968,7 +960,10 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 		fixed = len(compiled.bindSlots)
 		fingerprintCompiled := compiled
 		fingerprintCompiled.statement = targetPrepared.statement
-		targetFingerprint := graphInvocationFingerprint(edge, "target", fingerprintCompiled)
+		targetFingerprint, err := graphInvocationFingerprint(edge, "target", fingerprintCompiled)
+		if err != nil {
+			return nil, err
+		}
 		targetWidth := len(edge.childKey.parts)
 		batchSize = (budget - fixed) / targetWidth
 		if batchSize <= 0 {
@@ -987,7 +982,7 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 					continue
 				}
 				for _, row := range entry.rows {
-					targets[tuple.identity] = row
+					targets[tuple.identity] = graphRow{row: row.row, graph: edge.child.query.mapRow(row.row)}
 				}
 			}
 			if len(missing) == 0 {
