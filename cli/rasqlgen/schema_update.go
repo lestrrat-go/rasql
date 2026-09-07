@@ -15,6 +15,7 @@ import (
 	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/compilerlock"
 	"github.com/lestrrat-go/rasql/internal/compilerquery"
+	"github.com/lestrrat-go/rasql/internal/querygen"
 	"github.com/lestrrat-go/rasql/internal/schemasource"
 	"github.com/lestrrat-go/rasql/querydescribe"
 	"github.com/lestrrat-go/rasql/schema"
@@ -155,7 +156,15 @@ func (c command) runSchemaUpdate(args []string) error {
 		if lowerErr != nil {
 			return lowerErr
 		}
-		store.TypedQueries = append(store.TypedQueries, generate.TypedQuery{Function: goQuery.Name, Output: name.File, Engine: query.Engine.Dialect, SQL: sqlText, ArgumentNames: argumentNames, Operation: query.Operation, Cardinality: query.Cardinality, Result: name.Result, Projection: name.Projection, Decoder: name.Decoder, Parameters: append([]compilerir.GoField(nil), goQuery.Parameters...), Results: queryFields(goQuery)})
+		parameters, pairErr := typedValues(query.Parameters, goQuery.Parameters)
+		if pairErr != nil {
+			return pairErr
+		}
+		results, pairErr := typedValues(query.Results, queryFields(goQuery))
+		if pairErr != nil {
+			return pairErr
+		}
+		store.TypedQueries = append(store.TypedQueries, generate.TypedQuery{Function: goQuery.Name, Output: name.File, Engine: query.Engine.Dialect, SQL: sqlText, ArgumentNames: argumentNames, Operation: query.Operation, Cardinality: query.Cardinality, Result: name.Result, Projection: name.Projection, Decoder: name.Decoder, Parameters: parameters, Results: results, Imports: goModel.Imports})
 	}
 	plan, err := store.Plan()
 	if err != nil {
@@ -220,6 +229,20 @@ func queryFields(query compilerir.GoQuery) []compilerir.GoField {
 		return nil
 	}
 	return append([]compilerir.GoField(nil), query.Result.Fields...)
+}
+
+func typedValues(semantic []compilerir.SemanticValue, goFields []compilerir.GoField) ([]querygen.TypedValue, error) {
+	if len(semantic) != len(goFields) {
+		return nil, fmt.Errorf("typed query value count mismatch: semantic=%d go=%d", len(semantic), len(goFields))
+	}
+	values := make([]querygen.TypedValue, len(semantic))
+	for i := range semantic {
+		if semantic[i].Name != goFields[i].Name || semantic[i].Nullable != goFields[i].Nullable {
+			return nil, fmt.Errorf("typed query value mismatch at %d: semantic %q go %q", i, semantic[i].Name, goFields[i].Name)
+		}
+		values[i] = querygen.TypedValue{Semantic: semantic[i], Go: goFields[i]}
+	}
+	return values, nil
 }
 
 func queryConfigFor(cfg config, id compilerir.QueryID) configQuery {

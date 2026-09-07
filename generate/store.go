@@ -110,8 +110,9 @@ type TypedQuery struct {
 	Result        string
 	Projection    string
 	Decoder       string
-	Parameters    []compilerir.GoField
-	Results       []compilerir.GoField
+	Parameters    []querygen.TypedValue
+	Results       []querygen.TypedValue
+	Imports       []compilerir.GoImport
 	ArgumentNames []string
 }
 
@@ -645,7 +646,7 @@ func (s Store) planTypedQuery(dir string, q TypedQuery, filenames, identifiers m
 	source, err := querygen.TypedGoSource(querygen.TypedInput{
 		Package: s.Package, Function: q.Function, Engine: q.Engine, SQL: q.SQL,
 		Operation: q.Operation, Cardinality: q.Cardinality, Result: result,
-		Projection: q.Projection, Decoder: q.Decoder, Parameters: q.Parameters, Results: q.Results,
+		Projection: q.Projection, Decoder: q.Decoder, Parameters: q.Parameters, Results: q.Results, Imports: q.Imports,
 	})
 	if err != nil {
 		return File{}, err

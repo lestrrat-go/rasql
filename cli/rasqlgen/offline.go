@@ -101,29 +101,23 @@ func (c command) runOfflineGenerate(settings config, configPath string, check bo
 	}
 	for _, query := range lock.Queries {
 		goQuery := goQueries[query.ID]
+		analysis := compilerlock.AnalysisFromQuery(query)
 		typed := generate.TypedQuery{Function: goQuery.Name, Engine: query.Evidence.Dialect, SQL: "", Operation: query.Operation, Cardinality: query.Cardinality, Result: queryResultName(generation, query.ID), Projection: queryProjectionName(generation, query.ID), Decoder: queryDecoderName(generation, query.ID)}
 		if typed.Function == "" {
 			typed.Function = query.Name
 		}
 		typed.Output = queryFileName(generation, query.ID)
-		typed.Parameters = append([]compilerir.GoField(nil), goQuery.Parameters...)
+		typed.Parameters, err = typedValues(analysis.Parameters, goQuery.Parameters)
+		if err != nil {
+			return err
+		}
 		if goQuery.Result != nil {
-			typed.Results = append([]compilerir.GoField(nil), goQuery.Result.Fields...)
-		}
-		for _, value := range query.Evidence.Parameters {
-			for i := range typed.Parameters {
-				if typed.Parameters[i].Name == value.Name {
-					typed.Parameters[i].Codec = ""
-				}
+			typed.Results, err = typedValues(analysis.Results, goQuery.Result.Fields)
+			if err != nil {
+				return err
 			}
 		}
-		for _, value := range query.Results {
-			for i := range typed.Results {
-				if typed.Results[i].Name == value.Name {
-					typed.Results[i].Nullable = value.Nullable
-				}
-			}
-		}
+		typed.Imports = goModel.Imports
 		sqlPath := filepath.Join(root, query.SQL.Path)
 		sqlBytes, readErr := os.ReadFile(sqlPath)
 		if readErr != nil {
