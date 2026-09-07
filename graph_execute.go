@@ -85,14 +85,14 @@ func graphValidate(node *graphPlanNode, executor Executor, rootCompiled *compile
 		if edge == nil || edge.child == nil {
 			return planError("invalid_graph_plan", path, "edge is incomplete")
 		}
-		if _, ok := done[edge.child.id]; ok {
-			continue
-		}
 		if _, ok := active[edge.child.id]; ok {
 			return planError("graph_cycle", path, "graph plan identity is active")
 		}
 		if err := validateGraphEdge(edge, executor, path); err != nil {
 			return err
+		}
+		if _, ok := done[edge.child.id]; ok {
+			continue
 		}
 		stack = append(stack, frame{node: edge.child, path: current.path + "." + edge.name})
 	}
@@ -306,7 +306,11 @@ func graphCacheKeyFor(fingerprint graphCacheFingerprint, tuple keyTuple) graphCa
 	return graphCacheKey{fingerprint: fingerprint, tuple: tuple.identity}
 }
 
-type graphJunctionRow struct{ values []any }
+type graphJunctionRow struct {
+	values      []any
+	parentTuple keyTuple
+	targetTuple keyTuple
+}
 type graphJunctionDecoder struct {
 	schema ResultSchema
 	width  int
@@ -511,7 +515,7 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 	basePrepared := graphPreparedQuery{}
 	cacheable := graphStageCacheable(probeCompiled, probeLimit)
 	if cacheable {
-		basePrepared, err = probe.prepareCompiled(executor, probeCompiled)
+		basePrepared, err = probe.prepareCompiledRaw(executor, probeCompiled)
 		if err != nil {
 			return nil, err
 		}
@@ -557,7 +561,7 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 				continue
 			}
 			for _, row := range entry.rows {
-				loaded[tuple.identity] = append(loaded[tuple.identity], graphRow{row: row.row, graph: edge.child.query.mapRow(graphCloneValue(row.row))})
+				loaded[tuple.identity] = append(loaded[tuple.identity], graphRow{row: row.row})
 			}
 		}
 		if len(missing) == 0 {
@@ -585,7 +589,7 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 				return nil, err
 			}
 		}
-		prepared, err := edge.child.query.prepareCompiled(executor, compiled)
+		prepared, err := edge.child.query.prepareCompiledRaw(executor, compiled)
 		if err != nil {
 			return nil, err
 		}
@@ -611,7 +615,7 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 			if _, ok := groups[tuple.identity]; !ok {
 				return nil, planError("foreign_key_result", "graph."+edge.name, "child key was not requested")
 			}
-			loaded[tuple.identity] = append(loaded[tuple.identity], graphRow{row: row.row, graph: row.graph})
+			loaded[tuple.identity] = append(loaded[tuple.identity], graphRow{row: row.row})
 		}
 	}
 	next := make([]graphWork, 0)
@@ -622,7 +626,7 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 		}
 		values := make([]any, len(children))
 		for j := range children {
-			values[j] = children[j].graph
+			values[j] = edge.child.query.mapRow(graphCloneValue(children[j].row))
 		}
 		if edge.kind == graphHasOne {
 			if len(values) > 1 {
@@ -659,6 +663,8 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeSpec, parents []graphWork, rowCount *int64, deferred *[]graphDeferred, cache map[graphCacheKey]graphCacheEntry) ([]graphWork, error) {
 	codecs := graphCodecs(executor)
 	parentTuples := make([]keyTuple, 0, len(parents))
+	parentKeys := make([]string, len(parents))
+	parentPresent := make([]bool, len(parents))
 	parentIndex := make(map[string][]int)
 	for i, parent := range parents {
 		tuple, present, err := edge.parentKey.tuple(parent.row, codecs)
@@ -668,6 +674,8 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 		if !present {
 			continue
 		}
+		parentPresent[i] = true
+		parentKeys[i] = tuple.identity
 		if _, ok := parentIndex[tuple.identity]; !ok {
 			parentTuples = append(parentTuples, tuple)
 		}
@@ -742,23 +750,17 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 			if !ok {
 				return planError("internal_plan", "graph."+edge.name, "junction row type mismatch")
 			}
-			parentTuple, present, err := graphTupleValues(edge.junctionParent.parts, junctionRow.values[:len(edge.junctionParent.parts)], codecs)
-			if err != nil {
-				return err
-			}
-			if !present {
+			if len(junctionRow.parentTuple.components) == 0 {
 				return planError("foreign_key_result", "graph."+edge.name, "junction parent is absent")
 			}
+			parentTuple := junctionRow.parentTuple
 			if _, requested := parentIndex[parentTuple.identity]; !requested {
 				return planError("foreign_key_result", "graph."+edge.name, "junction parent was not requested")
 			}
-			targetTuple, present, err := graphTupleValues(edge.junctionChild.parts, junctionRow.values[len(edge.junctionParent.parts):], codecs)
-			if err != nil {
-				return err
-			}
-			if !present {
+			if len(junctionRow.targetTuple.components) == 0 {
 				return planError("foreign_key_result", "graph."+edge.name, "junction target is absent")
 			}
+			targetTuple := junctionRow.targetTuple
 			duplicate := false
 			for _, prior := range byParent[parentTuple.identity] {
 				if prior.identity == targetTuple.identity {
@@ -839,8 +841,17 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 				if _, requested := parentIndex[parentTuple.identity]; !requested {
 					return nil, planError("foreign_key_result", "graph."+edge.name, "junction parent was not requested")
 				}
+				targetTuple, present, err := graphTupleValues(edge.junctionChild.parts, junctionRow.values[len(edge.junctionParent.parts):], codecs)
+				if err != nil {
+					return nil, err
+				}
+				if !present {
+					return nil, planError("foreign_key_result", "graph."+edge.name, "junction target is absent")
+				}
+				junctionRow.parentTuple = parentTuple
+				junctionRow.targetTuple = targetTuple
 				entry := junctionCache[graphCacheKeyFor(junctionFingerprint, parentTuple)]
-				entry.rows = append(entry.rows, graphRow{row: row.row})
+				entry.rows = append(entry.rows, graphRow{row: junctionRow})
 				junctionCache[graphCacheKeyFor(junctionFingerprint, parentTuple)] = entry
 				entry.decoder = junctionPlan.decoderValue()
 				junctionCache[graphCacheKeyFor(junctionFingerprint, parentTuple)] = entry
@@ -972,11 +983,7 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 	}
 	next := make([]graphWork, 0)
 	for i, parent := range parents {
-		parentTuple, present, err := edge.parentKey.tuple(parent.row, codecs)
-		if err != nil {
-			return nil, err
-		}
-		if !present {
+		if !parentPresent[i] {
 			_, callback, err := edge.attach.attach(parent.parent, []any{}, true, false)
 			if err != nil {
 				return nil, err
@@ -984,7 +991,7 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 			*deferred = append(*deferred, graphDeferred{depth: parent.depth, fn: callback})
 			continue
 		}
-		junctionTargets := byParent[parentTuple.identity]
+		junctionTargets := byParent[parentKeys[i]]
 		values := make([]any, 0, len(junctionTargets))
 		for _, target := range junctionTargets {
 			row, ok := targets[target.identity]

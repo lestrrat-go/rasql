@@ -128,13 +128,16 @@ func (q graphQuery[R, G]) prepareCompiledMode(executor Executor, compiled compil
 				sequenceErr = err
 				return false
 			}
+			_, sequenceErr = count()
+			if sequenceErr != nil {
+				return false
+			}
 			var graph any
 			if mapRows {
 				graph = q.mapFn(row)
 			}
 			result = append(result, graphRow{row: row, graph: graph})
-			_, sequenceErr = count()
-			return sequenceErr == nil
+			return true
 		})
 		return result, sequenceErr
 	}}, nil
