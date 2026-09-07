@@ -61,6 +61,7 @@ type config struct {
 	// Dialect is the SQL dialect: postgresql (or postgres), mysql, or
 	// sqlite.
 	Dialect string `json:"dialect"`
+	Emitter string `json:"emitter"`
 
 	// Prune allows a run to delete a generated file it no longer writes.
 	// It is a pointer so that a file stating false is distinguishable from
@@ -243,6 +244,14 @@ func loadConfig(path string) (config, error) {
 	}
 	if _, err := loaded.mappings(); err != nil {
 		return config{}, fmt.Errorf("generate: parse config %s mappings: %w", path, err)
+	}
+	if loaded.Schema != nil {
+		if len(loaded.Queries) != 0 {
+			return config{}, fmt.Errorf("generate: schema mode does not support queries")
+		}
+		if loaded.Emitter != "" && loaded.Emitter != "legacy" {
+			return config{}, fmt.Errorf("generate: schema mode requires emitter legacy")
+		}
 	}
 	return loaded, nil
 }

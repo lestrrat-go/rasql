@@ -1,6 +1,7 @@
 package rasqlgen
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -22,8 +23,10 @@ type pendingEntry struct {
 	Desired fileState `json:"desired"`
 }
 type pendingMarker struct {
-	Operation string         `json:"operation"`
-	Entries   []pendingEntry `json:"entries"`
+	Operation   string         `json:"operation"`
+	OldLock     string         `json:"old_lock_sha256"`
+	DesiredLock string         `json:"desired_lock_sha256"`
+	Entries     []pendingEntry `json:"entries"`
 }
 
 func stateFor(path string) (fileState, error) {
@@ -38,9 +41,9 @@ func stateFor(path string) (fileState, error) {
 	return fileState{State: "present", SHA256: hex.EncodeToString(h[:])}, nil
 }
 
-func writePending(root string, entries []pendingEntry) error {
+func writePending(root, oldLock, desiredLock string, entries []pendingEntry) error {
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
-	m := pendingMarker{Operation: "schema-update", Entries: entries}
+	m := pendingMarker{Operation: "schema-update", OldLock: oldLock, DesiredLock: desiredLock, Entries: entries}
 	b, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return err
@@ -77,10 +80,18 @@ func validatePending(root string) error {
 		return err
 	}
 	var marker pendingMarker
-	if err := json.Unmarshal(b, &marker); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(b))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&marker); err != nil {
 		return fmt.Errorf("rasql: invalid pending marker: %w", err)
 	}
+	if marker.Operation != "schema-update" || marker.DesiredLock == "" {
+		return fmt.Errorf("rasql: invalid pending marker operation or lock")
+	}
 	for _, entry := range marker.Entries {
+		if entry.Path == "" || (entry.Old.State != "missing" && entry.Old.State != "present") || (entry.Desired.State != "missing" && entry.Desired.State != "present") {
+			return fmt.Errorf("rasql: invalid pending entry %q", entry.Path)
+		}
 		actual, err := stateFor(filepath.Join(root, filepath.FromSlash(entry.Path)))
 		if err != nil {
 			return err

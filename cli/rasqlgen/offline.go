@@ -40,7 +40,20 @@ func (c command) runOfflineGenerate(settings config, configPath string, check bo
 	if hasErrors(diagnostics) {
 		return fmt.Errorf("generate: semantic analysis failed")
 	}
-	generation := compilerir.GoConfig{Package: settings.Package, Output: settings.Output, Emitter: "legacy", Prune: true}
+	prune := lock.Generation.Prune
+	if settings.Prune != nil {
+		prune = *settings.Prune
+	}
+	if settings.Package == "" {
+		settings.Package = lock.Generation.Package
+	}
+	if settings.Output == "" {
+		settings.Output = lock.Generation.Output
+	}
+	generation := compilerir.GoConfig{Package: settings.Package, Output: settings.Output, Emitter: lock.Generation.Emitter, Prune: prune, Scalars: mappings.Scalars}
+	if generation.Emitter == "" {
+		generation.Emitter = "legacy"
+	}
 	for _, object := range lock.Generation.Objects {
 		generation.Objects = append(generation.Objects, compilerir.ObjectGoName{ID: compilerir.ObjectID(object.ID), Source: object.Source, Row: object.Row, Create: object.Create, Patch: object.Patch, File: object.File})
 	}

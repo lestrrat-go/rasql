@@ -14,6 +14,7 @@ import (
 	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/compilerlock"
 	"github.com/lestrrat-go/rasql/internal/schemasource"
+	"github.com/lestrrat-go/rasql/schema"
 )
 
 func (c command) runSchemaUpdate(args []string) error {
@@ -41,14 +42,17 @@ func (c command) runSchemaUpdate(args []string) error {
 		if err := validatePending(root); err != nil {
 			return err
 		}
-		return errors.New("schema update: pending publication requires retry after re-planning")
 	}
 	request := schemasource.Request{ModuleRoot: root, Engine: schemasource.EngineConfig{Dialect: cfg.Engine.Dialect, Profile: cfg.Engine.Profile}, Source: schemasource.SchemaSourceConfig{Kind: cfg.Schema.Kind, Identity: cfg.Schema.Identity, Paths: cfg.Schema.Paths, Inputs: cfg.Schema.Inputs, Command: cfg.Schema.Command, Environment: cfg.Schema.Environment}, BootstrapDSN: *dsn, TempRoot: filepath.Join(root, ".tmp")}
 	result, err := schemasource.Materialize(context.Background(), request, schemasource.DefaultDependencies())
 	if err != nil {
 		return fmt.Errorf("schema update: %w", err)
 	}
-	result.Catalog, _ = compilerir.AssignObjectIDs(result.Catalog, compilerir.IdentityInput{SourceIdentity: result.Source.Record.Identity})
+	var idDiagnostics []compilerir.Diagnostic
+	result.Catalog, idDiagnostics = compilerir.AssignObjectIDs(result.Catalog, compilerir.IdentityInput{SourceIdentity: result.Source.Record.Identity})
+	if hasErrors(idDiagnostics) {
+		return errors.New("schema update: object identity assignment failed")
+	}
 	mappings, err := cfg.mappings()
 	if err != nil {
 		return err
@@ -57,18 +61,41 @@ func (c command) runSchemaUpdate(args []string) error {
 	if hasErrors(diagnostics) {
 		return fmt.Errorf("schema update: semantic analysis failed")
 	}
-	generation := compilerir.GoConfig{Package: cfg.Package, Output: cfg.Output, Emitter: "legacy", Prune: true}
+	prune := true
+	if cfg.Prune != nil {
+		prune = *cfg.Prune
+	}
+	emitter := cfg.Emitter
+	if emitter == "" {
+		emitter = "legacy"
+	}
+	generation := compilerir.GoConfig{Package: cfg.Package, Output: cfg.Output, Emitter: emitter, Prune: prune, Scalars: mappings.Scalars}
+	rowNames := cfg.Tables.RowNames
+	configuredNames, err := cfg.names()
+	if err != nil {
+		return err
+	}
+	for _, object := range result.Catalog.Objects {
+		name := object.Name
+		if row := rowNames[object.Name]; row != "" {
+			name = row
+		}
+		if override, ok := configuredNames[schemaObjectName(object.Schema, object.Name)]; ok && override.RowType != "" {
+			name = override.RowType
+		}
+		generation.Objects = append(generation.Objects, compilerir.ObjectGoName{ID: object.ID, Source: object.Name, Row: name + "Row", Create: name + "Create", Patch: name + "Patch", File: object.Name + "_gen.go"})
+	}
 	goModel, diagnostics := compilerir.BuildGo(semantic, generation)
 	if hasErrors(diagnostics) {
 		return fmt.Errorf("schema update: Go model failed")
 	}
-	for _, object := range goModel.Objects {
+	for i, object := range goModel.Objects {
 		row := object.Row.Name
 		if row != "" {
 			row = strings.ToUpper(row[:1]) + row[1:]
 		}
-		generation.Objects = append(generation.Objects, compilerir.ObjectGoName{ID: object.ID, Source: object.SourceName, Row: object.Row.Name, File: object.SourceName + "_gen.go"})
-		generation.Objects[len(generation.Objects)-1].Row = row
+		generation.Objects[i].Source = object.SourceName
+		generation.Objects[i].Row = row
 	}
 	for _, query := range goModel.Queries {
 		generation.Queries = append(generation.Queries, compilerir.QueryGoName{ID: query.ID, Function: query.Name, Result: resultName(query), Projection: query.ProjectionName})
@@ -117,13 +144,24 @@ func (c command) runSchemaUpdate(args []string) error {
 		desiredHash := sha256.Sum256(file.Source)
 		entries = append(entries, pendingEntry{Path: filepath.ToSlash(path), Old: old, Desired: fileState{State: "present", SHA256: hex.EncodeToString(desiredHash[:])}})
 	}
+	for _, orphan := range plan.Orphans() {
+		old, err := stateFor(orphan)
+		if err != nil {
+			return err
+		}
+		path, err := filepath.Rel(root, orphan)
+		if err != nil {
+			return err
+		}
+		entries = append(entries, pendingEntry{Path: filepath.ToSlash(path), Old: old, Desired: fileState{State: "missing"}})
+	}
 	oldLock, err := stateFor(lockPath)
 	if err != nil {
 		return err
 	}
 	lockHash := sha256.Sum256(encoded)
 	entries = append(entries, pendingEntry{Path: "rasql.lock.json", Old: oldLock, Desired: fileState{State: "present", SHA256: hex.EncodeToString(lockHash[:])}})
-	if err := writePending(root, entries); err != nil {
+	if err := writePending(root, oldLock.SHA256, hex.EncodeToString(lockHash[:]), entries); err != nil {
 		return err
 	}
 	if err := plan.Commit(); err != nil {
@@ -144,6 +182,10 @@ func resultName(query compilerir.GoQuery) string {
 		return ""
 	}
 	return query.Result.Name
+}
+
+func schemaObjectName(namespace, name string) schema.ObjectName {
+	return schema.ObjectName{Schema: namespace, Name: name}
 }
 func queryInputs(queries []compilerir.QueryAnalysis) []compilerlock.QueryDigestInput {
 	out := make([]compilerlock.QueryDigestInput, 0, len(queries))
