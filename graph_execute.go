@@ -804,8 +804,21 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 	if err != nil {
 		return nil, err
 	}
+	junctionPrepared, err := junctionPlan.prepareCompiled(executor, compiled)
+	if err != nil {
+		return nil, err
+	}
+	junctionCacheable := true
+	for _, slot := range compiled.bindSlots {
+		if slot.id == 0 {
+			junctionCacheable = false
+			break
+		}
+	}
 	fixed = len(compiled.bindSlots)
-	junctionFingerprint := graphInvocationFingerprint(edge, "junction", compiled)
+	fingerprintCompiled := compiled
+	fingerprintCompiled.statement = junctionPrepared.statement
+	junctionFingerprint := graphInvocationFingerprint(edge, "junction", fingerprintCompiled)
 	budget := edge.options.BindLimit
 	if budget == 0 {
 		budget = profile.MaxBind
@@ -879,12 +892,23 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 			if err != nil {
 				return nil, err
 			}
-			if compiled, err := limited.compile(executor); err != nil {
+			finalCompiled, err := limited.compile(executor)
+			if err != nil {
 				return nil, err
-			} else if len(compiled.bindSlots) > budget || (profile.MaxBind > 0 && len(compiled.bindSlots) > profile.MaxBind) {
+			} else if len(finalCompiled.bindSlots) > budget || (profile.MaxBind > 0 && len(finalCompiled.bindSlots) > profile.MaxBind) {
 				return nil, planError("bind_limit", "graph."+edge.name, "compiled junction query exceeds bind budget")
 			}
-			rows, err := limited.run(ctx, executor, func() (int64, error) { *rowCount++; return *rowCount, nil })
+			if junctionCacheable {
+				finalCompiled, err = graphPreencodeBaseOccurrences(compiled, junctionPrepared.statement, finalCompiled)
+				if err != nil {
+					return nil, err
+				}
+			}
+			prepared, err := junctionPlan.prepareCompiled(executor, finalCompiled)
+			if err != nil {
+				return nil, err
+			}
+			rows, err := prepared.run(ctx, executor, func() (int64, error) { *rowCount++; return *rowCount, nil })
 			if err != nil {
 				return nil, err
 			}
@@ -930,8 +954,21 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 		if err != nil {
 			return nil, err
 		}
+		targetPrepared, err := edge.child.query.prepareCompiled(executor, compiled)
+		if err != nil {
+			return nil, err
+		}
+		targetCacheable := true
+		for _, slot := range compiled.bindSlots {
+			if slot.id == 0 {
+				targetCacheable = false
+				break
+			}
+		}
 		fixed = len(compiled.bindSlots)
-		targetFingerprint := graphInvocationFingerprint(edge, "target", compiled)
+		fingerprintCompiled := compiled
+		fingerprintCompiled.statement = targetPrepared.statement
+		targetFingerprint := graphInvocationFingerprint(edge, "target", fingerprintCompiled)
 		targetWidth := len(edge.childKey.parts)
 		batchSize = (budget - fixed) / targetWidth
 		if batchSize <= 0 {
@@ -964,12 +1001,23 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 			if err != nil {
 				return nil, err
 			}
-			if compiled, err := childQuery.compile(executor); err != nil {
+			finalCompiled, err := childQuery.compile(executor)
+			if err != nil {
 				return nil, err
-			} else if len(compiled.bindSlots) > budget || (profile.MaxBind > 0 && len(compiled.bindSlots) > profile.MaxBind) {
+			} else if len(finalCompiled.bindSlots) > budget || (profile.MaxBind > 0 && len(finalCompiled.bindSlots) > profile.MaxBind) {
 				return nil, planError("bind_limit", "graph."+edge.name, "compiled target query exceeds bind budget")
 			}
-			rows, err := childQuery.run(ctx, executor, func() (int64, error) { *rowCount++; return *rowCount, nil })
+			if targetCacheable {
+				finalCompiled, err = graphPreencodeBaseOccurrences(compiled, targetPrepared.statement, finalCompiled)
+				if err != nil {
+					return nil, err
+				}
+			}
+			prepared, err := edge.child.query.prepareCompiled(executor, finalCompiled)
+			if err != nil {
+				return nil, err
+			}
+			rows, err := prepared.run(ctx, executor, func() (int64, error) { *rowCount++; return *rowCount, nil })
 			if err != nil {
 				return nil, err
 			}
