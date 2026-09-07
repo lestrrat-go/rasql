@@ -183,6 +183,9 @@ func BuildGo(model SemanticModel, config GoConfig) (GoModel, []Diagnostic) {
 	needRasql, needTime := false, false
 	for _, object := range out.Objects {
 		for _, column := range object.Columns {
+			if column.GoType == "time.Time" || column.GoType == "rasql.Nullable[time.Time]" {
+				needTime = true
+			}
 			if strings.HasPrefix(column.GoType, "rasql.Nullable[") {
 				needRasql = true
 			}
