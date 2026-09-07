@@ -70,6 +70,22 @@ func TestEmitterInputCloneOwnsNestedValues(t *testing.T) {
 	}
 }
 
+func TestNewEmitterInputOwnsConstructorInputs(t *testing.T) {
+	in, _ := emitterFixture(t)
+	constructed, err := generate.NewEmitterInput(in.Catalog, in.Semantic, in.Go, in.Generation)
+	require.NoError(t, err)
+
+	in.Catalog.Objects[0].Columns[0].Name = "changed"
+	in.Semantic.Objects[0].Columns[0].Name = "changed"
+	in.Go.Objects[0].Columns[0].GoType = "Changed"
+	in.Generation.Objects[0].File = "changed.go"
+
+	require.Equal(t, "id", constructed.Catalog.Objects[0].Columns[0].Name)
+	require.Equal(t, "id", constructed.Semantic.Objects[0].Columns[0].Name)
+	require.NotEqual(t, "Changed", constructed.Go.Objects[0].Columns[0].GoType)
+	require.Equal(t, "users_gen.go", constructed.Generation.Objects[0].File)
+}
+
 func TestLegacyStoreRejectsCustomCodecBeforePlanning(t *testing.T) {
 	in, _ := emitterFixture(t)
 	if _, err := generate.LegacyStore(in); err == nil {
@@ -231,10 +247,6 @@ func TestLockRoundTripRebuildsIdenticalLegacyPlan(t *testing.T) {
 	}
 	model, diagnostics := compilerir.BuildGo(semantic, rebuiltConfig)
 	require.Empty(t, diagnostics)
-	model.Objects[0].SourceName = "Users"
-	model.Objects[0].Row.Name = "UsersRow"
-	model.Objects[0].Create.Name = "UsersCreate"
-	model.Objects[0].Patch.Name = "UsersPatch"
 	rebuilt, err := generate.NewEmitterInput(catalog, semantic, model, rebuiltConfig)
 	require.NoError(t, err)
 	originalStore, err := generate.LegacyStore(in)
