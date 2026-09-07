@@ -297,7 +297,7 @@ func (repository Repository) AllMembers(ctx context.Context) ([]MembersRow, erro
 // BEGIN(countoverdue)
 
 // CountOverdue returns how many open tasks fell due before the calendar day
-// on names. A task due on that day is not counted, because a task is past its
+// on date. A task due on that day is not counted, because a task is past its
 // due date only once the day is over. The query casts the bound value to a
 // date, and the driver reads that date off on in on's own location, so the
 // caller decides which day it is and the database session's time zone does
