@@ -722,7 +722,7 @@ func writeCompactRelations(b *bytes.Buffer, object CompactObject, accessor, row 
 		if targetRow == "" {
 			targetRow = exportedCompact(target.Catalog.Name) + "Row"
 		}
-		name := accessor + exportedCompact(relation.Name) + "Edge"
+		name := accessor + compilerir.RelationGoName(relation.Name) + "Edge"
 		b.WriteString("func ")
 		b.WriteString(name)
 		b.WriteString("[G, CG any](parentSource rasql.TypedRelation[")

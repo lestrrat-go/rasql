@@ -1747,7 +1747,9 @@ func relationshipSpecs(table schema.TableDef, allTables []schema.TableDef, names
 				continue
 			}
 			kind := inverseKind(child, relationship)
-			if hasStructuralInverse(table, child, relationship, kind) {
+			groupSize := inverseRelationshipGroupSize(child, table, bindings)
+			method := inverseRelationshipMethodName(child, relationship, groupSize)
+			if hasStructuralInverse(table, child, relationship, kind, method) {
 				continue
 			}
 			parentColumn, childColumn := parentColumns[0], childColumns[0]
@@ -1914,9 +1916,22 @@ func inverseKind(child schema.TableDef, relationship schema.RelationshipDef) sch
 // auto-derived path remains necessary when no matching relation is present.
 // Matching the complete key shape keeps unrelated same-named relations as
 // real collisions instead of hiding them behind this compatibility path.
-func hasStructuralInverse(table, child schema.TableDef, relationship schema.RelationshipDef, kind schema.RelationshipKind) bool {
+func inverseRelationshipGroupSize(child, parent schema.TableDef, bindings *generatedBindings) int {
+	count := 0
+	for _, relationship := range child.Relationships {
+		if relationshipTargetSchema(relationship) != parent.Schema || relationship.ReferencedTable != parent.Name {
+			continue
+		}
+		if _, _, _, _, ok := relationshipColumnsSupported(child, parent, relationship, bindings); ok {
+			count++
+		}
+	}
+	return count
+}
+
+func hasStructuralInverse(table, child schema.TableDef, relationship schema.RelationshipDef, kind schema.RelationshipKind, method string) bool {
 	for _, inverse := range table.Relationships {
-		if inverse.Kind != kind || relationshipTargetSchema(inverse) != child.Schema || inverse.ReferencedTable != child.Name {
+		if inverse.Kind != kind || goName(inverse.Name) != method || relationshipTargetSchema(inverse) != child.Schema || inverse.ReferencedTable != child.Name {
 			continue
 		}
 		if stringSlicesEqual(inverse.Columns, relationship.ReferencedColumns) && stringSlicesEqual(inverse.ReferencedColumns, relationship.Columns) {

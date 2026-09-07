@@ -255,15 +255,23 @@ func main() {
 	for name, ratio := range map[string]float64{"wall": wallRatio, "cpu": cpuRatio, "rss": rssRatio, "binary": binaryRatio} {
 		require.LessOrEqual(t, ratio, 1.10, "%s median compact/legacy ratio", name)
 	}
-	compactOutput := benchmarkPackage(t, root, command.Env, "./generated", "BenchmarkCompactScan")
-	legacyOutput := benchmarkPackage(t, root, command.Env, "./legacy", "BenchmarkLegacyScan")
-	t.Logf("compact scan measurement: %s", compactOutput)
-	t.Logf("legacy scan measurement: %s", legacyOutput)
-	compactAllocs, ok := benchmarkAllocs(string(compactOutput), "BenchmarkCompactScan")
-	require.True(t, ok)
-	legacyAllocs, ok := benchmarkAllocs(string(legacyOutput), "BenchmarkLegacyScan")
-	require.True(t, ok)
-	t.Logf("scan allocations compact=%d legacy=%d", compactAllocs, legacyAllocs)
+	compactScans, legacyScans := pairedScanSamples(t, root, command.Env)
+	compactNS := medianScanMetric(compactScans, func(sample scanSample) float64 { return sample.nsPerOp })
+	legacyNS := medianScanMetric(legacyScans, func(sample scanSample) float64 { return sample.nsPerOp })
+	require.Greater(t, legacyNS, float64(0))
+	require.Greater(t, compactNS, float64(0))
+	scanRatio := compactNS / legacyNS
+	t.Logf("scan median ns/op compact=%.0f legacy=%.0f ratio=%.2fx", compactNS, legacyNS, scanRatio)
+	for index, sample := range compactScans {
+		t.Logf("compact scan sample %d raw: %s", index+1, sample.raw)
+	}
+	for index, sample := range legacyScans {
+		t.Logf("legacy scan sample %d raw: %s", index+1, sample.raw)
+	}
+	require.LessOrEqual(t, scanRatio, 1.10, "median compact/legacy scan ns/op ratio")
+	compactAllocs := medianScanMetric(compactScans, func(sample scanSample) float64 { return sample.allocsPerOp })
+	legacyAllocs := medianScanMetric(legacyScans, func(sample scanSample) float64 { return sample.allocsPerOp })
+	t.Logf("scan median allocations compact=%.0f legacy=%.0f", compactAllocs, legacyAllocs)
 	require.LessOrEqual(t, compactAllocs, legacyAllocs)
 	manifest := store.APIManifest()
 	require.NotEmpty(t, manifest)
@@ -276,23 +284,74 @@ func main() {
 	require.True(t, removedTables)
 }
 
-func benchmarkAllocs(output, name string) (int, bool) {
+type scanSample struct {
+	nsPerOp     float64
+	allocsPerOp float64
+	raw         string
+}
+
+func pairedScanSamples(t *testing.T, root string, env []string) ([]scanSample, []scanSample) {
+	t.Helper()
+	for _, benchmark := range []struct {
+		packagePath string
+		name        string
+	}{
+		{packagePath: "./generated", name: "BenchmarkCompactScan"},
+		{packagePath: "./legacy", name: "BenchmarkLegacyScan"},
+	} {
+		benchmarkPackage(t, root, env, benchmark.packagePath, benchmark.name)
+	}
+	const samples = 7
+	compact := make([]scanSample, 0, samples)
+	legacy := make([]scanSample, 0, samples)
+	for index := 0; index < samples; index++ {
+		if index%2 == 0 {
+			compact = append(compact, scanSampleAt(t, root, env, "./generated", "BenchmarkCompactScan"))
+			legacy = append(legacy, scanSampleAt(t, root, env, "./legacy", "BenchmarkLegacyScan"))
+		} else {
+			legacy = append(legacy, scanSampleAt(t, root, env, "./legacy", "BenchmarkLegacyScan"))
+			compact = append(compact, scanSampleAt(t, root, env, "./generated", "BenchmarkCompactScan"))
+		}
+	}
+	return compact, legacy
+}
+
+func scanSampleAt(t *testing.T, root string, env []string, packagePath, benchmarkName string) scanSample {
+	t.Helper()
+	output := benchmarkPackage(t, root, env, packagePath, benchmarkName)
+	nsPerOp, ok := benchmarkMetric(string(output), benchmarkName, "ns/op")
+	require.True(t, ok, "missing ns/op in %s benchmark output: %s", benchmarkName, output)
+	allocsPerOp, ok := benchmarkMetric(string(output), benchmarkName, "allocs/op")
+	require.True(t, ok, "missing allocs/op in %s benchmark output: %s", benchmarkName, output)
+	return scanSample{nsPerOp: nsPerOp, allocsPerOp: allocsPerOp, raw: strings.TrimSpace(string(output))}
+}
+
+func benchmarkMetric(output, name, metric string) (float64, bool) {
 	for _, line := range strings.Split(output, "\n") {
 		if !strings.HasPrefix(strings.TrimSpace(line), name+"-") {
 			continue
 		}
 		fields := strings.Fields(line)
 		for index, field := range fields {
-			if field != "allocs/op" || index == 0 {
+			if field != metric || index == 0 {
 				continue
 			}
-			value, err := strconv.Atoi(fields[index-1])
+			value, err := strconv.ParseFloat(fields[index-1], 64)
 			if err == nil {
 				return value, true
 			}
 		}
 	}
 	return 0, false
+}
+
+func medianScanMetric(values []scanSample, metric func(scanSample) float64) float64 {
+	ordered := make([]float64, len(values))
+	for index, value := range values {
+		ordered[index] = metric(value)
+	}
+	sort.Float64s(ordered)
+	return ordered[len(ordered)/2]
 }
 
 func benchmarkPackage(t *testing.T, root string, env []string, packagePath, benchmarkName string) []byte {

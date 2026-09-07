@@ -1620,6 +1620,35 @@ func TestSchemaUsesCanonicalInverseWithoutDuplicate(t *testing.T) {
 	require.Contains(t, string(source), "func (t UsersTable) Projects()")
 }
 
+func TestSchemaPreservesLegacyInverseName(t *testing.T) {
+	users := schema.TableDef{
+		Name:       "users",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+		Relationships: []schema.RelationshipDef{{
+			Name: "OwnedProjects", Kind: schema.RelationshipHasMany, Optionality: schema.RelationshipRequired,
+			Columns: []string{"id"}, ReferencedTable: "projects", ReferencedColumns: []string{"owner_id"},
+		}},
+	}
+	projects := schema.TableDef{
+		Name:       "projects",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "owner_id", Type: schema.IntegerType{}}},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []schema.ForeignKeyDef{{
+			Columns: []string{"owner_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"},
+		}},
+		Relationships: []schema.RelationshipDef{{
+			Name: "Owner", InverseName: "Projects", Kind: schema.RelationshipBelongsTo,
+			Optionality: schema.RelationshipRequired, Columns: []string{"owner_id"},
+			ReferencedTable: "users", ReferencedColumns: []string{"id"},
+		}},
+	}
+	source, err := schemagen.PackageSource("generated", users, projects)
+	require.NoError(t, err)
+	require.Contains(t, string(source), "func (t UsersTable) OwnedProjects()")
+	require.Contains(t, string(source), "func (t UsersTable) Projects()")
+}
+
 func TestSchemaPreservesGenuineInverseNameCollision(t *testing.T) {
 	users := schema.TableDef{
 		Name:       "users",
