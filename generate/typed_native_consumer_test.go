@@ -16,13 +16,25 @@ func TestTypedNativeSQLiteTwoColumnConsumer(t *testing.T) {
 	require.NoError(t, err)
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/typedconsumer\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nreplace github.com/lestrrat-go/rasql => "+filepath.ToSlash(root)+"\n"), 0o600))
-	generated, err := querygen.TypedGoSource(querygen.TypedInput{Package: "queries", Function: "Find", Engine: "sqlite", SQL: "SELECT id, name FROM users WHERE id = ? OR id = ? ORDER BY id", Operation: "select", Cardinality: "many", Result: "FindResult", Decoder: "FindDecoder", Parameters: []querygen.TypedValue{{Go: compilerir.GoField{Name: "id", Type: "int64"}, Semantic: compilerir.SemanticValue{Name: "id", LogicalKind: "integer"}}}, ArgumentNames: []string{"id", "id"}, Results: []querygen.TypedValue{{Go: compilerir.GoField{Name: "id", Type: "int64"}, Semantic: compilerir.SemanticValue{Name: "id", LogicalKind: "integer"}}, {Go: compilerir.GoField{Name: "name", Type: "rasql.Nullable[string]", Nullable: true}, Semantic: compilerir.SemanticValue{Name: "name", LogicalKind: "text", Nullable: true}}}})
+	input := querygen.TypedInput{Package: "queries", Function: "Find", Engine: "sqlite", SQL: "SELECT id, name FROM users WHERE id > ? ORDER BY id", Operation: "select", Cardinality: "many", Result: "FindResult", Decoder: "FindDecoder", Parameters: []querygen.TypedValue{{Go: compilerir.GoField{Name: "id", Type: "int64"}, Semantic: compilerir.SemanticValue{Name: "id", LogicalKind: "integer"}}}, ArgumentNames: []string{"id"}, Results: []querygen.TypedValue{{Go: compilerir.GoField{Name: "id", Type: "int64"}, Semantic: compilerir.SemanticValue{Name: "id", LogicalKind: "integer"}}, {Go: compilerir.GoField{Name: "name", Type: "rasql.Nullable[string]", Nullable: true}, Semantic: compilerir.SemanticValue{Name: "name", LogicalKind: "text", Nullable: true}}}}
+	generated, err := querygen.TypedGoSource(input)
+	require.NoError(t, err)
+	oneInput := input
+	oneInput.Function, oneInput.Result, oneInput.Decoder, oneInput.Cardinality = "FindOne", "FindOneResult", "FindOneDecoder", "one"
+	oneGenerated, err := querygen.TypedGoSource(oneInput)
+	require.NoError(t, err)
+	maybeInput := input
+	maybeInput.Function, maybeInput.Result, maybeInput.Decoder, maybeInput.Cardinality = "FindMaybe", "FindMaybeResult", "FindMaybeDecoder", "maybe"
+	maybeGenerated, err := querygen.TypedGoSource(maybeInput)
 	require.NoError(t, err)
 	require.NoError(t, os.Mkdir(filepath.Join(dir, "queries"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "queries", "find_gen.go"), generated, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "queries", "find_one_gen.go"), oneGenerated, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "queries", "find_maybe_gen.go"), maybeGenerated, 0o600))
 	consumer := `package queries
 
 import (
+  "errors"
   "testing"
   "github.com/lestrrat-go/rasql"
   "github.com/lestrrat-go/rasql/dialect"
@@ -38,9 +50,15 @@ func TestConsumer(t *testing.T) {
   profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 1); if err != nil { t.Fatal(err) }
   executor, err := rasql.AsExecutor(rdb, profile); if err != nil { t.Fatal(err) }
   q, err := Find(1); if err != nil { t.Fatal(err) }
-  rows, err := rasql.All(t.Context(), executor, q); if err != nil || len(rows) != 1 || rows[0].ID != 1 || rows[0].Name.Valid { t.Fatalf("all: %#v %v", rows, err) }
-  one, err := rasql.One(t.Context(), executor, q); if err != nil || one.ID != 1 { t.Fatalf("one: %#v %v", one, err) }
-  maybe, found, err := rasql.Maybe(t.Context(), executor, q); if err != nil || !found || maybe.ID != 1 { t.Fatalf("maybe: %#v %t %v", maybe, found, err) }
+  rows, err := rasql.All(t.Context(), executor, q); if err != nil || len(rows) != 2 { t.Fatalf("many 2: %#v %v", rows, err) }
+  q, err = Find(3); if err != nil { t.Fatal(err) }; rows, err = rasql.All(t.Context(), executor, q); if err != nil || len(rows) != 0 { t.Fatalf("many 0: %#v %v", rows, err) }
+  q, err = Find(0); if err != nil { t.Fatal(err) }; rows, err = rasql.All(t.Context(), executor, q); if err != nil || len(rows) != 3 { t.Fatalf("many 3: %#v %v", rows, err) }
+  oneQuery, err := FindOne(2); if err != nil { t.Fatal(err) }; one, err := rasql.One(t.Context(), executor, oneQuery); if err != nil || one.ID != 3 { t.Fatalf("one 1: %#v %v", one, err) }
+  oneQuery, err = FindOne(3); if err != nil { t.Fatal(err) }; _, err = rasql.One(t.Context(), executor, oneQuery); if !errors.Is(err, rasql.ErrNoRows) { t.Fatalf("one 0: %v", err) }
+  oneQuery, err = FindOne(1); if err != nil { t.Fatal(err) }; _, err = rasql.One(t.Context(), executor, oneQuery); if !errors.Is(err, rasql.ErrMultipleRows) { t.Fatalf("one 2: %v", err) }
+  maybeQuery, err := FindMaybe(2); if err != nil { t.Fatal(err) }; maybe, found, err := rasql.Maybe(t.Context(), executor, maybeQuery); if err != nil || !found || maybe.ID != 3 { t.Fatalf("maybe 1: %#v %t %v", maybe, found, err) }
+  maybeQuery, err = FindMaybe(3); if err != nil { t.Fatal(err) }; _, found, err = rasql.Maybe(t.Context(), executor, maybeQuery); if err != nil || found { t.Fatalf("maybe 0: %t %v", found, err) }
+  maybeQuery, err = FindMaybe(1); if err != nil { t.Fatal(err) }; _, _, err = rasql.Maybe(t.Context(), executor, maybeQuery); if !errors.Is(err, rasql.ErrMultipleRows) { t.Fatalf("maybe 2: %v", err) }
   _ = query.Bind
 }
 `
