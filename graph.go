@@ -280,13 +280,17 @@ func NewGraphPlan[R, G any](q Query[R], mapper func(R) G, edges ...GraphEdge[R, 
 				return GraphPlan[R, G]{}, planError("graph_key_mismatch", "edges", "key component types differ")
 			}
 		}
+		optionSource := spec.child.query.sourceName()
+		if spec.kind == graphManyThrough {
+			optionSource = spec.junction.ref.QualifiedName()
+		}
 		if spec.options.Where.source != "" {
-			if childSource := spec.child.query.sourceName(); childSource != "" && spec.options.Where.source != childSource {
+			if optionSource != "" && spec.options.Where.source != optionSource {
 				return GraphPlan[R, G]{}, planError("invalid_graph_plan", "edge.where", "predicate source differs from child source")
 			}
 		}
 		for _, term := range spec.options.Order {
-			if term.source != "" && spec.child.query.sourceName() != "" && term.source != spec.child.query.sourceName() {
+			if term.source != "" && optionSource != "" && term.source != optionSource {
 				return GraphPlan[R, G]{}, planError("invalid_graph_plan", "edge.order", "order source differs from child source")
 			}
 		}
