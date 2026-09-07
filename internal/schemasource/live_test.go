@@ -293,10 +293,10 @@ type liveAnalyzer struct {
 	queries []compilerir.QueryAnalysis
 }
 
-func (f *liveAnalyzer) Analyze(_ context.Context, r schemasource.AnalysisRequest) ([]compilerir.QueryAnalysis, error) {
+func (f *liveAnalyzer) Analyze(_ context.Context, r schemasource.AnalysisRequest) (schemasource.AnalysisResult, error) {
 	f.calls++
 	f.request = r
-	return append([]compilerir.QueryAnalysis(nil), f.queries...), nil
+	return schemasource.AnalysisResult{Queries: append([]compilerir.QueryAnalysis(nil), f.queries...)}, nil
 }
 
 func liveProfile(t *testing.T) engineprofile.Profile {
