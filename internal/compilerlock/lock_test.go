@@ -58,7 +58,7 @@ func TestPhysicalWireRoundTripFixtures(t *testing.T) {
 }
 
 func TestDecodeRejectsMalformedPathsHashesAndDuplicateIDs(t *testing.T) {
-	b, err := os.ReadFile(filepath.Join("testdata", "v1", "sqlite.json"))
+	b, err := os.ReadFile(filepath.Join("testdata", "v2", "sqlite.json"))
 	require.NoError(t, err)
 	cases := map[string]string{
 		"path":    `"path": "queries/find.sql"`,
