@@ -41,9 +41,12 @@ func TestNativeProjectionMarksSchemaWithoutBinds(t *testing.T) {
 	require.NoError(t, query.Validate())
 	require.Empty(t, query.plan.projection[0].expression)
 	require.Empty(t, query.plan.projection[1].expression)
-	ordinary := Select(Source{}, projection)
+	ordinary := Select(runtimeQuery(t).Plan().sources[0], projection)
 	var planErr *PlanError
 	require.ErrorAs(t, ordinary.Validate(), &planErr)
+	require.Equal(t, "unsupported_feature", planErr.Code)
+	projected := Project(runtimeQuery(t).Plan(), projection)
+	require.ErrorAs(t, projected.Validate(), &planErr)
 	require.Equal(t, "unsupported_feature", planErr.Code)
 }
 
@@ -70,8 +73,8 @@ func (c nativeProjectionCountingCodec) Encode(value any) (driver.Value, error) {
 func (nativeProjectionCountingCodec) Decode(any, any) error { return nil }
 
 func TestEncodeStatementSkipsCodecForNilArguments(t *testing.T) {
-	calls := new(atomic.Int64)
-	registry, err := NewCodecRegistry(map[CodecID]ValueCodec{"count": nativeProjectionCountingCodec{calls: calls}})
+	var calls atomic.Int64
+	registry, err := NewCodecRegistry(map[CodecID]ValueCodec{"count": nativeProjectionCountingCodec{calls: &calls}})
 	require.NoError(t, err)
 	statement := stmt.New(sqltext.Text("SELECT ?, ?"), nil, "value")
 	encoded, err := encodeStatement(statement, []bindSlot{{codec: "count"}, {codec: "count"}}, registry)

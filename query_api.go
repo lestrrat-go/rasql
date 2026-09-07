@@ -536,6 +536,9 @@ func Select[R any](from Source, projection Projection[R]) Query[R] {
 func Project[R any](base QueryPlan, projection Projection[R]) Query[R] {
 	base.projection = cloneItems(projection.items)
 	base.projected = true
+	if projection.native {
+		base.planErr = planError("unsupported_feature", "projection", "native projections require Native")
+	}
 	if base.native != nil {
 		base.planErr = planError("unsupported_feature", "native", "native plans cannot be composed")
 	}
