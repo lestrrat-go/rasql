@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -500,7 +501,11 @@ func processMaxRSS(state *os.ProcessState) int64 {
 	if !maxRSS.IsValid() || !maxRSS.CanInt() {
 		return 0
 	}
-	return maxRSS.Int()
+	value := maxRSS.Int()
+	if runtime.GOOS == "darwin" {
+		return (value + 1023) / 1024
+	}
+	return value
 }
 
 func medianMetric(values []buildSample, metric func(buildSample) float64) float64 {
