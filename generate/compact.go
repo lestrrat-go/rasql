@@ -26,6 +26,16 @@ type APIMapping struct {
 	Status  string `json:"status"`
 }
 
+// APIManifest returns the compact renderer's immutable declaration mapping.
+// The returned slice can be changed by the caller without changing the held
+// render snapshot.
+func (s Store) APIManifest() []APIMapping {
+	if s.compact == nil {
+		return nil
+	}
+	return append([]APIMapping(nil), s.compact.manifest...)
+}
+
 type compactFile struct {
 	name         string
 	source       []byte
@@ -111,7 +121,10 @@ func RenderCompact(in EmitterInput) (Store, error) {
 	files = append(files, compactFile{name: schemaDescriptorFilename, source: meta})
 	files = append(files, compactFile{name: schemaDescriptorTestFilename, source: test})
 	sort.Slice(files, func(i, j int) bool { return files[i].name < files[j].name })
-	manifest := compactManifest(copy, seenDecls)
+	manifest, err := compactManifest(copy, tables, seenDecls)
+	if err != nil {
+		return Store{}, err
+	}
 	return Store{
 		Package: copy.Generation.Package,
 		Dir:     copy.Generation.Output,
@@ -178,11 +191,36 @@ func compactDeclarations(source []byte) ([]string, error) {
 	return result, nil
 }
 
-func compactManifest(in EmitterInput, declarations map[string]string) []APIMapping {
-	result := make([]APIMapping, 0, len(declarations))
-	for legacy, file := range declarations {
-		result = append(result, APIMapping{Legacy: legacy, Compact: legacy, Status: "replacement"})
-		_ = file
+func compactManifest(in EmitterInput, tables []schema.TableDef, declarations map[string]string) ([]APIMapping, error) {
+	legacyNames := make(map[schema.ObjectName]ObjectNames, len(in.Generation.Objects))
+	for _, object := range in.Catalog.Objects {
+		var table schema.TableDef
+		for _, candidate := range tables {
+			if candidate.Schema == object.Schema && candidate.Name == object.Name {
+				table = candidate
+				break
+			}
+		}
+		for _, config := range in.Generation.Objects {
+			if config.ID != object.ID {
+				continue
+			}
+			legacyNames[table.ObjectName()] = ObjectNames{Accessor: config.Source, RowType: config.Row, FileBase: strings.TrimSuffix(config.File, "_gen.go")}
+			break
+		}
+	}
+	resolved, err := schemagen.ResolveNames(in.Generation.Package, tables, toNameOverrides(legacyNames))
+	if err != nil {
+		return nil, fmt.Errorf("generate: compact manifest: %w", err)
+	}
+	legacy := resolved.PackageLevelNames()
+	result := make([]APIMapping, 0, len(legacy))
+	for _, name := range legacy {
+		if _, exists := declarations[name]; exists {
+			result = append(result, APIMapping{Legacy: name, Compact: name, Status: "replacement"})
+			continue
+		}
+		result = append(result, APIMapping{Legacy: name, Status: "removed"})
 	}
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].Legacy != result[j].Legacy {
@@ -190,7 +228,7 @@ func compactManifest(in EmitterInput, declarations map[string]string) []APIMappi
 		}
 		return result[i].Compact < result[j].Compact
 	})
-	return result
+	return result, nil
 }
 
 func (s Store) planCompactContext(ctx context.Context) (Plan, error) {

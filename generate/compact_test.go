@@ -4,9 +4,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/lestrrat-go/rasql/generate"
+	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,12 +31,155 @@ func TestRenderCompactPlansCanonicalTableSurface(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "generated"), 0o755))
 	require.NoError(t, plan.Commit())
 	module := filepath.Join(root, "go.mod")
-	require.NoError(t, os.WriteFile(module, []byte("module example.com/compact\n\ngo 1.23\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nreplace github.com/lestrrat-go/rasql => "+repoRoot(t)+"\n"), 0o600))
+	require.NoError(t, os.WriteFile(module, []byte("module example.com/compact\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire modernc.org/sqlite v1.55.0\nreplace github.com/lestrrat-go/rasql => "+repoRoot(t)+"\n"), 0o600))
+	consumer := `package store_test
+
+import (
+	"database/sql"
+	"testing"
+
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	generated "example.com/compact/generated"
+	_ "modernc.org/sqlite"
+)
+
+func TestCompactConsumerRoundTrip(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil { t.Fatal(err) }
+	defer db.Close()
+	if _, err := db.ExecContext(t.Context(), "CREATE TABLE users (id INTEGER PRIMARY KEY)"); err != nil { t.Fatal(err) }
+	rdb, err := rasql.New(db, dialect.SQLite())
+	if err != nil { t.Fatal(err) }
+	plan, err := generated.NewUsersCreate().ID(7).Plan()
+	if err != nil { t.Fatal(err) }
+	profile, err := rasql.DiscoverEngineProfile(t.Context(), rdb, "sqlite-3.35")
+	if err != nil { t.Fatal(err) }
+	executor, err := rasql.AsExecutor(rdb, profile)
+	if err != nil { t.Fatal(err) }
+	if _, err := rasql.ExecMutation(t.Context(), executor, plan); err != nil { t.Fatal(err) }
+	rows, err := rasql.SelectFrom(generated.Users()).All(t.Context(), rdb)
+	if err != nil { t.Fatal(err) }
+	if len(rows) != 1 || rows[0].ID != 7 { t.Fatalf("rows = %#v", rows) }
+}
+
+func BenchmarkCompactScan(b *testing.B) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil { b.Fatal(err) }
+	defer db.Close()
+	if _, err := db.ExecContext(b.Context(), "CREATE TABLE users (id INTEGER PRIMARY KEY)"); err != nil { b.Fatal(err) }
+	if _, err := db.ExecContext(b.Context(), "INSERT INTO users (id) VALUES (7)"); err != nil { b.Fatal(err) }
+	rdb, err := rasql.New(db, dialect.SQLite())
+	if err != nil { b.Fatal(err) }
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		rows, err := rasql.SelectFrom(generated.Users()).All(b.Context(), rdb)
+		if err != nil || len(rows) != 1 { b.Fatalf("rows=%v err=%v", rows, err) }
+	}
+}
+`
+	require.NoError(t, os.WriteFile(filepath.Join(root, "generated", "consumer_test.go"), []byte(consumer), 0o600))
 	command := exec.Command("go", "test", "-mod=mod", "./generated")
 	command.Dir = root
 	command.Env = append(os.Environ(), "GOCACHE="+filepath.Join(root, "cache"))
+	started := time.Now()
 	output, err := command.CombinedOutput()
 	require.NoError(t, err, "%s", output)
+	build := exec.Command("go", "test", "-mod=mod", "-c", "-o", filepath.Join(root, "compact.test"), "./generated")
+	build.Dir = root
+	build.Env = command.Env
+	buildOutput, err := build.CombinedOutput()
+	require.NoError(t, err, "%s", buildOutput)
+	binary, err := os.Stat(filepath.Join(root, "compact.test"))
+	require.NoError(t, err)
+	t.Logf("compact build wall=%s binary=%d bytes", time.Since(started).Round(time.Millisecond), binary.Size())
+	benchmark := exec.Command("go", "test", "-mod=mod", "-run", "^$", "-bench", "^BenchmarkCompactScan$", "-benchmem", "./generated")
+	benchmark.Dir = root
+	benchmark.Env = command.Env
+	benchmarkOutput, err := benchmark.CombinedOutput()
+	require.NoError(t, err, "%s", benchmarkOutput)
+	t.Logf("compact scan measurement: %s", benchmarkOutput)
+	manifest := store.APIManifest()
+	require.NotEmpty(t, manifest)
+	var removedTables bool
+	for _, mapping := range manifest {
+		if mapping.Legacy == "Tables" && mapping.Status == "removed" {
+			removedTables = true
+		}
+	}
+	require.True(t, removedTables)
+}
+
+func TestRenderCompactConcurrent(t *testing.T) {
+	in := plainEmitterFixture(t)
+	in.Generation.Emitter = "compact"
+	ctx := t.Context()
+	const renders = 100
+	dirs := make([]string, renders)
+	for i := range dirs {
+		dirs[i] = t.TempDir()
+	}
+	outputs := make([][]byte, renders)
+	errors := make([]error, renders)
+	var wait sync.WaitGroup
+	wait.Add(renders)
+	for i := range renders {
+		go func(index int) {
+			defer wait.Done()
+			store, err := generate.RenderCompact(in)
+			if err != nil {
+				errors[index] = err
+				return
+			}
+			store.Root = dirs[index]
+			store.Dir = "generated"
+			plan, err := store.PlanContext(ctx)
+			if err != nil {
+				errors[index] = err
+				return
+			}
+			var bytes []byte
+			for _, file := range plan.Files() {
+				bytes = append(bytes, filepath.Base(file.Path)...)
+				bytes = append(bytes, 0)
+				bytes = append(bytes, file.Source...)
+				bytes = append(bytes, 0)
+			}
+			outputs[index] = bytes
+		}(i)
+	}
+	wait.Wait()
+	for _, err := range errors {
+		require.NoError(t, err)
+	}
+	for i := 1; i < len(outputs); i++ {
+		require.Equal(t, outputs[0], outputs[i])
+	}
+}
+
+func TestCompactImportsOnlyUsedMappings(t *testing.T) {
+	catalog := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "sqlite", Version: "3"}, Objects: []compilerir.PhysicalObject{
+		{ID: "users", Kind: "table", Name: "users", Columns: []compilerir.PhysicalColumn{{Name: "id", LogicalKind: "integer"}, {Name: "status", Ordinal: 1, LogicalKind: "text", Native: &compilerir.NativeType{Name: "status"}}}},
+		{ID: "projects", Kind: "table", Name: "projects", Columns: []compilerir.PhysicalColumn{{Name: "id", LogicalKind: "integer"}, {Name: "title", Ordinal: 1, LogicalKind: "text"}}},
+	}}
+	mapping := compilerir.ScalarMapping{Name: "status", Match: compilerir.NativeMatch{Name: "status"}, GoType: "domain.Status", Imports: []compilerir.GoImport{{Path: "example.com/domain", Alias: "domain"}}}
+	semantic, diagnostics := compilerir.BuildSemantic(catalog, compilerir.MappingConfig{Scalars: []compilerir.ScalarMapping{mapping}}, nil)
+	require.Empty(t, diagnostics)
+	config := compilerir.GoConfig{Package: "store", Output: "generated", Emitter: "compact", Scalars: []compilerir.ScalarMapping{mapping}, Objects: []compilerir.ObjectGoName{{ID: "users", File: "users_gen.go"}, {ID: "projects", File: "projects_gen.go"}}}
+	model, diagnostics := compilerir.BuildGo(semantic, config)
+	require.Empty(t, diagnostics)
+	in, err := generate.NewEmitterInput(catalog, semantic, model, config)
+	require.NoError(t, err)
+	store, err := generate.RenderCompact(in)
+	require.NoError(t, err)
+	store.Root, store.Dir = t.TempDir(), "generated"
+	plan, err := store.Plan()
+	require.NoError(t, err)
+	for _, file := range plan.Files() {
+		if filepath.Base(file.Path) == "projects_gen.go" {
+			require.NotContains(t, string(file.Source), "example.com/domain")
+		}
+	}
 }
 
 func repoRoot(t *testing.T) string {

@@ -93,7 +93,7 @@ func (c command) runSchemaUpdate(args []string) error {
 	}
 	emitter := cfg.Emitter
 	if emitter == "" {
-		emitter = "legacy"
+		emitter = "compact"
 	}
 	generation := compilerir.GoConfig{Package: cfg.Package, Output: cfg.Output, Emitter: emitter, Prune: prune, Scalars: mappings.Scalars}
 	rowNames := cfg.Tables.RowNames
@@ -139,7 +139,7 @@ func (c command) runSchemaUpdate(args []string) error {
 	if err != nil {
 		return err
 	}
-	store, err := generate.LegacyStore(input)
+	store, err := renderEmitter(input)
 	if err != nil {
 		return err
 	}

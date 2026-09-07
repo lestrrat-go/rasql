@@ -156,15 +156,19 @@ func compactImports(object CompactObject) []compactImport {
 		if strings.Contains(column.GoType, "time.Time") {
 			seen["time"] = compactImport{Path: "time"}
 		}
-		if mapping, ok := compilerir.DefaultScalarMapping(column.Scalar); ok {
+		mapping, ok := compilerir.DefaultScalarMapping(column.Scalar)
+		if !ok {
+			for _, candidate := range object.Mappings {
+				if candidate.Name == column.Scalar {
+					mapping, ok = candidate, true
+					break
+				}
+			}
+		}
+		if ok {
 			for _, imp := range mapping.Imports {
 				seen[imp.Path] = compactImport{Path: imp.Path, Alias: imp.Alias}
 			}
-		}
-	}
-	for _, mapping := range object.Mappings {
-		for _, imp := range mapping.Imports {
-			seen[imp.Path] = compactImport{Path: imp.Path, Alias: imp.Alias}
 		}
 	}
 	result := make([]compactImport, 0, len(seen))

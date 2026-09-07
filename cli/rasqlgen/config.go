@@ -252,6 +252,9 @@ func loadConfig(path string) (config, error) {
 	if _, err := loaded.mappings(); err != nil {
 		return config{}, fmt.Errorf("generate: parse config %s mappings: %w", path, err)
 	}
+	if loaded.Emitter != "" && loaded.Emitter != "compact" && loaded.Emitter != "legacy" {
+		return config{}, fmt.Errorf("generate: config emitter %q must be compact or legacy", loaded.Emitter)
+	}
 	return loaded, nil
 }
 
