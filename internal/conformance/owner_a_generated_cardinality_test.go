@@ -37,7 +37,7 @@ func TestGeneratedOverdueCardinality(t *testing.T) {
 	require.NoError(t, err)
 	root := filepath.Join(t.TempDir(), "fixture")
 	require.NoError(t, copyGeneratedStore(filepath.Join("testdata", "sqlite", "internal", "store"), filepath.Join(root, "internal", "store")))
-	goMod := fmt.Sprintf("module example.test/generated\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire modernc.org/sqlite v1.40.1\n\nreplace github.com/lestrrat-go/rasql => %s\n", filepath.ToSlash(repoRoot))
+	goMod := fmt.Sprintf("module example.test/generated\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire modernc.org/sqlite v1.55.0\n\nreplace github.com/lestrrat-go/rasql => %s\n", filepath.ToSlash(repoRoot))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte(goMod), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "cardinality_test.go"), []byte(generatedCardinalityTest()), 0o600))
 	command := exec.Command("go", "test", "-run", "^TestGeneratedCardinalityRuntime$")
