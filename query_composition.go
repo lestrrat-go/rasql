@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/internal/querycompile"
 	"github.com/lestrrat-go/rasql/internal/sqlscan"
@@ -203,6 +204,41 @@ func CountQuery[R any](q Query[R], includePaging bool) Query[int64] {
 		plan.sources[0] = Source{ref: ref}
 	}
 	return Query[int64]{plan: plan, projection: projection}
+}
+
+// Render lowers q to SQL text for dialect d without executing it against a
+// database, the typed counterpart of the removed TypedSelectBuilder.Build.
+// A reader composing a query wants to see the SQL it produces, and a test
+// wants to assert that text; neither needs the live connection or the
+// discovered engine profile Executor otherwise requires, so Render goes
+// straight through the render package the way exec.RenderWrite does for a
+// write statement.
+//
+// It rejects a native query and a mutation rather than guessing which SQL a
+// reader meant to see: Render exists for the SELECT a typed Query composes,
+// a native query is already rendered SQL text by construction, and
+// RenderWrite already covers a write statement carrying its own RETURNING
+// clause.
+func Render[R any](q Query[R], d dialect.Dialect) (stmt.Statement, error) {
+	if err := rejectNativeComposition(q); err != nil {
+		return stmt.Statement{}, err
+	}
+	if q.plan.mutation != nil {
+		return stmt.Statement{}, planError("unsupported_feature", "render", "a mutation query has no SELECT to render")
+	}
+	result, err := resultQuery(q)
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	rendered, err := render.Result(d, result)
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	compiled, err := unwrapBindTokens(rendered)
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	return compiled.Statement()
 }
 
 func rejectNativeComposition[R any](q Query[R]) error {
