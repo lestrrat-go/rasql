@@ -342,6 +342,10 @@ func queryBody(plan QueryPlan) (query.QueryBody, error) {
 	}
 	orders := make([]query.Order, len(plan.order))
 	for i, order := range plan.order {
+		if order.result != nil {
+			orders[i] = lowerResultOrder(*order.result, order.descending)
+			continue
+		}
 		orders[i] = lowerOrder(order.node, order.descending, order.nulls)
 	}
 	if len(orders) > 0 {
@@ -424,6 +428,17 @@ func lowerOrder(expression query.Expression, descending bool, nulls NullOrder) q
 		return query.Desc(expression)
 	}
 	return query.Asc(expression)
+}
+
+// lowerResultOrder rebuilds the same query.Projection the projection lowering
+// above builds for this item, so the statement's own validation resolves the
+// ordering to a result the statement really reports.
+func lowerResultOrder(item ProjectionItem, descending bool) query.Order {
+	projection := query.Project(item.expression).As(item.column.Name)
+	if descending {
+		return query.DescResult(projection)
+	}
+	return query.AscResult(projection)
 }
 
 func resultColumns(items []ProjectionItem) []ResultColumn {

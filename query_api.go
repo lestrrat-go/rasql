@@ -415,6 +415,15 @@ func (p QueryPlan) Validate() error {
 		}
 	}
 	for i, term := range p.order {
+		// A result term carries the projection instead of an expression, so
+		// what needs checking against the allowed sources is the expression
+		// that projection computes.
+		if term.result != nil {
+			if err := validateQ1Expression(term.result.expression, allowed, fmt.Sprintf("plan.order[%d]", i)); err != nil {
+				return err
+			}
+			continue
+		}
 		if term.node == nil {
 			return planError("invalid_projection", fmt.Sprintf("plan.order[%d]", i), "order term is zero")
 		}

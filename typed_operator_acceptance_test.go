@@ -61,7 +61,12 @@ func (d acceptanceTotalDecoder) DecodeRow(src ScanSource, row *acceptanceTotalRo
 //	  AND LOWER(o.customer) LIKE 'a%'
 //	  AND o.id IN (SELECT r.order_id FROM refunds r)
 //	GROUP BY o.customer
-//	ORDER BY LOWER(o.customer)
+//	ORDER BY total DESC, LOWER(o.customer)
+//
+// The first ordering term names the SUM result by its alias, which is the
+// one position SQL allows a result name in, and the second orders by a
+// recomputed expression. Having both proves the two kinds of ordering term
+// compose in one statement.
 func acceptanceQuery(t *testing.T) Query[acceptanceTotalRow] {
 	t.Helper()
 
@@ -103,9 +108,12 @@ func acceptanceQuery(t *testing.T) Query[acceptanceTotalRow] {
 		ResultColumn{Name: "average", Type: schema.FloatType{}, Nullable: true},
 	)
 	require.NoError(t, err)
+	// total is held in a variable so the ordering below can name this exact
+	// projection rather than repeat its alias as a second string.
+	total := NullItem("total", SumExpr(amount.Expr()), schema.IntegerType{}, "")
 	projection, err := NewProjection([]ProjectionItem{
 		Item("customer", customer.Expr(), schema.TextType{}, ""),
-		NullItem("total", SumExpr(amount.Expr()), schema.IntegerType{}, ""),
+		total,
 		NullItem("average", AvgExpr(amount.Expr()), schema.FloatType{}, ""),
 	}, acceptanceTotalDecoder{result: result})
 	require.NoError(t, err)
@@ -122,7 +130,7 @@ func acceptanceQuery(t *testing.T) Query[acceptanceTotalRow] {
 			refundedOrder,
 		)).
 		GroupBy(Group(customer.Expr())).
-		OrderBy(AscExpr(LowerExpr(customer.Expr())))
+		OrderBy(DescResult(total), AscExpr(LowerExpr(customer.Expr())))
 }
 
 // acceptanceSeed fills both tables. Each row is chosen so that exactly one
@@ -156,12 +164,9 @@ func runAcceptance(t *testing.T, database *sql.DB, executor Executor, textType s
 	acceptanceSeed(t, database, textType)
 	rows, err := All(t.Context(), executor, acceptanceQuery(t))
 	require.NoError(t, err)
+	// The rows come back by descending total, which is the order the result
+	// alias asks for and not the order LOWER(customer) alone would give.
 	require.Equal(t, []acceptanceTotalRow{
-		{
-			Customer: "alice",
-			Total:    Nullable[int64]{Value: 350, Valid: true},
-			Average:  Nullable[float64]{Value: 175, Valid: true},
-		},
 		{
 			Customer: "amy",
 			Total:    Nullable[int64]{Value: 500, Valid: true},
@@ -171,6 +176,11 @@ func runAcceptance(t *testing.T, database *sql.DB, executor Executor, textType s
 			Customer: "Anna",
 			Total:    Nullable[int64]{Value: 400, Valid: true},
 			Average:  Nullable[float64]{Value: 400, Valid: true},
+		},
+		{
+			Customer: "alice",
+			Total:    Nullable[int64]{Value: 350, Valid: true},
+			Average:  Nullable[float64]{Value: 175, Valid: true},
 		},
 	}, rows)
 }

@@ -146,6 +146,27 @@ func NotInQuery[T comparable](left Expr[T], q Query[T]) (Predicate, error) {
 	return Predicate{node: query.NotInSelect(left.node, statement), source: left.source}, nil
 }
 
+// AscResult orders by a projection's already-computed result rather than
+// recomputing the expression behind it, which is what SELECT ... AS alias ...
+// ORDER BY alias means. Pass the same ProjectionItem the projection was built
+// from, so the alias is written once and renaming it cannot leave the ordering
+// naming a result the query no longer produces.
+//
+// It takes a ProjectionItem rather than an Expr for the reason query.AscResult
+// states: a result name is legal in exactly one place in SQL, alone as a whole
+// ORDER BY term, and PostgreSQL rejects it anywhere else. Keeping it out of
+// Expr means Where, GroupBy, Having and a join condition all refuse it at
+// compile time.
+func AscResult(item ProjectionItem) OrderTerm {
+	return OrderTerm{result: &item}
+}
+
+// DescResult orders by a projection's result in descending order. It is
+// AscResult reversed and carries every rule AscResult states.
+func DescResult(item ProjectionItem) OrderTerm {
+	return OrderTerm{result: &item, descending: true}
+}
+
 // subquerySelect lowers a typed query to the query package's Select so it can
 // stand inside a predicate. A single projected column is required because a
 // subquery compared against one value has to return one value.
