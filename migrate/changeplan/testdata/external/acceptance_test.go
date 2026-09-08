@@ -162,17 +162,23 @@ func TestExternalNonemptyPlanContract(t *testing.T) {
 	require.Equal(t, []changeplan.ObjectID{changeplan.ObjectID("tasks")}, operation.Objects())
 	require.False(t, operation.Reversible())
 	require.Equal(t, changeplan.TransactionEngineDefault, operation.Transaction())
-	require.Equal(t, fixture.statement.SQL(), operation.Statements()[0].SQL())
-	require.Empty(t, operation.Statements()[0].Args())
+	statements := operation.Statements()
+	require.Len(t, statements, 1)
+	require.Equal(t, fixture.statement.SQL(), statements[0].SQL())
+	require.Empty(t, statements[0].Args())
 	require.Empty(t, operation.ReverseStatements())
-	require.Equal(t, fixture.precondition.Object(), operation.Preconditions()[0].Object())
-	require.Equal(t, fixture.precondition.Path(), operation.Preconditions()[0].Path())
-	require.Equal(t, fixture.precondition.Operator(), operation.Preconditions()[0].Operator())
-	require.Equal(t, fixture.precondition.CanonicalValue(), operation.Preconditions()[0].CanonicalValue())
-	require.Equal(t, fixture.postcondition.Object(), operation.Postconditions()[0].Object())
-	require.Equal(t, fixture.postcondition.Path(), operation.Postconditions()[0].Path())
-	require.Equal(t, fixture.postcondition.Operator(), operation.Postconditions()[0].Operator())
-	require.Equal(t, fixture.postcondition.CanonicalValue(), operation.Postconditions()[0].CanonicalValue())
+	preconditions := operation.Preconditions()
+	require.Len(t, preconditions, 1)
+	require.Equal(t, fixture.precondition.Object(), preconditions[0].Object())
+	require.Equal(t, fixture.precondition.Path(), preconditions[0].Path())
+	require.Equal(t, fixture.precondition.Operator(), preconditions[0].Operator())
+	require.Equal(t, fixture.precondition.CanonicalValue(), preconditions[0].CanonicalValue())
+	postconditions := operation.Postconditions()
+	require.Len(t, postconditions, 1)
+	require.Equal(t, fixture.postcondition.Object(), postconditions[0].Object())
+	require.Equal(t, fixture.postcondition.Path(), postconditions[0].Path())
+	require.Equal(t, fixture.postcondition.Operator(), postconditions[0].Operator())
+	require.Equal(t, fixture.postcondition.CanonicalValue(), postconditions[0].CanonicalValue())
 
 	steps := fixture.resolved.CatalogSteps()
 	require.Len(t, steps, 1)
@@ -186,7 +192,7 @@ func TestExternalNonemptyPlanContract(t *testing.T) {
 	decoded, err := changeplan.Decode(fixture.encoded)
 	require.NoError(t, err)
 	require.Equal(t, baselineIdentity, decoded.Baseline())
-	require.NotEqual(t, changeplan.PlanID{}, decoded.ID())
+	require.Equal(t, plan.ID(), decoded.ID())
 	reencoded, err := changeplan.Encode(decoded)
 	require.NoError(t, err)
 	require.True(t, bytes.Equal(fixture.encoded, reencoded))
@@ -204,6 +210,20 @@ func TestExternalNonemptyPlanContract(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, profile.ID(), directPlan.Profile().ID())
 	require.Equal(t, profileDigest, mustProfileDigest(t, directPlan.Profile()))
+}
+
+func TestExternalCapabilityFieldTypesAreUsable(t *testing.T) {
+	var returning changeplan.EngineReturningForms = changeplan.EngineReturningInsert
+	var upsert changeplan.EngineUpsertForm = changeplan.EngineUpsertOnConflict
+	var perParent changeplan.EnginePerParentLimitStrategy = changeplan.EnginePerParentLimitWindow
+	var updateDefault changeplan.EngineUpdateDefaultSupport = changeplan.EngineUpdateDefaultExpression
+	capabilities := changeplan.EngineCapabilities{
+		Returning: returning, Upsert: upsert, PerParentLimit: perParent, UpdateDefault: updateDefault,
+	}
+	require.Equal(t, returning, capabilities.Returning)
+	require.Equal(t, upsert, capabilities.Upsert)
+	require.Equal(t, perParent, capabilities.PerParentLimit)
+	require.Equal(t, updateDefault, capabilities.UpdateDefault)
 }
 
 func mustProfileDigest(t *testing.T, profile changeplan.Profile) changeplan.Digest {
@@ -294,12 +314,13 @@ func TestPublicAPIHasNoInaccessibleTypes(t *testing.T) {
 	require.Empty(t, loaded[0].Errors)
 	require.Equal(t, "github.com/lestrrat-go/rasql/migrate/changeplan", loaded[0].Types.Path())
 	pkg := loaded[0].Types
+	approvedAliases := approvedPublicAliasDeclarations(t, pkg)
 	for _, name := range pkg.Scope().Names() {
 		object := pkg.Scope().Lookup(name)
 		if !object.Exported() {
 			continue
 		}
-		require.NoError(t, walkPublicType(object.Type(), map[types.Type]bool{}), name)
+		require.NoError(t, walkPublicType(object.Type(), map[types.Type]bool{}, approvedAliases), name)
 	}
 
 	internalPkg := types.NewPackage("example.com/rasql/internal/synthetic", "synthetic")
@@ -309,12 +330,12 @@ func TestPublicAPIHasNoInaccessibleTypes(t *testing.T) {
 	parameter := types.NewVar(token.NoPos, syntheticPkg, "value", hidden)
 	synthetic := types.NewSignatureType(nil, nil, nil, types.NewTuple(parameter), types.NewTuple(), false)
 	t.Run("direct hidden signature", func(t *testing.T) {
-		require.Error(t, walkPublicType(synthetic, map[types.Type]bool{}))
+		require.Error(t, walkPublicType(synthetic, map[types.Type]bool{}, approvedAliases))
 	})
 
 	t.Run("unapproved alias", func(t *testing.T) {
 		alias := types.NewAlias(types.NewTypeName(token.NoPos, publicPkg, "LeakedAlias", nil), hidden)
-		require.Error(t, walkPublicType(alias, map[types.Type]bool{}))
+		require.Error(t, walkPublicType(alias, map[types.Type]bool{}, approvedAliases))
 	})
 	t.Run("pointer receiver exported method", func(t *testing.T) {
 		public := types.NewNamed(types.NewTypeName(token.NoPos, publicPkg, "Container", nil), types.NewStruct(nil, nil), nil)
@@ -322,30 +343,47 @@ func TestPublicAPIHasNoInaccessibleTypes(t *testing.T) {
 		parameter := types.NewVar(token.NoPos, publicPkg, "value", hidden)
 		signature := types.NewSignatureType(receiver, nil, nil, types.NewTuple(parameter), types.NewTuple(), false)
 		public.AddMethod(types.NewFunc(token.NoPos, publicPkg, "Set", signature))
-		require.Error(t, walkPublicType(public, map[types.Type]bool{}))
+		require.Error(t, walkPublicType(public, map[types.Type]bool{}, approvedAliases))
 	})
 	t.Run("unrelated internal type with approved spelling", func(t *testing.T) {
 		collision := types.NewNamed(types.NewTypeName(token.NoPos, internalPkg, "EngineID", nil), types.Typ[types.String], nil)
-		require.Error(t, walkPublicType(collision, map[types.Type]bool{}))
+		require.Error(t, walkPublicType(collision, map[types.Type]bool{}, approvedAliases))
 	})
 	t.Run("named generic constraint", func(t *testing.T) {
 		constraint := types.NewInterfaceType(nil, []types.Type{hidden}).Complete()
 		parameter := types.NewTypeParam(types.NewTypeName(token.NoPos, publicPkg, "T", nil), constraint)
 		public := types.NewNamed(types.NewTypeName(token.NoPos, publicPkg, "Generic", nil), types.NewStruct(nil, nil), nil)
 		public.SetTypeParams([]*types.TypeParam{parameter})
-		require.Error(t, walkPublicType(public, map[types.Type]bool{}))
+		require.Error(t, walkPublicType(public, map[types.Type]bool{}, approvedAliases))
 	})
 	t.Run("embedded constraint union", func(t *testing.T) {
 		union := types.NewUnion([]*types.Term{types.NewTerm(false, hidden), types.NewTerm(false, types.Typ[types.Int])})
 		constraint := types.NewInterfaceType(nil, []types.Type{union}).Complete()
-		require.Error(t, walkPublicType(constraint, map[types.Type]bool{}))
+		require.Error(t, walkPublicType(constraint, map[types.Type]bool{}, approvedAliases))
+	})
+	t.Run("spoofed approved alias identity", func(t *testing.T) {
+		aliasPkg := types.NewPackage(pkg.Path(), pkg.Name())
+		targetPkg := types.NewPackage("github.com/lestrrat-go/rasql/internal/engineprofile", "engineprofile")
+		target := types.NewNamed(types.NewTypeName(token.NoPos, targetPkg, "EngineID", nil), types.Typ[types.Uint8], nil)
+		alias := types.NewAlias(types.NewTypeName(token.NoPos, aliasPkg, "EngineID", nil), target)
+		require.Error(t, walkPublicType(alias, map[types.Type]bool{}, approvedAliases))
+	})
+	t.Run("approved alias target does not exempt nested internal types", func(t *testing.T) {
+		aliasName := types.NewTypeName(token.NoPos, publicPkg, "Approved", nil)
+		targetPkg := types.NewPackage("example.com/rasql/internal/approved", "approved")
+		field := types.NewVar(token.NoPos, publicPkg, "Hidden", hidden)
+		target := types.NewNamed(types.NewTypeName(token.NoPos, targetPkg, "Target", nil),
+			types.NewStruct([]*types.Var{field}, []string{""}), nil)
+		alias := types.NewAlias(aliasName, target)
+		localApprovals := publicAliasApprovals{aliasName: target.Obj()}
+		require.Error(t, walkPublicType(alias, map[types.Type]bool{}, localApprovals))
 	})
 
 	t.Run("approved aliases", func(t *testing.T) {
 		for name := range approvedPublicAliases {
 			object := pkg.Scope().Lookup(name)
 			require.NotNil(t, object)
-			require.NoError(t, walkPublicType(object.Type(), map[types.Type]bool{}), name)
+			require.NoError(t, walkPublicType(object.Type(), map[types.Type]bool{}, approvedAliases), name)
 		}
 	})
 	t.Run("safe pointer receiver", func(t *testing.T) {
@@ -354,7 +392,7 @@ func TestPublicAPIHasNoInaccessibleTypes(t *testing.T) {
 		parameter := types.NewVar(token.NoPos, publicPkg, "value", types.Typ[types.String])
 		signature := types.NewSignatureType(receiver, nil, nil, types.NewTuple(parameter), types.NewTuple(), false)
 		public.AddMethod(types.NewFunc(token.NoPos, publicPkg, "Set", signature))
-		require.NoError(t, walkPublicType(public, map[types.Type]bool{}))
+		require.NoError(t, walkPublicType(public, map[types.Type]bool{}, approvedAliases))
 	})
 	t.Run("public generic constraint", func(t *testing.T) {
 		term := types.NewUnion([]*types.Term{types.NewTerm(true, types.Typ[types.String])})
@@ -362,12 +400,12 @@ func TestPublicAPIHasNoInaccessibleTypes(t *testing.T) {
 		parameter := types.NewTypeParam(types.NewTypeName(token.NoPos, publicPkg, "T", nil), constraint)
 		public := types.NewNamed(types.NewTypeName(token.NoPos, publicPkg, "GenericPublic", nil), types.NewStruct(nil, nil), nil)
 		public.SetTypeParams([]*types.TypeParam{parameter})
-		require.NoError(t, walkPublicType(public, map[types.Type]bool{}))
+		require.NoError(t, walkPublicType(public, map[types.Type]bool{}, approvedAliases))
 	})
 	t.Run("public union", func(t *testing.T) {
 		union := types.NewUnion([]*types.Term{types.NewTerm(false, types.Typ[types.Int]), types.NewTerm(false, types.Typ[types.String])})
 		constraint := types.NewInterfaceType(nil, []types.Type{union}).Complete()
-		require.NoError(t, walkPublicType(constraint, map[types.Type]bool{}))
+		require.NoError(t, walkPublicType(constraint, map[types.Type]bool{}, approvedAliases))
 	})
 }
 
@@ -377,17 +415,46 @@ type publicAliasTarget struct {
 }
 
 var approvedPublicAliases = map[string]publicAliasTarget{
-	"EngineID":           {packagePath: "github.com/lestrrat-go/rasql/internal/engineprofile", name: "EngineID"},
-	"EngineVersion":      {packagePath: "github.com/lestrrat-go/rasql/internal/engineprofile", name: "Version"},
-	"EngineCapabilities": {packagePath: "github.com/lestrrat-go/rasql/internal/engineprofile", name: "Capabilities"},
-	"EngineLimits":       {packagePath: "github.com/lestrrat-go/rasql/internal/engineprofile", name: "Limits"},
+	"EngineID":                     {packagePath: "github.com/lestrrat-go/rasql/internal/engineprofile", name: "EngineID"},
+	"EngineVersion":                {packagePath: "github.com/lestrrat-go/rasql/internal/engineprofile", name: "Version"},
+	"EngineCapabilities":           {packagePath: "github.com/lestrrat-go/rasql/internal/engineprofile", name: "Capabilities"},
+	"EngineLimits":                 {packagePath: "github.com/lestrrat-go/rasql/internal/engineprofile", name: "Limits"},
+	"EngineReturningForms":         {packagePath: "github.com/lestrrat-go/rasql/internal/engineprofile", name: "ReturningForms"},
+	"EngineUpsertForm":             {packagePath: "github.com/lestrrat-go/rasql/internal/engineprofile", name: "UpsertForm"},
+	"EnginePerParentLimitStrategy": {packagePath: "github.com/lestrrat-go/rasql/internal/engineprofile", name: "PerParentLimitStrategy"},
+	"EngineUpdateDefaultSupport":   {packagePath: "github.com/lestrrat-go/rasql/internal/engineprofile", name: "UpdateDefaultSupport"},
 }
 
-func walkPublicType(value types.Type, seen map[types.Type]bool) error {
-	return walkPublicTypeState(value, seen, false)
+type publicAliasApprovals map[*types.TypeName]*types.TypeName
+
+func approvedPublicAliasDeclarations(t *testing.T, pkg *types.Package) publicAliasApprovals {
+	t.Helper()
+	approvals := make(publicAliasApprovals, len(approvedPublicAliases))
+	for name, want := range approvedPublicAliases {
+		object, ok := pkg.Scope().Lookup(name).(*types.TypeName)
+		require.True(t, ok, name)
+		alias, ok := object.Type().(*types.Alias)
+		require.True(t, ok, name)
+		target, ok := types.Unalias(alias.Rhs()).(*types.Named)
+		require.True(t, ok, name)
+		require.NotNil(t, target.Obj().Pkg(), name)
+		require.Equal(t, want.packagePath, target.Obj().Pkg().Path(), name)
+		require.Equal(t, want.name, target.Obj().Name(), name)
+		approvals[object] = target.Obj()
+	}
+	return approvals
 }
 
-func walkPublicTypeState(value types.Type, seen map[types.Type]bool, allowAliasTarget bool) error {
+func walkPublicType(value types.Type, seen map[types.Type]bool, approvals publicAliasApprovals) error {
+	return walkPublicTypeState(value, seen, approvals, nil)
+}
+
+func walkPublicTypeState(
+	value types.Type,
+	seen map[types.Type]bool,
+	approvals publicAliasApprovals,
+	allowedNamed *types.TypeName,
+) error {
 	if value == nil || seen[value] {
 		return nil
 	}
@@ -395,115 +462,122 @@ func walkPublicTypeState(value types.Type, seen map[types.Type]bool, allowAliasT
 	defer delete(seen, value)
 	switch current := value.(type) {
 	case *types.Alias:
-		approved := approvedAliasTarget(current)
-		if err := walkTypeParams(current.TypeParams(), seen, allowAliasTarget); err != nil {
+		if err := walkTypeParams(current.TypeParams(), seen, approvals); err != nil {
 			return err
 		}
-		if err := walkTypeArgs(current.TypeArgs(), seen, allowAliasTarget); err != nil {
+		if err := walkTypeArgs(current.TypeArgs(), seen, approvals); err != nil {
 			return err
 		}
-		if err := walkPublicTypeState(current.Rhs(), seen, approved); err != nil {
-			return err
-		}
-		return walkPublicTypeState(types.Unalias(current), seen, approved)
+		return walkPublicTypeState(current.Rhs(), seen, approvals, approvedAliasTarget(current, approvals))
 	case *types.Named:
 		object := current.Obj()
-		if inaccessiblePackage(object.Pkg()) && !allowAliasTarget {
+		if inaccessiblePackage(object.Pkg()) && object != allowedNamed && !approvedAliasTargetObject(object, approvals) {
 			return fmt.Errorf("inaccessible type %s", types.TypeString(value, nil))
 		}
-		if err := walkTypeArgs(current.TypeArgs(), seen, allowAliasTarget); err != nil {
+		if err := walkTypeArgs(current.TypeArgs(), seen, approvals); err != nil {
 			return err
 		}
-		if err := walkTypeParams(current.TypeParams(), seen, allowAliasTarget); err != nil {
+		if err := walkTypeParams(current.TypeParams(), seen, approvals); err != nil {
 			return err
 		}
-		if err := walkPublicTypeState(current.Underlying(), seen, allowAliasTarget); err != nil {
+		if err := walkPublicTypeState(current.Underlying(), seen, approvals, nil); err != nil {
 			return err
 		}
 		for _, methodSet := range []*types.MethodSet{types.NewMethodSet(current), types.NewMethodSet(types.NewPointer(current))} {
 			for index := 0; index < methodSet.Len(); index++ {
 				method := methodSet.At(index).Obj()
 				if method.Exported() {
-					if err := walkPublicTypeState(method.Type(), seen, allowAliasTarget); err != nil {
+					if err := walkPublicTypeState(method.Type(), seen, approvals, nil); err != nil {
 						return err
 					}
 				}
 			}
 		}
 	case *types.Pointer:
-		return walkPublicTypeState(current.Elem(), seen, allowAliasTarget)
+		return walkPublicTypeState(current.Elem(), seen, approvals, nil)
 	case *types.Slice:
-		return walkPublicTypeState(current.Elem(), seen, allowAliasTarget)
+		return walkPublicTypeState(current.Elem(), seen, approvals, nil)
 	case *types.Array:
-		return walkPublicTypeState(current.Elem(), seen, allowAliasTarget)
+		return walkPublicTypeState(current.Elem(), seen, approvals, nil)
 	case *types.Map:
-		if err := walkPublicTypeState(current.Key(), seen, allowAliasTarget); err != nil {
+		if err := walkPublicTypeState(current.Key(), seen, approvals, nil); err != nil {
 			return err
 		}
-		return walkPublicTypeState(current.Elem(), seen, allowAliasTarget)
+		return walkPublicTypeState(current.Elem(), seen, approvals, nil)
 	case *types.Chan:
-		return walkPublicTypeState(current.Elem(), seen, allowAliasTarget)
+		return walkPublicTypeState(current.Elem(), seen, approvals, nil)
 	case *types.Struct:
 		for index := 0; index < current.NumFields(); index++ {
 			field := current.Field(index)
 			if field.Exported() {
-				if err := walkPublicTypeState(field.Type(), seen, allowAliasTarget); err != nil {
+				if err := walkPublicTypeState(field.Type(), seen, approvals, nil); err != nil {
 					return err
 				}
 			}
 		}
 	case *types.Signature:
 		if current.Recv() != nil {
-			if err := walkPublicTypeState(current.Recv().Type(), seen, allowAliasTarget); err != nil {
+			if err := walkPublicTypeState(current.Recv().Type(), seen, approvals, nil); err != nil {
 				return err
 			}
 		}
-		if err := walkTuple(current.Params(), seen, allowAliasTarget); err != nil {
+		if err := walkTuple(current.Params(), seen, approvals); err != nil {
 			return err
 		}
-		if err := walkTuple(current.Results(), seen, allowAliasTarget); err != nil {
+		if err := walkTuple(current.Results(), seen, approvals); err != nil {
 			return err
 		}
-		if err := walkTypeParams(current.TypeParams(), seen, allowAliasTarget); err != nil {
+		if err := walkTypeParams(current.TypeParams(), seen, approvals); err != nil {
 			return err
 		}
-		return walkTypeParams(current.RecvTypeParams(), seen, allowAliasTarget)
+		return walkTypeParams(current.RecvTypeParams(), seen, approvals)
 	case *types.Interface:
 		for index := 0; index < current.NumExplicitMethods(); index++ {
-			if err := walkPublicTypeState(current.ExplicitMethod(index).Type(), seen, allowAliasTarget); err != nil {
+			if err := walkPublicTypeState(current.ExplicitMethod(index).Type(), seen, approvals, nil); err != nil {
 				return err
 			}
 		}
 		for index := 0; index < current.NumEmbeddeds(); index++ {
-			if err := walkPublicTypeState(current.EmbeddedType(index), seen, allowAliasTarget); err != nil {
+			if err := walkPublicTypeState(current.EmbeddedType(index), seen, approvals, nil); err != nil {
 				return err
 			}
 		}
 		for index := 0; index < current.NumMethods(); index++ {
-			if err := walkPublicTypeState(current.Method(index).Type(), seen, allowAliasTarget); err != nil {
+			if err := walkPublicTypeState(current.Method(index).Type(), seen, approvals, nil); err != nil {
 				return err
 			}
 		}
 	case *types.Union:
 		for index := 0; index < current.Len(); index++ {
-			if err := walkPublicTypeState(current.Term(index).Type(), seen, allowAliasTarget); err != nil {
+			if err := walkPublicTypeState(current.Term(index).Type(), seen, approvals, nil); err != nil {
 				return err
 			}
 		}
 	case *types.TypeParam:
-		return walkPublicTypeState(current.Constraint(), seen, allowAliasTarget)
+		return walkPublicTypeState(current.Constraint(), seen, approvals, nil)
 	}
 	return nil
 }
 
-func approvedAliasTarget(value *types.Alias) bool {
-	object := value.Obj()
-	want, ok := approvedPublicAliases[object.Name()]
-	if !ok || object.Pkg() == nil || object.Pkg().Path() != "github.com/lestrrat-go/rasql/migrate/changeplan" {
-		return false
+func approvedAliasTargetObject(object *types.TypeName, approvals publicAliasApprovals) bool {
+	for _, target := range approvals {
+		if object == target {
+			return true
+		}
+	}
+	return false
+}
+
+func approvedAliasTarget(value *types.Alias, approvals publicAliasApprovals) *types.TypeName {
+	want, ok := approvals[value.Obj()]
+	if !ok {
+		return nil
 	}
 	target, ok := types.Unalias(value.Rhs()).(*types.Named)
-	return ok && target.Obj().Pkg() != nil && target.Obj().Pkg().Path() == want.packagePath && target.Obj().Name() == want.name
+	if !ok || target.Obj() != want {
+		return nil
+	}
+	return want
 }
 
 func inaccessiblePackage(pkg *types.Package) bool {
@@ -514,36 +588,36 @@ func inaccessiblePackage(pkg *types.Package) bool {
 	return path == "internal" || strings.Contains(path, "/internal/")
 }
 
-func walkTuple(tuple *types.Tuple, seen map[types.Type]bool, allowAliasTarget bool) error {
+func walkTuple(tuple *types.Tuple, seen map[types.Type]bool, approvals publicAliasApprovals) error {
 	if tuple == nil {
 		return nil
 	}
 	for index := 0; index < tuple.Len(); index++ {
-		if err := walkPublicTypeState(tuple.At(index).Type(), seen, allowAliasTarget); err != nil {
+		if err := walkPublicTypeState(tuple.At(index).Type(), seen, approvals, nil); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func walkTypeParams(params *types.TypeParamList, seen map[types.Type]bool, allowAliasTarget bool) error {
+func walkTypeParams(params *types.TypeParamList, seen map[types.Type]bool, approvals publicAliasApprovals) error {
 	if params == nil {
 		return nil
 	}
 	for index := 0; index < params.Len(); index++ {
-		if err := walkPublicTypeState(params.At(index).Constraint(), seen, allowAliasTarget); err != nil {
+		if err := walkPublicTypeState(params.At(index).Constraint(), seen, approvals, nil); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func walkTypeArgs(args *types.TypeList, seen map[types.Type]bool, allowAliasTarget bool) error {
+func walkTypeArgs(args *types.TypeList, seen map[types.Type]bool, approvals publicAliasApprovals) error {
 	if args == nil {
 		return nil
 	}
 	for index := 0; index < args.Len(); index++ {
-		if err := walkPublicTypeState(args.At(index), seen, allowAliasTarget); err != nil {
+		if err := walkPublicTypeState(args.At(index), seen, approvals, nil); err != nil {
 			return err
 		}
 	}

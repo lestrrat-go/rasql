@@ -36,12 +36,31 @@ type EngineID = engineprofile.EngineID
 type EngineVersion = engineprofile.Version
 type EngineCapabilities = engineprofile.Capabilities
 type EngineLimits = engineprofile.Limits
+type EngineReturningForms = engineprofile.ReturningForms
+type EngineUpsertForm = engineprofile.UpsertForm
+type EnginePerParentLimitStrategy = engineprofile.PerParentLimitStrategy
+type EngineUpdateDefaultSupport = engineprofile.UpdateDefaultSupport
 
 const (
 	PostgreSQLEngine EngineID = engineprofile.PostgreSQL
 	MySQLEngine      EngineID = engineprofile.MySQL
 	SQLiteEngine     EngineID = engineprofile.SQLite
 	CustomEngine     EngineID = engineprofile.Custom
+
+	EngineReturningNone      = engineprofile.ReturningNone
+	EngineReturningInsert    = engineprofile.ReturningInsert
+	EngineReturningAllWrites = engineprofile.ReturningInsertUpdateDelete
+
+	EngineUpsertNone         = engineprofile.UpsertNone
+	EngineUpsertOnConflict   = engineprofile.UpsertOnConflict
+	EngineUpsertDuplicateKey = engineprofile.UpsertDuplicateKey
+
+	EnginePerParentLimitUnsupported = engineprofile.PerParentLimitUnsupported
+	EnginePerParentLimitWindow      = engineprofile.PerParentLimitWindow
+	EnginePerParentLimitLateral     = engineprofile.PerParentLimitLateral
+
+	EngineUpdateDefaultUnsupported = engineprofile.UpdateDefaultUnsupported
+	EngineUpdateDefaultExpression  = engineprofile.UpdateDefaultExpression
 )
 
 type ProfileSource interface {
