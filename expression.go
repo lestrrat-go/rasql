@@ -122,6 +122,57 @@ func bindColumn[Row, T any](relation Source, name, codec string, nullable bool) 
 	}
 	return Column[Row, T]{}, planError("invalid_source", "column", "column is not a member of source")
 }
+
+// BindTypedColumn bridges a generated store accessor's query.TypedColumn
+// into the typed Expr/Column layer. BindColumn names the same column as a
+// string, which lets a renamed column pass silently instead of failing the
+// build; a generated accessor already carries a ColumnRef the compiler
+// checks at every call site, and this is the entry point that lets it be
+// used as-is instead of falling back to that weaker string form.
+func BindTypedColumn[Row, T any](column query.TypedColumn[Row, T]) (Column[Row, T], error) {
+	ref := column.Ref()
+	definition, err := lookupBoundColumn(ref)
+	if err != nil {
+		return Column[Row, T]{}, err
+	}
+	if definition.Nullable {
+		return Column[Row, T]{}, planError("invalid_source", "column", "nullability does not match handle")
+	}
+	return Column[Row, T]{ref: ref, codec: definition.Codec}, nil
+}
+
+// BindNullTypedColumn is BindTypedColumn for a nullable column, bridging the
+// query.NullableColumn a generated accessor returns for one.
+func BindNullTypedColumn[Row, T any](column query.NullableColumn[Row, T]) (NullColumn[Row, T], error) {
+	ref := column.Ref()
+	definition, err := lookupBoundColumn(ref)
+	if err != nil {
+		return NullColumn[Row, T]{}, err
+	}
+	if !definition.Nullable {
+		return NullColumn[Row, T]{}, planError("invalid_source", "column", "nullability does not match handle")
+	}
+	return NullColumn[Row, T]{ref: ref, codec: definition.Codec}, nil
+}
+
+// lookupBoundColumn finds ref's column definition in the schema its source
+// carries, the same lookup validateBoundColumn does for a column named by
+// string. BindTypedColumn and BindNullTypedColumn use it to recover the
+// codec a query.TypedColumn does not carry itself, since that type exists to
+// be checked by the compiler rather than to describe how its value is
+// encoded.
+func lookupBoundColumn(ref query.ColumnRef) (ResultColumn, error) {
+	if ref.Source().QualifiedName() == "" {
+		return ResultColumn{}, planError("invalid_source", "relation", "source is zero")
+	}
+	for _, column := range ref.Source().Columns() {
+		if column.Name == ref.Name() {
+			return column, nil
+		}
+	}
+	return ResultColumn{}, planError("invalid_source", "column", "column is not a member of source")
+}
+
 func validateBoundColumn(relation Source, name, codec string) error {
 	if relation.ref.QualifiedName() == "" {
 		return planError("invalid_source", "relation", "source is zero")
