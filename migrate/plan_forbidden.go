@@ -10,10 +10,7 @@ import (
 )
 
 type forbiddenPlanResult struct {
-	completed       *changeplan.Operation
-	nextIndex       int
-	digest          changeplan.Digest
-	cleanupRequired bool
+	completed *changeplan.Operation
 }
 
 func runForbiddenPlanOperation(
@@ -97,9 +94,9 @@ func recoverForbiddenPlanOperation(
 				planReconciliation(run.prepared, operation.operation.ID(), legacy.id, err))
 		}
 		if err := deleteMatchingJournal(ctx, connection, boundary, run, migration.id); err != nil {
-			return forbiddenPlanResult{nextIndex: next, digest: digest, cleanupRequired: true}, err
+			return forbiddenPlanResult{}, err
 		}
-		return forbiddenPlanResult{nextIndex: next, digest: digest}, nil
+		return forbiddenPlanResult{}, nil
 	}
 	candidates, err := readForbiddenCandidates(ctx, connection, boundary, run, operationIndex)
 	if err != nil {
@@ -125,7 +122,7 @@ func recoverForbiddenPlanOperation(
 			return forbiddenPlanResult{}, err
 		}
 		completed := operation.operation
-		return forbiddenPlanResult{completed: &completed, nextIndex: operationIndex + 1, digest: operation.afterDigest}, nil
+		return forbiddenPlanResult{completed: &completed}, nil
 	}
 	if err := restorePlanJournal(ctx, connection, boundary, run, migration, legacy.nextIndex); err != nil {
 		return forbiddenPlanResult{}, err
@@ -257,15 +254,14 @@ func finishForbiddenOperation(
 	if err := deletePlanJournal(ctx, boundaryOrConnection(boundary, connection), run, migration.id); err != nil {
 		commitErr := commitForbiddenDecision(ctx, boundary)
 		completed := operation.operation
-		return forbiddenPlanResult{completed: &completed, nextIndex: operation.index + 1,
-			digest: operation.afterDigest, cleanupRequired: true}, errors.Join(err, commitErr)
+		return forbiddenPlanResult{completed: &completed}, errors.Join(err, commitErr)
 	}
 	if err := commitForbiddenDecision(ctx, boundary); err != nil {
 		return forbiddenPlanResult{}, forbiddenIncomplete(run.prepared, operation.index,
 			ChangePlanStageCommit, -1, err)
 	}
 	completed := operation.operation
-	return forbiddenPlanResult{completed: &completed, nextIndex: operation.index + 1, digest: operation.afterDigest}, nil
+	return forbiddenPlanResult{completed: &completed}, nil
 }
 
 func readForbiddenCatalog(

@@ -16,8 +16,6 @@ type planRunState struct {
 
 type planGroupResult struct {
 	completed []changeplan.Operation
-	nextIndex int
-	digest    changeplan.Digest
 }
 
 type planApplyBoundary interface {
@@ -131,7 +129,7 @@ func runRequiredPlanGroup(
 	for index := range completed {
 		completed[index] = run.prepared.operations[start+index].operation
 	}
-	return planGroupResult{completed: completed, nextIndex: end, digest: run.prepared.operations[end-1].afterDigest}, nil
+	return planGroupResult{completed: completed}, nil
 }
 
 func newPlanProgressEntry(prepared preparedChangePlan, index int) planProgressEntry {
