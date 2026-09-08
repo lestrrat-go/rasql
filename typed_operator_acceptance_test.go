@@ -34,11 +34,15 @@ type acceptanceRefundRow struct {
 	OrderID int64
 }
 
-// acceptanceTotalRow is one customer and their summed order amount. SUM is
-// NULL over an empty group, so Total is Nullable even though amount is not.
+// acceptanceTotalRow is one customer with their summed and averaged order
+// amounts. SUM and AVG are both NULL over an empty group, so each is Nullable
+// even though amount is not. Average is float64 rather than int64 because the
+// average of integers is not an integer, and because both servers compute it
+// as an exact decimal they then deliver as text.
 type acceptanceTotalRow struct {
 	Customer string
 	Total    Nullable[int64]
+	Average  Nullable[float64]
 }
 
 type acceptanceTotalDecoder struct{ result ResultSchema }
@@ -46,12 +50,12 @@ type acceptanceTotalDecoder struct{ result ResultSchema }
 func (d acceptanceTotalDecoder) ResultSchema() ResultSchema { return d.result }
 func (d acceptanceTotalDecoder) Presence() []Presence       { return nil }
 func (d acceptanceTotalDecoder) DecodeRow(src ScanSource, row *acceptanceTotalRow) error {
-	return src.Scan(&row.Customer, &row.Total)
+	return src.Scan(&row.Customer, &row.Total, &row.Average)
 }
 
 // acceptanceQuery builds:
 //
-//	SELECT o.customer, SUM(o.amount)
+//	SELECT o.customer, SUM(o.amount), AVG(o.amount)
 //	FROM orders o
 //	WHERE o.amount > 100
 //	  AND LOWER(o.customer) LIKE 'a%'
@@ -96,11 +100,13 @@ func acceptanceQuery(t *testing.T) Query[acceptanceTotalRow] {
 	result, err := NewResultSchema(
 		ResultColumn{Name: "customer", Type: schema.TextType{}},
 		ResultColumn{Name: "total", Type: schema.IntegerType{}, Nullable: true},
+		ResultColumn{Name: "average", Type: schema.FloatType{}, Nullable: true},
 	)
 	require.NoError(t, err)
 	projection, err := NewProjection([]ProjectionItem{
 		Item("customer", customer.Expr(), schema.TextType{}, ""),
 		NullItem("total", SumExpr(amount.Expr()), schema.IntegerType{}, ""),
+		NullItem("average", AvgExpr(amount.Expr()), schema.FloatType{}, ""),
 	}, acceptanceTotalDecoder{result: result})
 	require.NoError(t, err)
 
@@ -151,9 +157,21 @@ func runAcceptance(t *testing.T, database *sql.DB, executor Executor, textType s
 	rows, err := All(t.Context(), executor, acceptanceQuery(t))
 	require.NoError(t, err)
 	require.Equal(t, []acceptanceTotalRow{
-		{Customer: "alice", Total: Nullable[int64]{Value: 350, Valid: true}},
-		{Customer: "amy", Total: Nullable[int64]{Value: 500, Valid: true}},
-		{Customer: "Anna", Total: Nullable[int64]{Value: 400, Valid: true}},
+		{
+			Customer: "alice",
+			Total:    Nullable[int64]{Value: 350, Valid: true},
+			Average:  Nullable[float64]{Value: 175, Valid: true},
+		},
+		{
+			Customer: "amy",
+			Total:    Nullable[int64]{Value: 500, Valid: true},
+			Average:  Nullable[float64]{Value: 500, Valid: true},
+		},
+		{
+			Customer: "Anna",
+			Total:    Nullable[int64]{Value: 400, Valid: true},
+			Average:  Nullable[float64]{Value: 400, Valid: true},
+		},
 	}, rows)
 }
 

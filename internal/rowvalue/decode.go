@@ -248,22 +248,25 @@ func assign(destination reflect.Value, value any) error {
 			}
 			destination.SetFloat(value)
 			return nil
+		case isTextEncoded(source):
+			return setFloatFromText(destination, textOf(source))
 		}
 	}
 	return fmt.Errorf("expected %s, got %T", destination.Type(), value)
 }
 
 // isTextEncoded reports whether a driver delivered its value as text rather
-// than as a Go number. MySQL sends every DECIMAL that way, including the
-// DECIMAL that SUM() over an integer column produces, so an integer
+// than as a Go number. MySQL sends every DECIMAL that way, and it computes
+// both SUM() and AVG() over an integer column as DECIMAL, so a numeric
 // destination has to read the text form instead of rejecting it.
 // database/sql's own convertAssign parses the same two shapes.
 //
-// Only integer destinations take this path. A float64 destination still
-// rejects text, because a DECIMAL carrying a fraction is not exactly
-// representable in binary floating point, and
-// TestAssignRejectsExactDecimalSourcesForFloat64 records that rasql maps a
-// DECIMAL column to a string for that reason.
+// Reading text into a float64 loses exactness whenever the value carries a
+// fraction binary floating point cannot represent, which is why rasql still
+// maps a DECIMAL column to a Go string rather than to a float64; see
+// TestAssignDecodesTextNumbersIntoFloatsInexactly. That mapping is a decision
+// about what a column's Go type should be, and it stands on the loss itself
+// rather than on the decoder refusing the conversion.
 func isTextEncoded(source reflect.Value) bool {
 	switch source.Kind() {
 	case reflect.String:
@@ -285,7 +288,9 @@ func textOf(source reflect.Value) string {
 // setIntFromText and setUintFromText accept only what the destination holds
 // exactly. A DECIMAL carrying a fraction is rejected against an integer field
 // rather than truncated, so a lost fraction is never silently written into a
-// row.
+// row. setFloatFromText cannot make that promise, because binary floating
+// point represents most decimal fractions only approximately; it rounds the
+// way ParseFloat does, and rejects only a value outside the type's range.
 func setIntFromText(destination reflect.Value, text string) error {
 	decoded, err := strconv.ParseInt(text, 10, destination.Type().Bits())
 	if errors.Is(err, strconv.ErrRange) {
@@ -307,6 +312,18 @@ func setUintFromText(destination reflect.Value, text string) error {
 		return fmt.Errorf("expected %s, got %q", destination.Type(), text)
 	}
 	destination.SetUint(decoded)
+	return nil
+}
+
+func setFloatFromText(destination reflect.Value, text string) error {
+	decoded, err := strconv.ParseFloat(text, destination.Type().Bits())
+	if errors.Is(err, strconv.ErrRange) {
+		return fmt.Errorf("%s overflows %s", text, destination.Type())
+	}
+	if err != nil {
+		return fmt.Errorf("expected %s, got %q", destination.Type(), text)
+	}
+	destination.SetFloat(decoded)
 	return nil
 }
 
