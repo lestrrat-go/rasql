@@ -146,6 +146,30 @@ func NotInQuery[T comparable](left Expr[T], q Query[T]) (Predicate, error) {
 	return Predicate{node: query.NotInSelect(left.node, statement), source: left.source}, nil
 }
 
+// SubqueryExpr lifts a scalar subquery into an Expr[T], the one entry point
+// a scalar subquery reaches the typed expression language through. Unlike
+// InQuery and ExistsQuery, which each build a whole Predicate, this returns
+// a value, so it stands wherever an Expr does: either operand of an ordered
+// comparison, such as GreaterExpr(amount, SubqueryExpr(avgQuery)), or naming
+// a projected column in Item or NullItem, such as
+// Item("count", SubqueryExpr(countQuery), ...). It composes with
+// Query.Correlated exactly like any other typed query, so q may read a
+// column of the enclosing query, and the Expr it returns may itself be
+// lifted a second time into an outer subquery — nesting is just building one
+// Query[T] from another.
+//
+// It reads T from q's own projection the way InQuery does, so q and the
+// context it is lifted into are checked against each other at compile time.
+// q must project exactly one column, the restriction subquerySelect applies
+// to every subquery standing in for a value.
+func SubqueryExpr[T any](q Query[T]) (Expr[T], error) {
+	statement, err := subquerySelect(q)
+	if err != nil {
+		return Expr[T]{}, err
+	}
+	return Expr[T]{node: query.Scalar(statement)}, nil
+}
+
 // AscResult orders by a projection's already-computed result rather than
 // recomputing the expression behind it, which is what SELECT ... AS alias ...
 // ORDER BY alias means. Pass the same ProjectionItem the projection was built
