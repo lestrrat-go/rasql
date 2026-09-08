@@ -77,8 +77,11 @@ func TestGetDecodesSQLiteValues(t *testing.T) {
 	require.Equal(t, createdAt, gotWhen)
 }
 
+// The source here is a string that names no number. A string that does name a
+// whole number decodes into an integer instead, which
+// TestAssignDecodesWholeTextNumbersIntoIntegers covers.
 func TestGetRejectsWrongType(t *testing.T) {
-	result, err := rowvalue.NewRow([]string{"id"}, []any{"42"})
+	result, err := rowvalue.NewRow([]string{"id"}, []any{"identifier"})
 	require.NoError(t, err)
 
 	_, err = rowvalue.Get[int64](result, "id")
@@ -458,6 +461,54 @@ func TestAssignDecodesIntegersAcrossSignedness(t *testing.T) {
 		var destination int64
 		err := rowvalue.Assign(result, "big_unsigned", &destination)
 		require.ErrorContains(t, err, "18446744073709551615 overflows int64")
+	})
+}
+
+// TestAssignDecodesWholeTextNumbersIntoIntegers covers the shape MySQL returns
+// for SUM() over an integer column: a DECIMAL with no fraction, delivered as
+// text. An integer destination reads it, and rejects anything it cannot hold
+// exactly, so a fraction is never truncated on the way in.
+func TestAssignDecodesWholeTextNumbersIntoIntegers(t *testing.T) {
+	result, err := rowvalue.NewRow(
+		[]string{"mysql_sum", "pg_sum", "fractional", "above_int64", "not_a_number"},
+		[]any{[]byte("350"), "350", []byte("12.50"), []byte("18446744073709551615"), []byte("total")},
+	)
+	require.NoError(t, err)
+
+	t.Run("int64 field takes a byte-encoded whole number", func(t *testing.T) {
+		var destination int64
+		require.NoError(t, rowvalue.Assign(result, "mysql_sum", &destination))
+		require.Equal(t, int64(350), destination)
+	})
+
+	t.Run("int64 field takes a string-encoded whole number", func(t *testing.T) {
+		var destination int64
+		require.NoError(t, rowvalue.Assign(result, "pg_sum", &destination))
+		require.Equal(t, int64(350), destination)
+	})
+
+	t.Run("uint32 field takes a byte-encoded whole number", func(t *testing.T) {
+		var destination uint32
+		require.NoError(t, rowvalue.Assign(result, "mysql_sum", &destination))
+		require.Equal(t, uint32(350), destination)
+	})
+
+	t.Run("int64 field rejects a fraction rather than truncating it", func(t *testing.T) {
+		var destination int64
+		err := rowvalue.Assign(result, "fractional", &destination)
+		require.ErrorContains(t, err, `expected int64, got "12.50"`)
+	})
+
+	t.Run("int64 field rejects a value above its range", func(t *testing.T) {
+		var destination int64
+		err := rowvalue.Assign(result, "above_int64", &destination)
+		require.ErrorContains(t, err, "18446744073709551615 overflows int64")
+	})
+
+	t.Run("uint64 field rejects text that is not a number", func(t *testing.T) {
+		var destination uint64
+		err := rowvalue.Assign(result, "not_a_number", &destination)
+		require.ErrorContains(t, err, `expected uint64, got "total"`)
 	})
 }
 

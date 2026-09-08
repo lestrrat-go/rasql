@@ -2,9 +2,11 @@ package rowvalue
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"math"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -209,6 +211,8 @@ func assign(destination reflect.Value, value any) error {
 			}
 			destination.SetInt(int64(value))
 			return nil
+		case isTextEncoded(source):
+			return setIntFromText(destination, textOf(source))
 		}
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		switch {
@@ -226,6 +230,8 @@ func assign(destination reflect.Value, value any) error {
 			}
 			destination.SetUint(uint64(value))
 			return nil
+		case isTextEncoded(source):
+			return setUintFromText(destination, textOf(source))
 		}
 	case reflect.Float32, reflect.Float64:
 		switch {
@@ -245,6 +251,63 @@ func assign(destination reflect.Value, value any) error {
 		}
 	}
 	return fmt.Errorf("expected %s, got %T", destination.Type(), value)
+}
+
+// isTextEncoded reports whether a driver delivered its value as text rather
+// than as a Go number. MySQL sends every DECIMAL that way, including the
+// DECIMAL that SUM() over an integer column produces, so an integer
+// destination has to read the text form instead of rejecting it.
+// database/sql's own convertAssign parses the same two shapes.
+//
+// Only integer destinations take this path. A float64 destination still
+// rejects text, because a DECIMAL carrying a fraction is not exactly
+// representable in binary floating point, and
+// TestAssignRejectsExactDecimalSourcesForFloat64 records that rasql maps a
+// DECIMAL column to a string for that reason.
+func isTextEncoded(source reflect.Value) bool {
+	switch source.Kind() {
+	case reflect.String:
+		return true
+	case reflect.Slice:
+		return source.Type().Elem().Kind() == reflect.Uint8
+	default:
+		return false
+	}
+}
+
+func textOf(source reflect.Value) string {
+	if source.Kind() == reflect.String {
+		return source.String()
+	}
+	return string(source.Bytes())
+}
+
+// setIntFromText and setUintFromText accept only what the destination holds
+// exactly. A DECIMAL carrying a fraction is rejected against an integer field
+// rather than truncated, so a lost fraction is never silently written into a
+// row.
+func setIntFromText(destination reflect.Value, text string) error {
+	decoded, err := strconv.ParseInt(text, 10, destination.Type().Bits())
+	if errors.Is(err, strconv.ErrRange) {
+		return fmt.Errorf("%s overflows %s", text, destination.Type())
+	}
+	if err != nil {
+		return fmt.Errorf("expected %s, got %q", destination.Type(), text)
+	}
+	destination.SetInt(decoded)
+	return nil
+}
+
+func setUintFromText(destination reflect.Value, text string) error {
+	decoded, err := strconv.ParseUint(text, 10, destination.Type().Bits())
+	if errors.Is(err, strconv.ErrRange) {
+		return fmt.Errorf("%s overflows %s", text, destination.Type())
+	}
+	if err != nil {
+		return fmt.Errorf("expected %s, got %q", destination.Type(), text)
+	}
+	destination.SetUint(decoded)
+	return nil
 }
 
 func decodeBool(value any) (bool, error) {
