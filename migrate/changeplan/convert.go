@@ -88,6 +88,13 @@ func NewResolvedChanges(baseline Catalog, steps []ResolvedCatalogStep, decisions
 		if !sameCatalogIdentity(out.baseline, out.steps[i].after) {
 			return ResolvedChanges{}, fmt.Errorf("%w: resolved catalog identity differs", ErrInvalidPlan)
 		}
+		digest, err := CatalogDigest(out.steps[i].after)
+		if err != nil {
+			return ResolvedChanges{}, err
+		}
+		if digest != out.operations[order[i]].resultDigest {
+			return ResolvedChanges{}, fmt.Errorf("%w: operation %q result digest does not match resolved catalog", ErrInvalidPlan, out.operations[order[i]].id)
+		}
 		before := out.baseline
 		if i > 0 {
 			before = out.steps[i-1].after

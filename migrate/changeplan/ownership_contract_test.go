@@ -402,25 +402,25 @@ func TestConstructorValidationCorpus(t *testing.T) {
 	require.ErrorIs(t, err, changeplan.ErrInvalidDecision)
 	_, err = changeplan.NewDecision("approval", changeplan.DecisionAcceptDestructive, "object", "", "", false, "approved")
 	require.ErrorIs(t, err, changeplan.ErrInvalidDecision)
-	_, err = changeplan.NewOperation("empty", changeplan.OperationNativeSQL, nil, []changeplan.ObjectID{"object"}, nil, nil, nil, changeplan.TransactionForbidden, false, nil)
+	_, err = changeplan.NewOperation("empty", changeplan.OperationNativeSQL, nil, []changeplan.ObjectID{"object"}, nil, nil, changeplan.Digest{}, nil, changeplan.TransactionForbidden, false, nil)
 	require.ErrorIs(t, err, changeplan.ErrInvalidOperation)
 	_, err = changeplan.NewOperation("reversible", changeplan.OperationNativeSQL, nil, []changeplan.ObjectID{"object"}, nil, nil,
-		[]stmt.Statement{stmt.New(sqltext.Text("SELECT 1"))}, changeplan.TransactionForbidden, true, nil)
+		changeplan.Digest{1}, []stmt.Statement{stmt.New(sqltext.Text("SELECT 1"))}, changeplan.TransactionForbidden, true, nil)
 	require.ErrorIs(t, err, changeplan.ErrInvalidOperation)
 	_, err = changeplan.NewOperation("irreversible", changeplan.OperationNativeSQL, nil, []changeplan.ObjectID{"object"}, nil, nil,
-		[]stmt.Statement{stmt.New(sqltext.Text("SELECT 1"))}, changeplan.TransactionForbidden, false, []stmt.Statement{stmt.New(sqltext.Text("SELECT 0"))})
+		changeplan.Digest{1}, []stmt.Statement{stmt.New(sqltext.Text("SELECT 1"))}, changeplan.TransactionForbidden, false, []stmt.Statement{stmt.New(sqltext.Text("SELECT 0"))})
 	require.ErrorIs(t, err, changeplan.ErrInvalidOperation)
 	_, err = changeplan.NewOperation("self", changeplan.OperationNativeSQL, []changeplan.OperationID{"self"}, []changeplan.ObjectID{"object"}, nil, nil,
-		[]stmt.Statement{stmt.New(sqltext.Text("SELECT 1"))}, changeplan.TransactionForbidden, false, []stmt.Statement{})
+		changeplan.Digest{1}, []stmt.Statement{stmt.New(sqltext.Text("SELECT 1"))}, changeplan.TransactionForbidden, false, []stmt.Statement{})
 	require.ErrorIs(t, err, changeplan.ErrInvalidOperation)
 	missing, err := changeplan.NewOperation("missing", changeplan.OperationNativeSQL, []changeplan.OperationID{"absent"}, []changeplan.ObjectID{"object"}, nil, nil,
-		[]stmt.Statement{stmt.New(sqltext.Text("SELECT 1"))}, changeplan.TransactionForbidden, false, []stmt.Statement{})
+		changeplan.Digest{1}, []stmt.Statement{stmt.New(sqltext.Text("SELECT 1"))}, changeplan.TransactionForbidden, false, []stmt.Statement{})
 	require.NoError(t, err)
 	cycleA, err := changeplan.NewOperation("cycle-a", changeplan.OperationNativeSQL, []changeplan.OperationID{"cycle-b"}, []changeplan.ObjectID{"object"}, nil, nil,
-		[]stmt.Statement{stmt.New(sqltext.Text("SELECT 1"))}, changeplan.TransactionForbidden, false, []stmt.Statement{})
+		changeplan.Digest{1}, []stmt.Statement{stmt.New(sqltext.Text("SELECT 1"))}, changeplan.TransactionForbidden, false, []stmt.Statement{})
 	require.NoError(t, err)
 	cycleB, err := changeplan.NewOperation("cycle-b", changeplan.OperationNativeSQL, []changeplan.OperationID{"cycle-a"}, []changeplan.ObjectID{"object"}, nil, nil,
-		[]stmt.Statement{stmt.New(sqltext.Text("SELECT 1"))}, changeplan.TransactionForbidden, false, []stmt.Statement{})
+		changeplan.Digest{1}, []stmt.Statement{stmt.New(sqltext.Text("SELECT 1"))}, changeplan.TransactionForbidden, false, []stmt.Statement{})
 	require.NoError(t, err)
 	profile := testProfile(t)
 	profileDigest, err := changeplan.ProfileDigest(profile)
@@ -510,7 +510,7 @@ func TestPublicDeepCopyContract(t *testing.T) {
 	argument := []byte("payload")
 	statements := []stmt.Statement{stmt.New(sqltext.Text("SELECT ?"), argument)}
 	operation, err := changeplan.NewOperation("operation", changeplan.OperationNativeSQL, depends, objects, preconditions, nil,
-		statements, changeplan.TransactionForbidden, false, nil)
+		changeplan.Digest{1}, statements, changeplan.TransactionForbidden, false, nil)
 	require.NoError(t, err)
 	depends[0] = "changed"
 	objects[0] = "changed"

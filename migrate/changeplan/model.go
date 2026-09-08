@@ -422,6 +422,7 @@ type Operation struct {
 	dependsOn                     []OperationID
 	objects                       []ObjectID
 	preconditions, postconditions []Fact
+	resultDigest                  Digest
 	statements                    []stmt.Statement
 	transaction                   TransactionMode
 	reversible                    bool
@@ -434,6 +435,7 @@ func NewOperation(
 	dependsOn []OperationID,
 	objects []ObjectID,
 	preconditions, postconditions []Fact,
+	resultDigest Digest,
 	statements []stmt.Statement,
 	transaction TransactionMode,
 	reversible bool,
@@ -441,6 +443,9 @@ func NewOperation(
 ) (Operation, error) {
 	if id == "" || len(strings.TrimSpace(string(kind))) == 0 {
 		return Operation{}, fmt.Errorf("%w: id and kind are required", ErrInvalidOperation)
+	}
+	if resultDigest == (Digest{}) {
+		return Operation{}, fmt.Errorf("%w: result digest is required", ErrInvalidOperation)
 	}
 	if !validOperationKind(kind) || !validTransaction(transaction) {
 		return Operation{}, fmt.Errorf("%w: unknown kind or transaction mode", ErrInvalidOperation)
@@ -475,7 +480,7 @@ func NewOperation(
 	if !reversible && len(reverseStatements) != 0 {
 		return Operation{}, fmt.Errorf("%w: irreversible operation has reverse SQL", ErrInvalidOperation)
 	}
-	out := Operation{id: id, kind: kind, transaction: transaction, reversible: reversible}
+	out := Operation{id: id, kind: kind, resultDigest: resultDigest, transaction: transaction, reversible: reversible}
 	out.dependsOn = append([]OperationID(nil), dependsOn...)
 	out.objects = append([]ObjectID(nil), objects...)
 	out.preconditions = append([]Fact(nil), preconditions...)
@@ -529,6 +534,7 @@ func (o Operation) DependsOn() []OperationID            { return append([]Operat
 func (o Operation) Objects() []ObjectID                 { return append([]ObjectID(nil), o.objects...) }
 func (o Operation) Preconditions() []Fact               { return append([]Fact(nil), o.preconditions...) }
 func (o Operation) Postconditions() []Fact              { return append([]Fact(nil), o.postconditions...) }
+func (o Operation) ResultDigest() Digest                { return o.resultDigest }
 func (o Operation) Statements() []stmt.Statement        { return cloneStatements(o.statements) }
 func (o Operation) Transaction() TransactionMode        { return o.transaction }
 func (o Operation) Reversible() bool                    { return o.reversible }

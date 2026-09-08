@@ -50,8 +50,10 @@ func TestExternalNonemptyPlanContract(t *testing.T) {
 	postcondition, err := changeplan.NewFact(startingID, "/columns/2/name", changeplan.FactOperatorEqual, `"title"`)
 	require.NoError(t, err)
 	statement := stmt.New(sqltext.Text(`ALTER TABLE "main"."tasks" ADD COLUMN "title" TEXT NOT NULL`))
+	resultDigest, err := changeplan.CatalogDigest(after)
+	require.NoError(t, err)
 	operation, err := changeplan.NewOperation("add-title", changeplan.OperationAddColumn, []changeplan.OperationID{}, []changeplan.ObjectID{startingID},
-		[]changeplan.Fact{precondition}, []changeplan.Fact{postcondition}, []stmt.Statement{statement}, changeplan.TransactionEngineDefault, false, []stmt.Statement{})
+		[]changeplan.Fact{precondition}, []changeplan.Fact{postcondition}, resultDigest, []stmt.Statement{statement}, changeplan.TransactionEngineDefault, false, []stmt.Statement{})
 	require.NoError(t, err)
 	require.Empty(t, statement.Args())
 	step, err := changeplan.NewResolvedCatalogStep(operation.ID(), after)

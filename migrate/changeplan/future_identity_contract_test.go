@@ -50,7 +50,7 @@ func newFutureIdentityFixture(t *testing.T) futureIdentityFixture {
 	history, err := NewHistoryIdentity("main", "schema_migrations")
 	require.NoError(t, err)
 	operation, err := NewOperation("create", OperationCreateTable, nil, []ObjectID{future.ID()}, nil, nil,
-		[]stmt.Statement{stmt.New(sqltext.Text("CREATE TABLE created (id INTEGER)"))}, TransactionRequired, false, nil)
+		Digest{1}, []stmt.Statement{stmt.New(sqltext.Text("CREATE TABLE created (id INTEGER)"))}, TransactionRequired, false, nil)
 	require.NoError(t, err)
 	plan, err := newPlan(profile, baseline, history, nil, []Operation{operation})
 	require.NoError(t, err)
@@ -96,11 +96,16 @@ func TestFutureIdentityRejectedAtNewResolvedChanges(t *testing.T) {
 	require.NoError(t, err)
 	after, err := NewCatalog(fixture.profile, "future-source", []CatalogObject{startingObject, createdObject})
 	require.NoError(t, err)
-	step, err := NewResolvedCatalogStep(fixture.operation.ID(), after)
+	resultDigest, err := CatalogDigest(after)
+	require.NoError(t, err)
+	operation, err := NewOperation(fixture.operation.ID(), fixture.operation.Kind(), fixture.operation.DependsOn(), fixture.operation.Objects(), nil, nil,
+		resultDigest, fixture.operation.Statements(), fixture.operation.Transaction(), fixture.operation.Reversible(), fixture.operation.ReverseStatements())
+	require.NoError(t, err)
+	step, err := NewResolvedCatalogStep(operation.ID(), after)
 	require.NoError(t, err)
 	badFuture := fixture.future
 	badFuture.id = "corrupt-future-id"
-	_, err = NewResolvedChanges(baseline, []ResolvedCatalogStep{step}, nil, []Operation{fixture.operation}, []BaselineObject{badFuture}, nil)
+	_, err = NewResolvedChanges(baseline, []ResolvedCatalogStep{step}, nil, []Operation{operation}, []BaselineObject{badFuture}, nil)
 	require.ErrorIs(t, err, ErrInvalidIdentity)
 }
 
@@ -113,7 +118,7 @@ func TestFutureIdentityRejectedAtFromLock(t *testing.T) {
 	})
 	require.NoError(t, err)
 	operation, err := NewOperation("create", OperationCreateTable, nil, []ObjectID{future.ID()}, nil, nil,
-		[]stmt.Statement{stmt.New(sqltext.Text("CREATE TABLE created (id INTEGER)"))}, TransactionRequired, false, nil)
+		Digest{1}, []stmt.Statement{stmt.New(sqltext.Text("CREATE TABLE created (id INTEGER)"))}, TransactionRequired, false, nil)
 	require.NoError(t, err)
 	baseline, err := CatalogFromLock(lock)
 	require.NoError(t, err)
@@ -124,6 +129,11 @@ func TestFutureIdentityRejectedAtFromLock(t *testing.T) {
 	createdObject, err := NewCatalogObject(future.ID(), schema.TableDef{Schema: "main", Name: "created", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
 	require.NoError(t, err)
 	after, err := NewCatalogLike(baseline, []CatalogObject{startingObject, createdObject})
+	require.NoError(t, err)
+	resultDigest, err := CatalogDigest(after)
+	require.NoError(t, err)
+	operation, err = NewOperation(operation.ID(), operation.Kind(), operation.DependsOn(), operation.Objects(), nil, nil,
+		resultDigest, operation.Statements(), operation.Transaction(), operation.Reversible(), operation.ReverseStatements())
 	require.NoError(t, err)
 	step, err := NewResolvedCatalogStep(operation.ID(), after)
 	require.NoError(t, err)

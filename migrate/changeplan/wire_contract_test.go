@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var goldenCatalogBytes = []byte(`{"engine":{"dialect":"sqlite","version":"3.35.0","profile":"sqlite-3.35"},"objects":[{"id":"starting","kind":"table","schema":"main","name":"users"},{"id":"created","kind":"table","schema":"main","name":"created"}]}`)
+var goldenCatalogBytes = []byte(`{"engine":{"dialect":"sqlite","version":"3.35.0","profile":"sqlite-3.35"},"objects":[{"id":"starting","kind":"table","schema":"main","name":"users","columns":[{"name":"id","ordinal":0,"logical_kind":"integer","native":null,"nullable":false,"default_sql":"","generated_sql":"","generated_storage":"","identity":"","collation":"","hidden":false,"integer":{"unsigned":false,"display_width":{"value":0,"set":false},"zero_fill":false},"text":null,"decimal":null}],"constraints":[{"name":"","kind":"primary_key","columns":["id"],"reference":null,"expression_sql":"","deferrable":false,"initially_deferred":false,"on_update":"","on_delete":"","deferrability":"","match":"","nulls_not_distinct":false,"include_columns":null,"on_conflict":"","keys":[],"temporal":false,"storage_parameters":[],"tablespace":"","replica_identity":false,"collations":[],"no_inherit":false,"not_valid":false,"not_enforced":false,"delete_set_columns":null}],"indexes":[],"exclusion_constraints":[],"strict":false,"without_rowid":false,"primary_key_autoincrement":false,"primary_key_on_conflict":"","virtual_table_module":"","virtual_table_module_arguments":null}]}`)
 
 func goldenDigest(data []byte) changeplan.Digest { return changeplan.Digest(sha256.Sum256(data)) }
 
@@ -25,13 +25,62 @@ func fullContractPlan(t *testing.T) changeplan.Plan {
 	profile := testProfile(t)
 	profileDigest, err := changeplan.ProfileDigest(profile)
 	require.NoError(t, err)
-	catalogIdentity, err := changeplan.NewCatalogIdentity(profile.Engine(), profileDigest, goldenDigest(goldenCatalogBytes), goldenDigest([]byte("fixture-source")))
-	require.NoError(t, err)
 	starting, err := changeplan.NewBaselineObject("starting", "table", "main", "users")
+	require.NoError(t, err)
+	startingDefinition := schema.TableDef{Schema: "main", Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}}
+	startingObject, err := changeplan.NewCatalogObject(starting.ID(), startingDefinition)
 	require.NoError(t, err)
 	future, err := changeplan.NewIntroducedBaselineObject("fixture-source", "create-table", schema.TableDef{
 		Schema: "main", Name: "created", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 	})
+	require.NoError(t, err)
+	createdDefinition := schema.TableDef{Schema: "main", Name: "created", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}}
+	state := func(objects ...changeplan.CatalogObject) changeplan.Catalog {
+		catalog, catalogErr := changeplan.NewCatalog(profile, "fixture-source", objects)
+		require.NoError(t, catalogErr)
+		return catalog
+	}
+	baselineCatalog := state(startingObject)
+	createdObject, err := changeplan.NewCatalogObject(future.ID(), createdDefinition)
+	require.NoError(t, err)
+	userWithName := startingDefinition
+	userWithName.Columns = append(userWithName.Columns, schema.ColumnDef{Name: "name", Type: schema.TextType{}})
+	userWithLabel := startingDefinition
+	userWithLabel.Columns = append(userWithLabel.Columns, schema.ColumnDef{Name: "label", Type: schema.TextType{}})
+	userWithLabelIndex := userWithLabel
+	userWithLabelIndex.Indexes = []schema.IndexDef{{Name: "users_label", Columns: []string{"label"}}}
+	userWithLabelUnique := userWithLabel
+	userWithLabelUnique.UniqueConstraints = []schema.UniqueDef{{Name: "users_label_unique", Columns: []string{"label"}}}
+	renameCreatedDefinition := createdDefinition
+	renameCreatedDefinition.Name = "renamed"
+	finalCreatedDefinition := createdDefinition
+	finalCreatedDefinition.Name = "final"
+	catalogState := func(user schema.TableDef, created *schema.TableDef) changeplan.Catalog {
+		userObject, objectErr := changeplan.NewCatalogObject(starting.ID(), user)
+		require.NoError(t, objectErr)
+		objects := []changeplan.CatalogObject{userObject}
+		if created != nil {
+			createdObject, objectErr := changeplan.NewCatalogObject(future.ID(), *created)
+			require.NoError(t, objectErr)
+			objects = append(objects, createdObject)
+		}
+		return state(objects...)
+	}
+	afterStates := []changeplan.Catalog{
+		catalogState(startingDefinition, &createdDefinition), catalogState(userWithName, &createdDefinition),
+		catalogState(startingDefinition, &createdDefinition), catalogState(userWithLabel, &createdDefinition),
+		catalogState(userWithLabel, &createdDefinition), catalogState(userWithLabelIndex, &createdDefinition),
+		catalogState(userWithLabel, &createdDefinition), catalogState(userWithLabelUnique, &createdDefinition),
+		catalogState(userWithLabel, &createdDefinition), catalogState(userWithLabel, &createdDefinition),
+		catalogState(userWithLabel, &createdDefinition), catalogState(userWithLabel, &renameCreatedDefinition),
+		catalogState(userWithLabel, &finalCreatedDefinition),
+	}
+	lastState, err := changeplan.NewCatalog(profile, "fixture-source", []changeplan.CatalogObject{createdObject})
+	require.NoError(t, err)
+	afterStates = append(afterStates, lastState)
+	baselineDigest, err := changeplan.CatalogDigest(baselineCatalog)
+	require.NoError(t, err)
+	catalogIdentity, err := changeplan.NewCatalogIdentity(profile.Engine(), profileDigest, baselineDigest, goldenDigest([]byte("fixture-source")))
 	require.NoError(t, err)
 	renameOne, err := changeplan.NewBaselineRename("rename-created-1", future.ID(), "main", "renamed")
 	require.NoError(t, err)
@@ -55,23 +104,24 @@ func fullContractPlan(t *testing.T) changeplan.Plan {
 		object                changeplan.ObjectID
 		pre, post             []changeplan.Fact
 		statement             stmt.Statement
+		after                 changeplan.Catalog
 		reversible            bool
 		reverse               []stmt.Statement
 	}{
-		{id: "create-table", kind: string(changeplan.OperationCreateTable), transaction: string(changeplan.TransactionRequired), object: future.ID(), statement: plain("CREATE TABLE created (id INTEGER)")},
-		{id: "add-column", kind: string(changeplan.OperationAddColumn), transaction: string(changeplan.TransactionForbidden), object: starting.ID(), pre: []changeplan.Fact{present}, statement: plain("ALTER TABLE users ADD COLUMN name TEXT")},
-		{id: "drop-column", kind: string(changeplan.OperationDropColumn), transaction: string(changeplan.TransactionEngineDefault), object: starting.ID(), statement: plain("ALTER TABLE users DROP COLUMN name")},
-		{id: "rename-column", kind: string(changeplan.OperationRenameColumn), transaction: string(changeplan.TransactionRequired), object: starting.ID(), statement: plain("ALTER TABLE users RENAME COLUMN name TO label")},
-		{id: "alter-column", kind: string(changeplan.OperationAlterColumn), transaction: string(changeplan.TransactionForbidden), object: starting.ID(), statement: plain("ALTER TABLE users ALTER COLUMN label TYPE TEXT")},
-		{id: "create-index", kind: string(changeplan.OperationCreateIndex), transaction: string(changeplan.TransactionEngineDefault), object: starting.ID(), statement: plain("CREATE INDEX users_label ON users(label)")},
-		{id: "drop-index", kind: string(changeplan.OperationDropIndex), transaction: string(changeplan.TransactionRequired), object: starting.ID(), statement: plain("DROP INDEX users_label")},
-		{id: "add-constraint", kind: string(changeplan.OperationAddConstraint), transaction: string(changeplan.TransactionForbidden), object: starting.ID(), statement: plain("ALTER TABLE users ADD CONSTRAINT users_label_unique UNIQUE(label)")},
-		{id: "drop-constraint", kind: string(changeplan.OperationDropConstraint), transaction: string(changeplan.TransactionEngineDefault), object: starting.ID(), statement: plain("ALTER TABLE users DROP CONSTRAINT users_label_unique")},
-		{id: "backfill", kind: string(changeplan.OperationBackfill), transaction: string(changeplan.TransactionRequired), object: starting.ID(), post: []changeplan.Fact{equal}, statement: statementWithArgs},
-		{id: "native-sql", kind: string(changeplan.OperationNativeSQL), transaction: string(changeplan.TransactionForbidden), object: starting.ID(), pre: []changeplan.Fact{absent}, statement: statementWithArgs, reversible: true, reverse: []stmt.Statement{plain("SELECT 0")}},
-		{id: "rename-created-1", kind: string(changeplan.OperationRenameTable), transaction: string(changeplan.TransactionEngineDefault), object: future.ID(), statement: plain("ALTER TABLE created RENAME TO renamed")},
-		{id: "rename-created-2", kind: string(changeplan.OperationRenameTable), transaction: string(changeplan.TransactionRequired), object: future.ID(), statement: plain("ALTER TABLE renamed RENAME TO final")},
-		{id: "drop-table", kind: string(changeplan.OperationDropTable), transaction: string(changeplan.TransactionRequired), object: starting.ID(), statement: plain("DROP TABLE users")},
+		{id: "create-table", kind: string(changeplan.OperationCreateTable), transaction: string(changeplan.TransactionRequired), object: future.ID(), statement: plain("CREATE TABLE created (id INTEGER)"), after: afterStates[0]},
+		{id: "add-column", kind: string(changeplan.OperationAddColumn), transaction: string(changeplan.TransactionForbidden), object: starting.ID(), pre: []changeplan.Fact{present}, statement: plain("ALTER TABLE users ADD COLUMN name TEXT"), after: afterStates[1]},
+		{id: "drop-column", kind: string(changeplan.OperationDropColumn), transaction: string(changeplan.TransactionEngineDefault), object: starting.ID(), statement: plain("ALTER TABLE users DROP COLUMN name"), after: afterStates[2]},
+		{id: "rename-column", kind: string(changeplan.OperationRenameColumn), transaction: string(changeplan.TransactionRequired), object: starting.ID(), statement: plain("ALTER TABLE users RENAME COLUMN name TO label"), after: afterStates[3]},
+		{id: "alter-column", kind: string(changeplan.OperationAlterColumn), transaction: string(changeplan.TransactionForbidden), object: starting.ID(), statement: plain("ALTER TABLE users ALTER COLUMN label TYPE TEXT"), after: afterStates[4]},
+		{id: "create-index", kind: string(changeplan.OperationCreateIndex), transaction: string(changeplan.TransactionEngineDefault), object: starting.ID(), statement: plain("CREATE INDEX users_label ON users(label)"), after: afterStates[5]},
+		{id: "drop-index", kind: string(changeplan.OperationDropIndex), transaction: string(changeplan.TransactionRequired), object: starting.ID(), statement: plain("DROP INDEX users_label"), after: afterStates[6]},
+		{id: "add-constraint", kind: string(changeplan.OperationAddConstraint), transaction: string(changeplan.TransactionForbidden), object: starting.ID(), statement: plain("ALTER TABLE users ADD CONSTRAINT users_label_unique UNIQUE(label)"), after: afterStates[7]},
+		{id: "drop-constraint", kind: string(changeplan.OperationDropConstraint), transaction: string(changeplan.TransactionEngineDefault), object: starting.ID(), statement: plain("ALTER TABLE users DROP CONSTRAINT users_label_unique"), after: afterStates[8]},
+		{id: "backfill", kind: string(changeplan.OperationBackfill), transaction: string(changeplan.TransactionRequired), object: starting.ID(), post: []changeplan.Fact{equal}, statement: statementWithArgs, after: afterStates[9]},
+		{id: "native-sql", kind: string(changeplan.OperationNativeSQL), transaction: string(changeplan.TransactionForbidden), object: starting.ID(), pre: []changeplan.Fact{absent}, statement: statementWithArgs, reversible: true, reverse: []stmt.Statement{plain("SELECT 0")}, after: afterStates[10]},
+		{id: "rename-created-1", kind: string(changeplan.OperationRenameTable), transaction: string(changeplan.TransactionEngineDefault), object: future.ID(), statement: plain("ALTER TABLE created RENAME TO renamed"), after: afterStates[11]},
+		{id: "rename-created-2", kind: string(changeplan.OperationRenameTable), transaction: string(changeplan.TransactionRequired), object: future.ID(), statement: plain("ALTER TABLE renamed RENAME TO final"), after: afterStates[12]},
+		{id: "drop-table", kind: string(changeplan.OperationDropTable), transaction: string(changeplan.TransactionRequired), object: starting.ID(), statement: plain("DROP TABLE users"), after: afterStates[13]},
 	}
 	decisions := []changeplan.Decision{
 		mustDecision(t, "rename-one", changeplan.DecisionRenameObject, future.ID(), "main.created", "main.renamed", ""),
@@ -87,8 +137,10 @@ func fullContractPlan(t *testing.T) changeplan.Plan {
 		if i > 0 {
 			depends = append(depends, changeplan.OperationID(operationSpec[i-1].id))
 		}
+		resultDigest, digestErr := changeplan.CatalogDigest(spec.after)
+		require.NoError(t, digestErr)
 		operation, operationErr := changeplan.NewOperation(changeplan.OperationID(spec.id), changeplan.OperationKind(spec.kind), depends,
-			[]changeplan.ObjectID{spec.object}, spec.pre, spec.post, []stmt.Statement{spec.statement},
+			[]changeplan.ObjectID{spec.object}, spec.pre, spec.post, resultDigest, []stmt.Statement{spec.statement},
 			changeplan.TransactionMode(spec.transaction), spec.reversible, spec.reverse)
 		require.NoError(t, operationErr)
 		operations = append(operations, operation)

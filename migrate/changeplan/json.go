@@ -110,6 +110,7 @@ type operationWire struct {
 	Objects           []string        `json:"objects"`
 	Preconditions     []factWire      `json:"preconditions"`
 	Postconditions    []factWire      `json:"postconditions"`
+	ResultDigest      string          `json:"result_digest"`
 	Statements        []statementWire `json:"statements"`
 	Transaction       string          `json:"transaction"`
 	Reversible        bool            `json:"reversible"`
@@ -352,7 +353,7 @@ func planWireFromPlan(p Plan, withID bool) (planWire, error) {
 	return w, nil
 }
 func operationToWire(x Operation) (operationWire, error) {
-	w := operationWire{ID: string(x.id), Kind: string(x.kind), DependsOn: append([]string{}, stringIDs(x.dependsOn)...), Objects: stringObjects(x.objects), Transaction: string(x.transaction), Reversible: x.reversible}
+	w := operationWire{ID: string(x.id), Kind: string(x.kind), DependsOn: append([]string{}, stringIDs(x.dependsOn)...), Objects: stringObjects(x.objects), ResultDigest: digestHex(x.resultDigest), Transaction: string(x.transaction), Reversible: x.reversible}
 	w.Preconditions = factsToWire(x.preconditions)
 	w.Postconditions = factsToWire(x.postconditions)
 	var err error
@@ -657,7 +658,7 @@ func validateWireShape(data []byte) error {
 		if err != nil {
 			return err
 		}
-		if err := requireKeys(operation, "id", "kind", "depends_on", "objects", "preconditions", "postconditions", "statements", "transaction", "reversible", "reverse_statements"); err != nil {
+		if err := requireKeys(operation, "id", "kind", "depends_on", "objects", "preconditions", "postconditions", "result_digest", "statements", "transaction", "reversible", "reverse_statements"); err != nil {
 			return err
 		}
 		for _, key := range []string{"id", "kind", "transaction"} {
@@ -940,6 +941,10 @@ func operationFromWire(w operationWire) (Operation, error) {
 	if err != nil {
 		return Operation{}, err
 	}
+	resultDigest, err := parseDigest(w.ResultDigest)
+	if err != nil {
+		return Operation{}, err
+	}
 	statements, err := statementsFromWire(w.Statements)
 	if err != nil {
 		return Operation{}, err
@@ -956,7 +961,7 @@ func operationFromWire(w operationWire) (Operation, error) {
 	for i, x := range w.Objects {
 		objects[i] = ObjectID(x)
 	}
-	return NewOperation(OperationID(w.ID), OperationKind(w.Kind), deps, objects, pre, post, statements, TransactionMode(w.Transaction), w.Reversible, reverse)
+	return NewOperation(OperationID(w.ID), OperationKind(w.Kind), deps, objects, pre, post, resultDigest, statements, TransactionMode(w.Transaction), w.Reversible, reverse)
 }
 func factsFromWire(in []factWire) ([]Fact, error) {
 	out := make([]Fact, len(in))

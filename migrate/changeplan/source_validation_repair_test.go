@@ -88,7 +88,7 @@ func TestPlanRenameDecisionUsesStructuredTableBinding(t *testing.T) {
 	decision, err := NewDecision("rename-decision", DecisionRenameObject, starting.ID(), "main.wrong", "main.other", true, "")
 	require.NoError(t, err)
 	operation, err := NewOperation("rename", OperationRenameTable, nil, []ObjectID{starting.ID()}, nil, nil,
-		[]stmt.Statement{stmt.New(sqltext.Text("ALTER TABLE users RENAME TO accounts"))}, TransactionEngineDefault, false, nil)
+		Digest{1}, []stmt.Statement{stmt.New(sqltext.Text("ALTER TABLE users RENAME TO accounts"))}, TransactionEngineDefault, false, nil)
 	require.NoError(t, err)
 	_, err = NewPlan(profile, baseline, history, []Decision{decision}, []Operation{operation})
 	require.ErrorIs(t, err, ErrInvalidDecision)
@@ -104,8 +104,10 @@ func TestResolvedColumnRenameUsesAdjacentCatalogs(t *testing.T) {
 	require.NoError(t, err)
 	after, err := NewCatalogLike(baseline, []CatalogObject{afterObject})
 	require.NoError(t, err)
+	resultDigest, err := CatalogDigest(after)
+	require.NoError(t, err)
 	operation, err := NewOperation("rename-column", OperationRenameColumn, nil, []ObjectID{"task"}, nil, nil,
-		[]stmt.Statement{stmt.New(sqltext.Text("ALTER TABLE tasks RENAME COLUMN old_name TO new_name"))}, TransactionEngineDefault, false, nil)
+		resultDigest, []stmt.Statement{stmt.New(sqltext.Text("ALTER TABLE tasks RENAME COLUMN old_name TO new_name"))}, TransactionEngineDefault, false, nil)
 	require.NoError(t, err)
 	step, err := NewResolvedCatalogStep(operation.ID(), after)
 	require.NoError(t, err)
@@ -338,7 +340,7 @@ func newRepeatedTablePlanWithDecisionPairs(t *testing.T, operationPairs, decisio
 			depends = []OperationID{operations[index-1].ID()}
 		}
 		operations[index], err = NewOperation(operationID, OperationRenameTable, depends, []ObjectID{object.ID()}, nil, nil,
-			[]stmt.Statement{stmt.New(sqltext.Text("ALTER TABLE a RENAME TO b"))}, TransactionEngineDefault, false, nil)
+			Digest{1}, []stmt.Statement{stmt.New(sqltext.Text("ALTER TABLE a RENAME TO b"))}, TransactionEngineDefault, false, nil)
 		if err != nil {
 			return Plan{}, err
 		}
@@ -382,8 +384,8 @@ func TestResolvedAdjacentColumnRenameMatrix(t *testing.T) {
 	require.NoError(t, err)
 	one := catalogForSourceRepair(t, profile, "source", oneObject)
 	two := catalogForSourceRepair(t, profile, "source", twoObject)
-	first := sourceRepairRenameOperation(t, "rename-1", nil, "a", "x")
-	second := sourceRepairRenameOperation(t, "rename-2", []OperationID{"rename-1"}, "b", "y")
+	first := sourceRepairRenameOperation(t, "rename-1", nil, one, "a", "x")
+	second := sourceRepairRenameOperation(t, "rename-2", []OperationID{"rename-1"}, two, "b", "y")
 	steps := []ResolvedCatalogStep{sourceRepairStep(t, first, one), sourceRepairStep(t, second, two)}
 	decisions := []Decision{
 		sourceRepairRenameDecision(t, "decision-1", "task", "a", "x"),
@@ -398,7 +400,11 @@ func TestResolvedAdjacentColumnRenameMatrix(t *testing.T) {
 	require.NoError(t, err)
 	badStep, err := NewResolvedCatalogStep(first.ID(), catalogForSourceRepair(t, profile, "source", badBoth))
 	require.NoError(t, err)
-	_, err = NewResolvedChanges(baseline, []ResolvedCatalogStep{badStep}, []Decision{decisions[0]}, []Operation{first}, nil, nil)
+	badDigest, err := CatalogDigest(badStep.Catalog())
+	require.NoError(t, err)
+	badOperation, err := NewOperation(first.ID(), first.Kind(), first.DependsOn(), first.Objects(), first.Preconditions(), first.Postconditions(), badDigest, first.Statements(), first.Transaction(), first.Reversible(), first.ReverseStatements())
+	require.NoError(t, err)
+	_, err = NewResolvedChanges(baseline, []ResolvedCatalogStep{badStep}, []Decision{decisions[0]}, []Operation{badOperation}, nil, nil)
 	require.ErrorIs(t, err, ErrInvalidDecision)
 	for _, test := range []struct {
 		name      string
@@ -436,8 +442,10 @@ func TestTableRenameBindingFromLock(t *testing.T) {
 	mutatedLock := bytes.Replace(lock, []byte(`"name": "tasks"`), []byte(`"name": "accounts"`), 1)
 	after, err := CatalogFromLock(mutatedLock)
 	require.NoError(t, err)
+	resultDigest, err := CatalogDigest(after)
+	require.NoError(t, err)
 	operation, err := NewOperation("rename", OperationRenameTable, nil, []ObjectID{tasks}, nil, nil,
-		[]stmt.Statement{stmt.New(sqltext.Text("ALTER TABLE tasks RENAME TO accounts"))}, TransactionEngineDefault, false, nil)
+		resultDigest, []stmt.Statement{stmt.New(sqltext.Text("ALTER TABLE tasks RENAME TO accounts"))}, TransactionEngineDefault, false, nil)
 	require.NoError(t, err)
 	decision, err := NewDecision("rename-decision", DecisionRenameObject, tasks, "main.tasks", "main.accounts", true, "")
 	require.NoError(t, err)
@@ -463,10 +471,12 @@ func catalogForSourceRepair(t *testing.T, profile Profile, source string, object
 	return catalog
 }
 
-func sourceRepairRenameOperation(t *testing.T, id OperationID, depends []OperationID, from, to string) Operation {
+func sourceRepairRenameOperation(t *testing.T, id OperationID, depends []OperationID, after Catalog, from, to string) Operation {
 	t.Helper()
+	resultDigest, err := CatalogDigest(after)
+	require.NoError(t, err)
 	operation, err := NewOperation(id, OperationRenameColumn, depends, []ObjectID{"task"}, nil, nil,
-		[]stmt.Statement{stmt.New(sqltext.Text("ALTER TABLE tasks RENAME COLUMN " + from + " TO " + to))}, TransactionEngineDefault, false, nil)
+		resultDigest, []stmt.Statement{stmt.New(sqltext.Text("ALTER TABLE tasks RENAME COLUMN " + from + " TO " + to))}, TransactionEngineDefault, false, nil)
 	require.NoError(t, err)
 	return operation
 }

@@ -25,9 +25,11 @@ func catalogForObjects(t *testing.T, profile changeplan.Profile, source string, 
 	return catalog
 }
 
-func operationFor(t *testing.T, id changeplan.OperationID, kind changeplan.OperationKind, object changeplan.ObjectID, depends []changeplan.OperationID, pre, post []changeplan.Fact, sql string) changeplan.Operation {
+func operationFor(t *testing.T, id changeplan.OperationID, kind changeplan.OperationKind, object changeplan.ObjectID, depends []changeplan.OperationID, pre, post []changeplan.Fact, after changeplan.Catalog, sql string) changeplan.Operation {
 	t.Helper()
-	operation, err := changeplan.NewOperation(id, kind, depends, []changeplan.ObjectID{object}, pre, post,
+	digest, err := changeplan.CatalogDigest(after)
+	require.NoError(t, err)
+	operation, err := changeplan.NewOperation(id, kind, depends, []changeplan.ObjectID{object}, pre, post, digest,
 		[]stmt.Statement{stmt.New(sqltext.Text(sql))}, changeplan.TransactionEngineDefault, false, []stmt.Statement{})
 	require.NoError(t, err)
 	return operation
@@ -66,11 +68,11 @@ func TestAdjacentResolvedCatalogContract(t *testing.T) {
 	require.NoError(t, err)
 	droppedFact, err := changeplan.NewFact(created.ID(), "$", changeplan.FactOperatorAbsent, "")
 	require.NoError(t, err)
-	create := operationFor(t, "create", changeplan.OperationCreateTable, created.ID(), nil, nil, []changeplan.Fact{createFact}, "CREATE TABLE created (id INTEGER)")
-	rename := operationFor(t, "rename", changeplan.OperationRenameTable, created.ID(), []changeplan.OperationID{"create"}, []changeplan.Fact{createdName}, []changeplan.Fact{renamedName}, "ALTER TABLE created RENAME TO renamed")
-	renameTwo := operationFor(t, "rename-two", changeplan.OperationRenameTable, created.ID(), []changeplan.OperationID{"rename"}, []changeplan.Fact{renamedName}, []changeplan.Fact{finalName}, "ALTER TABLE renamed RENAME TO final")
-	alter := operationFor(t, "alter", changeplan.OperationAddColumn, created.ID(), []changeplan.OperationID{"rename-two"}, []changeplan.Fact{finalName}, []changeplan.Fact{titleFact}, "ALTER TABLE final ADD COLUMN title TEXT")
-	drop := operationFor(t, "drop", changeplan.OperationDropTable, created.ID(), []changeplan.OperationID{"alter"}, []changeplan.Fact{titleFact}, []changeplan.Fact{droppedFact}, "DROP TABLE final")
+	create := operationFor(t, "create", changeplan.OperationCreateTable, created.ID(), nil, nil, []changeplan.Fact{createFact}, afterCreate, "CREATE TABLE created (id INTEGER)")
+	rename := operationFor(t, "rename", changeplan.OperationRenameTable, created.ID(), []changeplan.OperationID{"create"}, []changeplan.Fact{createdName}, []changeplan.Fact{renamedName}, afterRename, "ALTER TABLE created RENAME TO renamed")
+	renameTwo := operationFor(t, "rename-two", changeplan.OperationRenameTable, created.ID(), []changeplan.OperationID{"rename"}, []changeplan.Fact{renamedName}, []changeplan.Fact{finalName}, afterSecondRename, "ALTER TABLE renamed RENAME TO final")
+	alter := operationFor(t, "alter", changeplan.OperationAddColumn, created.ID(), []changeplan.OperationID{"rename-two"}, []changeplan.Fact{finalName}, []changeplan.Fact{titleFact}, afterAlter, "ALTER TABLE final ADD COLUMN title TEXT")
+	drop := operationFor(t, "drop", changeplan.OperationDropTable, created.ID(), []changeplan.OperationID{"alter"}, []changeplan.Fact{titleFact}, []changeplan.Fact{droppedFact}, baseline, "DROP TABLE final")
 	renameBinding, err := changeplan.NewBaselineRename("rename", created.ID(), "main", "renamed")
 	require.NoError(t, err)
 	renameBindingTwo, err := changeplan.NewBaselineRename("rename-two", created.ID(), "main", "final")
@@ -153,9 +155,9 @@ func TestOccurrenceIdentityContract(t *testing.T) {
 	gotID, ok = withCreate.ObjectID(schema.ObjectTable, "public", "a")
 	require.True(t, ok)
 	require.Equal(t, createFuture.ID(), gotID)
-	rename, err := operationForOccurrence(t, "rename-a-b", changeplan.OperationRenameTable, ordinary.ID(), nil, "ALTER TABLE a RENAME TO b")
+	rename, err := operationForOccurrence(t, "rename-a-b", changeplan.OperationRenameTable, ordinary.ID(), nil, withRename, "ALTER TABLE a RENAME TO b")
 	require.NoError(t, err)
-	create, err := operationForOccurrence(t, "op-create-a-1", changeplan.OperationCreateTable, createFuture.ID(), []changeplan.OperationID{"rename-a-b"}, "CREATE TABLE a (id INTEGER)")
+	create, err := operationForOccurrence(t, "op-create-a-1", changeplan.OperationCreateTable, createFuture.ID(), []changeplan.OperationID{"rename-a-b"}, withCreate, "CREATE TABLE a (id INTEGER)")
 	require.NoError(t, err)
 	renameBinding, err := changeplan.NewBaselineRename(rename.ID(), ordinary.ID(), "public", "b")
 	require.NoError(t, err)
@@ -184,12 +186,12 @@ func TestOccurrenceReuseSequences(t *testing.T) {
 	require.NoError(t, err)
 	futureTwoObject, err := changeplan.NewCatalogObject(futureTwo.ID(), definition)
 	require.NoError(t, err)
-	dropOrdinary, err := operationForOccurrence(t, "drop-ordinary", changeplan.OperationDropTable, ordinaryObject.ID(), nil, "DROP TABLE a")
+	emptyReuse := make([]changeplan.CatalogObject, 0)
+	dropOrdinary, err := operationForOccurrence(t, "drop-ordinary", changeplan.OperationDropTable, ordinaryObject.ID(), nil, catalogForObjects(t, profile, "fixture-source", emptyReuse...), "DROP TABLE a")
 	require.NoError(t, err)
-	createTwo, err := operationForOccurrence(t, "op-create-a-2", changeplan.OperationCreateTable, futureTwo.ID(), []changeplan.OperationID{"drop-ordinary"}, "CREATE TABLE a (id INTEGER)")
+	createTwo, err := operationForOccurrence(t, "op-create-a-2", changeplan.OperationCreateTable, futureTwo.ID(), []changeplan.OperationID{"drop-ordinary"}, catalogForObjects(t, profile, "fixture-source", futureTwoObject), "CREATE TABLE a (id INTEGER)")
 	require.NoError(t, err)
 	dropDecision := mustDecision(t, "drop-ordinary-decision", changeplan.DecisionAcceptDestructive, ordinaryObject.ID(), "", "", "approved")
-	emptyReuse := make([]changeplan.CatalogObject, 0)
 	dropStep, err := changeplan.NewResolvedCatalogStep(dropOrdinary.ID(), catalogForObjects(t, profile, "fixture-source", emptyReuse...))
 	require.NoError(t, err)
 	createStep, err := changeplan.NewResolvedCatalogStep(createTwo.ID(), catalogForObjects(t, profile, "fixture-source", futureTwoObject))
@@ -212,11 +214,11 @@ func TestOccurrenceReuseSequences(t *testing.T) {
 	require.NoError(t, err)
 	empty := make([]changeplan.CatalogObject, 0)
 	emptyBaseline := catalogForObjects(t, profile, "fixture-source", empty...)
-	createOne, err := operationForOccurrence(t, "op-create-a-1", changeplan.OperationCreateTable, futureOne.ID(), nil, "CREATE TABLE a (id INTEGER)")
+	createOne, err := operationForOccurrence(t, "op-create-a-1", changeplan.OperationCreateTable, futureOne.ID(), nil, catalogForObjects(t, profile, "fixture-source", futureOneObject), "CREATE TABLE a (id INTEGER)")
 	require.NoError(t, err)
-	dropOne, err := operationForOccurrence(t, "drop-a-1", changeplan.OperationDropTable, futureOne.ID(), []changeplan.OperationID{"op-create-a-1"}, "DROP TABLE a")
+	dropOne, err := operationForOccurrence(t, "drop-a-1", changeplan.OperationDropTable, futureOne.ID(), []changeplan.OperationID{"op-create-a-1"}, emptyBaseline, "DROP TABLE a")
 	require.NoError(t, err)
-	createThree, err := operationForOccurrence(t, "op-create-a-3", changeplan.OperationCreateTable, futureThree.ID(), []changeplan.OperationID{"drop-a-1"}, "CREATE TABLE a (id INTEGER)")
+	createThree, err := operationForOccurrence(t, "op-create-a-3", changeplan.OperationCreateTable, futureThree.ID(), []changeplan.OperationID{"drop-a-1"}, catalogForObjects(t, profile, "fixture-source", futureThreeObject), "CREATE TABLE a (id INTEGER)")
 	require.NoError(t, err)
 	stepOne, err := changeplan.NewResolvedCatalogStep(createOne.ID(), catalogForObjects(t, profile, "fixture-source", futureOneObject))
 	require.NoError(t, err)
@@ -245,7 +247,7 @@ func TestResolvedPrefixNegativeContract(t *testing.T) {
 	object, err := changeplan.NewCatalogObject("ordinary", tableDefinition("users", false))
 	require.NoError(t, err)
 	baseline := catalogForObjects(t, profile, "negative-source", object)
-	operation, err := operationForOccurrence(t, "native", changeplan.OperationNativeSQL, object.ID(), nil, "SELECT 1")
+	operation, err := operationForOccurrence(t, "native", changeplan.OperationNativeSQL, object.ID(), nil, baseline, "SELECT 1")
 	require.NoError(t, err)
 	decision := mustDecision(t, "native-decision", changeplan.DecisionAcceptNativeSQL, object.ID(), "", "", "approved")
 	wrongStep, err := changeplan.NewResolvedCatalogStep("different-operation", baseline)
@@ -258,7 +260,7 @@ func TestResolvedPrefixNegativeContract(t *testing.T) {
 	require.NoError(t, err)
 	_, err = changeplan.NewResolvedChanges(baseline, []changeplan.ResolvedCatalogStep{wrongStep, extraStep}, []changeplan.Decision{decision}, []changeplan.Operation{operation}, nil, nil)
 	require.ErrorContains(t, err, "step count")
-	duplicateOperation, err := operationForOccurrence(t, "duplicate", changeplan.OperationNativeSQL, object.ID(), []changeplan.OperationID{"native"}, "SELECT 2")
+	duplicateOperation, err := operationForOccurrence(t, "duplicate", changeplan.OperationNativeSQL, object.ID(), []changeplan.OperationID{"native"}, baseline, "SELECT 2")
 	require.NoError(t, err)
 	duplicateStep, err := changeplan.NewResolvedCatalogStep(duplicateOperation.ID(), baseline)
 	require.NoError(t, err)
@@ -275,8 +277,12 @@ func TestResolvedPrefixNegativeContract(t *testing.T) {
 	require.ErrorContains(t, err, "identity differs")
 }
 
-func operationForOccurrence(t *testing.T, id changeplan.OperationID, kind changeplan.OperationKind, object changeplan.ObjectID, depends []changeplan.OperationID, sql string) (changeplan.Operation, error) {
+func operationForOccurrence(t *testing.T, id changeplan.OperationID, kind changeplan.OperationKind, object changeplan.ObjectID, depends []changeplan.OperationID, after changeplan.Catalog, sql string) (changeplan.Operation, error) {
 	t.Helper()
+	digest, err := changeplan.CatalogDigest(after)
+	if err != nil {
+		return changeplan.Operation{}, err
+	}
 	return changeplan.NewOperation(id, kind, depends, []changeplan.ObjectID{object}, nil, nil,
-		[]stmt.Statement{stmt.New(sqltext.Text(sql))}, changeplan.TransactionEngineDefault, false, []stmt.Statement{})
+		digest, []stmt.Statement{stmt.New(sqltext.Text(sql))}, changeplan.TransactionEngineDefault, false, []stmt.Statement{})
 }

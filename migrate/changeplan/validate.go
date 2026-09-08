@@ -100,7 +100,7 @@ func validatePlanParts(baseline BaselineIdentity, decisions []Decision, operatio
 		opIDs[operation.id] = index
 		if _, err := NewOperation(operation.id, operation.kind, operation.dependsOn,
 			operation.objects, operation.preconditions, operation.postconditions,
-			operation.statements, operation.transaction, operation.reversible,
+			operation.resultDigest, operation.statements, operation.transaction, operation.reversible,
 			operation.reverseStatements); err != nil {
 			return err
 		}
@@ -254,6 +254,9 @@ func validateResolvedState(resolved ResolvedChanges, baseline BaselineIdentity) 
 	if err != nil {
 		return err
 	}
+	if err := validateResolvedResultDigests(resolved, order); err != nil {
+		return err
+	}
 	if err := validateResolvedRenameDecisions(resolved, baseline, order); err != nil {
 		return err
 	}
@@ -309,6 +312,22 @@ func validateResolvedState(resolved ResolvedChanges, baseline BaselineIdentity) 
 		}
 		if err := matchActiveCatalog(resolved.steps[i].after, active); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func validateResolvedResultDigests(resolved ResolvedChanges, order []int) error {
+	if len(resolved.steps) != len(resolved.operations) {
+		return fmt.Errorf("%w: resolved catalog step count does not match operations", ErrInvalidPlan)
+	}
+	for i, index := range order {
+		digest, err := CatalogDigest(resolved.steps[i].after)
+		if err != nil {
+			return err
+		}
+		if digest != resolved.operations[index].resultDigest {
+			return fmt.Errorf("%w: operation %q result digest does not match resolved catalog", ErrInvalidPlan, resolved.operations[index].id)
 		}
 	}
 	return nil
