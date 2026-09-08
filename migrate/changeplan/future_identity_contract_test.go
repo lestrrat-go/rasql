@@ -1,7 +1,10 @@
 package changeplan
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
 
@@ -60,7 +63,11 @@ func newFutureIdentityFixture(t *testing.T) futureIdentityFixture {
 func TestFutureIdentityRejectedAtNewPlan(t *testing.T) {
 	fixture := newFutureIdentityFixture(t)
 	fixture.baseline.objects[1].id = "corrupt-future-id"
-	_, err := newPlan(fixture.profile, fixture.baseline, fixture.history, nil, []Operation{fixture.operation})
+	source := futureIdentityProfileSource{value: engineprofile.Profile{
+		ID: fixture.profile.ID(), Engine: fixture.profile.Engine(), Version: fixture.profile.Version(),
+		Capabilities: fixture.profile.Capabilities(), Limits: fixture.profile.Limits(),
+	}}
+	_, err := NewPlan(source, fixture.baseline, fixture.history, nil, []Operation{fixture.operation})
 	require.ErrorIs(t, err, ErrInvalidIdentity)
 }
 
@@ -82,8 +89,21 @@ func TestFutureIdentityRejectedAtDecode(t *testing.T) {
 	objects[1].(map[string]any)["id"] = "corrupt-future-id"
 	mutated, err := json.Marshal(root)
 	require.NoError(t, err)
+	originalID, ok := root["id"].(string)
+	require.True(t, ok)
+	mutated = futureIdentityRehash(t, mutated, originalID)
 	_, err = Decode(mutated)
 	require.ErrorIs(t, err, ErrInvalidIdentity)
+}
+
+func futureIdentityRehash(t *testing.T, data []byte, planID string) []byte {
+	t.Helper()
+	withoutID := bytes.Replace(data, []byte(`"id":"`+planID+`",`), nil, 1)
+	withoutID = bytes.TrimSuffix(withoutID, []byte{'\n'})
+	digest := sha256.Sum256(withoutID)
+	mutatedID := fmt.Sprintf("%x", digest[:])
+	data = bytes.Replace(data, []byte(`"id":"`+planID+`",`), []byte(`"id":"`+mutatedID+`",`), 1)
+	return data
 }
 
 func TestFutureIdentityRejectedAtNewResolvedChanges(t *testing.T) {
