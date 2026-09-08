@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"os/exec"
 	"path/filepath"
 	"sync"
 	"testing"
