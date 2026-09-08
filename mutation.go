@@ -141,7 +141,21 @@ func ExecMutation(ctx context.Context, executor Executor, plan MutationPlan) (Mu
 	}
 	result, err := executor.Exec(ctx, compiled)
 	if err != nil {
-		return MutationOutcome{Durability: DurabilityUnknown}, err
+		// executor.Exec wraps an after-hook failure in *ExtensionError, which
+		// still reports whether the driver call underneath it succeeded. When
+		// it did, and a result came back, the write already landed: reporting
+		// Unknown and zero rows here would tell the caller less than the
+		// executor actually knows, so the outcome is filled in from that
+		// result instead of being discarded alongside the hook error.
+		var extensionErr *ExtensionError
+		if !errors.As(err, &extensionErr) || !extensionErr.ExecutionSucceeded() || result == nil {
+			return MutationOutcome{Durability: DurabilityUnknown}, err
+		}
+		affected, rowsErr := result.RowsAffected()
+		if rowsErr != nil {
+			return MutationOutcome{Durability: DurabilityUnknown}, err
+		}
+		return MutationOutcome{Affected: affected, Durability: executorDurability(executor)}, err
 	}
 	if result == nil {
 		return MutationOutcome{Durability: DurabilityUnknown}, fmt.Errorf("rasql: executor returned nil mutation result")
