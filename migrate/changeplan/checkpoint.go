@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 )
 
 type Checkpoint struct {
@@ -92,44 +90,4 @@ func validateCheckpointShape(data []byte) error {
 		return fmt.Errorf("%w: checkpoint next_index type", ErrInvalidWire)
 	}
 	return nil
-}
-func ReadCheckpoint(name string) (Checkpoint, error) {
-	b, err := os.ReadFile(name)
-	if err != nil {
-		return Checkpoint{}, err
-	}
-	return DecodeCheckpoint(b)
-}
-func WriteCheckpoint(name string, c Checkpoint) error {
-	b, err := EncodeCheckpoint(c)
-	if err != nil {
-		return err
-	}
-	f, err := os.CreateTemp(filepath.Dir(name), ".migration-checkpoint-*")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	defer func() { _ = os.Remove(tmp) }()
-	if err := f.Chmod(0o600); err != nil {
-		_ = f.Close()
-		return err
-	}
-	n, err := f.Write(b)
-	if err != nil {
-		_ = f.Close()
-		return err
-	}
-	if n != len(b) {
-		_ = f.Close()
-		return io.ErrShortWrite
-	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp, name)
 }
