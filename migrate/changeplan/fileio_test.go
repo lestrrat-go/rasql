@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,7 +14,7 @@ import (
 
 type fakeAtomicFile struct {
 	name     string
-	calls    *[]string
+	calls    *[]fakeCall
 	data     []byte
 	chmodErr error
 	writeN   int
@@ -22,14 +23,21 @@ type fakeAtomicFile struct {
 	closeErr error
 }
 
-func (f *fakeAtomicFile) record(call string) { *f.calls = append(*f.calls, call) }
-func (f *fakeAtomicFile) Name() string       { return f.name }
-func (f *fakeAtomicFile) Chmod(os.FileMode) error {
-	f.record("chmod")
+type fakeCall struct {
+	op   string
+	args []string
+	mode fs.FileMode
+	data []byte
+}
+
+func (f *fakeAtomicFile) record(call fakeCall) { *f.calls = append(*f.calls, call) }
+func (f *fakeAtomicFile) Name() string         { return f.name }
+func (f *fakeAtomicFile) Chmod(mode fs.FileMode) error {
+	f.record(fakeCall{op: "chmod", mode: mode})
 	return f.chmodErr
 }
 func (f *fakeAtomicFile) Write(data []byte) (int, error) {
-	f.record("write")
+	f.record(fakeCall{op: "write", data: append([]byte(nil), data...)})
 	if f.writeErr != nil {
 		return 0, f.writeErr
 	}
@@ -41,16 +49,16 @@ func (f *fakeAtomicFile) Write(data []byte) (int, error) {
 	return n, nil
 }
 func (f *fakeAtomicFile) Sync() error {
-	f.record("sync")
+	f.record(fakeCall{op: "sync"})
 	return f.syncErr
 }
 func (f *fakeAtomicFile) Close() error {
-	f.record("close")
+	f.record(fakeCall{op: "close"})
 	return f.closeErr
 }
 
 type fakeFileSystem struct {
-	calls       []string
+	calls       []fakeCall
 	readData    []byte
 	readErr     error
 	createErr   error
@@ -62,12 +70,12 @@ type fakeFileSystem struct {
 	destination map[string][]byte
 }
 
-func (f *fakeFileSystem) ReadFile(string) ([]byte, error) {
-	f.calls = append(f.calls, "read")
+func (f *fakeFileSystem) ReadFile(name string) ([]byte, error) {
+	f.calls = append(f.calls, fakeCall{op: "read", args: []string{name}})
 	return append([]byte(nil), f.readData...), f.readErr
 }
 func (f *fakeFileSystem) CreateTemp(dir, pattern string) (atomicFile, error) {
-	f.calls = append(f.calls, "create")
+	f.calls = append(f.calls, fakeCall{op: "create", args: []string{dir, pattern}})
 	f.createDir, f.createPat = dir, pattern
 	if f.createErr != nil {
 		return nil, f.createErr
@@ -78,7 +86,7 @@ func (f *fakeFileSystem) CreateTemp(dir, pattern string) (atomicFile, error) {
 	return f.file, nil
 }
 func (f *fakeFileSystem) Rename(oldPath, newPath string) error {
-	f.calls = append(f.calls, "rename")
+	f.calls = append(f.calls, fakeCall{op: "rename", args: []string{oldPath, newPath}})
 	if f.renameErr != nil {
 		return f.renameErr
 	}
@@ -88,8 +96,8 @@ func (f *fakeFileSystem) Rename(oldPath, newPath string) error {
 	f.destination[newPath] = append([]byte(nil), f.file.data...)
 	return nil
 }
-func (f *fakeFileSystem) Remove(string) error {
-	f.calls = append(f.calls, "remove")
+func (f *fakeFileSystem) Remove(name string) error {
+	f.calls = append(f.calls, fakeCall{op: "remove", args: []string{name}})
 	return f.removeErr
 }
 
@@ -101,34 +109,53 @@ func TestAtomicWriteFailureMatrix(t *testing.T) {
 	closeErr := errors.New("close")
 	renameErr := errors.New("rename")
 	removeErr := errors.New("remove")
+	destination := filepath.Join("/destination", "plan.json")
 	tests := []struct {
 		name      string
 		configure func(*fakeFileSystem)
 		wantErr   error
-		wantCalls []string
+		wantCalls []fakeCall
 	}{
 		{name: "create", configure: func(f *fakeFileSystem) { f.createErr = createErr }, wantErr: createErr,
-			wantCalls: []string{"create"}},
+			wantCalls: []fakeCall{{op: "create", args: []string{"/destination", ".temporary-*"}}}},
 		{name: "chmod", configure: func(f *fakeFileSystem) { f.file.chmodErr = chmodErr }, wantErr: chmodErr,
-			wantCalls: []string{"create", "chmod", "close", "remove"}},
+			wantCalls: []fakeCall{{op: "create", args: []string{"/destination", ".temporary-*"}},
+				{op: "chmod", mode: 0o600}, {op: "close"}, {op: "remove", args: []string{"/destination/temporary"}}}},
 		{name: "write error", configure: func(f *fakeFileSystem) { f.file.writeErr = writeErr }, wantErr: writeErr,
-			wantCalls: []string{"create", "chmod", "write", "close", "remove"}},
+			wantCalls: []fakeCall{{op: "create", args: []string{"/destination", ".temporary-*"}},
+				{op: "chmod", mode: 0o600}, {op: "write", data: []byte("replacement")}, {op: "close"},
+				{op: "remove", args: []string{"/destination/temporary"}}}},
 		{name: "short write", configure: func(f *fakeFileSystem) { f.file.writeN = 1 }, wantErr: io.ErrShortWrite,
-			wantCalls: []string{"create", "chmod", "write", "close", "remove"}},
+			wantCalls: []fakeCall{{op: "create", args: []string{"/destination", ".temporary-*"}},
+				{op: "chmod", mode: 0o600}, {op: "write", data: []byte("replacement")}, {op: "close"},
+				{op: "remove", args: []string{"/destination/temporary"}}}},
 		{name: "sync", configure: func(f *fakeFileSystem) { f.file.syncErr = syncErr }, wantErr: syncErr,
-			wantCalls: []string{"create", "chmod", "write", "sync", "close", "remove"}},
-		{name: "close", configure: func(f *fakeFileSystem) { f.file.closeErr = closeErr }, wantErr: closeErr,
-			wantCalls: []string{"create", "chmod", "write", "sync", "close", "remove"}},
-		{name: "rename", configure: func(f *fakeFileSystem) { f.renameErr = renameErr }, wantErr: renameErr,
-			wantCalls: []string{"create", "chmod", "write", "sync", "close", "rename", "remove"}},
-		{name: "remove error", configure: func(f *fakeFileSystem) {
-			f.file.syncErr = syncErr
+			wantCalls: []fakeCall{{op: "create", args: []string{"/destination", ".temporary-*"}},
+				{op: "chmod", mode: 0o600}, {op: "write", data: []byte("replacement")}, {op: "sync"}, {op: "close"},
+				{op: "remove", args: []string{"/destination/temporary"}}}},
+		{name: "close", configure: func(f *fakeFileSystem) {
+			f.file.closeErr = closeErr
 			f.removeErr = removeErr
-		}, wantErr: syncErr, wantCalls: []string{"create", "chmod", "write", "sync", "close", "remove"}},
-		{name: "success", wantCalls: []string{"create", "chmod", "write", "sync", "close", "rename"}},
+		}, wantErr: closeErr, wantCalls: []fakeCall{{op: "create", args: []string{"/destination", ".temporary-*"}},
+			{op: "chmod", mode: 0o600}, {op: "write", data: []byte("replacement")}, {op: "sync"}, {op: "close"},
+			{op: "remove", args: []string{"/destination/temporary"}}}},
+		{name: "rename", configure: func(f *fakeFileSystem) { f.renameErr = renameErr }, wantErr: renameErr,
+			wantCalls: []fakeCall{{op: "create", args: []string{"/destination", ".temporary-*"}},
+				{op: "chmod", mode: 0o600}, {op: "write", data: []byte("replacement")}, {op: "sync"}, {op: "close"},
+				{op: "rename", args: []string{"/destination/temporary", destination}},
+				{op: "remove", args: []string{"/destination/temporary"}}}},
+		{name: "remove error", configure: func(f *fakeFileSystem) {
+			f.renameErr = renameErr
+			f.removeErr = removeErr
+		}, wantErr: renameErr, wantCalls: []fakeCall{{op: "create", args: []string{"/destination", ".temporary-*"}},
+			{op: "chmod", mode: 0o600}, {op: "write", data: []byte("replacement")}, {op: "sync"}, {op: "close"},
+			{op: "rename", args: []string{"/destination/temporary", destination}},
+			{op: "remove", args: []string{"/destination/temporary"}}}},
+		{name: "success", wantCalls: []fakeCall{{op: "create", args: []string{"/destination", ".temporary-*"}},
+			{op: "chmod", mode: 0o600}, {op: "write", data: []byte("replacement")}, {op: "sync"}, {op: "close"},
+			{op: "rename", args: []string{"/destination/temporary", destination}}}},
 	}
 
-	destination := filepath.Join("/destination", "plan.json")
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			fs := &fakeFileSystem{
@@ -144,7 +171,7 @@ func TestAtomicWriteFailureMatrix(t *testing.T) {
 				if err != nil {
 					t.Fatalf("atomicWrite() error = %v", err)
 				}
-			} else if !errors.Is(err, test.wantErr) {
+			} else if err != test.wantErr {
 				t.Fatalf("atomicWrite() error = %v, want %v", err, test.wantErr)
 			}
 			if !reflect.DeepEqual(fs.calls, test.wantCalls) {
@@ -184,8 +211,12 @@ func TestReadDecodedFailureMatrix(t *testing.T) {
 				}
 				return "decoded", test.decodeErr
 			})
-			if !errors.Is(err, test.wantErr) {
+			if err != test.wantErr {
 				t.Fatalf("readDecoded() error = %v, want %v", err, test.wantErr)
+			}
+			wantCalls := []fakeCall{{op: "read", args: []string{"input"}}}
+			if !reflect.DeepEqual(fs.calls, wantCalls) {
+				t.Fatalf("filesystem calls = %#v, want %#v", fs.calls, wantCalls)
 			}
 			if calls != test.wantCalls {
 				t.Fatalf("decoder calls = %d, want %d", calls, test.wantCalls)
@@ -206,6 +237,13 @@ func TestPlanFileIO(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	encoded, err := Encode(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(encoded, fixture) {
+		t.Fatal("Encode(plan) bytes differ from stable fixture")
+	}
 	dir := t.TempDir()
 	name := filepath.Join(dir, "plan.json")
 	if err := Write(name, plan); err != nil {
@@ -215,10 +253,10 @@ func TestPlanFileIO(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(got, fixture) {
-		t.Fatalf("written bytes differ from fixture")
+	if !bytes.Equal(got, encoded) {
+		t.Fatalf("written bytes differ from Encode(plan)")
 	}
-	assertMode0600(t, name)
+	assertMode(t, name, 0o600)
 	readPlan, err := Read(name)
 	if err != nil {
 		t.Fatal(err)
@@ -226,11 +264,25 @@ func TestPlanFileIO(t *testing.T) {
 	if !reflect.DeepEqual(readPlan, plan) {
 		t.Fatalf("Read() plan differs from fixture plan")
 	}
-	assertNoTemporaryFiles(t, dir, ".migration-plan-")
-
-	if err := os.WriteFile(name, []byte("old"), 0o644); err != nil {
+	if readPlan.ID() != plan.ID() {
+		t.Fatalf("Read() plan ID = %s, want %s", readPlan.ID(), plan.ID())
+	}
+	reencoded, err := Encode(readPlan)
+	if err != nil {
 		t.Fatal(err)
 	}
+	if !bytes.Equal(reencoded, encoded) {
+		t.Fatal("re-encoded Read() plan bytes differ from Encode(plan)")
+	}
+	assertNoTemporaryFiles(t, dir, ".migration-plan-")
+
+	if err := os.WriteFile(name, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(name, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	assertMode(t, name, 0o644)
 	if err := Write(name, plan); err != nil {
 		t.Fatal(err)
 	}
@@ -238,12 +290,14 @@ func TestPlanFileIO(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(got, fixture) {
+	if !bytes.Equal(got, encoded) {
 		t.Fatalf("replacement bytes differ from fixture")
 	}
-	assertMode0600(t, name)
+	assertMode(t, name, 0o600)
+	assertNoTemporaryFiles(t, dir, ".migration-plan-")
 
-	if err := os.WriteFile(name, []byte("preserve"), 0o644); err != nil {
+	old := []byte("preserve")
+	if err := os.WriteFile(name, old, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := Write(name, Plan{}); err == nil {
@@ -253,7 +307,7 @@ func TestPlanFileIO(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != "preserve" {
+	if !bytes.Equal(got, old) {
 		t.Fatalf("invalid plan changed destination to %q", got)
 	}
 	assertNoTemporaryFiles(t, dir, ".migration-plan-")
@@ -263,14 +317,14 @@ func TestPlanFileIO(t *testing.T) {
 	}
 }
 
-func assertMode0600(t *testing.T, name string) {
+func assertMode(t *testing.T, name string, want fs.FileMode) {
 	t.Helper()
 	info, err := os.Stat(name)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := info.Mode().Perm(); got != 0o600 {
-		t.Fatalf("mode = %o, want 600", got)
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("mode = %o, want %o", got, want)
 	}
 }
 

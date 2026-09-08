@@ -49,8 +49,15 @@ func TestCheckpointAccessorsAndEncoding(t *testing.T) {
 
 func TestCheckpointDecodeRejectsInvalidWire(t *testing.T) {
 	validPlan := strings.Repeat("0", 62) + "ab"
-	validCatalog := strings.Repeat("0", 64)
+	validCatalog := strings.Repeat("0", 62) + "cd"
 	base := `{"plan_id":"` + validPlan + `","next_index":2,"catalog_digest":"` + validCatalog + `"}`
+	decoded, err := DecodeCheckpoint([]byte(base))
+	if err != nil {
+		t.Fatalf("DecodeCheckpoint(valid object without newline) error = %v", err)
+	}
+	if decoded.NextIndex() != 2 {
+		t.Fatalf("decoded next index = %d, want 2", decoded.NextIndex())
+	}
 	tests := []struct {
 		name string
 		data string
@@ -63,6 +70,7 @@ func TestCheckpointDecodeRejectsInvalidWire(t *testing.T) {
 		{name: "null catalog", data: strings.Replace(base, `"`+validCatalog+`"`, "null", 1)},
 		{name: "unknown field", data: strings.TrimSuffix(base, "}") + `,"extra":true}`},
 		{name: "array", data: "[]"},
+		{name: "null", data: "null"},
 		{name: "string", data: `"checkpoint"`},
 		{name: "plan type", data: strings.Replace(base, `"`+validPlan+`"`, "1", 1)},
 		{name: "index type", data: strings.Replace(base, "2", `"2"`, 1)},
@@ -70,7 +78,10 @@ func TestCheckpointDecodeRejectsInvalidWire(t *testing.T) {
 		{name: "malformed", data: base[:len(base)-1]},
 		{name: "short plan digest", data: strings.Replace(base, validPlan, "1", 1)},
 		{name: "short catalog digest", data: strings.Replace(base, validCatalog, "1", 1)},
+		{name: "non-hex plan digest", data: strings.Replace(base, validPlan, strings.Repeat("g", 64), 1)},
+		{name: "non-hex catalog digest", data: strings.Replace(base, validCatalog, strings.Repeat("g", 64), 1)},
 		{name: "uppercase plan digest", data: strings.Replace(base, validPlan, strings.ToUpper(validPlan), 1)},
+		{name: "uppercase catalog digest", data: strings.Replace(base, validCatalog, strings.ToUpper(validCatalog), 1)},
 		{name: "negative index", data: strings.Replace(base, "2", "-1", 1)},
 		{name: "trailing json", data: base + "{}"},
 	}
@@ -90,6 +101,12 @@ func TestCheckpointDecodeRejectsInvalidWire(t *testing.T) {
 	}
 	if _, err := DecodeCheckpoint([]byte(`{"plan_id":"` + strings.Repeat("0", 64) + `","next_index":0,"catalog_digest":"` + validCatalog + `"}`)); !errors.Is(err, ErrInvalidPlan) {
 		t.Fatalf("zero plan ID error = %v, want ErrInvalidPlan", err)
+	}
+	if err := func() error {
+		_, err := EncodeCheckpoint(Checkpoint{})
+		return err
+	}(); !errors.Is(err, ErrInvalidPlan) {
+		t.Fatalf("EncodeCheckpoint(Checkpoint{}) error = %v, want ErrInvalidPlan", err)
 	}
 }
 
@@ -138,7 +155,7 @@ func TestCheckpointFileIO(t *testing.T) {
 	if !bytes.Equal(got, encoded) {
 		t.Fatalf("written checkpoint bytes differ")
 	}
-	assertMode0600(t, name)
+	assertMode(t, name, 0o600)
 	readCheckpoint, err := ReadCheckpoint(name)
 	if err != nil {
 		t.Fatal(err)
@@ -148,9 +165,13 @@ func TestCheckpointFileIO(t *testing.T) {
 	}
 	assertNoTemporaryFiles(t, dir, ".migration-checkpoint-")
 
-	if err := os.WriteFile(name, []byte("old"), 0o644); err != nil {
+	if err := os.WriteFile(name, []byte("old"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(name, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	assertMode(t, name, 0o644)
 	if err := WriteCheckpoint(name, checkpoint); err != nil {
 		t.Fatal(err)
 	}
@@ -161,12 +182,13 @@ func TestCheckpointFileIO(t *testing.T) {
 	if !bytes.Equal(got, encoded) {
 		t.Fatalf("replacement checkpoint bytes differ")
 	}
-	assertMode0600(t, name)
+	assertMode(t, name, 0o600)
+	assertNoTemporaryFiles(t, dir, ".migration-checkpoint-")
 
 	if err := os.WriteFile(name, []byte("preserve"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := WriteCheckpoint(name, Checkpoint{}); err == nil {
+	if err := WriteCheckpoint(name, Checkpoint{}); !errors.Is(err, ErrInvalidPlan) {
 		t.Fatal("WriteCheckpoint(Checkpoint{}) succeeded")
 	}
 	got, err = os.ReadFile(name)
