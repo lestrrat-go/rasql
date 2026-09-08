@@ -1460,6 +1460,14 @@ func validationContractOperation(t *testing.T, kind OperationKind, objects []Obj
 	return NewOperation("validation-operation", kind, nil, objects, nil, nil, Digest{1}, statements, TransactionForbidden, reversible, reverse)
 }
 
+func validationContractDependencyOperation(t *testing.T, id string, dependsOn []OperationID) Operation {
+	t.Helper()
+	operation, err := NewOperation(OperationID(id), OperationNativeSQL, dependsOn, []ObjectID{"object"}, nil, nil,
+		Digest{1}, []stmt.Statement{stmt.New(sqltext.Text("SELECT 1"))}, TransactionForbidden, false, nil)
+	require.NoError(t, err)
+	return operation
+}
+
 func TestValidationContractOperationSemantics(t *testing.T) {
 	validSQL := []stmt.Statement{stmt.New(sqltext.Text("ALTER TABLE users ADD COLUMN value TEXT"))}
 	for _, row := range []struct {
@@ -1511,6 +1519,30 @@ func TestValidationContractOperationSemantics(t *testing.T) {
 		require.ErrorIs(t, err, ErrInvalidOperation)
 		require.ErrorContains(t, err, "create_table needs one object")
 	})
+	t.Run("operation unknown kind", func(t *testing.T) {
+		_, err := NewOperation("unknown-kind", OperationKind("unknown"), nil, []ObjectID{"object"}, nil, nil,
+			Digest{1}, validSQL, TransactionForbidden, false, nil)
+		require.ErrorIs(t, err, ErrInvalidOperation)
+		require.ErrorContains(t, err, "unknown kind or transaction")
+	})
+	t.Run("operation unknown transaction", func(t *testing.T) {
+		_, err := NewOperation("unknown-transaction", OperationAddColumn, nil, []ObjectID{"object"}, nil, nil,
+			Digest{1}, validSQL, TransactionMode("unknown"), false, nil)
+		require.ErrorIs(t, err, ErrInvalidOperation)
+		require.ErrorContains(t, err, "unknown kind or transaction")
+	})
+	t.Run("constructor self dependency", func(t *testing.T) {
+		_, err := NewOperation("self", OperationNativeSQL, []OperationID{"self"}, []ObjectID{"object"}, nil, nil,
+			Digest{1}, []stmt.Statement{stmt.New(sqltext.Text("SELECT 1"))}, TransactionForbidden, false, nil)
+		require.ErrorIs(t, err, ErrInvalidOperation)
+		require.ErrorContains(t, err, "depends on itself")
+	})
+	t.Run("irreversible empty reverse succeeds", func(t *testing.T) {
+		operation, err := NewOperation("irreversible-empty-reverse", OperationNativeSQL, nil, []ObjectID{"object"}, nil, nil,
+			Digest{1}, []stmt.Statement{stmt.New(sqltext.Text("SELECT 1"))}, TransactionForbidden, false, []stmt.Statement{})
+		require.NoError(t, err)
+		require.Empty(t, operation.ReverseStatements())
+	})
 	t.Run("rename table two objects remains aggregate", func(t *testing.T) {
 		_, identity, object, _ := validationContractIdentity(t)
 		rename, err := NewOperation("rename", OperationRenameTable, nil, []ObjectID{object.ID()}, nil, nil,
@@ -1525,6 +1557,60 @@ func TestValidationContractOperationSemantics(t *testing.T) {
 		require.ErrorIs(t, err, ErrInvalidIdentity)
 		require.ErrorContains(t, err, "rename binding mismatch")
 	})
+	t.Run("rename table two objects plan remains aggregate", func(t *testing.T) {
+		profile, identity, object, history := validationContractIdentity(t)
+		rename, err := NewOperation("rename-plan", OperationRenameTable, nil, []ObjectID{object.ID()}, nil, nil,
+			Digest{1}, []stmt.Statement{stmt.New(sqltext.Text("ALTER TABLE users RENAME TO renamed"))}, TransactionForbidden, false, nil)
+		require.NoError(t, err)
+		rename.objects = []ObjectID{object.ID(), "other"}
+		binding, err := NewBaselineRename("rename-plan", object.ID(), "main", "renamed")
+		require.NoError(t, err)
+		baseline, err := NewBaselineIdentity(identity, "validation", []BaselineObject{object}, []BaselineRename{binding})
+		require.NoError(t, err)
+		_, err = newPlan(profile, baseline, history, nil, []Operation{rename})
+		require.ErrorIs(t, err, ErrInvalidIdentity)
+		require.ErrorContains(t, err, "rename binding mismatch")
+	})
+	for _, kind := range []OperationKind{OperationAddColumn, OperationBackfill, OperationNativeSQL} {
+		kind := kind
+		t.Run(string(kind)+" nil forward statements", func(t *testing.T) {
+			_, err := validationContractOperation(t, kind, []ObjectID{"object"}, nil, nil, false)
+			require.ErrorIs(t, err, ErrInvalidOperation)
+			require.ErrorContains(t, err, "needs forward SQL")
+		})
+		t.Run(string(kind)+" empty forward statements", func(t *testing.T) {
+			_, err := validationContractOperation(t, kind, []ObjectID{"object"}, []stmt.Statement{}, nil, false)
+			require.ErrorIs(t, err, ErrInvalidOperation)
+			require.ErrorContains(t, err, "needs forward SQL")
+		})
+	}
+	for _, kind := range []OperationKind{OperationAddColumn, OperationBackfill, OperationNativeSQL} {
+		kind := kind
+		for _, sqlText := range []string{"", "  "} {
+			name := string(kind) + " empty SQL"
+			if sqlText != "" {
+				name = string(kind) + " whitespace SQL"
+			}
+			t.Run(name, func(t *testing.T) {
+				_, err := validationContractOperation(t, kind, []ObjectID{"object"}, []stmt.Statement{stmt.New(sqltext.Text(sqlText))}, nil, false)
+				require.ErrorIs(t, err, ErrInvalidOperation)
+				require.ErrorContains(t, err, "statement SQL is empty")
+			})
+		}
+	}
+	for _, sqlText := range []string{"", "  "} {
+		name := "reversible reverse empty SQL"
+		if sqlText != "" {
+			name = "reversible reverse whitespace SQL"
+		}
+		t.Run(name, func(t *testing.T) {
+			_, err := validationContractOperation(t, OperationNativeSQL, []ObjectID{"object"},
+				[]stmt.Statement{stmt.New(sqltext.Text("SELECT 1"))},
+				[]stmt.Statement{stmt.New(sqltext.Text(sqlText))}, true)
+			require.ErrorIs(t, err, ErrInvalidOperation)
+			require.ErrorContains(t, err, "statement SQL is empty")
+		})
+	}
 	for _, row := range []struct {
 		name  string
 		value any
@@ -1680,15 +1766,52 @@ func TestValidationContractPlanSemantics(t *testing.T) {
 			require.ErrorContains(t, err, row.contains)
 		})
 	}
-	first, err := NewOperation("first", OperationNativeSQL, nil, []ObjectID{"object"}, nil, nil, Digest{2}, []stmt.Statement{stmt.New(sqltext.Text("SELECT 1"))}, TransactionForbidden, false, nil)
-	require.NoError(t, err)
-	second, err := NewOperation("second", OperationNativeSQL, []OperationID{"first"}, []ObjectID{"object"}, nil, nil, Digest{3}, []stmt.Statement{stmt.New(sqltext.Text("SELECT 2"))}, TransactionForbidden, false, nil)
-	require.NoError(t, err)
-	plan, err := newPlan(profile, baseline, history, []Decision{decision}, []Operation{second, first})
-	require.NoError(t, err)
-	order, err := plan.StableOperationOrder()
-	require.NoError(t, err)
-	require.Equal(t, []OperationID{"first", "second"}, order)
+	t.Run("decode self dependency", func(t *testing.T) {
+		root := validationContractJSON(t, validationContractValid(t)).(map[string]any)
+		validationContractSet(root, []any{"native-sql"}, "operations", 10, "depends_on")
+		validationContractDecodeError(t, validationContractRehash(t, validationContractBytes(t, root)), ErrInvalidOperation, "depends on itself")
+	})
+	t.Run("missing dependency later", func(t *testing.T) {
+		first := operation
+		first.id = "first-later-missing"
+		first.dependsOn = []OperationID{"later-missing"}
+		later := operation
+		later.id = "later"
+		_, err := newPlan(profile, baseline, history, []Decision{decision}, []Operation{first, later})
+		require.ErrorIs(t, err, ErrInvalidOperation)
+		require.ErrorContains(t, err, "missing dependency")
+	})
+	for _, row := range []struct {
+		name       string
+		operations []Operation
+	}{
+		{"two-node cycle", []Operation{
+			validationContractDependencyOperation(t, "cycle-a", []OperationID{"cycle-b"}),
+			validationContractDependencyOperation(t, "cycle-b", []OperationID{"cycle-a"}),
+		}},
+		{"three-node cycle", []Operation{
+			validationContractDependencyOperation(t, "cycle-a", []OperationID{"cycle-b"}),
+			validationContractDependencyOperation(t, "cycle-b", []OperationID{"cycle-c"}),
+			validationContractDependencyOperation(t, "cycle-c", []OperationID{"cycle-a"}),
+		}},
+	} {
+		row := row
+		t.Run(row.name, func(t *testing.T) {
+			_, err := newPlan(profile, baseline, history, []Decision{decision}, row.operations)
+			require.ErrorIs(t, err, ErrDependencyCycle)
+		})
+	}
+	t.Run("later-declared dependency succeeds", func(t *testing.T) {
+		first, err := NewOperation("first", OperationNativeSQL, nil, []ObjectID{"object"}, nil, nil, Digest{2}, []stmt.Statement{stmt.New(sqltext.Text("SELECT 1"))}, TransactionForbidden, false, nil)
+		require.NoError(t, err)
+		second, err := NewOperation("second", OperationNativeSQL, []OperationID{"first"}, []ObjectID{"object"}, nil, nil, Digest{3}, []stmt.Statement{stmt.New(sqltext.Text("SELECT 2"))}, TransactionForbidden, false, nil)
+		require.NoError(t, err)
+		plan, err := newPlan(profile, baseline, history, []Decision{decision}, []Operation{second, first})
+		require.NoError(t, err)
+		order, err := plan.StableOperationOrder()
+		require.NoError(t, err)
+		require.Equal(t, []OperationID{"first", "second"}, order)
+	})
 	for _, row := range []struct {
 		name     string
 		mutate   func(*BaselineIdentity)
@@ -1707,12 +1830,27 @@ func TestValidationContractPlanSemantics(t *testing.T) {
 			require.ErrorContains(t, err, row.contains)
 		})
 	}
-	zero := Plan{}
-	_, err = Encode(zero)
-	require.ErrorIs(t, err, ErrInvalidPlan)
-	plan.operations[0].resultDigest = Digest{8}
-	_, err = Encode(plan)
-	require.ErrorIs(t, err, ErrInvalidPlan)
+	t.Run("empty history table", func(t *testing.T) {
+		_, err := NewHistoryIdentity("main", "")
+		require.ErrorIs(t, err, ErrInvalidIdentity)
+		require.ErrorContains(t, err, "history table is required")
+	})
+	t.Run("blank history table", func(t *testing.T) {
+		_, err := NewHistoryIdentity("main", "   ")
+		require.ErrorIs(t, err, ErrInvalidIdentity)
+		require.ErrorContains(t, err, "history table is required")
+	})
+	t.Run("encode zero plan id", func(t *testing.T) {
+		_, err := Encode(Plan{})
+		require.ErrorIs(t, err, ErrInvalidPlan)
+	})
+	t.Run("encode stale plan id", func(t *testing.T) {
+		plan, err := newPlan(profile, baseline, history, []Decision{decision}, []Operation{operation})
+		require.NoError(t, err)
+		plan.operations[0].resultDigest = Digest{8}
+		_, err = Encode(plan)
+		require.ErrorIs(t, err, ErrInvalidPlan)
+	})
 
 	future, err := NewIntroducedBaselineObject("validation", "create", schema.TableDef{Schema: "main", Name: "created", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
 	require.NoError(t, err)
