@@ -266,7 +266,12 @@ func assertResultOperation(t *testing.T, operation changeplan.Operation) {
 	require.False(t, operation.Reversible())
 	require.Empty(t, operation.DependsOn())
 	require.Equal(t, []changeplan.ObjectID{"object"}, operation.Objects())
-	require.Len(t, operation.Statements(), 2)
+	statements := operation.Statements()
+	require.Len(t, statements, 2)
+	require.Equal(t, "SELECT 1", statements[0].SQL())
+	require.Equal(t, []any{[]byte("payload"), time.Unix(123, 456)}, statements[0].Args())
+	require.Equal(t, "SELECT 2", statements[1].SQL())
+	require.Equal(t, []any{}, statements[1].Args())
 }
 
 func TestIncompleteChangePlanErrorInvalidValues(t *testing.T) {
