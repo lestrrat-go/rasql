@@ -2031,7 +2031,7 @@ func newValidationContractRenameDependencyFixture(t *testing.T) validationContra
 		if i == 1 {
 			dependsOn = []OperationID{"rename-chain-a"}
 		}
-		renameSQL := "ALTER TABLE users RENAME TO " + names[0]
+		renameSQL := "ALTER TABLE " + strings.TrimPrefix(names[1], "main.") + " RENAME TO " + names[0]
 		operation, err := NewOperation(operationID, OperationRenameTable, dependsOn, []ObjectID{object.ID()}, nil, nil,
 			Digest{1}, []stmt.Statement{stmt.New(sqltext.Text(renameSQL))}, TransactionEngineDefault, false, nil)
 		require.NoError(t, err)
