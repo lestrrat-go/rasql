@@ -18,7 +18,7 @@ func TestCompactGeneratedMeasurements(t *testing.T) {
 	in := measurementEmitterFixture(t)
 	legacyInput := in.Clone()
 	legacyInput.Generation.Emitter = "legacy"
-	legacy, err := generate.LegacyStore(legacyInput)
+	legacy, err := generate.HistoricalStoreForTest(legacyInput)
 	require.NoError(t, err)
 	compactInput := in.Clone()
 	compactInput.Generation.Emitter = "compact"

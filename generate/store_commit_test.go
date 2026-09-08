@@ -87,7 +87,7 @@ func TestStoreWriteMatchesWritePackageByteForByte(t *testing.T) {
 	require.NoError(t, WritePackage("store", writeDir, users, orders))
 
 	storeDir := filepath.Join(t.TempDir(), "store")
-	store := Store{Package: "store", Dir: storeDir, Tables: []schema.TableDef{users, orders}}
+	store := Store{Package: "store", Dir: storeDir, legacyTables: []schema.TableDef{users, orders}}
 	require.NoError(t, store.Write())
 
 	require.Equal(t, snapshotDirFiles(t, writeDir), snapshotDirFiles(t, storeDir))
@@ -100,7 +100,7 @@ func TestStoreWriteCreatesAMissingDirectory(t *testing.T) {
 	dir := filepath.Join(base, "missing", "parent", "store")
 	require.NoDirExists(t, dir)
 
-	store := Store{Package: "store", Dir: dir, Tables: []schema.TableDef{commitTestUsersDef()}}
+	store := Store{Package: "store", Dir: dir, legacyTables: []schema.TableDef{commitTestUsersDef()}}
 	require.NoError(t, store.Write())
 
 	require.DirExists(t, dir)
@@ -127,12 +127,12 @@ func TestPlanCommitWritesInThePlannedOrder(t *testing.T) {
 	require.NoError(t, os.WriteFile(sqlPath, []byte("SELECT 1"), 0o600))
 
 	store := Store{
-		Package: "store",
-		Dir:     dir,
-		Tables:  []schema.TableDef{users},
-		Dialect: dialect.PostgreSQL(),
-		Queries: []Query{{Input: sqlPath, Function: "Q", Output: "q_gen.go"}},
-		Prune:   true,
+		Package:       "store",
+		Dir:           dir,
+		legacyTables:  []schema.TableDef{users},
+		legacyDialect: dialect.PostgreSQL(),
+		legacyQueries: []legacyQuery{{Input: sqlPath, Function: "Q", Output: "q_gen.go"}},
+		Prune:         true,
 	}
 	plan, err := store.Plan()
 	require.NoError(t, err)
@@ -169,7 +169,7 @@ func TestPlanCommitWritesInThePlannedOrder(t *testing.T) {
 // file itself must be untouched.
 func TestPlanCommitWritesNothingWhenADestinationIsRefused(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "store")
-	store := Store{Package: "store", Dir: dir, Tables: []schema.TableDef{commitTestUsersDef(), commitTestOrdersDef()}}
+	store := Store{Package: "store", Dir: dir, legacyTables: []schema.TableDef{commitTestUsersDef(), commitTestOrdersDef()}}
 	plan, err := store.Plan()
 	require.NoError(t, err)
 
@@ -201,12 +201,12 @@ func TestHeldStorePlanRefusesNewGeneratedOutput(t *testing.T) {
 
 	dir := filepath.Join(moduleDir, "internal", "store")
 	users, orders := commitTestUsersDef(), commitTestOrdersDef()
-	held, err := (Store{Package: "store", Dir: dir, Tables: []schema.TableDef{users}}).Plan()
+	held, err := (Store{Package: "store", Dir: dir, legacyTables: []schema.TableDef{users}}).Plan()
 	require.NoError(t, err)
 	require.Empty(t, held.Orphans())
-	require.NoError(t, (Store{Package: "store", Dir: dir, Tables: []schema.TableDef{users, orders}}).Write())
+	require.NoError(t, (Store{Package: "store", Dir: dir, legacyTables: []schema.TableDef{users, orders}}).Write())
 	runGeneratedPackageTest(t, moduleDir)
-	fresh, err := (Store{Package: "store", Dir: dir, Tables: []schema.TableDef{users}}).Plan()
+	fresh, err := (Store{Package: "store", Dir: dir, legacyTables: []schema.TableDef{users}}).Plan()
 	require.NoError(t, err)
 	require.Equal(t, []string{filepath.Join(dir, "orders_gen.go")}, fresh.Orphans())
 
@@ -233,7 +233,7 @@ func TestHeldStorePlanAllowsHandwrittenSamePackageFile(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "store")
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "helper.go"), []byte("package store\n"), 0o600))
-	plan, err := (Store{Package: "store", Dir: dir, Tables: []schema.TableDef{commitTestUsersDef()}}).Plan()
+	plan, err := (Store{Package: "store", Dir: dir, legacyTables: []schema.TableDef{commitTestUsersDef()}}).Plan()
 	require.NoError(t, err)
 	require.NoError(t, plan.Commit())
 	require.NoError(t, plan.Check())
@@ -241,7 +241,7 @@ func TestHeldStorePlanAllowsHandwrittenSamePackageFile(t *testing.T) {
 
 func TestHeldStorePlanRefusesNewForeignPackageFile(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "store")
-	store := Store{Package: "store", Dir: dir, Tables: []schema.TableDef{commitTestUsersDef()}}
+	store := Store{Package: "store", Dir: dir, legacyTables: []schema.TableDef{commitTestUsersDef()}}
 	require.NoError(t, store.Write())
 	plan, err := store.Plan()
 	require.NoError(t, err)
@@ -261,9 +261,9 @@ func TestHeldStorePlanRefusesNewForeignPackageFile(t *testing.T) {
 func TestHeldStorePlanWithPruneRefusesNewGeneratedOutput(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "store")
 	users, orders := commitTestUsersDef(), commitTestOrdersDef()
-	held, err := (Store{Package: "store", Dir: dir, Tables: []schema.TableDef{users}, Prune: true}).Plan()
+	held, err := (Store{Package: "store", Dir: dir, legacyTables: []schema.TableDef{users}, Prune: true}).Plan()
 	require.NoError(t, err)
-	require.NoError(t, (Store{Package: "store", Dir: dir, Tables: []schema.TableDef{users, orders}}).Write())
+	require.NoError(t, (Store{Package: "store", Dir: dir, legacyTables: []schema.TableDef{users, orders}}).Write())
 	before := snapshotDirFiles(t, dir)
 
 	err = held.Commit()
@@ -301,7 +301,7 @@ func TestPlanCommitRefusesLeftoversWithoutPrune(t *testing.T) {
 	require.NoError(t, os.WriteFile(orphan, []byte(genfile.Marker+"\n\npackage store\n"), 0o600))
 	before := snapshotDirFiles(t, dir)
 
-	store := Store{Package: "store", Dir: dir, Tables: []schema.TableDef{commitTestUsersDef()}}
+	store := Store{Package: "store", Dir: dir, legacyTables: []schema.TableDef{commitTestUsersDef()}}
 	plan, err := store.Plan()
 	require.NoError(t, err)
 	require.Equal(t, []string{orphan}, plan.Orphans())
@@ -319,7 +319,7 @@ func TestPlanCommitPrunesLeftoversWithPrune(t *testing.T) {
 	orphan := filepath.Join(dir, "dropped_gen.go")
 	require.NoError(t, os.WriteFile(orphan, []byte(genfile.Marker+"\n\npackage store\n"), 0o600))
 
-	store := Store{Package: "store", Dir: dir, Tables: []schema.TableDef{commitTestUsersDef()}, Prune: true}
+	store := Store{Package: "store", Dir: dir, legacyTables: []schema.TableDef{commitTestUsersDef()}, Prune: true}
 	plan, err := store.Plan()
 	require.NoError(t, err)
 	require.Equal(t, []string{orphan}, plan.Orphans())
@@ -341,7 +341,7 @@ func TestPlanCommitRefusesToDeleteAFileThatLostItsMarker(t *testing.T) {
 	orphan := filepath.Join(dir, "dropped_gen.go")
 	require.NoError(t, os.WriteFile(orphan, []byte(genfile.Marker+"\n\npackage store\n"), 0o600))
 
-	store := Store{Package: "store", Dir: dir, Tables: []schema.TableDef{commitTestUsersDef()}, Prune: true}
+	store := Store{Package: "store", Dir: dir, legacyTables: []schema.TableDef{commitTestUsersDef()}, Prune: true}
 	plan, err := store.Plan()
 	require.NoError(t, err)
 	require.Equal(t, []string{orphan}, plan.Orphans())
@@ -363,7 +363,7 @@ func TestPlanCommitDeletesNothingItWrote(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, WritePackage("store", dir, commitTestNamedDef("Users")))
 
-	store := Store{Package: "store", Dir: dir, Tables: []schema.TableDef{commitTestNamedDef("users")}, Prune: true}
+	store := Store{Package: "store", Dir: dir, legacyTables: []schema.TableDef{commitTestNamedDef("users")}, Prune: true}
 	plan, err := store.Plan()
 	require.NoError(t, err)
 	require.Empty(t, plan.Orphans(), "the file already on disk for Users and the file planned for users share one destination")
@@ -376,7 +376,7 @@ func TestPlanCommitDeletesNothingItWrote(t *testing.T) {
 // leaves identical bytes on disk.
 func TestPlanCommitIsIdempotent(t *testing.T) {
 	dir := t.TempDir()
-	store := Store{Package: "store", Dir: dir, Tables: []schema.TableDef{commitTestUsersDef(), commitTestOrdersDef()}}
+	store := Store{Package: "store", Dir: dir, legacyTables: []schema.TableDef{commitTestUsersDef(), commitTestOrdersDef()}}
 	plan, err := store.Plan()
 	require.NoError(t, err)
 	require.NoError(t, plan.Commit())

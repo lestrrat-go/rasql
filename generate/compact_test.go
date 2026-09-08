@@ -32,7 +32,7 @@ func TestRenderCompactPlansCanonicalTableSurface(t *testing.T) {
 	require.NoError(t, err)
 	legacyInput := plainEmitterFixture(t)
 	legacyInput.Generation.Emitter = "legacy"
-	legacyStore, err := generate.LegacyStore(legacyInput)
+	legacyStore, err := generate.HistoricalStoreForTest(legacyInput)
 	require.NoError(t, err)
 	legacyStore.Root = root
 	legacyStore.Dir = "legacy"
@@ -91,7 +91,13 @@ func TestCompactConsumerRoundTrip(t *testing.T) {
 	executor, err := rasql.AsExecutor(rdb, profile)
 	if err != nil { t.Fatal(err) }
 	if _, err := rasql.ExecMutation(t.Context(), executor, plan); err != nil { t.Fatal(err) }
-	rows, err := rasql.SelectFrom(generated.Users()).All(t.Context(), rdb)
+	source, err := generated.Users().Source("")
+	if err != nil { t.Fatal(err) }
+	expressions, err := (generated.UsersColumns{}).Bind(source)
+	if err != nil { t.Fatal(err) }
+	projection, err := generated.UsersProjection(expressions)
+	if err != nil { t.Fatal(err) }
+	rows, err := rasql.All(t.Context(), executor, rasql.Select(source.Source(), projection))
 	if err != nil { t.Fatal(err) }
 	if len(rows) != 1 || rows[0].ID != 7 { t.Fatalf("rows = %#v", rows) }
 }

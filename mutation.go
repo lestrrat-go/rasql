@@ -29,6 +29,17 @@ type mutationBatchPlan interface {
 	mutationInsert() (query.Insert, error)
 }
 
+func requireTableOperation[T any](table Table[T], operation schema.Operation) error {
+	if isNilTable(table) {
+		return fmt.Errorf("rasql: table must not be nil")
+	}
+	if !table.Ref().Definition().Supports(operation) {
+		return fmt.Errorf("rasql: object %q does not support operation %d",
+			table.Ref().Definition().QualifiedName(), operation)
+	}
+	return nil
+}
+
 func (p CreatePlan[T]) mutationPlan() (query.WriteStatement, error) { return p.lower() }
 func (p CreatePlan[T]) mutationInsert() (query.Insert, error)       { return p.lower() }
 func (p PatchPlan[T]) mutationPlan() (query.WriteStatement, error)  { return p.lower() }

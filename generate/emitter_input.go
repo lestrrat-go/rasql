@@ -370,8 +370,8 @@ func validateGenerationFiles(goModel compilerir.GoModel, generation compilerir.G
 	return nil
 }
 
-// LegacyStore adapts canonical facts to the existing legacy renderer.
-func LegacyStore(in EmitterInput) (Store, error) {
+// legacyStore adapts canonical facts for retained internal comparisons.
+func legacyStore(in EmitterInput) (Store, error) {
 	if err := in.Validate(); err != nil {
 		return Store{}, err
 	}
@@ -408,7 +408,7 @@ func LegacyStore(in EmitterInput) (Store, error) {
 	for _, object := range in.Catalog.Objects {
 		physicalByID[object.ID] = object
 	}
-	names := make(map[schema.ObjectName]ObjectNames, len(tables))
+	names := make(map[schema.ObjectName]legacyObjectNames, len(tables))
 	configByID := make(map[compilerir.ObjectID]compilerir.ObjectGoName, len(in.Generation.Objects))
 	for _, cfg := range in.Generation.Objects {
 		configByID[cfg.ID] = cfg
@@ -417,9 +417,9 @@ func LegacyStore(in EmitterInput) (Store, error) {
 		id := in.Catalog.Objects[i].ID
 		goObject := goByID[id]
 		cfg := configByID[id]
-		names[tables[i].ObjectName()] = ObjectNames{Accessor: cfg.Source, RowType: cfg.Row}
+		names[tables[i].ObjectName()] = legacyObjectNames{Accessor: cfg.Source, RowType: cfg.Row}
 		if cfg.File != "" {
-			names[tables[i].ObjectName()] = ObjectNames{Accessor: cfg.Source, RowType: cfg.Row, FileBase: strings.TrimSuffix(cfg.File, "_gen.go")}
+			names[tables[i].ObjectName()] = legacyObjectNames{Accessor: cfg.Source, RowType: cfg.Row, FileBase: strings.TrimSuffix(cfg.File, "_gen.go")}
 		}
 		for j := range tables[i].Columns {
 			column := goObject.Columns[j]
@@ -473,7 +473,10 @@ func LegacyStore(in EmitterInput) (Store, error) {
 			}
 		}
 	}
-	return Store{Package: in.Generation.Package, Root: "", Dir: in.Generation.Output, Tables: tables, Names: names, Prune: in.Generation.Prune, Dialect: generationDialect(in.Catalog.Engine.Dialect)}, nil
+	return Store{
+		Package: in.Generation.Package, Root: "", Dir: in.Generation.Output, Prune: in.Generation.Prune,
+		legacyTables: tables, legacyNames: names, legacyDialect: generationDialect(in.Catalog.Engine.Dialect),
+	}, nil
 }
 
 func mappingFor(scalar string, mappings []compilerir.ScalarMapping) (compilerir.ScalarMapping, bool) {

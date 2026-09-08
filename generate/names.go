@@ -10,7 +10,7 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 )
 
-func toNameOverrides(names map[schema.ObjectName]ObjectNames) schemagen.NameOverrides {
+func toNameOverrides(names map[schema.ObjectName]legacyObjectNames) schemagen.NameOverrides {
 	overrides := schemagen.NameOverrides{Objects: make(map[schema.ObjectName]schemagen.ObjectNameOverrides, len(names))}
 	for object, configured := range names {
 		columns := make(map[string]schemagen.ColumnNameOverrides, len(configured.Columns))
@@ -22,17 +22,15 @@ func toNameOverrides(names map[schema.ObjectName]ObjectNames) schemagen.NameOver
 	return overrides
 }
 
-// ObjectNames assigns generated Go names to one physical table.
-type ObjectNames struct {
-	Accessor  string                 `json:"accessor,omitempty"`
-	TableType string                 `json:"table_type,omitempty"`
-	RowType   string                 `json:"row_type,omitempty"`
-	FileBase  string                 `json:"file_base,omitempty"`
-	Columns   map[string]ColumnNames `json:"columns,omitempty"`
+type legacyObjectNames struct {
+	Accessor  string                       `json:"accessor,omitempty"`
+	TableType string                       `json:"table_type,omitempty"`
+	RowType   string                       `json:"row_type,omitempty"`
+	FileBase  string                       `json:"file_base,omitempty"`
+	Columns   map[string]legacyColumnNames `json:"columns,omitempty"`
 }
 
-// ColumnNames assigns generated Go names to one physical column.
-type ColumnNames struct {
+type legacyColumnNames struct {
 	Field    string `json:"field,omitempty"`
 	Accessor string `json:"accessor,omitempty"`
 }
@@ -51,7 +49,7 @@ func validExportedName(name string) bool {
 	return len(r) > 0 && unicode.IsUpper(r[0])
 }
 
-func validateObjectNames(tables []schema.TableDef, names map[schema.ObjectName]ObjectNames) error {
+func validateObjectNames(tables []schema.TableDef, names map[schema.ObjectName]legacyObjectNames) error {
 	known := make(map[schema.ObjectName]schema.TableDef, len(tables))
 	for _, table := range tables {
 		known[table.ObjectName()] = table
@@ -112,10 +110,10 @@ func validateObjectNames(tables []schema.TableDef, names map[schema.ObjectName]O
 	return nil
 }
 
-func cloneObjectNames(names map[schema.ObjectName]ObjectNames) map[schema.ObjectName]ObjectNames {
-	clone := make(map[schema.ObjectName]ObjectNames, len(names))
+func cloneObjectNames(names map[schema.ObjectName]legacyObjectNames) map[schema.ObjectName]legacyObjectNames {
+	clone := make(map[schema.ObjectName]legacyObjectNames, len(names))
 	for object, configured := range names {
-		columns := make(map[string]ColumnNames, len(configured.Columns))
+		columns := make(map[string]legacyColumnNames, len(configured.Columns))
 		for column, columnNames := range configured.Columns {
 			columns[column] = columnNames
 		}

@@ -3,14 +3,11 @@ package generate_test
 import (
 	"os"
 	"path/filepath"
-	"sort"
 	"testing"
 
-	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/compilerlock"
-	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
 
@@ -90,7 +87,7 @@ func TestNewEmitterInputOwnsConstructorInputs(t *testing.T) {
 
 func TestLegacyStoreRejectsCustomCodecBeforePlanning(t *testing.T) {
 	in, _ := emitterFixture(t)
-	if _, err := generate.LegacyStore(in); err == nil {
+	if _, err := generate.HistoricalStoreForTest(in); err == nil {
 		t.Fatal("legacy store accepted an unrepresentable codec")
 	}
 }
@@ -123,43 +120,6 @@ func TestEmitterInputRejectsMissingOrConflictingPolicy(t *testing.T) {
 	}
 }
 
-func TestLegacyStorePlanMatchesCanonicalBaseline(t *testing.T) {
-	in := plainEmitterFixture(t)
-	legacy, err := generate.LegacyStore(in)
-	if err != nil {
-		t.Fatal(err)
-	}
-	root := t.TempDir()
-	if err := os.Mkdir(filepath.Join(root, "generated"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	legacy.Root = root
-	tables, diagnostics := compilerir.TableDefsFromPhysical(in.Catalog)
-	if len(diagnostics) != 0 {
-		t.Fatalf("baseline diagnostics: %#v", diagnostics)
-	}
-	direct := generate.Store{Package: "store", Root: root, Dir: "generated", Tables: tables, Names: legacy.Names, Prune: in.Generation.Prune, Dialect: dialect.SQLite()}
-	legacyPlan, err := legacy.Plan()
-	if err != nil {
-		t.Fatal(err)
-	}
-	directPlan, err := direct.Plan()
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacyFiles, directFiles := legacyPlan.Files(), directPlan.Files()
-	sort.Slice(legacyFiles, func(i, j int) bool { return legacyFiles[i].Path < legacyFiles[j].Path })
-	sort.Slice(directFiles, func(i, j int) bool { return directFiles[i].Path < directFiles[j].Path })
-	if len(legacyFiles) != len(directFiles) {
-		t.Fatalf("file count differs: %d != %d", len(legacyFiles), len(directFiles))
-	}
-	for i := range legacyFiles {
-		if legacyFiles[i].Path != directFiles[i].Path || string(legacyFiles[i].Source) != string(directFiles[i].Source) {
-			t.Fatalf("file %d differs", i)
-		}
-	}
-}
-
 func TestLegacyStoreCanonicalSelfForeignKeyRelations(t *testing.T) {
 	for _, test := range []struct {
 		name     string
@@ -170,7 +130,7 @@ func TestLegacyStoreCanonicalSelfForeignKeyRelations(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			in := canonicalSelfForeignKeyEmitterInput(t, test.nullable)
-			store, err := generate.LegacyStore(in)
+			store, err := generate.HistoricalStoreForTest(in)
 			require.NoError(t, err)
 			plan, err := store.Plan()
 			require.NoError(t, err)
@@ -297,12 +257,9 @@ func TestLegacyStoreUsesConfiguredAccessorRowAndFile(t *testing.T) {
 	in.Go.Objects[0].Create.Name = "PersonCreate"
 	in.Go.Objects[0].Patch.Name = "PersonPatch"
 	in.Go.Files = []compilerir.GoFile{{Path: "people_gen.go"}}
-	store, err := generate.LegacyStore(in)
+	store, err := generate.HistoricalStoreForTest(in)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if got := store.Names[schema.ObjectName{Name: "users"}]; got.Accessor != "Users" || got.RowType != "PersonRow" || got.FileBase != "people" {
-		t.Fatalf("unexpected names: %#v", got)
 	}
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "generated"), 0o755); err != nil {
@@ -328,7 +285,7 @@ func TestLegacyStoreRejectsIndependentMutationNames(t *testing.T) {
 	if err := in.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := generate.LegacyStore(in); err == nil {
+	if _, err := generate.HistoricalStoreForTest(in); err == nil {
 		t.Fatal("legacy store accepted independent mutation naming")
 	}
 }
@@ -365,9 +322,9 @@ func TestLockRoundTripRebuildsIdenticalLegacyPlan(t *testing.T) {
 	require.Empty(t, diagnostics)
 	rebuilt, err := generate.NewEmitterInput(catalog, semantic, model, rebuiltConfig, compilerir.MappingConfig{})
 	require.NoError(t, err)
-	originalStore, err := generate.LegacyStore(in)
+	originalStore, err := generate.HistoricalStoreForTest(in)
 	require.NoError(t, err)
-	rebuiltStore, err := generate.LegacyStore(rebuilt)
+	rebuiltStore, err := generate.HistoricalStoreForTest(rebuilt)
 	require.NoError(t, err)
 	originalPlan, err := originalStore.Plan()
 	require.NoError(t, err)

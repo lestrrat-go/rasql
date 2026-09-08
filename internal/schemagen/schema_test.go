@@ -29,7 +29,7 @@ import (
 	"example.com/generated"
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/dynamic"
+	"github.com/lestrrat-go/rasql/internal/rowvalue"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
 	"github.com/stretchr/testify/require"
@@ -40,7 +40,7 @@ var _ rasql.DestinationScanner = (*generated.UsersRow)(nil)
 
 func TestGeneratedRowDecodesByFieldName(t *testing.T) {
 	createdAt := time.Date(2026, time.August, 1, 12, 30, 0, 0, time.UTC)
-	result, err := dynamic.NewRow(
+	result, err := rowvalue.NewRow(
 		[]string{"id", "email", "created_at"},
 		[]any{int64(7), "ada@example.com", createdAt},
 	)
@@ -48,7 +48,7 @@ func TestGeneratedRowDecodesByFieldName(t *testing.T) {
 
 	// UsersRow carries no rasql tags, so dynamic.Decode's field-mapping
 	// fallback snake-cases ID, Email and CreatedAt onto id, email and created_at.
-	decoded, err := dynamic.Decode[generated.UsersRow](result)
+	decoded, err := rowvalue.Decode[generated.UsersRow](result)
 	require.NoError(t, err)
 	require.Equal(t, int64(7), decoded.ID)
 	require.NotNil(t, decoded.Email)
@@ -56,19 +56,19 @@ func TestGeneratedRowDecodesByFieldName(t *testing.T) {
 	require.Equal(t, createdAt, decoded.CreatedAt)
 
 	// A nullable column decodes into a nil pointer rather than failing.
-	nullEmail, err := dynamic.NewRow(
+	nullEmail, err := rowvalue.NewRow(
 		[]string{"id", "email", "created_at"},
 		[]any{int64(7), nil, createdAt},
 	)
 	require.NoError(t, err)
-	decoded, err = dynamic.Decode[generated.UsersRow](nullEmail)
+	decoded, err = rowvalue.Decode[generated.UsersRow](nullEmail)
 	require.NoError(t, err)
 	require.Nil(t, decoded.Email)
 
 	// A missing column is reported by the field-mapping fallback.
-	partial, err := dynamic.NewRow([]string{"id"}, []any{int64(7)})
+	partial, err := rowvalue.NewRow([]string{"id"}, []any{int64(7)})
 	require.NoError(t, err)
-	_, err = dynamic.Decode[generated.UsersRow](partial)
+	_, err = rowvalue.Decode[generated.UsersRow](partial)
 	require.ErrorContains(t, err, ` + "`" + `column "email" is not present` + "`" + `)
 }
 

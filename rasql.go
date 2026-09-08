@@ -1,28 +1,15 @@
 // Package rasql provides typed SQL queries and execution for Go.
 //
-// Use New to pair a database/sql handle with a SQL dialect. The DB it returns
-// is the only handle type in this package: DB.Begin starts a transaction and
-// returns another DB, so a transaction is the same type as the database it was
-// started on, and every builder and function that takes one takes either.
-// DB.Atomic composes work across pool and transaction DBs by owning a
-// transaction outside one and a savepoint inside one.
-// Generated table descriptors use MustTableDef, then SelectFrom, Insert,
-// Update, DeleteFrom, and CreateTable execute typed database operations: the
-// builders take the DB at their terminal call, so one builder runs inside a
-// transaction and outside it alike.
-// Query operations return a rangeable iter.Seq2 sequence plus any construction
-// error. The sequence yields rows followed by at most one scanning error.
-// [TypedSelectBuilder.One] and [QueryWriteOne] report a row count other than one
-// through [ErrNoRows] or [ErrMultipleRows].
+// Use NewExecutor to pair a database/sql handle with an engine profile. Build
+// a [Query] from a generated source and projection with [Select], then execute
+// it through [Rows], [All], [One], or [Maybe]. [Rows] returns a rangeable
+// iter.Seq2 that yields decoded values followed by at most one execution or
+// scanning error. [One] reports a row count other than one through [ErrNoRows]
+// or [ErrMultipleRows].
 //
-// A write statement built through the query package that carries a RETURNING
-// clause is read with dynamic.QueryWrite, or the typed QueryWriteAll and
-// QueryWriteOne, instead of Exec, which rejects it.
+// Writes use [MutationPlan] and the same [Executor]. [Native] and
+// [NativeMutation] provide the explicit boundary for hand-written SQL.
 //
-// This package re-exports DB, Handle, the hooks and the shared error
-// sentinels from rasql/exec, so ordinary use needs this import alone. The
-// schema, query, render, dynamic, and dialect packages expose lower-level
-// APIs for schema generation, dynamic queries, rendering, and result
-// handling. A column name known only as a string at run time is served by
-// rasql/dynamic, which imports rasql/exec rather than this package.
+// The schema, query, render, and dialect packages expose lower-level schema,
+// expression, rendering, and engine APIs.
 package rasql

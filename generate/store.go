@@ -27,6 +27,16 @@ import (
 
 const maxQueryInputBytes = 64 << 20
 
+type queryInputSnapshot struct {
+	path   string
+	digest [sha256.Size]byte
+}
+
+type queryInputData struct {
+	snapshot queryInputSnapshot
+	data     []byte
+}
+
 // Store describes one generated store package: which tables it is
 // generated from, where it goes, and what else belongs in the same
 // directory.
@@ -37,10 +47,6 @@ const maxQueryInputBytes = 64 << 20
 // output.
 type Store struct {
 	compact *compactStoreInput
-	// CompilerInput is an optional validated compiler catalog. When set, it
-	// is adapted to legacy descriptors before rendering; Tables remains a
-	// supported compatibility input.
-	CompilerInput *CompilerInput
 	// Package is the generated package name. Required, and must be a Go
 	// identifier that is not the blank identifier: "package _" is not a
 	// package clause the compiler accepts.
@@ -60,37 +66,14 @@ type Store struct {
 	// is an error rather than a guess.
 	Root string
 
-	// Tables are the descriptors to generate from. Required and
-	// non-empty. Each is validated, cloned, and sorted by Name before
-	// rendering, so the caller's slice is never modified and its order
-	// does not reach the output.
-	Tables []schema.TableDef
+	// The legacy fields remain private only for the pinned historical
+	// generator comparison compiled by this package's tests.
+	legacyTables  []schema.TableDef
+	legacyHints   map[string]legacyTableHint
+	legacyNames   map[schema.ObjectName]legacyObjectNames
+	legacyDialect dialect.Dialect
+	legacyQueries []legacyQuery
 
-	// Hints overlay Go-side facts no database can state, keyed by
-	// schema.TableDef.Name. A key naming no table in Tables is an error,
-	// and so is a key matching more than one table, which two same-named
-	// tables in different schemas can produce; set the fact on the
-	// descriptor itself in that case.
-	//
-	// A hint is an overlay, so it can set a fact but not clear one, and a
-	// fact it sets is rendered into the generated descriptor and
-	// therefore comes back out of the store's own Tables(). Deleting a
-	// hint from this map does not un-set it for a run generated from
-	// that store; it does for a run generated from a database.
-	Hints map[string]TableHint
-
-	// Names assigns stable generated Go names by exact physical table identity.
-	Names map[schema.ObjectName]ObjectNames
-
-	// Dialect selects the placeholder style for a Query that does not
-	// name its own. Required when any Query leaves Dialect nil, ignored
-	// otherwise. It is not used to render the tables, which are
-	// dialect-independent.
-	Dialect dialect.Dialect
-
-	// Queries are static SQL templates compiled into this package, one
-	// generated function each.
-	Queries      []Query
 	TypedQueries []TypedQuery
 
 	// Prune allows a run to delete a file in Dir that rasqlgen wrote and
@@ -127,7 +110,7 @@ type TypedQuery struct {
 // Go-side fact the server never records, unlike, say, SQLite's Strict or
 // WithoutRowID, which inspection already reads from the live schema itself
 // and therefore never needs a hand-maintained override.
-type TableHint struct {
+type legacyTableHint struct {
 	// RowName overrides the generated row type exactly like the RowNamed
 	// TableOption does; see TableDef.RowName's own doc for what setting it
 	// means and what rejects an invalid value. The zero value, an empty
@@ -138,7 +121,7 @@ type TableHint struct {
 
 // Apply returns table with hint's non-zero fields overlaid onto it. An
 // empty TableHint returns table unchanged.
-func (hint TableHint) Apply(table schema.TableDef) schema.TableDef {
+func (hint legacyTableHint) Apply(table schema.TableDef) schema.TableDef {
 	if hint.RowName != "" {
 		table.RowName = hint.RowName
 	}
@@ -147,7 +130,7 @@ func (hint TableHint) Apply(table schema.TableDef) schema.TableDef {
 
 // Query is one static SQL template compiled into a generated function
 // inside the store package.
-type Query struct {
+type legacyQuery struct {
 	Describer   querydescribe.Describer
 	Expected    *querydescribe.Description
 	ResultType  string
@@ -253,25 +236,7 @@ func (s Store) PlanContext(ctx context.Context) (Plan, error) {
 	if s.compact != nil {
 		return s.planCompactContext(ctx)
 	}
-	if len(s.Tables) == 0 && s.CompilerInput != nil {
-		input := s.CompilerInput.Clone()
-		if err := compilerir.ValidatePhysical(input.Catalog); err != nil {
-			return Plan{}, fmt.Errorf("generate: compiler input: %w", err)
-		}
-		tables, diagnostics := compilerir.TableDefsFromPhysical(input.Catalog)
-		for _, diagnostic := range diagnostics {
-			if diagnostic.Level == compilerir.DiagnosticError {
-				return Plan{}, fmt.Errorf("generate: %s", diagnostic.Message)
-			}
-		}
-		s.Tables = tables
-		var restoreErr error
-		s.Tables, restoreErr = restoreLegacy(s.Tables, input)
-		if restoreErr != nil {
-			return Plan{}, restoreErr
-		}
-	}
-	if len(s.Tables) == 0 {
+	if len(s.legacyTables) == 0 {
 		return Plan{}, errors.New("generate: store requires at least one table")
 	}
 
@@ -310,11 +275,11 @@ func (s Store) PlanContext(ctx context.Context) (Plan, error) {
 		}
 	}
 
-	tables, err := applyHints(s.Tables, s.Hints)
+	tables, err := applyHints(s.legacyTables, s.legacyHints)
 	if err != nil {
 		return Plan{}, err
 	}
-	names := cloneObjectNames(s.Names)
+	names := cloneObjectNames(s.legacyNames)
 	if err := validateObjectNames(tables, names); err != nil {
 		return Plan{}, err
 	}
@@ -338,7 +303,7 @@ func (s Store) PlanContext(ctx context.Context) (Plan, error) {
 	// generated identifiers, which is why this check exists beside
 	// Validate rather than instead of it. It is keyed through filenameKey,
 	// so two names differing only in case are one claim.
-	filenames := make(map[string]string, len(sorted)+1+len(s.Queries)+len(s.TypedQueries))
+	filenames := make(map[string]string, len(sorted)+1+len(s.legacyQueries)+len(s.TypedQueries))
 	filenames[filenameKey(schemaDescriptorFilename)] = "the schema descriptor file " + schemaDescriptorFilename
 	for _, table := range sorted {
 		filename := resolved.Filename(table)
@@ -355,13 +320,13 @@ func (s Store) PlanContext(ctx context.Context) (Plan, error) {
 	// explain, which is why this set is built once here and handed to
 	// planQuery rather than derived per query.
 	declared := resolved.PackageLevelNames()
-	identifiers := make(map[string]string, len(declared)+len(s.Queries)+len(s.TypedQueries))
+	identifiers := make(map[string]string, len(declared)+len(s.legacyQueries)+len(s.TypedQueries))
 	for _, name := range declared {
 		identifiers[name] = "an identifier the generated store already declares"
 	}
 
-	files := make([]File, 0, len(sorted)+2+len(s.Queries)+len(s.TypedQueries))
-	inputs := make(map[string]queryInputData, len(s.Queries))
+	files := make([]File, 0, len(sorted)+2+len(s.legacyQueries)+len(s.TypedQueries))
+	inputs := make(map[string]queryInputData, len(s.legacyQueries))
 	for _, table := range sorted {
 		source, err := schemagen.TableSurfaceSourceWithOptions(s.Package, table, schemagen.SourceOptions{Dir: dir, Names: resolved}, sorted...)
 		if err != nil {
@@ -382,7 +347,7 @@ func (s Store) PlanContext(ctx context.Context) (Plan, error) {
 	}
 	files = append(files, File{Path: filepath.Join(dir, schemaDescriptorTestFilename), Source: descriptorTestSource})
 
-	for index, q := range s.Queries {
+	for index, q := range s.legacyQueries {
 		file, err := s.planQuery(ctx, root, dir, q, sorted, filenames, identifiers, inputs)
 		if err != nil {
 			return Plan{}, fmt.Errorf("generate: query[%d]: %w", index, err)
@@ -509,7 +474,7 @@ func (s Store) Check() error {
 // both once they pass, so a later query is checked against them too. tables
 // is the hint-applied, validated, name-sorted set the generated package
 // declares; a bind that names a column resolves against it.
-func (s Store) planQuery(ctx context.Context, root, dir string, q Query, tables []schema.TableDef, filenames, identifiers map[string]string, inputs map[string]queryInputData) (File, error) {
+func (s Store) planQuery(ctx context.Context, root, dir string, q legacyQuery, tables []schema.TableDef, filenames, identifiers map[string]string, inputs map[string]queryInputData) (File, error) {
 	if q.Input == "" && q.SQL == "" {
 		return File{}, errors.New("input or sql is required")
 	}
@@ -569,7 +534,7 @@ func (s Store) planQuery(ctx context.Context, root, dir string, q Query, tables 
 
 	d := q.Dialect
 	if d == nil {
-		d = s.Dialect
+		d = s.legacyDialect
 	}
 
 	text := q.SQL
@@ -748,7 +713,7 @@ func isExportedGoIdentifier(name string) bool {
 // leaving tables itself untouched. A hint key that names no table, or that
 // names more than one -- which two same-named tables in different schemas
 // can produce -- is an error.
-func applyHints(tables []schema.TableDef, hints map[string]TableHint) ([]schema.TableDef, error) {
+func applyHints(tables []schema.TableDef, hints map[string]legacyTableHint) ([]schema.TableDef, error) {
 	clones := make([]schema.TableDef, len(tables))
 	for i, table := range tables {
 		clones[i] = table.Clone()

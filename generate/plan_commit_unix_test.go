@@ -92,7 +92,7 @@ func TestPlanCommitRefusesAnOutsideDirectoryReplacedAfterItWasResolved(t *testin
 	planned := filepath.Join(dir, "users_gen.go")
 	require.NoError(t, os.Symlink(filepath.Join(target, "users_gen.go"), planned))
 
-	store := Store{Package: "store", Dir: dir, Tables: []schema.TableDef{commitTestUsersDef()}}
+	store := Store{Package: "store", Dir: dir, legacyTables: []schema.TableDef{commitTestUsersDef()}}
 	plan, err := store.Plan()
 	require.NoError(t, err)
 
@@ -122,7 +122,7 @@ func TestPlanCommitRefusesADestinationReplacedAfterItWasAuthorized(t *testing.T)
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	require.NoError(t, os.MkdirAll(elsewhere, 0o700))
 
-	store := Store{Package: "store", Dir: dir, Tables: []schema.TableDef{commitTestUsersDef()}}
+	store := Store{Package: "store", Dir: dir, legacyTables: []schema.TableDef{commitTestUsersDef()}}
 	plan, err := store.Plan()
 	require.NoError(t, err)
 
@@ -153,7 +153,7 @@ func TestPlanCommitRefusesADestinationReplacedAfterItWasAuthorized(t *testing.T)
 func TestPlanCommitRefusesADestinationRedirectedOntoAFileItWrote(t *testing.T) {
 	dir := t.TempDir()
 
-	store := Store{Package: "store", Dir: dir, Tables: []schema.TableDef{commitTestUsersDef()}}
+	store := Store{Package: "store", Dir: dir, legacyTables: []schema.TableDef{commitTestUsersDef()}}
 	plan, err := store.Plan()
 	require.NoError(t, err)
 
@@ -186,7 +186,7 @@ func TestPlanCommitRefusesToDeleteALeftoverReplacedMidCommit(t *testing.T) {
 	orphan := filepath.Join(dir, "dropped_gen.go")
 	require.NoError(t, os.WriteFile(orphan, commitTestMarkerFile, 0o600))
 
-	store := Store{Package: "store", Dir: dir, Tables: []schema.TableDef{commitTestUsersDef()}, Prune: true}
+	store := Store{Package: "store", Dir: dir, legacyTables: []schema.TableDef{commitTestUsersDef()}, Prune: true}
 	plan, err := store.Plan()
 	require.NoError(t, err)
 	require.Equal(t, []string{orphan}, plan.Orphans())

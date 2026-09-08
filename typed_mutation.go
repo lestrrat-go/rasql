@@ -1,12 +1,9 @@
 package rasql
 
 import (
-	"context"
-	"database/sql"
 	"fmt"
 	"reflect"
 
-	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/mutationcolumn"
 	"github.com/lestrrat-go/rasql/internal/nilcheck"
 	"github.com/lestrrat-go/rasql/query"
@@ -137,7 +134,6 @@ type normalizedCreate[T any] struct {
 	table       query.TableRef
 	columns     []query.ColumnRef
 	values      []any
-	rawValues   []any
 	defaultOnly bool
 }
 
@@ -256,20 +252,6 @@ func (p CreatePlan[T]) lower() (query.Insert, error) {
 	return query.NewInsertRows(lowered.table, lowered.columns, [][]any{lowered.values})
 }
 
-func (p CreatePlan[T]) lowerRaw() (query.Insert, error) {
-	if p.err != nil {
-		return query.Insert{}, p.err
-	}
-	lowered, err := p.lowerNormalized()
-	if err != nil {
-		return query.Insert{}, err
-	}
-	if lowered.defaultOnly {
-		return query.NewInsert(lowered.table, query.Defaults())
-	}
-	return query.NewInsertRows(lowered.table, lowered.columns, [][]any{lowered.rawValues})
-}
-
 func (p CreatePlan[T]) lowerNormalized() (normalizedCreate[T], error) {
 	if p.err != nil {
 		return normalizedCreate[T]{}, p.err
@@ -292,14 +274,11 @@ func (p CreatePlan[T]) lowerNormalized() (normalizedCreate[T], error) {
 			continue
 		}
 		var value any = field.bound
-		rawValue := field.value
 		if field.state == mutationClear {
 			value = nil
-			rawValue = nil
 		}
 		lowered.columns = append(lowered.columns, p.table.Ref().Column(column.Name))
 		lowered.values = append(lowered.values, value)
-		lowered.rawValues = append(lowered.rawValues, rawValue)
 	}
 	lowered.defaultOnly = len(lowered.columns) == 0
 	return lowered, nil
@@ -342,132 +321,6 @@ func (p PatchPlan[T]) lower() (query.Update, error) {
 		where = query.And(where, query.Equal(p.version.column, p.version.expected))
 	}
 	return statement.WithWhere(where)
-}
-
-func (p PatchPlan[T]) lowerRaw() (query.Update, error) {
-	if p.err != nil {
-		return query.Update{}, p.err
-	}
-	columns := p.table.Ref().Definition().Columns
-	byName := make(map[string]MutationField[T], len(p.fields))
-	for _, field := range p.fields {
-		byName[field.column.Name()] = field
-	}
-	assignments := make([]query.Assignment, 0, len(p.fields))
-	for _, column := range columns {
-		field, ok := byName[column.Name]
-		if !ok {
-			continue
-		}
-		value := field.value
-		if field.state == mutationClear {
-			value = query.Bind(nil)
-		}
-		assignments = append(assignments, query.Set(p.table.Ref().Column(column.Name), value))
-	}
-	if p.version != nil {
-		assignments = append(assignments, query.Set(p.version.column, query.Add(p.version.column, 1)))
-	}
-	statement, err := query.NewUpdate(p.table.Ref(), assignments...)
-	if err != nil {
-		return query.Update{}, err
-	}
-	where := p.where
-	if p.version != nil {
-		where = query.And(where, query.Equal(p.version.column, p.version.expected))
-	}
-	return statement.WithWhere(where)
-}
-
-func returning[T any](table Table[T]) []query.Projection {
-	columns := table.Ref().Definition().Columns
-	result := make([]query.Projection, len(columns))
-	for i, column := range columns {
-		result[i] = table.Ref().Column(column.Name)
-	}
-	return result
-}
-
-func validateReturningDB(db DB) error {
-	if err := db.Validate(); err != nil {
-		return err
-	}
-	if !db.Dialect().Supports(dialect.CapabilityReturning) {
-		return fmt.Errorf("rasql: dialect %s does not support RETURNING", db.Dialect().Name())
-	}
-	return nil
-}
-
-func ExecCreate[T any](ctx context.Context, db DB, plan CreatePlan[T]) (sql.Result, error) {
-	statement, err := plan.lowerRaw()
-	if err != nil {
-		return nil, err
-	}
-	return Exec(ctx, db, statement)
-}
-
-func QueryCreate[T any](ctx context.Context, db DB, plan CreatePlan[T]) (T, error) {
-	var zero T
-	if plan.err != nil {
-		return zero, plan.err
-	}
-	if err := validateReturningDB(db); err != nil {
-		return zero, err
-	}
-	statement, err := plan.lowerRaw()
-	if err != nil {
-		return zero, err
-	}
-	statement, err = statement.WithReturning(returning(plan.table)...)
-	if err != nil {
-		return zero, err
-	}
-	return QueryWriteOne[T](ctx, db, statement)
-}
-
-func ExecPatch[T any](ctx context.Context, db DB, plan PatchPlan[T]) (sql.Result, error) {
-	statement, err := plan.lowerRaw()
-	if err != nil {
-		return nil, err
-	}
-	return Exec(ctx, db, statement)
-}
-
-func QueryPatchAll[T any](ctx context.Context, db DB, plan PatchPlan[T]) ([]T, error) {
-	if plan.err != nil {
-		return nil, plan.err
-	}
-	if err := validateReturningDB(db); err != nil {
-		return nil, err
-	}
-	statement, err := plan.lowerRaw()
-	if err != nil {
-		return nil, err
-	}
-	statement, err = statement.WithReturning(returning(plan.table)...)
-	if err != nil {
-		return nil, err
-	}
-	return QueryWriteAll[T](ctx, db, statement)
-}
-
-func QueryPatchOne[T any](ctx context.Context, db DB, plan PatchPlan[T]) (T, error) {
-	var zero T
-	if plan.err != nil {
-		return zero, plan.err
-	}
-	if err := validateReturningDB(db); err != nil {
-		return zero, err
-	}
-	statement, err := plan.lowerRaw()
-	if err != nil {
-		return zero, err
-	}
-	statement, err = statement.WithReturning(returning(plan.table)...)
-	if err != nil {
-		return zero, err
-	}
-	return QueryWriteOne[T](ctx, db, statement)
 }
 
 func mutationBind(value any, codec string) (query.Expression, error) {

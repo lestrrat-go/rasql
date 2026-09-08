@@ -21,7 +21,7 @@ import (
 func TestPlanCommitPublicationPublishesLockAfterGeneratedFiles(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "store")
-	store := Store{Package: "store", Root: root, Dir: dir, Dialect: dialect.SQLite(), Tables: []schema.TableDef{
+	store := Store{Package: "store", Root: root, Dir: dir, legacyDialect: dialect.SQLite(), legacyTables: []schema.TableDef{
 		schema.MustTableDef("users", schema.Integer("id"), schema.PrimaryKey("id")),
 	}}
 	plan, err := store.PlanContext(t.Context())
@@ -52,7 +52,7 @@ func TestPlanCommitPublicationPublishesLockAfterGeneratedFiles(t *testing.T) {
 func TestPlanCommitPublicationRefusesWrongLockStateBeforeCallback(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "store")
-	store := Store{Package: "store", Root: root, Dir: dir, Tables: []schema.TableDef{
+	store := Store{Package: "store", Root: root, Dir: dir, legacyTables: []schema.TableDef{
 		schema.MustTableDef("users", schema.Integer("id"), schema.PrimaryKey("id")),
 	}}
 	plan, err := store.PlanContext(t.Context())
@@ -71,7 +71,7 @@ func TestPlanCommitPublicationRefusesWrongLockStateBeforeCallback(t *testing.T) 
 func TestPlanCommitPublicationReportsSortedClonedStates(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "store")
-	store := Store{Package: "store", Root: root, Dir: dir, Dialect: dialect.SQLite(), Tables: []schema.TableDef{
+	store := Store{Package: "store", Root: root, Dir: dir, legacyDialect: dialect.SQLite(), legacyTables: []schema.TableDef{
 		schema.MustTableDef("users", schema.Integer("id"), schema.PrimaryKey("id")),
 	}}
 	require.NoError(t, store.Write())
@@ -117,7 +117,7 @@ func TestPlanCommitPublicationRefusesChangedOrphanBytes(t *testing.T) {
 	orphan := filepath.Join(dir, "old_gen.go")
 	old := []byte(genfile.Marker + "\n\npackage store\n")
 	require.NoError(t, os.WriteFile(orphan, old, 0o600))
-	store := Store{Package: "store", Root: root, Dir: dir, Prune: true, Tables: []schema.TableDef{users}}
+	store := Store{Package: "store", Root: root, Dir: dir, Prune: true, legacyTables: []schema.TableDef{users}}
 	plan, err := store.PlanContext(t.Context())
 	require.NoError(t, err)
 	changed := []byte(genfile.Marker + "\n\npackage store\n// changed\n")
@@ -138,7 +138,7 @@ func TestPlanCommitPublicationRecoversMarkerOwnedMissingAndPresent(t *testing.T)
 	old := []byte(genfile.Marker + "\n\npackage store\n")
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "old_gen.go"), old, 0o600))
-	store := Store{Package: "store", Root: root, Dir: dir, Prune: true, Dialect: dialect.SQLite(), Tables: []schema.TableDef{
+	store := Store{Package: "store", Root: root, Dir: dir, Prune: true, legacyDialect: dialect.SQLite(), legacyTables: []schema.TableDef{
 		schema.MustTableDef("users", schema.Integer("id"), schema.PrimaryKey("id")),
 	}}
 	plan, err := store.PlanContext(t.Context())
@@ -160,7 +160,7 @@ func TestPlanCommitPublicationRecoversMarkerOwnedMissingAndPresent(t *testing.T)
 
 func TestPlanCommitPublicationCancellationDoesNotWrite(t *testing.T) {
 	root := t.TempDir()
-	store := Store{Package: "store", Root: root, Dir: filepath.Join(root, "store"), Dialect: dialect.SQLite(), Tables: []schema.TableDef{
+	store := Store{Package: "store", Root: root, Dir: filepath.Join(root, "store"), legacyDialect: dialect.SQLite(), legacyTables: []schema.TableDef{
 		schema.MustTableDef("users", schema.Integer("id"), schema.PrimaryKey("id")),
 	}}
 	plan, err := store.PlanContext(t.Context())
@@ -188,7 +188,7 @@ func TestPlanCommitPublicationOrderIncludesRecoveryBeforeAggregators(t *testing.
 	require.NoError(t, os.WriteFile(orphan, []byte(genfile.Marker+"\n\npackage store\n"), 0o600))
 	queryPath := filepath.Join(root, "q.sql")
 	require.NoError(t, os.WriteFile(queryPath, []byte("SELECT 1"), 0o600))
-	store := Store{Package: "store", Root: root, Dir: dir, Prune: true, Dialect: dialect.PostgreSQL(), Tables: []schema.TableDef{users}, Queries: []Query{{Input: queryPath, Function: "Q", Output: "q_gen.go"}}}
+	store := Store{Package: "store", Root: root, Dir: dir, Prune: true, legacyDialect: dialect.PostgreSQL(), legacyTables: []schema.TableDef{users}, legacyQueries: []legacyQuery{{Input: queryPath, Function: "Q", Output: "q_gen.go"}}}
 	plan, err := store.PlanContext(t.Context())
 	require.NoError(t, err)
 	var sequence []string
@@ -243,7 +243,7 @@ func TestPlanCommitPublicationFaultsStopAtTheInjectedPhase(t *testing.T) {
 			oldLock := []byte("old lock\n")
 			lockPath := filepath.Join(root, "rasql.lock.json")
 			require.NoError(t, os.WriteFile(lockPath, oldLock, 0o600))
-			store := Store{Package: "store", Root: root, Dir: dir, Prune: true, Dialect: dialect.PostgreSQL(), Tables: []schema.TableDef{users}, Queries: []Query{{Input: queryPath, Function: "Q", Output: "q_gen.go"}}}
+			store := Store{Package: "store", Root: root, Dir: dir, Prune: true, legacyDialect: dialect.PostgreSQL(), legacyTables: []schema.TableDef{users}, legacyQueries: []legacyQuery{{Input: queryPath, Function: "Q", Output: "q_gen.go"}}}
 			plan, err := store.PlanContext(t.Context())
 			require.NoError(t, err)
 			oldFiles := make(map[string][]byte)
@@ -367,7 +367,7 @@ func TestPlanCommitPublicationRejectsUnsafeFinalTargetsBeforeCallback(t *testing
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
 			dir := filepath.Join(root, "store")
-			store := Store{Package: "store", Root: root, Dir: dir, Tables: []schema.TableDef{commitTestUsersDef()}}
+			store := Store{Package: "store", Root: root, Dir: dir, legacyTables: []schema.TableDef{commitTestUsersDef()}}
 			plan, err := store.PlanContext(t.Context())
 			require.NoError(t, err)
 			target := filepath.Join(root, filepath.FromSlash(test.path(root, dir)))
@@ -391,7 +391,7 @@ func TestPlanCommitPublicationRefusesFinalParentRetarget(t *testing.T) {
 	root := t.TempDir()
 	finalDir := filepath.Join(root, "final")
 	require.NoError(t, os.Mkdir(finalDir, 0o700))
-	store := Store{Package: "store", Root: root, Dir: filepath.Join(root, "store"), Tables: []schema.TableDef{commitTestUsersDef()}}
+	store := Store{Package: "store", Root: root, Dir: filepath.Join(root, "store"), legacyTables: []schema.TableDef{commitTestUsersDef()}}
 	plan, err := store.PlanContext(t.Context())
 	require.NoError(t, err)
 	oldResolve := resolvePublication

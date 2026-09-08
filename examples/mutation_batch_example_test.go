@@ -28,7 +28,7 @@ func Example_mutationBatch() {
 		fmt.Println(err)
 		return
 	}
-	fmt.Println(outcome.Inputs)
+	fmt.Printf("%v\n", outcome.Inputs)
 	// END(mutationBatch)
 	// Output: [1 1]
 }
