@@ -139,7 +139,18 @@ type normalizedCreate[T any] struct {
 
 func NewCreatePlan[T any](table Table[T], fields ...MutationField[T]) (CreatePlan[T], error) {
 	plan := CreatePlan[T]{table: table, fields: append([]MutationField[T](nil), fields...)}
-	plan.err = validateMutationPlan(table, plan.fields, false, nil)
+	// TableOf and MustTableOf already refuse a definition that does not
+	// support insert, but a handle can reach this constructor without going
+	// through either of them, so the capability is checked again here. The
+	// error is recorded into plan.err rather than returned early: CreatePlan
+	// already carries a deferred error the same way for its other two
+	// validations below, and lower keeps reading that field, so every
+	// rejection this constructor can produce should reach the caller through
+	// the one path lower already knows about.
+	plan.err = requireTableOperation(table, schema.OperationInsert)
+	if plan.err == nil {
+		plan.err = validateMutationPlan(table, plan.fields, false, nil)
+	}
 	if plan.err == nil {
 		plan.err = validateCreateRequired(table, plan.fields)
 	}
@@ -199,7 +210,13 @@ func NewPatchPlan[T any, P patchPredicate](table Table[T], where P, fields ...Mu
 		return PatchPlan[T]{table: table, fields: append([]MutationField[T](nil), fields...), err: err}, err
 	}
 	plan := PatchPlan[T]{table: table, fields: append([]MutationField[T](nil), fields...), where: expression}
-	plan.err = validateMutationPlan(table, plan.fields, true, expression)
+	// Same reasoning as NewCreatePlan: the capability check is recorded into
+	// plan.err rather than returned early, matching how PatchPlan already
+	// defers validateMutationPlan's result to the same field for lower.
+	plan.err = requireTableOperation(table, schema.OperationUpdate)
+	if plan.err == nil {
+		plan.err = validateMutationPlan(table, plan.fields, true, expression)
+	}
 	return plan, plan.err
 }
 
