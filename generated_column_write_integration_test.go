@@ -11,6 +11,7 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/inspect"
 	"github.com/lestrrat-go/rasql/internal/dbtest"
+	"github.com/lestrrat-go/rasql/query"
 	"github.com/stretchr/testify/require"
 )
 
@@ -86,10 +87,28 @@ func TestInsertOmitsGeneratedColumnAgainstLiveDatabases(t *testing.T) {
 			measurements, err := rasql.TableOf[measurement](definition)
 			require.NoError(t, err, "build a typed table from the inspected descriptor")
 
-			// The point under test: this must succeed. If typedInsertMany
-			// ever again named the generated column explicitly, the server
-			// itself -- not a mock -- would refuse the statement here.
-			_, err = rasql.Insert(ctx, db, measurements, measurement{ID: 1, Celsius: 20, Fahrenheit: 999})
+			profileID := "postgresql-17"
+			if test.dialect.Name() == "mysql" {
+				profileID = "mysql-8.4"
+			}
+			profile, err := rasql.DiscoverEngineProfile(ctx, db, profileID)
+			require.NoError(t, err, "discover engine profile")
+			executor, err := rasql.AsExecutor(db, profile)
+			require.NoError(t, err, "build executor")
+
+			id := query.TypedColumnOf[measurement, int64](measurements.Column("id"))
+			celsius := query.TypedColumnOf[measurement, int64](measurements.Column("celsius"))
+
+			// The point under test: this must succeed. NewCreatePlan treats a
+			// generated column as omissible and there is no field here that
+			// sets fahrenheit at all, so if the generated column ever again
+			// had to be named explicitly to build a valid plan, this would
+			// fail before the server saw a statement. Reaching ExecMutation
+			// puts the server itself -- not a mock -- in the position to
+			// refuse the statement if the column reached the INSERT list.
+			plan, err := rasql.NewCreatePlan(measurements, rasql.SetField(id, int64(1)), rasql.SetField(celsius, int64(20)))
+			require.NoError(t, err, "create plan must accept a table with a generated column when nothing sets it")
+			_, err = rasql.ExecMutation(ctx, executor, plan)
 			require.NoError(t, err, "insert into a table with a generated column must succeed: the generated column must not reach the INSERT statement")
 
 			// Read the row back directly, bypassing the typed read path,

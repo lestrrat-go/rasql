@@ -113,6 +113,12 @@ func TestSQLiteDistinctCountDropsNULL(t *testing.T) {
 	visits, err := rasql.TableOf[visit](definition)
 	require.NoError(t, err)
 	require.NoError(t, rasql.CreateTable(t.Context(), db, visits))
+	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+	require.NoError(t, err)
+	executor, err := rasql.AsExecutor(db, profile)
+	require.NoError(t, err)
+	visitID := query.TypedColumnOf[visit, int64](visits.Column("id"))
+	visitCity := query.NullableColumnOf[visit, string](visits.Column("city"))
 	tokyo := "tokyo"
 	// NULL, NULL, tokyo: two distinct rows, one distinct non-NULL value.
 	for _, fixture := range []visit{
@@ -120,7 +126,15 @@ func TestSQLiteDistinctCountDropsNULL(t *testing.T) {
 		{ID: 2, City: nil},
 		{ID: 3, City: &tokyo},
 	} {
-		_, err = rasql.Insert(t.Context(), db, visits, fixture)
+		fields := []rasql.MutationField[visit]{rasql.SetField(visitID, fixture.ID)}
+		if fixture.City != nil {
+			fields = append(fields, rasql.SetNullableField(visitCity, *fixture.City))
+		} else {
+			fields = append(fields, rasql.ClearField(visitCity))
+		}
+		plan, err := rasql.NewCreatePlan(visits, fields...)
+		require.NoError(t, err)
+		_, err = rasql.ExecMutation(t.Context(), executor, plan)
 		require.NoError(t, err)
 	}
 
@@ -240,12 +254,25 @@ func distinctFixture(t *testing.T) (*sql.DB, schema.TableDef) {
 	users, err := rasql.TableOf[user](definition)
 	require.NoError(t, err)
 	require.NoError(t, rasql.CreateTable(t.Context(), db, users))
+	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+	require.NoError(t, err)
+	executor, err := rasql.AsExecutor(db, profile)
+	require.NoError(t, err)
+	userID := query.TypedColumnOf[user, int64](users.Column("id"))
+	userCity := query.TypedColumnOf[user, string](users.Column("city"))
+	userAge := query.TypedColumnOf[user, int64](users.Column("age"))
 	for _, fixture := range []user{
 		{ID: 1, City: "tokyo", Age: 30},
 		{ID: 2, City: "osaka", Age: 20},
 		{ID: 3, City: "tokyo", Age: 10},
 	} {
-		_, err = rasql.Insert(t.Context(), db, users, fixture)
+		plan, err := rasql.NewCreatePlan(users,
+			rasql.SetField(userID, fixture.ID),
+			rasql.SetField(userCity, fixture.City),
+			rasql.SetField(userAge, fixture.Age),
+		)
+		require.NoError(t, err)
+		_, err = rasql.ExecMutation(t.Context(), executor, plan)
 		require.NoError(t, err)
 	}
 	return database, definition
