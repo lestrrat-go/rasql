@@ -98,6 +98,12 @@ func recoverForbiddenPlanOperation(
 		}
 		return forbiddenPlanResult{}, nil
 	}
+	if legacy.nextIndex > legacy.sourceIndex {
+		if err := commitForbiddenDecision(ctx, boundary); err != nil {
+			return forbiddenPlanResult{}, err
+		}
+		return executeForbiddenStatements(ctx, connection, run, operation, legacy.nextIndex)
+	}
 	candidates, err := readForbiddenCandidates(ctx, connection, boundary, run, operationIndex)
 	if err != nil {
 		return forbiddenPlanResult{}, rollbackForbiddenDecision(boundary,

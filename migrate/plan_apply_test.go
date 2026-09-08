@@ -115,6 +115,42 @@ func TestSQLiteForbiddenChangePlanRecoversExecutedStatement(t *testing.T) {
 	require.Zero(t, progressRows)
 }
 
+func TestSQLiteForbiddenChangePlanResumesAfterDurableStatementCheckpoint(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "checkpoint.sqlite")
+	database, err := sql.Open("sqlite", path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	require.NoError(t, createPlanFixtureTable(t, database, false))
+	plan := sqliteTwoStatementForbiddenPlan(t, database)
+	runner, err := New(database, dialect.SQLite())
+	require.NoError(t, err)
+
+	intentFailure := errors.New("stop before second intent")
+	originalHook := journalWriteHook
+	intentCalls := 0
+	journalWriteHook = func(stage string) error {
+		if stage == "intent" {
+			intentCalls++
+			if intentCalls == 2 {
+				return intentFailure
+			}
+		}
+		return nil
+	}
+	t.Cleanup(func() { journalWriteHook = originalHook })
+
+	result, err := runner.ApplyChangePlan(t.Context(), plan)
+	require.ErrorIs(t, err, intentFailure)
+	require.NotNil(t, result.IncompleteOperation)
+	require.Equal(t, 2, sqliteColumnCount(t, database, "users"))
+
+	journalWriteHook = originalHook
+	result, err = runner.ApplyChangePlan(t.Context(), plan)
+	require.NoError(t, err)
+	require.Len(t, result.CompletedOperations, 1)
+	require.Equal(t, 3, sqliteColumnCount(t, database, "users"))
+}
+
 func TestSQLiteRequiredChangePlanRollsBackWholeGroup(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "required-rollback.sqlite")
 	database, err := sql.Open("sqlite", path)
@@ -230,6 +266,58 @@ func sqliteAddColumnPlan(t *testing.T, database *sql.DB, mode changeplan.Transac
 		mode, false, nil)
 	require.NoError(t, err)
 	plan, err := changeplan.NewPlan(planProfileAdapter{profile}, baselineIdentity, history, nil, []changeplan.Operation{operation})
+	require.NoError(t, err)
+	return plan
+}
+
+func sqliteTwoStatementForbiddenPlan(t *testing.T, database *sql.DB) changeplan.Plan {
+	t.Helper()
+	profile, err := engineprofile.Discover(t.Context(), database, engineprofile.SQLite, "sqlite-3.35")
+	require.NoError(t, err)
+	baselineResult, err := catalogread.Read(t.Context(), database, profile, catalogread.Scope{})
+	require.NoError(t, err)
+	baseline := catalogFromPlanRead(t, profile, baselineResult)
+	after := sqlitePlanCatalogForSchema(t, profile,
+		"CREATE TABLE users (id INTEGER NOT NULL PRIMARY KEY, name TEXT, email TEXT)")
+
+	profileDigest, err := changeplan.ProfileDigest(planProfileAdapter{profile})
+	require.NoError(t, err)
+	baselineDigest, err := changeplan.CatalogDigest(baseline)
+	require.NoError(t, err)
+	afterDigest, err := changeplan.CatalogDigest(after)
+	require.NoError(t, err)
+	identity, err := changeplan.NewCatalogIdentity(
+		changeplan.SQLiteEngine, profileDigest, baselineDigest, changeplan.Digest{1},
+	)
+	require.NoError(t, err)
+	object, err := changeplan.NewBaselineObject("users", "table", "main", "users")
+	require.NoError(t, err)
+	baselineIdentity, err := changeplan.NewBaselineIdentity(
+		identity, "sqlite-plan-source", []changeplan.BaselineObject{object}, nil,
+	)
+	require.NoError(t, err)
+	history, err := changeplan.NewHistoryIdentity("main", defaultHistoryTable)
+	require.NoError(t, err)
+	operation, err := changeplan.NewOperation(
+		"add-fields",
+		changeplan.OperationAddColumn,
+		nil,
+		[]changeplan.ObjectID{"users"},
+		nil,
+		nil,
+		afterDigest,
+		[]stmt.Statement{
+			stmt.New(sqltext.Text("ALTER TABLE users ADD COLUMN name TEXT")),
+			stmt.New(sqltext.Text("ALTER TABLE users ADD COLUMN email TEXT")),
+		},
+		changeplan.TransactionForbidden,
+		false,
+		nil,
+	)
+	require.NoError(t, err)
+	plan, err := changeplan.NewPlan(
+		planProfileAdapter{profile}, baselineIdentity, history, nil, []changeplan.Operation{operation},
+	)
 	require.NoError(t, err)
 	return plan
 }
