@@ -7,8 +7,11 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/lestrrat-go/rasql/internal/catalogread"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/migrate/changeplan"
+	"github.com/lestrrat-go/rasql/sqltext"
+	"github.com/lestrrat-go/rasql/stmt"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,6 +37,48 @@ func TestRunSQLiteChangePlanFlow(t *testing.T) {
 	output.Reset()
 	require.NoError(t, Run([]string{"apply", "-plan", planFile, "-dialect", "sqlite", "-dsn", dsn}, &output, &diagnostics))
 	require.Equal(t, "migration plan apply completed: 0 applied\n", output.String())
+
+	output.Reset()
+	require.NoError(t, RunLegacy([]string{"apply", "-plan", planFile, "-dialect", "sqlite", "-dsn", dsn}, &output))
+	require.Equal(t, "migration plan apply completed: 0 applied\n", output.String())
+}
+
+func TestRunSQLiteNonemptyChangePlanFlow(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "application.sqlite")
+	database, err := sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	plan := sqliteCreateTableChangePlan(t, database)
+	require.NoError(t, database.Close())
+	planFile := filepath.Join(t.TempDir(), "plan.json")
+	require.NoError(t, changeplan.Write(planFile, plan))
+
+	var output, diagnostics bytes.Buffer
+	require.NoError(t, Run([]string{"plan", "-file", planFile}, &output, &diagnostics))
+	require.Equal(t, "plan\t"+plan.ID().String()+"\noperation\t0\tcreate-users\tcreate_table\tengine_default\n",
+		output.String())
+	require.Empty(t, diagnostics.String())
+
+	output.Reset()
+	require.NoError(t, Run([]string{"plan", "check", "-file", planFile, "-dialect", "sqlite", "-dsn", dsn},
+		&output, &diagnostics))
+	require.Equal(t, "plan\t"+plan.ID().String()+"\nnext-operation\t0\ncatalog-digest\t"+
+		plan.Baseline().Catalog().CatalogDigest().String()+"\ncomplete\tfalse\n", output.String())
+
+	output.Reset()
+	require.NoError(t, Run([]string{"apply", "-plan", planFile, "-dialect", "sqlite", "-dsn", dsn},
+		&output, &diagnostics))
+	require.Equal(t, "applied-operation\t0\tcreate-users\nmigration plan apply completed: 1 applied\n", output.String())
+
+	database, err = sql.Open("sqlite", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	var tables int
+	require.NoError(t, database.QueryRowContext(t.Context(),
+		"SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'users'").Scan(&tables))
+	require.Equal(t, 1, tables)
+	require.NoError(t, database.QueryRowContext(t.Context(),
+		"SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'rasql_schema_migrations'").Scan(&tables))
+	require.Zero(t, tables)
 
 	output.Reset()
 	require.NoError(t, RunLegacy([]string{"apply", "-plan", planFile, "-dialect", "sqlite", "-dsn", dsn}, &output))
@@ -109,6 +154,64 @@ func emptySQLiteChangePlan(t *testing.T, database *sql.DB) changeplan.Plan {
 	history, err := changeplan.NewHistoryIdentity("main", "rasql_schema_migrations")
 	require.NoError(t, err)
 	plan, err := changeplan.NewPlan(adapted, baseline, history, nil, nil)
+	require.NoError(t, err)
+	return plan
+}
+
+func sqliteCreateTableChangePlan(t *testing.T, database *sql.DB) changeplan.Plan {
+	t.Helper()
+	profile, err := engineprofile.Discover(t.Context(), database, engineprofile.SQLite, "sqlite-3.35")
+	require.NoError(t, err)
+	adapted := cliPlanProfile{profile}
+	sourceIdentity := "cli-create-table"
+	baseline, err := changeplan.NewCatalog(adapted, sourceIdentity, []changeplan.CatalogObject{})
+	require.NoError(t, err)
+
+	const createSQL = "CREATE TABLE users (id INTEGER NOT NULL PRIMARY KEY)"
+	_, err = database.ExecContext(t.Context(), createSQL)
+	require.NoError(t, err)
+	afterRead, err := catalogread.Read(t.Context(), database, profile, catalogread.Scope{})
+	require.NoError(t, err)
+	require.Len(t, afterRead.Tables, 1)
+	operationID := changeplan.OperationID("create-users")
+	introduced, err := changeplan.NewIntroducedBaselineObject(sourceIdentity, operationID, afterRead.Tables[0])
+	require.NoError(t, err)
+	afterObject, err := changeplan.NewCatalogObject(introduced.ID(), afterRead.Tables[0])
+	require.NoError(t, err)
+	after, err := changeplan.NewCatalog(adapted, sourceIdentity, []changeplan.CatalogObject{afterObject})
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), "DROP TABLE users")
+	require.NoError(t, err)
+
+	profileDigest, err := changeplan.ProfileDigest(adapted)
+	require.NoError(t, err)
+	baselineDigest, err := changeplan.CatalogDigest(baseline)
+	require.NoError(t, err)
+	afterDigest, err := changeplan.CatalogDigest(after)
+	require.NoError(t, err)
+	identity, err := changeplan.NewCatalogIdentity(changeplan.SQLiteEngine, profileDigest, baselineDigest, changeplan.Digest{1})
+	require.NoError(t, err)
+	baselineIdentity, err := changeplan.NewBaselineIdentity(
+		identity, sourceIdentity, []changeplan.BaselineObject{introduced}, nil,
+	)
+	require.NoError(t, err)
+	history, err := changeplan.NewHistoryIdentity("main", "rasql_schema_migrations")
+	require.NoError(t, err)
+	operation, err := changeplan.NewOperation(
+		operationID,
+		changeplan.OperationCreateTable,
+		nil,
+		[]changeplan.ObjectID{introduced.ID()},
+		nil,
+		nil,
+		afterDigest,
+		[]stmt.Statement{stmt.New(sqltext.Text(createSQL))},
+		changeplan.TransactionEngineDefault,
+		false,
+		nil,
+	)
+	require.NoError(t, err)
+	plan, err := changeplan.NewPlan(adapted, baselineIdentity, history, nil, []changeplan.Operation{operation})
 	require.NoError(t, err)
 	return plan
 }
