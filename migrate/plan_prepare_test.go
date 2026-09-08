@@ -61,7 +61,9 @@ func TestPreparedChangePlanSchedule(t *testing.T) {
 	_, err = empty.expectedPrefixDigest(1)
 	require.Error(t, err)
 
-	first := scheduleOperationWithArgs(t, "first", nil, changeplan.TransactionRequired, changeplan.Digest{11}, []any{[]byte("payload"), time.Unix(123, 456)})
+	payload := []byte("payload")
+	constructorArgs := []any{payload, time.Unix(123, 456)}
+	first := scheduleOperationWithArgs(t, "first", nil, changeplan.TransactionRequired, changeplan.Digest{11}, constructorArgs)
 	second := scheduleOperation(t, "second", []changeplan.OperationID{"first"}, changeplan.TransactionEngineDefault, changeplan.Digest{12})
 	third := scheduleOperation(t, "third", []changeplan.OperationID{"second"}, changeplan.TransactionForbidden, changeplan.Digest{13})
 	mixedPlan := runnerPlanWithOperations(t, "rasql_schema_migrations", engineprofile.SQLite, []changeplan.Operation{third, second, first})
@@ -72,10 +74,8 @@ func TestPreparedChangePlanSchedule(t *testing.T) {
 	require.Equal(t, []changeplan.OperationID{"first", "second", "third"}, []changeplan.OperationID{
 		prepared.operations[0].operation.ID(), prepared.operations[1].operation.ID(), prepared.operations[2].operation.ID(),
 	})
-	require.Equal(t, []resolvedChangePlanMode{planModeRequired, planModeRequired, planModeForbidden}, []resolvedChangePlanMode{
-		prepared.operations[0].mode, prepared.operations[1].mode, prepared.operations[2].mode,
-	})
 	expectedIDs := []changeplan.OperationID{"first", "second", "third"}
+	expectedModes := []resolvedChangePlanMode{planModeRequired, planModeRequired, planModeForbidden}
 	expectedSQL := []string{"ALTER TABLE users ADD COLUMN value TEXT", "ALTER TABLE users ADD COLUMN value TEXT", "ALTER TABLE users ADD COLUMN value TEXT"}
 	expectedBefore := []changeplan.Digest{mixedPlan.Baseline().Catalog().CatalogDigest(), {11}, {12}}
 	expectedAfter := []changeplan.Digest{{11}, {12}, {13}}
@@ -84,6 +84,7 @@ func TestPreparedChangePlanSchedule(t *testing.T) {
 		for index, operation := range prepared.operations {
 			require.Equal(t, index, operation.index)
 			require.Equal(t, expectedIDs[index], operation.operation.ID())
+			require.Equal(t, expectedModes[index], operation.mode)
 			require.Equal(t, expectedSQL[index], operation.operation.Statements()[0].SQL())
 			require.Equal(t, expectedArguments[index], operation.operation.Statements()[0].Args())
 			require.Equal(t, expectedBefore[index], operation.beforeDigest)
@@ -112,6 +113,9 @@ func TestPreparedChangePlanSchedule(t *testing.T) {
 	require.Len(t, args, 2)
 	args[0].([]byte)[0] = 'X'
 	args[1] = time.Unix(0, 0)
+	payload[0] = 'Q'
+	constructorArgs[0] = []byte("constructor mutation")
+	constructorArgs[1] = time.Unix(0, 1)
 	operations[0] = third
 	require.Equal(t, changeplan.OperationID("first"), prepared.operations[0].operation.ID())
 	returnedStatements := prepared.operations[0].operation.Statements()

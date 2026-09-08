@@ -223,6 +223,40 @@ func TestIncompleteChangePlanResultDeepCopies(t *testing.T) {
 	}
 }
 
+func TestIncompleteChangePlanResultsAreIndependent(t *testing.T) {
+	prepared := resultPreparedPlan(t)
+	incomplete := mustIncomplete(t, prepared, 0, 2, 0, ChangePlanStageStatement, 0, 1, ChangePlanOperationUnknown)
+	cause := errors.New("statement failed")
+	typed := newIncompleteChangePlanError(incomplete, cause)
+	inputCompleted := []changeplan.Operation{prepared.operations[0].operation}
+	firstResult, firstErr := changePlanExecutionResult(inputCompleted, typed)
+	secondResult, secondErr := changePlanExecutionResult(inputCompleted, typed)
+	require.Same(t, typed, firstErr)
+	require.Same(t, typed, secondErr)
+	inputCompleted[0] = prepared.operations[2].operation
+
+	assertResultOperation(t, secondResult.CompletedOperations[0])
+	require.Equal(t, typedErrorValue(t, typed), *secondResult.IncompleteOperation)
+	assertResultOperation(t, secondResult.IncompleteOperation.Operation())
+	assertResultOperation(t, secondResult.IncompleteOperation.AffectedOperations()[0])
+
+	firstResult.CompletedOperations[0] = prepared.operations[2].operation
+	firstResult.IncompleteOperation.operation = prepared.operations[2].operation
+	firstResult.IncompleteOperation.affectedOperations[0] = prepared.operations[2].operation
+	assertResultOperation(t, secondResult.CompletedOperations[0])
+	assertResultOperation(t, secondResult.IncompleteOperation.Operation())
+	assertResultOperation(t, secondResult.IncompleteOperation.AffectedOperations()[0])
+	assertResultOperation(t, typedErrorValue(t, typed).Operation())
+	require.Equal(t, changeplan.OperationID("first"), typedErrorValue(t, typed).AffectedOperations()[0].ID())
+}
+
+func typedErrorValue(t *testing.T, err error) IncompleteOperation {
+	t.Helper()
+	var typedError *IncompleteChangePlanError
+	require.ErrorAs(t, err, &typedError)
+	return typedError.Incomplete
+}
+
 func assertResultOperation(t *testing.T, operation changeplan.Operation) {
 	t.Helper()
 	require.Equal(t, changeplan.OperationID("first"), operation.ID())
@@ -387,6 +421,7 @@ func TestPublicExecutionResultCompatibility(t *testing.T) {
 func assertLegacyIncompleteResult(t *testing.T, result ExecutionResult, err error, migration Migration, direction Direction, sourceIndex int) {
 	t.Helper()
 	require.Error(t, err)
+	require.Empty(t, result.Completed)
 	var incompleteErr *IncompleteMigrationError
 	require.ErrorAs(t, err, &incompleteErr)
 	require.NotNil(t, result.Incomplete)
@@ -401,6 +436,7 @@ func assertLegacyIncompleteResult(t *testing.T, result ExecutionResult, err erro
 	require.Equal(t, sources[sourceIndex].Source, result.Incomplete.Source)
 	require.Equal(t, *result.Incomplete, incompleteErr.Incomplete)
 	require.EqualError(t, incompleteErr.Cause, "execute source: migration SQL failure")
+	require.ErrorIs(t, err, incompleteErr.Cause)
 	require.ErrorContains(t, err, "migration SQL failure")
 	require.Nil(t, result.CompletedOperations)
 	require.Nil(t, result.IncompleteOperation)
