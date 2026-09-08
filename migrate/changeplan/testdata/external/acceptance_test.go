@@ -2,7 +2,13 @@ package external_test
 
 import (
 	"bytes"
+	"fmt"
+	"go/token"
+	"go/types"
 	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/lestrrat-go/rasql"
@@ -11,6 +17,7 @@ import (
 	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/lestrrat-go/rasql/stmt"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/tools/go/packages"
 )
 
 var _ changeplan.ProfileSource = rasql.EngineProfile{}
@@ -86,4 +93,130 @@ func TestExternalNonemptyPlanContract(t *testing.T) {
 	reencoded, err := changeplan.Encode(decoded)
 	require.NoError(t, err)
 	require.True(t, bytes.Equal(encoded, reencoded))
+}
+
+func TestPublicAPIHasNoInaccessibleTypes(t *testing.T) {
+	_, filename, _, ok := runtime.Caller(0)
+	require.True(t, ok)
+	root := filepath.Join(filepath.Dir(filename), "../../../..")
+	config := &packages.Config{Mode: packages.NeedTypes, Dir: root}
+	loaded, err := packages.Load(config, "github.com/lestrrat-go/rasql/migrate/changeplan")
+	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+	require.Empty(t, loaded[0].Errors)
+	pkg := loaded[0].Types
+	for _, name := range pkg.Scope().Names() {
+		object := pkg.Scope().Lookup(name)
+		if !object.Exported() {
+			continue
+		}
+		require.NoError(t, walkPublicType(object.Type(), map[types.Type]bool{}), name)
+	}
+
+	internalPackage := types.NewPackage("example.com/rasql/internal/synthetic", "synthetic")
+	hidden := types.NewNamed(types.NewTypeName(token.NoPos, internalPackage, "Hidden", nil), types.Typ[types.String], nil)
+	syntheticPackage := types.NewPackage("example.com/synthetic", "synthetic")
+	parameter := types.NewVar(token.NoPos, syntheticPackage, "value", hidden)
+	synthetic := types.NewSignatureType(nil, nil, nil, types.NewTuple(parameter), types.NewTuple(), false)
+	require.Error(t, walkPublicType(synthetic, map[types.Type]bool{}))
+}
+
+var approvedPublicAliases = map[string]bool{
+	"EngineID":           true,
+	"EngineVersion":      true,
+	"EngineCapabilities": true,
+	"EngineLimits":       true,
+}
+
+func walkPublicType(value types.Type, seen map[types.Type]bool) error {
+	if value == nil || seen[value] {
+		return nil
+	}
+	seen[value] = true
+	switch current := value.(type) {
+	case *types.Named:
+		object := current.Obj()
+		if object.Pkg() != nil && strings.Contains(object.Pkg().Path(), "/internal/") && !approvedPublicAliases[object.Name()] {
+			return fmt.Errorf("inaccessible type %s", types.TypeString(value, nil))
+		}
+		for index := 0; index < current.TypeArgs().Len(); index++ {
+			if err := walkPublicType(current.TypeArgs().At(index), seen); err != nil {
+				return err
+			}
+		}
+		if err := walkPublicType(current.Underlying(), seen); err != nil {
+			return err
+		}
+		methodSet := types.NewMethodSet(current)
+		for index := 0; index < methodSet.Len(); index++ {
+			method := methodSet.At(index).Obj()
+			if method.Exported() {
+				if err := walkPublicType(method.Type(), seen); err != nil {
+					return err
+				}
+			}
+		}
+	case *types.Pointer:
+		return walkPublicType(current.Elem(), seen)
+	case *types.Slice:
+		return walkPublicType(current.Elem(), seen)
+	case *types.Array:
+		return walkPublicType(current.Elem(), seen)
+	case *types.Map:
+		if err := walkPublicType(current.Key(), seen); err != nil {
+			return err
+		}
+		return walkPublicType(current.Elem(), seen)
+	case *types.Chan:
+		return walkPublicType(current.Elem(), seen)
+	case *types.Struct:
+		for index := 0; index < current.NumFields(); index++ {
+			field := current.Field(index)
+			if field.Exported() {
+				if err := walkPublicType(field.Type(), seen); err != nil {
+					return err
+				}
+			}
+		}
+	case *types.Signature:
+		if current.Recv() != nil {
+			if err := walkPublicType(current.Recv().Type(), seen); err != nil {
+				return err
+			}
+		}
+		if err := walkTuple(current.Params(), seen); err != nil {
+			return err
+		}
+		if err := walkTuple(current.Results(), seen); err != nil {
+			return err
+		}
+		if current.TypeParams() != nil {
+			for index := 0; index < current.TypeParams().Len(); index++ {
+				if err := walkPublicType(current.TypeParams().At(index).Constraint(), seen); err != nil {
+					return err
+				}
+			}
+		}
+	case *types.Interface:
+		for index := 0; index < current.NumMethods(); index++ {
+			method := current.Method(index)
+			if method.Exported() {
+				if err := walkPublicType(method.Type(), seen); err != nil {
+					return err
+				}
+			}
+		}
+	case *types.TypeParam:
+		return walkPublicType(current.Constraint(), seen)
+	}
+	return nil
+}
+
+func walkTuple(tuple *types.Tuple, seen map[types.Type]bool) error {
+	for index := 0; index < tuple.Len(); index++ {
+		if err := walkPublicType(tuple.At(index).Type(), seen); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -16,12 +16,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var goldenCatalogBytes = []byte(`{"engine":{"dialect":"sqlite","version":"3.35.0","profile":"sqlite-3.35"},"objects":[{"id":"starting","kind":"table","schema":"main","name":"users"},{"id":"created","kind":"table","schema":"main","name":"created"}]}`)
+
+func goldenDigest(data []byte) changeplan.Digest { return changeplan.Digest(sha256.Sum256(data)) }
+
 func fullContractPlan(t *testing.T) changeplan.Plan {
 	t.Helper()
 	profile := testProfile(t)
 	profileDigest, err := changeplan.ProfileDigest(profile)
 	require.NoError(t, err)
-	catalogIdentity, err := changeplan.NewCatalogIdentity(profile.Engine(), profileDigest, changeplan.Digest{2}, changeplan.Digest{3})
+	catalogIdentity, err := changeplan.NewCatalogIdentity(profile.Engine(), profileDigest, goldenDigest(goldenCatalogBytes), goldenDigest([]byte("fixture-source")))
 	require.NoError(t, err)
 	starting, err := changeplan.NewBaselineObject("starting", "table", "main", "users")
 	require.NoError(t, err)
@@ -29,9 +33,11 @@ func fullContractPlan(t *testing.T) changeplan.Plan {
 		Schema: "main", Name: "created", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 	})
 	require.NoError(t, err)
-	rename, err := changeplan.NewBaselineRename("rename-table", starting.ID(), "main", "accounts")
+	renameOne, err := changeplan.NewBaselineRename("rename-created-1", future.ID(), "main", "renamed")
 	require.NoError(t, err)
-	baseline, err := changeplan.NewBaselineIdentity(catalogIdentity, "fixture-source", []changeplan.BaselineObject{starting, future}, []changeplan.BaselineRename{rename})
+	renameTwo, err := changeplan.NewBaselineRename("rename-created-2", future.ID(), "main", "final")
+	require.NoError(t, err)
+	baseline, err := changeplan.NewBaselineIdentity(catalogIdentity, "fixture-source", []changeplan.BaselineObject{starting, future}, []changeplan.BaselineRename{renameOne, renameTwo})
 	require.NoError(t, err)
 	history, err := changeplan.NewHistoryIdentity("main", "schema_migrations")
 	require.NoError(t, err)
@@ -63,11 +69,13 @@ func fullContractPlan(t *testing.T) changeplan.Plan {
 		{id: "drop-constraint", kind: string(changeplan.OperationDropConstraint), transaction: string(changeplan.TransactionEngineDefault), object: starting.ID(), statement: plain("ALTER TABLE users DROP CONSTRAINT users_label_unique")},
 		{id: "backfill", kind: string(changeplan.OperationBackfill), transaction: string(changeplan.TransactionRequired), object: starting.ID(), post: []changeplan.Fact{equal}, statement: statementWithArgs},
 		{id: "native-sql", kind: string(changeplan.OperationNativeSQL), transaction: string(changeplan.TransactionForbidden), object: starting.ID(), pre: []changeplan.Fact{absent}, statement: statementWithArgs, reversible: true, reverse: []stmt.Statement{plain("SELECT 0")}},
-		{id: "rename-table", kind: string(changeplan.OperationRenameTable), transaction: string(changeplan.TransactionEngineDefault), object: starting.ID(), statement: plain("ALTER TABLE users RENAME TO accounts")},
-		{id: "drop-table", kind: string(changeplan.OperationDropTable), transaction: string(changeplan.TransactionRequired), object: starting.ID(), statement: plain("DROP TABLE accounts")},
+		{id: "rename-created-1", kind: string(changeplan.OperationRenameTable), transaction: string(changeplan.TransactionEngineDefault), object: future.ID(), statement: plain("ALTER TABLE created RENAME TO renamed")},
+		{id: "rename-created-2", kind: string(changeplan.OperationRenameTable), transaction: string(changeplan.TransactionRequired), object: future.ID(), statement: plain("ALTER TABLE renamed RENAME TO final")},
+		{id: "drop-table", kind: string(changeplan.OperationDropTable), transaction: string(changeplan.TransactionRequired), object: starting.ID(), statement: plain("DROP TABLE users")},
 	}
 	decisions := []changeplan.Decision{
-		mustDecision(t, "rename", changeplan.DecisionRenameObject, starting.ID(), "main.users", "main.accounts", ""),
+		mustDecision(t, "rename-one", changeplan.DecisionRenameObject, future.ID(), "main.created", "main.renamed", ""),
+		mustDecision(t, "rename-two", changeplan.DecisionRenameObject, future.ID(), "main.renamed", "main.final", ""),
 		mustDecision(t, "rename-column", changeplan.DecisionRenameObject, starting.ID(), "name", "label", ""),
 		mustDecision(t, "destructive", changeplan.DecisionAcceptDestructive, starting.ID(), "", "", "approved"),
 		mustDecision(t, "backfill", changeplan.DecisionSupplyBackfill, starting.ID(), "", "", "approved"),
@@ -138,19 +146,18 @@ func TestV1FullGoldenContract(t *testing.T) {
 	require.Len(t, wire.Baseline.ProfileDigest, 64)
 	require.Len(t, wire.Baseline.CatalogDigest, 64)
 	require.Len(t, wire.Baseline.SourceDigest, 64)
-	profileDigest, err := changeplan.ProfileDigest(plan.Profile())
-	require.NoError(t, err)
-	require.Equal(t, profileDigest.String(), wire.Baseline.ProfileDigest)
-	var catalogDigest, sourceDigest changeplan.Digest
-	catalogDigest[0] = 2
-	sourceDigest[0] = 3
-	require.Equal(t, catalogDigest.String(), wire.Baseline.CatalogDigest)
-	require.Equal(t, sourceDigest.String(), wire.Baseline.SourceDigest)
+	var rawRoot map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(fixture, &rawRoot))
+	var rawProfile json.RawMessage
+	require.NoError(t, json.Unmarshal(rawRoot["profile"], &rawProfile))
+	require.Equal(t, goldenDigest(bytes.TrimSpace(rawProfile)).String(), wire.Baseline.ProfileDigest)
+	require.Equal(t, goldenDigest(goldenCatalogBytes).String(), wire.Baseline.CatalogDigest)
+	require.Equal(t, goldenDigest([]byte("fixture-source")).String(), wire.Baseline.SourceDigest)
 	noID := bytes.Replace(fixture, []byte(`"id":"`+wire.ID+`",`), []byte{}, 1)
 	planDigest := sha256.Sum256(bytes.TrimSuffix(noID, []byte{'\n'}))
 	require.Equal(t, hex.EncodeToString(planDigest[:]), wire.ID)
 	require.Equal(t, plan.ID().String(), wire.ID)
-	require.NotEqual(t, changeplan.Digest{}, plan.Baseline().Catalog().CatalogDigest())
+	require.Equal(t, goldenDigest(goldenCatalogBytes), plan.Baseline().Catalog().CatalogDigest())
 
 	wantKinds := map[string]bool{}
 	wantTransactions := map[string]bool{}
@@ -168,8 +175,12 @@ func TestV1FullGoldenContract(t *testing.T) {
 		require.True(t, wantTransactions[string(mode)], "missing transaction mode %s", mode)
 	}
 	var wireArgumentKinds []string
-	for _, argument := range wire.Operations[9].Statements[0].Args {
-		wireArgumentKinds = append(wireArgumentKinds, argument.Kind)
+	for _, operation := range wire.Operations {
+		if operation.Kind == string(changeplan.OperationBackfill) {
+			for _, argument := range operation.Statements[0].Args {
+				wireArgumentKinds = append(wireArgumentKinds, argument.Kind)
+			}
+		}
 	}
 	require.Equal(t, []string{"null", "bool", "int64", "uint64", "float64", "string", "bytes_base64", "time_rfc3339nano"}, wireArgumentKinds)
 }
@@ -177,9 +188,19 @@ func TestV1FullGoldenContract(t *testing.T) {
 func TestFullContractArgumentsAndReversibility(t *testing.T) {
 	plan := fullContractPlan(t)
 	operations := plan.Operations()
-	require.Len(t, operations, 13)
+	require.Len(t, operations, 14)
 	var argumentKinds []string
-	for _, argument := range operations[9].Statements()[0].Args() {
+	var backfill changeplan.Operation
+	var native changeplan.Operation
+	for _, operation := range operations {
+		if operation.ID() == "backfill" {
+			backfill = operation
+		}
+		if operation.ID() == "native-sql" {
+			native = operation
+		}
+	}
+	for _, argument := range backfill.Statements()[0].Args() {
 		switch argument.(type) {
 		case nil:
 			argumentKinds = append(argumentKinds, "null")
@@ -201,8 +222,8 @@ func TestFullContractArgumentsAndReversibility(t *testing.T) {
 	}
 	require.Equal(t, []string{"null", "bool", "int64", "uint64", "float64", "string", "bytes_base64", "time_rfc3339nano"}, argumentKinds)
 	require.False(t, operations[0].Reversible())
-	require.True(t, operations[10].Reversible())
-	require.Len(t, operations[10].ReverseStatements(), 1)
+	require.True(t, native.Reversible())
+	require.Len(t, native.ReverseStatements(), 1)
 	for _, operation := range operations {
 		require.NotEmpty(t, operation.Statements())
 	}
