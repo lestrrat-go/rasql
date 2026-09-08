@@ -143,9 +143,10 @@ func (r MembersTableTasksRelation) Join() rasql.Join {
 }
 
 // LoadWith fetches children with filtering, ordering, caps, and bind batching.
-func (r MembersTableTasksRelation) LoadWith(ctx context.Context, db rasql.DB, parents []MembersRow, options rasql.RelationshipLoadOptions) (map[*int64][]TasksRow, error) {
-	return rasql.LoadHasManyPlan[MembersRow, TasksRow, *int64](ctx, db, r.Child, []query.ColumnRef{r.ChildKey}, parents, func(row MembersRow) *int64 { value := row.ID; return &value }, func(row TasksRow) *int64 {
-		return func() *int64 {
+func (r MembersTableTasksRelation) LoadWith(ctx context.Context, db rasql.DB, parents []MembersRow, options rasql.RelationshipLoadOptions) (map[int64][]TasksRow, error) {
+	return rasql.LoadHasManyPlan[MembersRow, TasksRow, int64](ctx, db, r.Child, []query.ColumnRef{r.ChildKey}, parents, func(row MembersRow) int64 { return row.ID }, func(row TasksRow) int64 {
+		return func() int64 {
+			var zero int64
 			nullable, ok := any(row.AssigneeID).(rasql.NullableBindValue)
 			if !ok {
 				nullable, ok = any(&row.AssigneeID).(rasql.NullableBindValue)
@@ -153,43 +154,40 @@ func (r MembersTableTasksRelation) LoadWith(ctx context.Context, db rasql.DB, pa
 			if ok {
 				value, valid := nullable.NullableBind()
 				if !valid {
-					return nil
+					return zero
 				}
 				typed, ok := value.(int64)
 				if ok {
-					return &typed
+					return typed
 				}
-				return nil
+				return zero
 			}
 			if value, ok := any(row.AssigneeID).(*int64); ok {
-				return value
+				if value == nil {
+					return zero
+				}
+				return *value
 			}
 			if value, ok := any(row.AssigneeID).(int64); ok {
-				return &value
+				return value
 			}
-			return nil
+			return zero
 		}()
-	}, func(key *int64) ([]any, bool) {
-		if key == nil {
-			return nil, false
-		}
-		return []any{*key}, true
-	}, options)
+	}, func(key int64) ([]any, bool) { return []any{key}, true }, options)
 }
 
 // Load fetches all children for parents in one query.
-func (r MembersTableTasksRelation) Load(ctx context.Context, db rasql.DB, parents []MembersRow) (map[*int64][]TasksRow, error) {
+func (r MembersTableTasksRelation) Load(ctx context.Context, db rasql.DB, parents []MembersRow) (map[int64][]TasksRow, error) {
 	return r.LoadWith(ctx, db, parents, rasql.RelationshipLoadOptions{})
 }
 
 // SourceKey returns the ordered source relationship key.
-func (r MembersTableTasksRelation) SourceKey(row MembersRow) *int64 {
-	return func() *int64 { value := row.ID; return &value }()
-}
+func (r MembersTableTasksRelation) SourceKey(row MembersRow) int64 { return row.ID }
 
 // TargetKey returns the ordered target relationship key.
-func (r MembersTableTasksRelation) TargetKey(row TasksRow) *int64 {
-	return func() *int64 {
+func (r MembersTableTasksRelation) TargetKey(row TasksRow) int64 {
+	return func() int64 {
+		var zero int64
 		nullable, ok := any(row.AssigneeID).(rasql.NullableBindValue)
 		if !ok {
 			nullable, ok = any(&row.AssigneeID).(rasql.NullableBindValue)
@@ -197,20 +195,23 @@ func (r MembersTableTasksRelation) TargetKey(row TasksRow) *int64 {
 		if ok {
 			value, valid := nullable.NullableBind()
 			if !valid {
-				return nil
+				return zero
 			}
 			typed, ok := value.(int64)
 			if ok {
-				return &typed
+				return typed
 			}
-			return nil
+			return zero
 		}
 		if value, ok := any(row.AssigneeID).(*int64); ok {
-			return value
+			if value == nil {
+				return zero
+			}
+			return *value
 		}
 		if value, ok := any(row.AssigneeID).(int64); ok {
-			return &value
+			return value
 		}
-		return nil
+		return zero
 	}()
 }
