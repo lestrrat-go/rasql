@@ -310,7 +310,11 @@ func queryBody(plan QueryPlan) (query.QueryBody, error) {
 	for i, group := range plan.group {
 		groups[i] = group.node
 	}
-	selectBody, err := query.NewCorrelatedJoinedSelect(plan.sources[0].ref, nil, plan.joins, groups, projections...)
+	correlations := make([]query.RelationSource, len(plan.correlations))
+	for i, source := range plan.correlations {
+		correlations[i] = source.ref
+	}
+	selectBody, err := query.NewCorrelatedJoinedSelect(plan.sources[0].ref, correlations, plan.joins, groups, projections...)
 	if err != nil {
 		return nil, err
 	}

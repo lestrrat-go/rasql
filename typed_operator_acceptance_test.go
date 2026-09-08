@@ -17,9 +17,10 @@ import (
 // realistic query that a reader would expect any ORM to express, and it uses
 // only the canonical typed API: no query.Expression escape hatch, no raw SQL.
 //
-// It exercises the five operator groups the typed API was missing:
-// an ordered comparison, a string function, a pattern match, a SUM aggregate,
-// and an IN subquery. A query the typed API cannot express is a capability
+// It exercises every operator group the typed API was missing: an ordered
+// comparison, a string function, a pattern match, the SUM and AVG aggregates,
+// an IN subquery, a correlated EXISTS, and an ordering that names a projected
+// result by its alias. A query the typed API cannot express is a capability
 // the redesign has not replaced, so this test is the standing definition of
 // "the expression language is complete enough to ship".
 
@@ -60,6 +61,7 @@ func (d acceptanceTotalDecoder) DecodeRow(src ScanSource, row *acceptanceTotalRo
 //	WHERE o.amount > 100
 //	  AND LOWER(o.customer) LIKE 'a%'
 //	  AND o.id IN (SELECT r.order_id FROM refunds r)
+//	  AND EXISTS (SELECT r.order_id FROM refunds r WHERE r.order_id = o.id)
 //	GROUP BY o.customer
 //	ORDER BY total DESC, LOWER(o.customer)
 //
@@ -123,11 +125,23 @@ func acceptanceQuery(t *testing.T) Query[acceptanceTotalRow] {
 	refundedOrder, err := InQuery(orderID.Expr(), refundQuery)
 	require.NoError(t, err)
 
+	// The same restriction written a second way, as a correlated EXISTS. Its
+	// WHERE reads o.id, a column of the enclosing query, which is what makes
+	// it correlated. It is redundant with refundedOrder on purpose: an EXISTS
+	// that changed which rows survive would not prove the two forms agree.
+	correlated, err := ExistsQuery(
+		Select(r.Source(), refunded).
+			Correlated(o.Source()).
+			Where(EqualExpr(refundOrder.Expr(), orderID.Expr())),
+	)
+	require.NoError(t, err)
+
 	return Select(o.Source(), projection).
 		Where(And(
 			GreaterValue(amount.Expr(), int64(100)),
 			LikeValue(LowerExpr(customer.Expr()), "a%"),
 			refundedOrder,
+			correlated,
 		)).
 		GroupBy(Group(customer.Expr())).
 		OrderBy(DescResult(total), AscExpr(LowerExpr(customer.Expr())))
@@ -183,6 +197,95 @@ func runAcceptance(t *testing.T, database *sql.DB, executor Executor, textType s
 			Average:  Nullable[float64]{Value: 175, Valid: true},
 		},
 	}, rows)
+}
+
+// correlationQuery is acceptanceQuery reduced to the one restriction under
+// test: the correlated EXISTS, with the IN subquery and every other operator
+// removed. Order 7 is alice's, for 900, and is the only order with no refund.
+// A correlated EXISTS is evaluated per row and drops it, leaving alice at 350.
+// An EXISTS that lost its correlation asks only whether the refunds table has
+// any row at all, which is true for every order, and alice would come back at
+// 1250. The two answers differ, which is what makes this a test of the
+// correlation rather than of the seed.
+func correlationQuery(t *testing.T) Query[acceptanceTotalRow] {
+	t.Helper()
+
+	orders, err := ReadTableOf[acceptanceOrderRow](schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{
+		{Name: "id", Type: schema.IntegerType{}},
+		{Name: "customer", Type: schema.TextType{}},
+		{Name: "amount", Type: schema.IntegerType{}},
+	}})
+	require.NoError(t, err)
+	refunds, err := ReadTableOf[acceptanceRefundRow](schema.TableDef{Name: "refunds", Columns: []schema.ColumnDef{
+		{Name: "id", Type: schema.IntegerType{}},
+		{Name: "order_id", Type: schema.IntegerType{}},
+	}})
+	require.NoError(t, err)
+
+	o, err := SourceOf(orders, "o")
+	require.NoError(t, err)
+	r, err := SourceOf(refunds, "r")
+	require.NoError(t, err)
+
+	orderID, err := BindColumn[acceptanceOrderRow, int64](o, "id", "")
+	require.NoError(t, err)
+	customer, err := BindColumn[acceptanceOrderRow, string](o, "customer", "")
+	require.NoError(t, err)
+	amount, err := BindColumn[acceptanceOrderRow, int64](o, "amount", "")
+	require.NoError(t, err)
+	refundOrder, err := BindColumn[acceptanceRefundRow, int64](r, "order_id", "")
+	require.NoError(t, err)
+
+	refunded, err := Scalar("order_id", refundOrder.Expr(), schema.IntegerType{}, "")
+	require.NoError(t, err)
+
+	result, err := NewResultSchema(
+		ResultColumn{Name: "customer", Type: schema.TextType{}},
+		ResultColumn{Name: "total", Type: schema.IntegerType{}, Nullable: true},
+		ResultColumn{Name: "average", Type: schema.FloatType{}, Nullable: true},
+	)
+	require.NoError(t, err)
+	projection, err := NewProjection([]ProjectionItem{
+		Item("customer", customer.Expr(), schema.TextType{}, ""),
+		NullItem("total", SumExpr(amount.Expr()), schema.IntegerType{}, ""),
+		NullItem("average", AvgExpr(amount.Expr()), schema.FloatType{}, ""),
+	}, acceptanceTotalDecoder{result: result})
+	require.NoError(t, err)
+
+	correlated, err := ExistsQuery(
+		Select(r.Source(), refunded).
+			Correlated(o.Source()).
+			Where(EqualExpr(refundOrder.Expr(), orderID.Expr())),
+	)
+	require.NoError(t, err)
+
+	return Select(o.Source(), projection).
+		Where(correlated).
+		GroupBy(Group(customer.Expr())).
+		OrderBy(AscExpr(customer.Expr()))
+}
+
+func TestTypedOperatorCorrelationIsEvaluatedPerRow(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = database.Close() })
+	db, err := New(database, dialect.SQLite())
+	require.NoError(t, err)
+	profile, err := EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+	require.NoError(t, err)
+	executor, err := AsExecutor(db, profile)
+	require.NoError(t, err)
+	acceptanceSeed(t, database, "TEXT")
+
+	rows, err := All(t.Context(), executor, correlationQuery(t))
+	require.NoError(t, err)
+	totals := make(map[string]int64, len(rows))
+	for _, row := range rows {
+		totals[row.Customer] = row.Total.Value
+	}
+	require.Equal(t, int64(350), totals["alice"],
+		"order 7 has no refund, so a per-row EXISTS drops it; 1250 would mean the correlation was lost",
+	)
 }
 
 func TestTypedOperatorAcceptanceSQLite(t *testing.T) {

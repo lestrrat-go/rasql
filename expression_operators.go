@@ -167,16 +167,53 @@ func DescResult(item ProjectionItem) OrderTerm {
 	return OrderTerm{result: &item, descending: true}
 }
 
+// ExistsQuery tests whether q returns any row. Write q so that it reads a
+// column of the enclosing query, which is what makes the test say something
+// about the row being tested; an EXISTS over a query that reads only its own
+// tables reports whether a table is non-empty and answers the same for every
+// row.
+//
+// Unlike InQuery this places no requirement on what q projects, because EXISTS
+// counts rows and never reads a value out of one.
+func ExistsQuery[R any](q Query[R]) (Predicate, error) {
+	statement, err := subqueryStatement(q)
+	if err != nil {
+		return Predicate{}, err
+	}
+	return Predicate{node: query.Exists(statement)}, nil
+}
+
+// NotExistsQuery tests whether q returns no row at all. A NULL among q's
+// results changes nothing, unlike in NotInQuery: EXISTS reports whether a row
+// arrived and never reads a value from it.
+func NotExistsQuery[R any](q Query[R]) (Predicate, error) {
+	statement, err := subqueryStatement(q)
+	if err != nil {
+		return Predicate{}, err
+	}
+	return Predicate{node: query.NotExists(statement)}, nil
+}
+
 // subquerySelect lowers a typed query to the query package's Select so it can
 // stand inside a predicate. A single projected column is required because a
 // subquery compared against one value has to return one value.
 func subquerySelect[R any](q Query[R]) (query.Select, error) {
-	if err := q.Validate(); err != nil {
+	statement, err := subqueryStatement(q)
+	if err != nil {
 		return query.Select{}, err
 	}
 	if columns := q.Schema().Columns(); len(columns) != 1 {
 		return query.Select{}, planError("invalid_query", "subquery.projection",
 			"a subquery used as a value must project exactly one column")
+	}
+	return statement, nil
+}
+
+// subqueryStatement lowers a typed query to a Select without judging what it
+// projects, which is all an EXISTS needs.
+func subqueryStatement[R any](q Query[R]) (query.Select, error) {
+	if err := q.Validate(); err != nil {
+		return query.Select{}, err
 	}
 	body, err := queryBody(q.plan)
 	if err != nil {
