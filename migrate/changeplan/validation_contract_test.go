@@ -1667,61 +1667,123 @@ func validationContractBaselineObject(t *testing.T, id, schemaName, name string)
 	return object
 }
 
+type validationContractBaselineFixture struct {
+	profile       Profile
+	identity      CatalogIdentity
+	source        string
+	starting      []BaselineObject
+	future        []BaselineObject
+	objects       []BaselineObject
+	creates       []Operation
+	renameRecords []BaselineRename
+	renames       []Operation
+	decisions     []Decision
+	history       HistoryIdentity
+	plan          Plan
+}
+
+func newValidationContractBaselineFixture(t *testing.T) validationContractBaselineFixture {
+	t.Helper()
+	profile := sourceRepairProfile(t)
+	profileDigest, err := ProfileDigest(profile)
+	require.NoError(t, err)
+	identity, err := NewCatalogIdentity(profile.Engine(), profileDigest, Digest{1}, Digest{2})
+	require.NoError(t, err)
+	source := "baseline-validation-source"
+	starting := []BaselineObject{
+		validationContractBaselineObject(t, "starting-a", "main", "users"),
+		validationContractBaselineObject(t, "starting-b", "main", "orders"),
+	}
+	future := make([]BaselineObject, 0, 2)
+	for _, row := range []struct{ operation, schemaName, name string }{
+		{"create-a", "main", "created_a"}, {"create-b", "main", "created_b"},
+	} {
+		object, objectErr := NewIntroducedBaselineObject(source, OperationID(row.operation), schema.TableDef{
+			Schema: row.schemaName, Name: row.name,
+			Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		})
+		require.NoError(t, objectErr)
+		future = append(future, object)
+	}
+	objects := append(append([]BaselineObject(nil), starting...), future...)
+	creates := make([]Operation, 0, len(future))
+	for i, object := range future {
+		operationID := OperationID("create-" + string(rune('a'+i)))
+		operation, operationErr := NewOperation(operationID, OperationCreateTable, nil, []ObjectID{object.ID()}, nil, nil,
+			Digest{1}, []stmt.Statement{stmt.New(sqltext.Text("CREATE TABLE " + object.Name()))}, TransactionRequired, false, nil)
+		require.NoError(t, operationErr)
+		creates = append(creates, operation)
+	}
+	renameRecords := []BaselineRename{}
+	renames := []Operation{}
+	decisions := []Decision{}
+	for i, object := range starting {
+		operationID := OperationID("rename-" + string(rune('a'+i)))
+		toName := []string{"accounts", "purchases"}[i]
+		record, recordErr := NewBaselineRename(operationID, object.ID(), "main", toName)
+		require.NoError(t, recordErr)
+		renameRecords = append(renameRecords, record)
+		rename, renameErr := NewOperation(operationID, OperationRenameTable, nil, []ObjectID{object.ID()}, nil, nil,
+			Digest{1}, []stmt.Statement{stmt.New(sqltext.Text("ALTER TABLE " + object.Name() + " RENAME TO " + toName))}, TransactionEngineDefault, false, nil)
+		require.NoError(t, renameErr)
+		renames = append(renames, rename)
+		decision, decisionErr := NewDecision(DecisionID("decision-"+string(rune('a'+i))), DecisionRenameObject, object.ID(),
+			"main."+object.Name(), "main."+toName, true, "")
+		require.NoError(t, decisionErr)
+		decisions = append(decisions, decision)
+	}
+	baseline, err := NewBaselineIdentity(identity, source, objects, renameRecords)
+	require.NoError(t, err)
+	history, err := NewHistoryIdentity("main", "schema_migrations")
+	require.NoError(t, err)
+	operations := append(append([]Operation(nil), creates...), renames...)
+	plan, err := newPlan(profile, baseline, history, decisions, operations)
+	require.NoError(t, err)
+	return validationContractBaselineFixture{
+		profile: profile, identity: identity, source: source, starting: starting, future: future, objects: objects,
+		creates: creates, renameRecords: renameRecords, renames: renames, decisions: decisions, history: history, plan: plan,
+	}
+}
+
 func TestValidationContractBaselineSemantics(t *testing.T) {
-	_, identity, object, _ := validationContractIdentity(t)
+	fixture := newValidationContractBaselineFixture(t)
+	allObjects := func() []BaselineObject { return append([]BaselineObject(nil), fixture.objects...) }
 	for _, row := range []struct {
 		name     string
-		mutate   func([]BaselineObject, []BaselineRename) (BaselineObject, []BaselineRename)
+		identity CatalogIdentity
+		source   string
+		objects  func() []BaselineObject
+		target   error
 		contains string
 	}{
-		{"baseline catalog engine zero", func(objects []BaselineObject, renames []BaselineRename) (BaselineObject, []BaselineRename) {
-			return object, renames
-		}, "catalog"},
-	} {
-		_ = row
-	}
-	for _, row := range []struct {
-		name                            string
-		id, kind, nameValue, schemaName string
-		target                          error
-		contains                        string
-	}{
-		{"blank id", "", "table", "users", "main", ErrInvalidIdentity, "baseline object fields are required"},
-		{"blank kind", "object", "", "users", "main", ErrInvalidIdentity, "baseline object fields are required"},
-		{"blank name", "object", "table", "", "main", ErrInvalidIdentity, "baseline object fields are required"},
-		{"blank schema remains valid", "object", "table", "users", "", nil, ""},
+		{"baseline catalog engine zero", func() CatalogIdentity { value := fixture.identity; value.engine = 0; return value }(), fixture.source, allObjects, ErrInvalidIdentity, "catalog or source identity is empty"},
+		{"baseline catalog engine above custom", func() CatalogIdentity { value := fixture.identity; value.engine = CustomEngine + 1; return value }(), fixture.source, allObjects, ErrInvalidIdentity, "catalog or source identity is empty"},
+		{"baseline source empty", fixture.identity, "", allObjects, ErrInvalidIdentity, "source identity is required"},
+		{"baseline source whitespace", fixture.identity, "   ", allObjects, ErrInvalidIdentity, "source identity is required"},
+		{"baseline object blank id", fixture.identity, fixture.source, func() []BaselineObject { objects := allObjects(); objects[0].id = ""; return objects }, ErrInvalidIdentity, "incomplete baseline object"},
+		{"baseline object blank kind", fixture.identity, fixture.source, func() []BaselineObject { objects := allObjects(); objects[0].kind = ""; return objects }, ErrInvalidIdentity, "incomplete baseline object"},
+		{"baseline object blank name", fixture.identity, fixture.source, func() []BaselineObject { objects := allObjects(); objects[0].name = ""; return objects }, ErrInvalidIdentity, "incomplete baseline object"},
+		{"baseline object blank schema remains valid", fixture.identity, fixture.source, func() []BaselineObject { objects := allObjects(); objects[0].schema = ""; return objects }, nil, ""},
+		{"duplicate starting id", fixture.identity, fixture.source, func() []BaselineObject { objects := allObjects(); objects[1].id = objects[0].id; return objects }, ErrInvalidIdentity, "duplicate object ID"},
+		{"duplicate starting and future id", fixture.identity, fixture.source, func() []BaselineObject { objects := allObjects(); objects[2].id = objects[0].id; return objects }, ErrInvalidIdentity, "duplicate object ID"},
+		{"duplicate future id", fixture.identity, fixture.source, func() []BaselineObject { objects := allObjects(); objects[3].id = objects[2].id; return objects }, ErrInvalidIdentity, "duplicate object ID"},
+		{"duplicate active qualified name", fixture.identity, fixture.source, func() []BaselineObject { objects := allObjects(); objects[1].name = objects[0].name; return objects }, ErrInvalidIdentity, "duplicate qualified name"},
+		{"equal names different schemas succeeds", fixture.identity, fixture.source, func() []BaselineObject {
+			objects := allObjects()
+			objects[1].schema = "other"
+			objects[1].name = objects[0].name
+			return objects
+		}, nil, ""},
 	} {
 		row := row
-		t.Run("baseline object "+row.name, func(t *testing.T) {
-			candidate, err := NewBaselineObject(ObjectID(row.id), row.kind, row.schemaName, row.nameValue)
+		t.Run(row.name, func(t *testing.T) {
+			_, err := NewBaselineIdentity(row.identity, row.source, row.objects(), fixture.renameRecords)
 			if row.target == nil {
 				require.NoError(t, err)
 				return
 			}
 			require.ErrorIs(t, err, row.target)
 			require.ErrorContains(t, err, row.contains)
-			_ = candidate
-		})
-	}
-	for _, row := range []struct {
-		name     string
-		objects  []BaselineObject
-		target   error
-		contains string
-	}{
-		{"duplicate starting id", []BaselineObject{object, object}, ErrInvalidIdentity, "duplicate object ID"},
-		{"duplicate active qualified name", []BaselineObject{object, validationContractBaselineObject(t, "second", "main", "users")}, ErrInvalidIdentity, "duplicate qualified name"},
-		{"equal names different schemas", []BaselineObject{object, validationContractBaselineObject(t, "second", "other", "users")}, nil, ""},
-	} {
-		row := row
-		t.Run(row.name, func(t *testing.T) {
-			_, err := NewBaselineIdentity(identity, "validation", row.objects, nil)
-			if row.target == nil {
-				require.NoError(t, err)
-			} else {
-				require.ErrorIs(t, err, row.target)
-				require.ErrorContains(t, err, row.contains)
-			}
 		})
 	}
 }
