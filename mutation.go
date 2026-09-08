@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
+	"github.com/lestrrat-go/rasql/internal/nilcheck"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/stmt"
@@ -95,7 +96,11 @@ func (p DeletePlan[T]) mutationPlan() (query.WriteStatement, error) {
 type StatementPlan struct{ statement query.WriteStatement }
 
 func NewStatementPlan(statement query.WriteStatement) (StatementPlan, error) {
-	if statement == nil {
+	// A typed nil such as (*query.Insert)(nil) stored in this interface is not
+	// == nil, and Insert.Validate is a value method: calling it through such a
+	// pointer dereferences nil before the guard below could ever see it, so the
+	// check must ask nilcheck.Is rather than compare the interface directly.
+	if nilcheck.Is(statement) {
 		return StatementPlan{}, fmt.Errorf("rasql: mutation statement must not be nil")
 	}
 	if err := statement.Validate(); err != nil {
@@ -109,7 +114,12 @@ func ExecMutation(ctx context.Context, executor Executor, plan MutationPlan) (Mu
 	if executor == nil {
 		return MutationOutcome{}, fmt.Errorf("rasql: executor must not be nil")
 	}
-	if plan == nil {
+	// Every MutationPlan implementation is a struct with value-receiver
+	// methods, so a typed nil pointer to one (e.g. (*DeletePlan[T])(nil))
+	// satisfies this interface without being == nil, the same gap
+	// NewStatementPlan had. nilcheck.Is catches it before mutationPlan below
+	// can dereference that nil pointer.
+	if nilcheck.Is(plan) {
 		return MutationOutcome{}, fmt.Errorf("rasql: mutation plan must not be nil")
 	}
 	var compiled stmt.Statement
@@ -221,7 +231,9 @@ func executorDurability(executor Executor) Durability {
 
 // Returning attaches the requested Q1 projection to a mutation.
 func Returning[R any](plan MutationPlan, projection Projection[R]) (Query[R], error) {
-	if plan == nil {
+	// See the matching comment in ExecMutation: a typed nil MutationPlan
+	// passes == nil and would otherwise reach mutationPlan below.
+	if nilcheck.Is(plan) {
 		return Query[R]{}, fmt.Errorf("rasql: mutation plan must not be nil")
 	}
 	if _, ok := plan.(nativeMutationPlanAccessor); ok {
@@ -284,7 +296,9 @@ func ExecMutationBatch(ctx context.Context, executor Executor, plans []MutationP
 		return outcome, fmt.Errorf("rasql: mutation batch MaxBindParameters must be positive")
 	}
 	for index, plan := range plans {
-		if plan == nil {
+		// Same typed-nil gap as ExecMutation's plan guard: a nil *DeletePlan[T]
+		// or similar is not == nil, so this must ask nilcheck.Is too.
+		if nilcheck.Is(plan) {
 			return outcome, fmt.Errorf("rasql: mutation batch input %d is nil", index)
 		}
 		if native, ok := plan.(nativeMutationPlanAccessor); ok {
@@ -298,7 +312,7 @@ func ExecMutationBatch(ctx context.Context, executor Executor, plans []MutationP
 	bindLimit := mutationBindLimit(executor, options.MaxBindParameters)
 	var target string
 	for index, plan := range plans {
-		if plan == nil {
+		if nilcheck.Is(plan) {
 			return outcome, fmt.Errorf("rasql: mutation batch input %d is nil", index)
 		}
 		statement, err := plan.mutationPlan()
