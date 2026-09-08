@@ -689,11 +689,24 @@ func TestValidationContractOperationSemantics(t *testing.T) {
 		{"sql.NamedArg", sql.Named("value", "x")}, {"struct", struct{ Value string }{"x"}}, {"NaN", math.NaN()}, {"positive infinity", math.Inf(1)}, {"negative infinity", math.Inf(-1)},
 	} {
 		row := row
-		t.Run(row.name, func(t *testing.T) {
-			_, err := validationContractOperation(t, OperationBackfill, []ObjectID{"object"}, nil, nil, false, row.value)
-			require.ErrorIs(t, err, ErrInvalidOperation)
-			require.ErrorContains(t, err, "unsupported statement argument")
-		})
+		for _, kind := range []OperationKind{OperationBackfill, OperationNativeSQL} {
+			kind := kind
+			t.Run(string(kind)+" forward/"+row.name, func(t *testing.T) {
+				_, err := validationContractOperation(t, kind, []ObjectID{"object"}, nil, nil, false, row.value)
+				require.ErrorIs(t, err, ErrInvalidOperation)
+				require.ErrorIs(t, err, ErrUnsupportedArg)
+				require.ErrorContains(t, err, "unsupported statement argument")
+			})
+			t.Run(string(kind)+" reverse/"+row.name, func(t *testing.T) {
+				forward := []stmt.Statement{stmt.New(sqltext.Text("SELECT 1"))}
+				reverse := []stmt.Statement{stmt.New(sqltext.Text("SELECT ?"), row.value)}
+				_, err := NewOperation("validation-reverse-"+OperationID(kind), kind, nil, []ObjectID{"object"}, nil, nil,
+					Digest{1}, forward, TransactionForbidden, true, reverse)
+				require.ErrorIs(t, err, ErrInvalidOperation)
+				require.ErrorIs(t, err, ErrUnsupportedArg)
+				require.ErrorContains(t, err, "unsupported statement argument")
+			})
+		}
 	}
 	for _, kind := range []OperationKind{OperationCreateTable, OperationDropTable, OperationRenameTable, OperationAddColumn, OperationDropColumn, OperationRenameColumn, OperationAlterColumn, OperationCreateIndex, OperationDropIndex, OperationAddConstraint, OperationDropConstraint} {
 		t.Run("DDL argument "+string(kind), func(t *testing.T) {

@@ -522,7 +522,7 @@ func validateStatements(statements []stmt.Statement, argumentsAllowed bool) erro
 				return fmt.Errorf("%w: DDL statement has arguments", ErrInvalidOperation)
 			}
 			if _, err := cloneArg(argument); err != nil {
-				return fmt.Errorf("%w: %v", ErrInvalidOperation, err)
+				return fmt.Errorf("%w: %w", ErrInvalidOperation, err)
 			}
 		}
 	}
