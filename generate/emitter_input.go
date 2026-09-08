@@ -4,9 +4,7 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
-	"github.com/lestrrat-go/rasql/schema"
 )
 
 // EmitterInput is the complete, sidecar-free input to a generated store.
@@ -374,21 +372,4 @@ func mappingFor(scalar string, mappings []compilerir.ScalarMapping) (compilerir.
 		}
 	}
 	return compilerir.ScalarMapping{}, false
-}
-func importsFor(imports []compilerir.GoImport) []schema.GoImport {
-	out := make([]schema.GoImport, len(imports))
-	for i, imp := range imports {
-		out[i] = schema.GoImport{Path: imp.Path, Name: imp.Alias}
-	}
-	return out
-}
-func generationDialect(name string) dialect.Dialect {
-	switch name {
-	case "postgresql":
-		return dialect.PostgreSQL()
-	case "mysql":
-		return dialect.MySQL()
-	default:
-		return dialect.SQLite()
-	}
 }

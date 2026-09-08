@@ -1,7 +1,6 @@
 package inspect_test
 
 import (
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -52,20 +51,6 @@ func compactRenderedSource(t *testing.T, tables ...schema.TableDef) string {
 		source.WriteByte('\n')
 	}
 	return source.String()
-}
-
-// compactFile returns the source of the one planned file named base (for
-// example "schema_gen.go" or "users_gen.go"), for a test that needs one
-// file's source to stand alone as valid Go, such as a parser.ParseFile check.
-func compactFile(t *testing.T, base string, tables ...schema.TableDef) []byte {
-	t.Helper()
-	for _, file := range compactPlan(t, tables...).Files() {
-		if filepath.Base(file.Path) == base {
-			return file.Source
-		}
-	}
-	t.Fatalf("compact plan did not write %s", base)
-	return nil
 }
 
 // compactDescriptorLiteral renders table's schema.TableDef literal the same

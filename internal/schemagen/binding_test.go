@@ -46,4 +46,3 @@ func TestResolveGoBindingPreservesNullableDefaultsAndExplicitTypes(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, "NullUserID", resolved.For(true))
 }
-

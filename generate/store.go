@@ -25,11 +25,6 @@ type queryInputSnapshot struct {
 	digest [sha256.Size]byte
 }
 
-type queryInputData struct {
-	snapshot queryInputSnapshot
-	data     []byte
-}
-
 // Store describes one generated store package: which tables it is
 // generated from, where it goes, and what else belongs in the same
 // directory.

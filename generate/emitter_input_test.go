@@ -110,35 +110,6 @@ func TestEmitterInputRejectsMissingOrConflictingPolicy(t *testing.T) {
 	}
 }
 
-func canonicalSelfForeignKeyEmitterInput(t *testing.T, nullable bool) generate.EmitterInput {
-	t.Helper()
-	catalog := compilerir.PhysicalCatalog{
-		Engine: compilerir.EngineIdentity{Dialect: "sqlite", Version: "3"},
-		Objects: []compilerir.PhysicalObject{{
-			ID: "employees", Kind: "table", Name: "employees",
-			Columns: []compilerir.PhysicalColumn{
-				{Name: "id", Ordinal: 0, LogicalKind: "integer"},
-				{Name: "manager_id", Ordinal: 1, LogicalKind: "integer", Nullable: nullable},
-			},
-			Constraints: []compilerir.PhysicalConstraint{
-				{Kind: "primary_key", Name: "employees_pk", Columns: []string{"id"}},
-				{Kind: "foreign_key", Name: "employees_manager", Columns: []string{"manager_id"}, Reference: &compilerir.ForeignReference{Object: "employees", Columns: []string{"id"}}},
-			},
-		}},
-	}
-	semantic, diagnostics := compilerir.BuildSemantic(catalog, compilerir.MappingConfig{}, nil)
-	require.Empty(t, diagnostics)
-	config := compilerir.GoConfig{
-		Package: "store", Output: "generated", Emitter: "legacy",
-		Objects: []compilerir.ObjectGoName{{ID: "employees", File: "employees_gen.go"}},
-	}
-	model, diagnostics := compilerir.BuildGo(semantic, config)
-	require.Empty(t, diagnostics)
-	in, err := generate.NewEmitterInput(catalog, semantic, model, config, compilerir.MappingConfig{})
-	require.NoError(t, err)
-	return in
-}
-
 func TestEmitterInputAcceptsCanonicalViewWithoutWriteShapes(t *testing.T) {
 	in := plainEmitterFixture(t)
 	in.Catalog.Objects[0].Kind = "view"
@@ -205,4 +176,3 @@ func manyThroughEmitterFixture(t *testing.T) generate.EmitterInput {
 	require.NoError(t, err)
 	return in
 }
-
