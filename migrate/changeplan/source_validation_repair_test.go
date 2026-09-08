@@ -260,11 +260,15 @@ func TestRepeatedTableRenameDecisionMatrix(t *testing.T) {
 	plan := newRepeatedTablePlan(t, pairs)
 	encoded, err := Encode(plan)
 	require.NoError(t, err)
-	_, err = Decode(encoded)
-	require.NoError(t, err)
-	plan.decisions[0].from = "a"
-	_, err = Encode(plan)
-	require.ErrorIs(t, err, ErrInvalidDecision)
+	t.Run("repeated table rename valid roundtrip", func(t *testing.T) {
+		_, err := Decode(encoded)
+		require.NoError(t, err)
+	})
+	t.Run("private encode invalid decision", func(t *testing.T) {
+		plan.decisions[0].from = "a"
+		_, err := Encode(plan)
+		require.ErrorIs(t, err, ErrInvalidDecision)
+	})
 
 	for _, test := range []struct {
 		name   string
@@ -297,8 +301,10 @@ func TestRepeatedTableRenameDecisionMatrix(t *testing.T) {
 	require.NoError(t, err)
 	mutated, err := json.Marshal(root)
 	require.NoError(t, err)
-	_, err = Decode(mutated)
-	require.ErrorIs(t, err, ErrInvalidDecision)
+	t.Run("wire decode invalid decision", func(t *testing.T) {
+		_, err := Decode(mutated)
+		require.ErrorIs(t, err, ErrInvalidDecision)
+	})
 }
 
 func newRepeatedTablePlan(t *testing.T, pairs []struct{ from, to string }) Plan {
@@ -404,8 +410,10 @@ func TestResolvedAdjacentColumnRenameMatrix(t *testing.T) {
 	require.NoError(t, err)
 	badOperation, err := NewOperation(first.ID(), first.Kind(), first.DependsOn(), first.Objects(), first.Preconditions(), first.Postconditions(), badDigest, first.Statements(), first.Transaction(), first.Reversible(), first.ReverseStatements())
 	require.NoError(t, err)
-	_, err = NewResolvedChanges(baseline, []ResolvedCatalogStep{badStep}, []Decision{decisions[0]}, []Operation{badOperation}, nil, nil)
-	require.ErrorIs(t, err, ErrInvalidDecision)
+	t.Run("more than one changed column", func(t *testing.T) {
+		_, badErr := NewResolvedChanges(baseline, []ResolvedCatalogStep{badStep}, []Decision{decisions[0]}, []Operation{badOperation}, nil, nil)
+		require.ErrorIs(t, badErr, ErrInvalidDecision)
+	})
 	for _, test := range []struct {
 		name      string
 		decisions []Decision
