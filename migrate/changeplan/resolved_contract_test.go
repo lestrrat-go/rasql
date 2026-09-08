@@ -621,9 +621,7 @@ func TestResolvedPrefixNamedFailures(t *testing.T) {
 		err = newPlanErr(t, baseline, []ResolvedCatalogStep{newStep(t, operation, after)}, nil,
 			[]Operation{operation}, []BaselineObject{future}, nil)
 		require.ErrorIs(t, err, ErrInvalidIdentity)
-		require.True(t, strings.Contains(err.Error(), "invalid deterministic ID") ||
-			strings.Contains(err.Error(), "no matching create operation") ||
-			strings.Contains(err.Error(), "does not name its create_table operation"))
+		require.ErrorContains(t, err, "future object \"wrong-future-id\" does not name its create_table operation")
 	})
 
 	t.Run("not yet created use", func(t *testing.T) {
