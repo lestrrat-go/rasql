@@ -377,19 +377,25 @@ func runPlan(args []string) error {
 		return runChangePlanCheck(args[1:])
 	}
 	flags := newFlagSet("plan")
-	directory := flags.String("dir", "", "directory that holds migration directories")
-	file := flags.String("file", "", "serialized migration plan file")
+	directory := addUniqueStringFlag(flags, "dir", "directory that holds migration directories")
+	file := addUniqueStringFlag(flags, "file", "serialized migration plan file")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if len(flags.Args()) != 0 {
 		return errors.New("plan accepts no positional arguments")
 	}
-	if (*directory == "") == (*file == "") {
+	if directory.set == file.set {
 		return errors.New("plan requires exactly one of -dir and -file")
 	}
-	if *file != "" {
-		plan, err := changeplan.Read(*file)
+	if directory.set && directory.value == "" {
+		return errors.New("plan -dir must not be empty")
+	}
+	if file.set && file.value == "" {
+		return errors.New("plan -file must not be empty")
+	}
+	if file.set {
+		plan, err := changeplan.Read(file.value)
 		if err != nil {
 			return fmt.Errorf("read migration plan: %w", err)
 		}
@@ -400,7 +406,7 @@ func runPlan(args []string) error {
 		_, _ = commandOutput.Write(output)
 		return nil
 	}
-	migrations, err := migrationdir.Load(*directory)
+	migrations, err := migrationdir.Load(directory.value)
 	if err != nil {
 		return err
 	}
@@ -410,8 +416,8 @@ func runPlan(args []string) error {
 
 func runApply(args []string) error {
 	flags := newFlagSet("apply")
-	directory := flags.String("dir", "", "directory that holds migration directories")
-	planFile := flags.String("plan", "", "serialized migration plan file")
+	directory := addUniqueStringFlag(flags, "dir", "directory that holds migration directories")
+	planFile := addUniqueStringFlag(flags, "plan", "serialized migration plan file")
 	dialectName := flags.String("dialect", "", "postgresql, mysql, or sqlite")
 	dsn := flags.String("dsn", "", "database connection string")
 	historyTable := flags.String("history-table", "", "migration history table name")
@@ -423,10 +429,16 @@ func runApply(args []string) error {
 	if len(flags.Args()) != 0 {
 		return errors.New("apply accepts no positional arguments")
 	}
-	if (*directory == "") == (*planFile == "") {
+	if directory.set == planFile.set {
 		return errors.New("apply requires exactly one of -dir and -plan")
 	}
-	if *planFile != "" {
+	if directory.set && directory.value == "" {
+		return errors.New("apply -dir must not be empty")
+	}
+	if planFile.set && planFile.value == "" {
+		return errors.New("apply -plan must not be empty")
+	}
+	if planFile.set {
 		var directoryOnly string
 		flags.Visit(func(flagValue *flag.Flag) {
 			if flagValue.Name == "to" || flagValue.Name == "dry-run" {
@@ -436,13 +448,13 @@ func runApply(args []string) error {
 		if directoryOnly != "" {
 			return fmt.Errorf("apply -%s is valid only with -dir", directoryOnly)
 		}
-		return runChangePlanApply(*planFile, *dialectName, *dsn, *historyTable)
+		return runChangePlanApply(planFile.value, *dialectName, *dsn, *historyTable)
 	}
 	target := migrate.AllPending()
 	if *through != "" {
 		target = migrate.ApplyThrough(*through)
 	}
-	runner, migrations, closeDatabase, err := openRunner(context.Background(), *directory, *dialectName, *dsn, *historyTable)
+	runner, migrations, closeDatabase, err := openRunner(context.Background(), directory.value, *dialectName, *dsn, *historyTable)
 	if err != nil {
 		return err
 	}

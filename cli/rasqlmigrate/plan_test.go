@@ -46,6 +46,31 @@ func TestRunChangePlanRejectsDirectoryOnlyFlags(t *testing.T) {
 	require.EqualError(t, err, "apply -dry-run is valid only with -dir")
 }
 
+func TestRunChangePlanSelectorFlags(t *testing.T) {
+	setCommandOutput(t)
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "plan missing", args: []string{"plan"}, want: "plan requires exactly one of -dir and -file"},
+		{name: "plan conflict", args: []string{"plan", "-dir", "migrations", "-file", "plan.json"}, want: "plan requires exactly one of -dir and -file"},
+		{name: "plan duplicate file", args: []string{"plan", "-file", "first.json", "-file", "second.json"}, want: "-file provided more than once"},
+		{name: "plan empty file", args: []string{"plan", "-file="}, want: "plan -file must not be empty"},
+		{name: "plan positional", args: []string{"plan", "-dir", "migrations", "extra"}, want: "plan accepts no positional arguments"},
+		{name: "apply missing", args: []string{"apply"}, want: "apply requires exactly one of -dir and -plan"},
+		{name: "apply conflict", args: []string{"apply", "-dir", "migrations", "-plan", "plan.json"}, want: "apply requires exactly one of -dir and -plan"},
+		{name: "apply duplicate plan", args: []string{"apply", "-plan", "first.json", "-plan", "second.json"}, want: "-plan provided more than once"},
+		{name: "apply empty plan", args: []string{"apply", "-plan="}, want: "apply -plan must not be empty"},
+		{name: "apply positional", args: []string{"apply", "-dir", "migrations", "extra"}, want: "apply accepts no positional arguments"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.ErrorContains(t, run(test.args), test.want)
+		})
+	}
+}
+
 func TestRunChangePlanReadsFileBeforeOpeningDatabase(t *testing.T) {
 	setCommandOutput(t)
 	originalOpen := openDatabase
@@ -55,10 +80,15 @@ func TestRunChangePlanReadsFileBeforeOpeningDatabase(t *testing.T) {
 		opened = true
 		return nil, errors.New("database must not be opened")
 	}
-	err := run([]string{"plan", "check", "-file", filepath.Join(t.TempDir(), "missing.json"),
-		"-dialect", "sqlite", "-dsn", "secret"})
-	require.ErrorContains(t, err, "read migration plan")
-	require.False(t, opened)
+	missing := filepath.Join(t.TempDir(), "missing.json")
+	for _, args := range [][]string{
+		{"plan", "check", "-file", missing, "-dialect", "sqlite", "-dsn", "secret"},
+		{"plan", "check", "-dialect", "sqlite", "-dsn", "secret", "-file", missing},
+	} {
+		err := run(args)
+		require.ErrorContains(t, err, "read migration plan")
+		require.False(t, opened)
+	}
 }
 
 func emptySQLiteChangePlan(t *testing.T, database *sql.DB) changeplan.Plan {

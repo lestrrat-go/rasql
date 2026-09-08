@@ -4,12 +4,35 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 
 	"github.com/lestrrat-go/rasql/internal/dsnredact"
 	"github.com/lestrrat-go/rasql/migrate"
 	"github.com/lestrrat-go/rasql/migrate/changeplan"
 )
+
+type uniqueStringFlag struct {
+	name  string
+	value string
+	set   bool
+}
+
+func (f *uniqueStringFlag) String() string { return f.value }
+func (f *uniqueStringFlag) Set(value string) error {
+	if f.set {
+		return fmt.Errorf("-%s provided more than once", f.name)
+	}
+	f.set = true
+	f.value = value
+	return nil
+}
+
+func addUniqueStringFlag(flags *flag.FlagSet, name, usage string) *uniqueStringFlag {
+	value := &uniqueStringFlag{name: name}
+	flags.Var(value, name, usage)
+	return value
+}
 
 func formatChangePlan(plan changeplan.Plan) ([]byte, error) {
 	operations, err := plan.TopologicalOperations()
@@ -26,7 +49,7 @@ func formatChangePlan(plan changeplan.Plan) ([]byte, error) {
 
 func runChangePlanCheck(args []string) error {
 	flags := newFlagSet("plan check")
-	file := flags.String("file", "", "serialized migration plan file")
+	file := addUniqueStringFlag(flags, "file", "serialized migration plan file")
 	dialectName := flags.String("dialect", "", "postgresql, mysql, or sqlite")
 	dsn := flags.String("dsn", "", "database connection string")
 	historyTable := flags.String("history-table", "", "migration history table name")
@@ -36,10 +59,10 @@ func runChangePlanCheck(args []string) error {
 	if len(flags.Args()) != 0 {
 		return errors.New("plan check accepts no positional arguments")
 	}
-	if *file == "" || *dialectName == "" || *dsn == "" {
+	if file.value == "" || *dialectName == "" || *dsn == "" {
 		return errors.New("plan check requires -file, -dialect, and -dsn")
 	}
-	plan, err := changeplan.Read(*file)
+	plan, err := changeplan.Read(file.value)
 	if err != nil {
 		return fmt.Errorf("read migration plan: %w", err)
 	}
