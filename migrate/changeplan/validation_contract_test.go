@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"io"
 	"math"
 	"os"
 	"sort"
@@ -28,8 +29,12 @@ func validationContractValid(t *testing.T) []byte {
 
 func validationContractJSON(t *testing.T, data []byte) any {
 	t.Helper()
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
 	var value any
-	require.NoError(t, json.Unmarshal(data, &value))
+	require.NoError(t, decoder.Decode(&value))
+	var extra any
+	require.ErrorIs(t, decoder.Decode(&extra), io.EOF)
 	return value
 }
 
@@ -43,6 +48,38 @@ func validationContractBytes(t *testing.T, value any) []byte {
 func validationContractClone(t *testing.T, value any) any {
 	t.Helper()
 	return validationContractJSON(t, validationContractBytes(t, value))
+}
+
+func validationContractNumberMutation(t *testing.T, data []byte, token json.Number, path ...any) []byte {
+	t.Helper()
+	root := validationContractClone(t, validationContractJSON(t, data))
+	validationContractSet(root, token, path...)
+	encoded := validationContractBytes(t, root)
+	require.Contains(t, string(encoded), token.String())
+	return validationContractRehash(t, encoded)
+}
+
+func validationContractRequireValidNumericRoundTrip(t *testing.T) {
+	t.Helper()
+	for _, row := range []struct {
+		name  string
+		path  []any
+		value json.Number
+		index int
+		want  any
+	}{
+		{name: "int64 minimum", path: []any{"operations", 9, "statements", 0, "args", 2, "value"}, value: json.Number("-9223372036854775808"), index: 2, want: int64(-9223372036854775808)},
+		{name: "int64 maximum", path: []any{"operations", 9, "statements", 0, "args", 2, "value"}, value: json.Number("9223372036854775807"), index: 2, want: int64(9223372036854775807)},
+		{name: "uint64 maximum", path: []any{"operations", 9, "statements", 0, "args", 3, "value"}, value: json.Number("18446744073709551615"), index: 3, want: uint64(18446744073709551615)},
+	} {
+		row := row
+		t.Run(row.name, func(t *testing.T) {
+			data := validationContractNumberMutation(t, validationContractValid(t), row.value, row.path...)
+			plan, err := Decode(data)
+			require.NoError(t, err)
+			require.Equal(t, row.want, plan.Operations()[9].Statements()[0].Args()[row.index])
+		})
+	}
 }
 
 func validationContractAt(root any, path ...any) any {
@@ -104,6 +141,8 @@ func validationContractWrongType(value any) any {
 	switch value.(type) {
 	case string:
 		return 1
+	case json.Number:
+		return "wrong"
 	case bool:
 		return "wrong"
 	case []any:
@@ -132,6 +171,148 @@ func validationContractPath(path []any) string {
 	return out.String()
 }
 
+type validationContractField struct {
+	path      []any
+	value     any
+	allowNull bool
+}
+
+func validationContractWireFields(t *testing.T, root any) []validationContractField {
+	t.Helper()
+	fields := make([]validationContractField, 0, 320)
+	add := func(path ...any) {
+		fields = append(fields, validationContractField{path: path, value: validationContractAt(root, path...)})
+	}
+	for _, key := range []string{"format", "id"} {
+		add(key)
+	}
+	for _, key := range []string{"engine", "custom_name", "version_known", "max_bind_parameters"} {
+		add("profile", key)
+	}
+	for _, key := range []string{"major", "minor", "patch"} {
+		add("profile", "version", key)
+	}
+	for _, key := range []string{
+		"returning", "upsert", "conflict_target", "default_values", "empty_insert", "default_values_upsert",
+		"subquery_limit", "write_subquery_target", "partial_index", "aggregate_filter", "qualified_reference",
+		"qualified_index_target", "qualified_index_name", "match_operator", "select_for_update", "select_for_share",
+		"select_lock_of", "select_lock_no_wait", "select_lock_skip_locked", "upsert_conflict_where", "upsert_update_where",
+		"window_functions", "lateral_joins", "savepoints", "transactional_ddl", "explicit_null_ordering",
+		"tuple_comparison", "per_parent_limit", "update_default",
+	} {
+		add("profile", "capabilities", key)
+	}
+	for _, key := range []string{"engine", "profile_digest", "catalog_digest", "source_digest", "source_identity"} {
+		add("baseline", key)
+	}
+	for _, key := range []string{"schema", "table"} {
+		add("history", key)
+	}
+	for _, index := range []int{0, 1} {
+		for _, key := range []string{"id", "kind", "schema", "name", "introduced_by"} {
+			add("baseline", "objects", index, key)
+		}
+		for _, key := range []string{"operation", "object", "to_schema", "to_name"} {
+			add("baseline", "renames", index, key)
+		}
+	}
+	for _, index := range []int{0, 1, 2, 3, 4, 5} {
+		for _, key := range []string{"id", "kind", "object", "from", "to", "accepted", "reason"} {
+			add("decisions", index, key)
+		}
+	}
+	for _, index := range []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13} {
+		for _, key := range []string{"id", "kind", "depends_on", "objects", "preconditions", "postconditions", "result_digest", "statements", "transaction", "reversible", "reverse_statements"} {
+			add("operations", index, key)
+		}
+		add("operations", index, "statements", 0, "sql")
+		add("operations", index, "statements", 0, "args")
+	}
+	for _, row := range []struct {
+		path []any
+	}{
+		{path: []any{"operations", 1, "preconditions", 0}},
+		{path: []any{"operations", 9, "postconditions", 0}},
+	} {
+		for _, key := range []string{"object", "path", "operator", "value"} {
+			path := append(append([]any(nil), row.path...), key)
+			add(path...)
+		}
+	}
+	for _, row := range []struct {
+		path []any
+	}{
+		{path: []any{"operations", 0, "statements", 0}},
+		{path: []any{"operations", 1, "statements", 0}},
+		{path: []any{"operations", 2, "statements", 0}},
+		{path: []any{"operations", 3, "statements", 0}},
+		{path: []any{"operations", 4, "statements", 0}},
+		{path: []any{"operations", 5, "statements", 0}},
+		{path: []any{"operations", 6, "statements", 0}},
+		{path: []any{"operations", 7, "statements", 0}},
+		{path: []any{"operations", 8, "statements", 0}},
+		{path: []any{"operations", 9, "statements", 0}},
+		{path: []any{"operations", 10, "statements", 0}},
+		{path: []any{"operations", 11, "statements", 0}},
+		{path: []any{"operations", 12, "statements", 0}},
+		{path: []any{"operations", 13, "statements", 0}},
+		{path: []any{"operations", 10, "reverse_statements", 0}},
+	} {
+		for _, key := range []string{"sql", "args"} {
+			add(append(append([]any(nil), row.path...), key)...)
+		}
+	}
+	for _, row := range []struct {
+		path      []any
+		allowNull bool
+	}{
+		{path: []any{"operations", 9, "statements", 0, "args", 0}, allowNull: true},
+		{path: []any{"operations", 9, "statements", 0, "args", 1}},
+		{path: []any{"operations", 9, "statements", 0, "args", 2}},
+		{path: []any{"operations", 9, "statements", 0, "args", 3}},
+		{path: []any{"operations", 9, "statements", 0, "args", 4}},
+		{path: []any{"operations", 9, "statements", 0, "args", 5}},
+		{path: []any{"operations", 9, "statements", 0, "args", 6}},
+		{path: []any{"operations", 9, "statements", 0, "args", 7}},
+		{path: []any{"operations", 10, "reverse_statements", 0, "args", 0}, allowNull: true},
+		{path: []any{"operations", 10, "reverse_statements", 0, "args", 1}},
+		{path: []any{"operations", 10, "reverse_statements", 0, "args", 2}},
+		{path: []any{"operations", 10, "reverse_statements", 0, "args", 3}},
+		{path: []any{"operations", 10, "reverse_statements", 0, "args", 4}},
+		{path: []any{"operations", 10, "reverse_statements", 0, "args", 5}},
+		{path: []any{"operations", 10, "reverse_statements", 0, "args", 6}},
+		{path: []any{"operations", 10, "reverse_statements", 0, "args", 7}},
+	} {
+		add("operations", row.path[1].(int), row.path[2].(string), row.path[3].(int), row.path[4].(string), row.path[5].(int), "kind")
+		valuePath := append(append([]any(nil), row.path...), "value")
+		fields = append(fields, validationContractField{path: valuePath, value: validationContractAt(root, valuePath...), allowNull: row.allowNull})
+	}
+	sort.Slice(fields, func(i, j int) bool {
+		return validationContractPath(fields[i].path) < validationContractPath(fields[j].path)
+	})
+	return fields
+}
+
+func validationContractReverseArguments(t *testing.T, data []byte) []byte {
+	t.Helper()
+	root := validationContractJSON(t, data).(map[string]any)
+	forward := validationContractAt(root, "operations", 9, "statements", 0, "args")
+	validationContractSet(root, validationContractClone(t, forward), "operations", 10, "reverse_statements", 0, "args")
+	data = validationContractBytes(t, root)
+	data = validationContractRehash(t, data)
+	_, err := Decode(data)
+	require.NoError(t, err)
+	return data
+}
+
+func validationContractUnknownField(t *testing.T, data []byte, path ...any) []byte {
+	t.Helper()
+	root := validationContractClone(t, validationContractJSON(t, data))
+	object := validationContractAt(root, path...).(map[string]any)
+	object["unexpected"] = true
+	return validationContractBytes(t, root)
+}
+
 func TestValidationContractWireShape(t *testing.T) {
 	valid := validationContractValid(t)
 	for _, test := range []struct {
@@ -146,133 +327,257 @@ func TestValidationContractWireShape(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) { validationContractDecodeError(t, test.data, ErrInvalidWire, "") })
 	}
-	root := validationContractJSON(t, valid).(map[string]any)
-	type field struct {
-		path  []any
-		label string
-		value any
-	}
-	var fields []field
-	var walk func(any, []any)
-	walk = func(value any, path []any) {
-		switch current := value.(type) {
-		case map[string]any:
-			for key, child := range current {
-				childPath := append(append([]any(nil), path...), key)
-				if key != "value" {
-					fields = append(fields, field{path: childPath, label: validationContractPath(childPath), value: child})
-				}
-				walk(child, childPath)
-			}
-		case []any:
-			for index, child := range current {
-				walk(child, append(append([]any(nil), path...), index))
-			}
-		}
-	}
-	walk(root, nil)
-	sort.Slice(fields, func(i, j int) bool { return fields[i].label < fields[j].label })
-	for _, current := range fields {
-		current := current
-		t.Run("field "+current.label, func(t *testing.T) {
-			walkPath := current.path
-			value := current.value
+
+	validationContractRequireValidNumericRoundTrip(t)
+	reverseValid := validationContractReverseArguments(t, valid)
+	root := validationContractJSON(t, reverseValid).(map[string]any)
+
+	for _, field := range validationContractWireFields(t, root) {
+		field := field
+		label := validationContractPath(field.path)
+		t.Run("field "+label, func(t *testing.T) {
 			for _, test := range []struct {
 				name   string
 				mutate func(any)
 			}{
 				{"missing", func(copyRoot any) {
-					parent := validationContractAt(copyRoot, walkPath[:len(walkPath)-1]...).(map[string]any)
-					delete(parent, walkPath[len(walkPath)-1].(string))
+					parent := validationContractAt(copyRoot, field.path[:len(field.path)-1]...).(map[string]any)
+					delete(parent, field.path[len(field.path)-1].(string))
 				}},
-				{"null", func(copyRoot any) { validationContractSet(copyRoot, nil, walkPath...) }},
-				{"wrong type", func(copyRoot any) { validationContractSet(copyRoot, validationContractWrongType(value), walkPath...) }},
+				{"null", func(copyRoot any) { validationContractSet(copyRoot, nil, field.path...) }},
+				{"wrong type", func(copyRoot any) {
+					validationContractSet(copyRoot, validationContractWrongType(field.value), field.path...)
+				}},
 			} {
+				test := test
 				t.Run(test.name, func(t *testing.T) {
 					copyRoot := validationContractClone(t, root)
 					test.mutate(copyRoot)
 					data := validationContractBytes(t, copyRoot)
+					if test.name == "null" && field.allowNull {
+						_, err := Decode(data)
+						require.NoError(t, err)
+						return
+					}
 					validationContractDecodeError(t, data, ErrInvalidWire, "")
 				})
 			}
 		})
 	}
+
 	for _, test := range []struct {
 		name string
 		path []any
 	}{
-		{"decisions", []any{"decisions"}}, {"operations", []any{"operations"}},
-		{"baseline.objects", []any{"baseline", "objects"}}, {"baseline.renames", []any{"baseline", "renames"}},
-		{"preconditions", []any{"operations", 0, "preconditions"}}, {"postconditions", []any{"operations", 1, "postconditions"}},
-		{"statements", []any{"operations", 0, "statements"}}, {"reverse_statements", []any{"operations", 10, "reverse_statements"}},
-		{"statement.args", []any{"operations", 9, "statements", 0, "args"}},
+		{"decisions", []any{"decisions"}},
+		{"operations", []any{"operations"}},
+		{"baseline.objects", []any{"baseline", "objects"}},
+		{"baseline.renames", []any{"baseline", "renames"}},
+		{"operations[1].depends_on", []any{"operations", 1, "depends_on"}},
+		{"operations[0].objects", []any{"operations", 0, "objects"}},
+		{"operations[1].preconditions", []any{"operations", 1, "preconditions"}},
+		{"operations[9].postconditions", []any{"operations", 9, "postconditions"}},
+		{"operations[0].statements", []any{"operations", 0, "statements"}},
+		{"operations[10].reverse_statements", []any{"operations", 10, "reverse_statements"}},
+		{"operations[9].statements[0].args", []any{"operations", 9, "statements", 0, "args"}},
 	} {
-		t.Run(test.name+" missing", func(t *testing.T) {
-			copyRoot := validationContractClone(t, root)
-			parent := validationContractAt(copyRoot, test.path[:len(test.path)-1]...).(map[string]any)
-			delete(parent, test.path[len(test.path)-1].(string))
-			validationContractDecodeError(t, validationContractBytes(t, copyRoot), ErrInvalidWire, "")
-		})
-		t.Run(test.name+" null", func(t *testing.T) {
-			copyRoot := validationContractClone(t, root)
-			validationContractSet(copyRoot, nil, test.path...)
-			validationContractDecodeError(t, validationContractBytes(t, copyRoot), ErrInvalidWire, "")
-		})
+		test := test
+		for _, shape := range []struct {
+			name  string
+			value any
+		}{
+			{"missing", nil},
+			{"null", nil},
+			{"object", map[string]any{}},
+			{"scalar", true},
+		} {
+			shape := shape
+			t.Run(test.name+" "+shape.name, func(t *testing.T) {
+				copyRoot := validationContractClone(t, root)
+				if shape.name == "missing" {
+					parent := validationContractAt(copyRoot, test.path[:len(test.path)-1]...).(map[string]any)
+					delete(parent, test.path[len(test.path)-1].(string))
+				} else {
+					validationContractSet(copyRoot, shape.value, test.path...)
+				}
+				validationContractDecodeError(t, validationContractBytes(t, copyRoot), ErrInvalidWire, "")
+			})
+		}
 	}
+
 	for _, test := range []struct {
 		name string
 		path []any
 	}{
-		{"null decision element", []any{"decisions", 0}}, {"boolean decision element", []any{"decisions", 0}},
-		{"number operation element", []any{"operations", 0}}, {"string baseline object element", []any{"baseline", "objects", 0}},
-		{"array rename element", []any{"baseline", "renames", 0}}, {"null fact element", []any{"operations", 1, "preconditions", 0}},
-		{"number statement element", []any{"operations", 0, "statements", 0}}, {"boolean argument element", []any{"operations", 9, "statements", 0, "args", 0}},
+		{"decision", []any{"decisions", 0}},
+		{"operation", []any{"operations", 0}},
+		{"baseline object starting", []any{"baseline", "objects", 0}},
+		{"baseline object future", []any{"baseline", "objects", 1}},
+		{"baseline rename starting", []any{"baseline", "renames", 0}},
+		{"baseline rename future", []any{"baseline", "renames", 1}},
+		{"precondition", []any{"operations", 1, "preconditions", 0}},
+		{"postcondition", []any{"operations", 9, "postconditions", 0}},
+		{"statement", []any{"operations", 0, "statements", 0}},
+		{"reverse statement", []any{"operations", 10, "reverse_statements", 0}},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			copyRoot := validationContractClone(t, root)
-			validationContractSet(copyRoot, nil, test.path...)
-			if strings.Contains(test.name, "number") {
-				validationContractSet(copyRoot, 1, test.path...)
-			}
-			if strings.Contains(test.name, "boolean") {
-				validationContractSet(copyRoot, true, test.path...)
-			}
-			if strings.Contains(test.name, "string") {
-				validationContractSet(copyRoot, "wrong", test.path...)
-			}
-			if strings.Contains(test.name, "array") {
-				validationContractSet(copyRoot, []any{}, test.path...)
-			}
-			validationContractDecodeError(t, validationContractBytes(t, copyRoot), ErrInvalidWire, "")
-		})
-	}
-	for _, field := range []struct {
-		name string
-		path []any
-	}{
-		{"decision", []any{"decisions", 0}}, {"operation", []any{"operations", 0}},
-		{"baseline object", []any{"baseline", "objects", 0}}, {"baseline rename", []any{"baseline", "renames", 0}},
-		{"precondition", []any{"operations", 1, "preconditions", 0}}, {"postcondition", []any{"operations", 9, "postconditions", 0}},
-		{"statement", []any{"operations", 0, "statements", 0}}, {"reverse statement", []any{"operations", 10, "reverse_statements", 0}},
-		{"argument", []any{"operations", 9, "statements", 0, "args", 0}},
-		{"dependency", []any{"operations", 1, "depends_on", 0}}, {"object", []any{"operations", 0, "objects", 0}},
-	} {
+		test := test
 		for _, element := range []struct {
 			name  string
 			value any
 		}{
-			{"null", nil}, {"boolean", true}, {"number", 1}, {"string", "wrong"}, {"array", []any{}},
+			{"null", nil},
+			{"boolean", true},
+			{"number", json.Number("1")},
+			{"string", "wrong"},
+			{"nested array", []any{}},
 		} {
-			field, element := field, element
-			if (field.name == "dependency" || field.name == "object") && element.name == "string" {
-				continue
-			}
-			t.Run(field.name+" element "+element.name, func(t *testing.T) {
+			element := element
+			t.Run(test.name+" element "+element.name, func(t *testing.T) {
 				copyRoot := validationContractClone(t, root)
-				validationContractSet(copyRoot, element.value, field.path...)
+				validationContractSet(copyRoot, element.value, test.path...)
 				validationContractDecodeError(t, validationContractBytes(t, copyRoot), ErrInvalidWire, "")
 			})
 		}
+	}
+
+	for _, test := range []struct {
+		name string
+		path []any
+		key  string
+	}{
+		{"precondition", []any{"operations", 1, "preconditions", 0}, "preconditions"},
+		{"postcondition", []any{"operations", 9, "postconditions", 0}, "postconditions"},
+		{"forward argument", []any{"operations", 9, "statements", 0, "args", 0}, "args"},
+		{"reverse argument", []any{"operations", 10, "reverse_statements", 0, "args", 0}, "args"},
+	} {
+		test := test
+		for _, element := range []struct {
+			name  string
+			value any
+		}{
+			{"null", nil},
+			{"boolean", true},
+			{"number", json.Number("1")},
+			{"string", "wrong"},
+			{"nested array", []any{}},
+		} {
+			element := element
+			t.Run(test.name+" element "+element.name, func(t *testing.T) {
+				copyRoot := validationContractClone(t, root)
+				validationContractSet(copyRoot, element.value, test.path...)
+				validationContractDecodeError(t, validationContractBytes(t, copyRoot), ErrInvalidWire, "")
+			})
+		}
+	}
+
+	for _, test := range []struct {
+		name string
+		path []any
+		key  string
+	}{
+		{"depends_on", []any{"operations", 1, "depends_on", 0}, "depends_on"},
+		{"objects", []any{"operations", 0, "objects", 0}, "objects"},
+	} {
+		test := test
+		for _, element := range []struct {
+			name  string
+			value any
+		}{
+			{"null", nil},
+			{"boolean", true},
+			{"number", json.Number("1")},
+			{"object", map[string]any{}},
+			{"nested array", []any{}},
+		} {
+			element := element
+			t.Run(test.name+" element "+element.name, func(t *testing.T) {
+				copyRoot := validationContractClone(t, root)
+				validationContractSet(copyRoot, element.value, test.path...)
+				data := validationContractBytes(t, copyRoot)
+				validationContractDecodeError(t, data, ErrInvalidWire, test.key+" element must be a string")
+			})
+		}
+	}
+
+	unknownLocations := []struct {
+		name string
+		path []any
+	}{
+		{"root", nil},
+		{"profile", []any{"profile"}},
+		{"version", []any{"profile", "version"}},
+		{"capabilities", []any{"profile", "capabilities"}},
+		{"baseline", []any{"baseline"}},
+		{"history", []any{"history"}},
+		{"baseline object starting", []any{"baseline", "objects", 0}},
+		{"baseline object future", []any{"baseline", "objects", 1}},
+		{"baseline rename starting", []any{"baseline", "renames", 0}},
+		{"baseline rename future", []any{"baseline", "renames", 1}},
+	}
+	for _, index := range []int{0, 1, 2, 3, 4, 5} {
+		unknownLocations = append(unknownLocations, struct {
+			name string
+			path []any
+		}{"decision " + strconv.Itoa(index), []any{"decisions", index}})
+	}
+	for _, index := range []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13} {
+		unknownLocations = append(unknownLocations, struct {
+			name string
+			path []any
+		}{"operation " + strconv.Itoa(index), []any{"operations", index}})
+		unknownLocations = append(unknownLocations, struct {
+			name string
+			path []any
+		}{"statement " + strconv.Itoa(index), []any{"operations", index, "statements", 0}})
+	}
+	unknownLocations = append(unknownLocations,
+		struct {
+			name string
+			path []any
+		}{"reverse statement", []any{"operations", 10, "reverse_statements", 0}},
+		struct {
+			name string
+			path []any
+		}{"precondition", []any{"operations", 1, "preconditions", 0}},
+		struct {
+			name string
+			path []any
+		}{"postcondition", []any{"operations", 9, "postconditions", 0}},
+	)
+	for _, location := range unknownLocations {
+		location := location
+		t.Run(location.name+" unexpected field", func(t *testing.T) {
+			data := validationContractUnknownField(t, reverseValid, location.path...)
+			validationContractDecodeError(t, data, ErrInvalidWire, "unknown field")
+		})
+	}
+
+	for _, row := range []struct {
+		name string
+		path []any
+	}{
+		{"forward null", []any{"operations", 9, "statements", 0, "args", 0}},
+		{"forward bool", []any{"operations", 9, "statements", 0, "args", 1}},
+		{"forward int64", []any{"operations", 9, "statements", 0, "args", 2}},
+		{"forward uint64", []any{"operations", 9, "statements", 0, "args", 3}},
+		{"forward float64", []any{"operations", 9, "statements", 0, "args", 4}},
+		{"forward string", []any{"operations", 9, "statements", 0, "args", 5}},
+		{"forward bytes_base64", []any{"operations", 9, "statements", 0, "args", 6}},
+		{"forward time_rfc3339nano", []any{"operations", 9, "statements", 0, "args", 7}},
+		{"reverse null", []any{"operations", 10, "reverse_statements", 0, "args", 0}},
+		{"reverse bool", []any{"operations", 10, "reverse_statements", 0, "args", 1}},
+		{"reverse int64", []any{"operations", 10, "reverse_statements", 0, "args", 2}},
+		{"reverse uint64", []any{"operations", 10, "reverse_statements", 0, "args", 3}},
+		{"reverse float64", []any{"operations", 10, "reverse_statements", 0, "args", 4}},
+		{"reverse string", []any{"operations", 10, "reverse_statements", 0, "args", 5}},
+		{"reverse bytes_base64", []any{"operations", 10, "reverse_statements", 0, "args", 6}},
+		{"reverse time_rfc3339nano", []any{"operations", 10, "reverse_statements", 0, "args", 7}},
+	} {
+		row := row
+		t.Run(row.name+" unexpected field", func(t *testing.T) {
+			data := validationContractUnknownField(t, reverseValid, row.path...)
+			validationContractDecodeError(t, data, ErrInvalidWire, "unknown field")
+		})
 	}
 }
 
