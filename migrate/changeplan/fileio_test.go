@@ -109,7 +109,10 @@ func TestAtomicWriteFailureMatrix(t *testing.T) {
 	closeErr := errors.New("close")
 	renameErr := errors.New("rename")
 	removeErr := errors.New("remove")
-	destination := filepath.Join("/destination", "plan.json")
+	destinationDir := filepath.Join("fake", "destination")
+	destination := filepath.Join(destinationDir, "plan.json")
+	temporary := filepath.Join(destinationDir, "temporary")
+	tempPattern := ".temporary-*"
 	tests := []struct {
 		name      string
 		configure func(*fakeFileSystem)
@@ -117,56 +120,63 @@ func TestAtomicWriteFailureMatrix(t *testing.T) {
 		wantCalls []fakeCall
 	}{
 		{name: "create", configure: func(f *fakeFileSystem) { f.createErr = createErr }, wantErr: createErr,
-			wantCalls: []fakeCall{{op: "create", args: []string{"/destination", ".temporary-*"}}}},
+			wantCalls: []fakeCall{{op: "create", args: []string{destinationDir, tempPattern}}}},
 		{name: "chmod", configure: func(f *fakeFileSystem) { f.file.chmodErr = chmodErr }, wantErr: chmodErr,
-			wantCalls: []fakeCall{{op: "create", args: []string{"/destination", ".temporary-*"}},
-				{op: "chmod", mode: 0o600}, {op: "close"}, {op: "remove", args: []string{"/destination/temporary"}}}},
+			wantCalls: []fakeCall{{op: "create", args: []string{destinationDir, tempPattern}},
+				{op: "chmod", mode: 0o600}, {op: "close"}, {op: "remove", args: []string{temporary}}}},
 		{name: "write error", configure: func(f *fakeFileSystem) { f.file.writeErr = writeErr }, wantErr: writeErr,
-			wantCalls: []fakeCall{{op: "create", args: []string{"/destination", ".temporary-*"}},
+			wantCalls: []fakeCall{{op: "create", args: []string{destinationDir, tempPattern}},
 				{op: "chmod", mode: 0o600}, {op: "write", data: []byte("replacement")}, {op: "close"},
-				{op: "remove", args: []string{"/destination/temporary"}}}},
+				{op: "remove", args: []string{temporary}}}},
 		{name: "short write", configure: func(f *fakeFileSystem) { f.file.writeN = 1 }, wantErr: io.ErrShortWrite,
-			wantCalls: []fakeCall{{op: "create", args: []string{"/destination", ".temporary-*"}},
+			wantCalls: []fakeCall{{op: "create", args: []string{destinationDir, tempPattern}},
 				{op: "chmod", mode: 0o600}, {op: "write", data: []byte("replacement")}, {op: "close"},
-				{op: "remove", args: []string{"/destination/temporary"}}}},
+				{op: "remove", args: []string{temporary}}}},
 		{name: "sync", configure: func(f *fakeFileSystem) { f.file.syncErr = syncErr }, wantErr: syncErr,
-			wantCalls: []fakeCall{{op: "create", args: []string{"/destination", ".temporary-*"}},
+			wantCalls: []fakeCall{{op: "create", args: []string{destinationDir, tempPattern}},
 				{op: "chmod", mode: 0o600}, {op: "write", data: []byte("replacement")}, {op: "sync"}, {op: "close"},
-				{op: "remove", args: []string{"/destination/temporary"}}}},
+				{op: "remove", args: []string{temporary}}}},
+		{name: "sync cleanup errors", configure: func(f *fakeFileSystem) {
+			f.file.syncErr = syncErr
+			f.file.closeErr = closeErr
+			f.removeErr = removeErr
+		}, wantErr: syncErr, wantCalls: []fakeCall{{op: "create", args: []string{destinationDir, tempPattern}},
+			{op: "chmod", mode: 0o600}, {op: "write", data: []byte("replacement")}, {op: "sync"}, {op: "close"},
+			{op: "remove", args: []string{temporary}}}},
 		{name: "close", configure: func(f *fakeFileSystem) {
 			f.file.closeErr = closeErr
 			f.removeErr = removeErr
-		}, wantErr: closeErr, wantCalls: []fakeCall{{op: "create", args: []string{"/destination", ".temporary-*"}},
+		}, wantErr: closeErr, wantCalls: []fakeCall{{op: "create", args: []string{destinationDir, tempPattern}},
 			{op: "chmod", mode: 0o600}, {op: "write", data: []byte("replacement")}, {op: "sync"}, {op: "close"},
-			{op: "remove", args: []string{"/destination/temporary"}}}},
+			{op: "remove", args: []string{temporary}}}},
 		{name: "rename", configure: func(f *fakeFileSystem) { f.renameErr = renameErr }, wantErr: renameErr,
-			wantCalls: []fakeCall{{op: "create", args: []string{"/destination", ".temporary-*"}},
+			wantCalls: []fakeCall{{op: "create", args: []string{destinationDir, tempPattern}},
 				{op: "chmod", mode: 0o600}, {op: "write", data: []byte("replacement")}, {op: "sync"}, {op: "close"},
-				{op: "rename", args: []string{"/destination/temporary", destination}},
-				{op: "remove", args: []string{"/destination/temporary"}}}},
+				{op: "rename", args: []string{temporary, destination}},
+				{op: "remove", args: []string{temporary}}}},
 		{name: "remove error", configure: func(f *fakeFileSystem) {
 			f.renameErr = renameErr
 			f.removeErr = removeErr
-		}, wantErr: renameErr, wantCalls: []fakeCall{{op: "create", args: []string{"/destination", ".temporary-*"}},
+		}, wantErr: renameErr, wantCalls: []fakeCall{{op: "create", args: []string{destinationDir, tempPattern}},
 			{op: "chmod", mode: 0o600}, {op: "write", data: []byte("replacement")}, {op: "sync"}, {op: "close"},
-			{op: "rename", args: []string{"/destination/temporary", destination}},
-			{op: "remove", args: []string{"/destination/temporary"}}}},
-		{name: "success", wantCalls: []fakeCall{{op: "create", args: []string{"/destination", ".temporary-*"}},
+			{op: "rename", args: []string{temporary, destination}},
+			{op: "remove", args: []string{temporary}}}},
+		{name: "success", wantCalls: []fakeCall{{op: "create", args: []string{destinationDir, tempPattern}},
 			{op: "chmod", mode: 0o600}, {op: "write", data: []byte("replacement")}, {op: "sync"}, {op: "close"},
-			{op: "rename", args: []string{"/destination/temporary", destination}}}},
+			{op: "rename", args: []string{temporary, destination}}}},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			fs := &fakeFileSystem{
-				file:        &fakeAtomicFile{name: "/destination/temporary", writeN: -1},
+				file:        &fakeAtomicFile{name: temporary, writeN: -1},
 				destination: map[string][]byte{destination: []byte("original")},
 			}
 			fs.file.calls = &fs.calls
 			if test.configure != nil {
 				test.configure(fs)
 			}
-			err := atomicWrite(fs, destination, ".temporary-*", []byte("replacement"))
+			err := atomicWrite(fs, destination, tempPattern, []byte("replacement"))
 			if test.wantErr == nil {
 				if err != nil {
 					t.Fatalf("atomicWrite() error = %v", err)

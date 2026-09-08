@@ -102,10 +102,8 @@ func TestCheckpointDecodeRejectsInvalidWire(t *testing.T) {
 	if _, err := DecodeCheckpoint([]byte(`{"plan_id":"` + strings.Repeat("0", 64) + `","next_index":0,"catalog_digest":"` + validCatalog + `"}`)); !errors.Is(err, ErrInvalidPlan) {
 		t.Fatalf("zero plan ID error = %v, want ErrInvalidPlan", err)
 	}
-	if err := func() error {
-		_, err := EncodeCheckpoint(Checkpoint{})
-		return err
-	}(); !errors.Is(err, ErrInvalidPlan) {
+	_, err = EncodeCheckpoint(Checkpoint{})
+	if !errors.Is(err, ErrInvalidPlan) {
 		t.Fatalf("EncodeCheckpoint(Checkpoint{}) error = %v, want ErrInvalidPlan", err)
 	}
 }
