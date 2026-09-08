@@ -341,23 +341,7 @@ func validateRenameDecisions(baseline BaselineIdentity, decisions []Decision, op
 		}
 	}
 	used := make([]bool, len(decisions))
-	consume := func(object ObjectID, from, to string, exact bool) error {
-		matches := make([]int, 0, 1)
-		for i, decision := range decisions {
-			if used[i] || decision.kind != DecisionRenameObject || decision.object != object {
-				continue
-			}
-			if exact && (decision.from != from || decision.to != to) {
-				continue
-			}
-			matches = append(matches, i)
-		}
-		if len(matches) != 1 {
-			return fmt.Errorf("%w: rename for %q has %d matching decisions", ErrInvalidDecision, object, len(matches))
-		}
-		used[matches[0]] = true
-		return nil
-	}
+	expectedTables := make([]renameDecisionKey, 0)
 	for _, index := range order {
 		operation := operations[index]
 		if operation.kind == OperationCreateTable {
@@ -376,25 +360,10 @@ func validateRenameDecisions(baseline BaselineIdentity, decisions []Decision, op
 			if !ok {
 				return fmt.Errorf("%w: rename object is inactive", ErrInvalidDecision)
 			}
-			fromNames := []string{decisionName(object.schema, object.name), object.name}
-			toNames := []string{decisionName(rename.toSchema, rename.toName), rename.toName}
-			matches := 0
-			matchingIndex := -1
-			for i, decision := range decisions {
-				if used[i] || decision.kind != DecisionRenameObject || decision.object != rename.object {
-					continue
-				}
-				fromMatches := decision.from == fromNames[0] || decision.from == fromNames[1]
-				toMatches := decision.to == toNames[0] || decision.to == toNames[1]
-				if fromMatches && toMatches {
-					matches++
-					matchingIndex = i
-				}
-			}
-			if matches != 1 {
-				return fmt.Errorf("%w: rename %q has %d matching decisions", ErrInvalidDecision, operation.id, matches)
-			}
-			used[matchingIndex] = true
+			expectedTables = append(expectedTables, renameDecisionKey{
+				object: rename.object, from: decisionName(object.schema, object.name),
+				to: decisionName(rename.toSchema, rename.toName), operation: operation.id,
+			})
 			object.schema, object.name = rename.toSchema, rename.toName
 			active[rename.object] = object
 		}
@@ -404,22 +373,67 @@ func validateRenameDecisions(baseline BaselineIdentity, decisions []Decision, op
 			}
 		}
 	}
-	for _, index := range order {
-		operation := operations[index]
+	if err := consumeRenameDecisions(decisions, used, expectedTables); err != nil {
+		return err
+	}
+	columnCounts := make(map[ObjectID]int)
+	for _, operation := range operations {
 		if operation.kind != OperationRenameColumn {
 			continue
 		}
 		for _, objectID := range operation.objects {
-			if err := consume(objectID, "", "", false); err != nil {
-				return err
+			columnCounts[objectID]++
+		}
+	}
+	for objectID, count := range columnCounts {
+		matches := 0
+		for i, decision := range decisions {
+			if !used[i] && decision.kind == DecisionRenameObject && decision.object == objectID {
+				matches++
+			}
+		}
+		if matches != count {
+			return fmt.Errorf("%w: rename for %q has %d matching decisions, want %d", ErrInvalidDecision, objectID, matches, count)
+		}
+		for i, decision := range decisions {
+			if !used[i] && decision.kind == DecisionRenameObject && decision.object == objectID {
+				used[i] = true
 			}
 		}
 	}
-	for i, decision := range decisions {
-		if decision.kind == DecisionRenameObject {
-			if !used[i] {
-				return fmt.Errorf("%w: rename decision %q is unused", ErrInvalidDecision, decision.id)
+	return rejectUnusedRenameDecisions(decisions, used)
+}
+
+type renameDecisionKey struct {
+	operation OperationID
+	object    ObjectID
+	from      string
+	to        string
+}
+
+func consumeRenameDecisions(decisions []Decision, used []bool, expected []renameDecisionKey) error {
+	for _, want := range expected {
+		matchingIndex := -1
+		for i, decision := range decisions {
+			if used[i] || decision.kind != DecisionRenameObject || decision.object != want.object ||
+				decision.from != want.from || decision.to != want.to {
+				continue
 			}
+			matchingIndex = i
+			break
+		}
+		if matchingIndex < 0 {
+			return fmt.Errorf("%w: rename %q has no matching decision", ErrInvalidDecision, want.operation)
+		}
+		used[matchingIndex] = true
+	}
+	return nil
+}
+
+func rejectUnusedRenameDecisions(decisions []Decision, used []bool) error {
+	for i, decision := range decisions {
+		if decision.kind == DecisionRenameObject && !used[i] {
+			return fmt.Errorf("%w: rename decision %q is unused", ErrInvalidDecision, decision.id)
 		}
 	}
 	return nil
@@ -440,20 +454,7 @@ func validateResolvedRenameDecisions(resolved ResolvedChanges, baseline Baseline
 	for _, rename := range baseline.renames {
 		renamed[rename.operation] = rename
 	}
-	consume := func(object ObjectID, from, to string) error {
-		matches := make([]int, 0, 1)
-		for i, decision := range resolved.decisions {
-			if used[i] || decision.kind != DecisionRenameObject || decision.object != object || decision.from != from || decision.to != to {
-				continue
-			}
-			matches = append(matches, i)
-		}
-		if len(matches) != 1 {
-			return fmt.Errorf("%w: rename for %q has %d matching decisions", ErrInvalidDecision, object, len(matches))
-		}
-		used[matches[0]] = true
-		return nil
-	}
+	expected := make([]renameDecisionKey, 0)
 	for stepIndex, operationIndex := range order {
 		operation := resolved.operations[operationIndex]
 		switch operation.kind {
@@ -472,11 +473,8 @@ func validateResolvedRenameDecisions(resolved ResolvedChanges, baseline Baseline
 			if !ok {
 				return fmt.Errorf("%w: rename object is inactive", ErrInvalidDecision)
 			}
-			if err := consume(rename.object, decisionName(object.schema, object.name), decisionName(rename.toSchema, rename.toName)); err != nil {
-				if err := consume(rename.object, object.name, rename.toName); err != nil {
-					return err
-				}
-			}
+			expected = append(expected, renameDecisionKey{operation: operation.id, object: rename.object,
+				from: decisionName(object.schema, object.name), to: decisionName(rename.toSchema, rename.toName)})
 			object.schema, object.name = rename.toSchema, rename.toName
 			active[rename.object] = object
 		case OperationRenameColumn:
@@ -493,9 +491,7 @@ func validateResolvedRenameDecisions(resolved ResolvedChanges, baseline Baseline
 				if !ok {
 					return fmt.Errorf("%w: rename %q has no single adjacent column change", ErrInvalidDecision, operation.id)
 				}
-				if err := consume(objectID, from, to); err != nil {
-					return err
-				}
+				expected = append(expected, renameDecisionKey{operation: operation.id, object: objectID, from: from, to: to})
 			}
 		case OperationDropTable:
 			for _, objectID := range operation.objects {
@@ -503,12 +499,10 @@ func validateResolvedRenameDecisions(resolved ResolvedChanges, baseline Baseline
 			}
 		}
 	}
-	for i, decision := range resolved.decisions {
-		if decision.kind == DecisionRenameObject && !used[i] {
-			return fmt.Errorf("%w: rename decision %q is unused", ErrInvalidDecision, decision.id)
-		}
+	if err := consumeRenameDecisions(resolved.decisions, used, expected); err != nil {
+		return err
 	}
-	return nil
+	return rejectUnusedRenameDecisions(resolved.decisions, used)
 }
 
 func adjacentColumnRename(before, after Catalog, objectID ObjectID) (string, string, bool) {

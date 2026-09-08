@@ -445,6 +445,11 @@ func NewOperation(
 	if !validOperationKind(kind) || !validTransaction(transaction) {
 		return Operation{}, fmt.Errorf("%w: unknown kind or transaction mode", ErrInvalidOperation)
 	}
+	for _, dependency := range dependsOn {
+		if dependency == id {
+			return Operation{}, fmt.Errorf("%w: operation depends on itself", ErrInvalidOperation)
+		}
+	}
 	if len(objects) == 0 {
 		return Operation{}, fmt.Errorf("%w: operation needs an object", ErrInvalidOperation)
 	}
