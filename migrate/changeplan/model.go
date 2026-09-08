@@ -573,12 +573,15 @@ func newPlan(profile Profile, baseline BaselineIdentity, history HistoryIdentity
 	if err := validateFutureObjectIDs(baseline, operations); err != nil {
 		return Plan{}, err
 	}
-	p := Plan{profile: profile, baseline: baseline, history: history}
+	p := Plan{profile: profile, baseline: cloneBaseline(baseline), history: history}
 	if err := validatePlanIdentity(p); err != nil {
 		return Plan{}, err
 	}
 	p.decisions = append([]Decision(nil), decisions...)
 	p.operations = append([]Operation(nil), operations...)
+	for i := range p.operations {
+		p.operations[i] = cloneOperation(p.operations[i])
+	}
 	if p.decisions == nil {
 		p.decisions = make([]Decision, 0)
 	}

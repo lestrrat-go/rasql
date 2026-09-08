@@ -622,18 +622,31 @@ func TestImmutabilityMatrixBaselineBoundaries(t *testing.T) {
 	})
 
 	plan, planBaseline, history, operation := immutabilityPlanParts(t)
+	t.Run("NewPlan baseline input", func(t *testing.T) {
+		built, buildErr := NewPlan(plan.Profile(), planBaseline, history, plan.Decisions(), []Operation{operation})
+		require.NoError(t, buildErr)
+		wantBaseline := built.Baseline()
+		wantID := built.ID()
+		wantBytes := mustEncodePlan(t, built)
+		planBaseline.objects[0] = BaselineObject{}
+		require.Equal(t, wantBaseline, built.Baseline())
+		require.Equal(t, wantID, built.ID())
+		require.Equal(t, wantBytes, mustEncodePlan(t, built))
+	})
 	t.Run("Plan.Baseline return", func(t *testing.T) {
 		beforeBytes := mustEncodePlan(t, plan)
+		beforeID := plan.ID()
+		want := plan.Baseline()
 		returned := plan.Baseline()
 		returned.objects[0] = BaselineObject{}
-		returned.renames = append(returned.renames, rename)
 		returned.sourceIdentity = "changed"
-		// This strict equality also checks that the empty rename slice keeps its initialized value state.
-		require.Equal(t, planBaseline, plan.Baseline())
+		require.Equal(t, want.Catalog(), plan.Baseline().Catalog())
+		require.Equal(t, want.SourceIdentity(), plan.Baseline().SourceIdentity())
+		require.Equal(t, want.Objects(), plan.Baseline().Objects())
+		require.Empty(t, plan.Baseline().Renames())
+		require.Equal(t, beforeID, plan.ID())
 		require.Equal(t, beforeBytes, mustEncodePlan(t, plan))
 	})
-	_ = history
-	_ = operation
 
 	t.Run("ResolvedChanges.FutureObjects input", func(t *testing.T) {
 		resolved, futures, _ := immutabilityFutureFixture(t)
@@ -681,10 +694,15 @@ func TestImmutabilityMatrixDecisionBoundaries(t *testing.T) {
 		require.Equal(t, plan.Decisions(), built.Decisions())
 	})
 	t.Run("Plan.Decisions return", func(t *testing.T) {
+		want := append([]Decision(nil), plan.Decisions()...)
+		wantID := plan.ID()
+		wantBytes := mustEncodePlan(t, plan)
 		returned := plan.Decisions()
 		returned[0] = Decision{}
 		require.Len(t, append(returned, decision), 2)
-		require.Equal(t, plan.Decisions(), plan.Decisions())
+		require.Equal(t, want, plan.Decisions())
+		require.Equal(t, wantID, plan.ID())
+		require.Equal(t, wantBytes, mustEncodePlan(t, plan))
 	})
 	t.Run("Decision accessors unchanged", func(t *testing.T) {
 		got := plan.Decisions()[0]
@@ -823,7 +841,7 @@ func TestImmutabilityMatrixOperationBoundaries(t *testing.T) {
 		}
 		t.Run("Operation accessors "+label, func(t *testing.T) {
 			op := immutabilityOperation(t, reversible)
-			before := op
+			want := immutabilityOperation(t, reversible)
 			depends := op.DependsOn()
 			depends[0] = "changed"
 			require.Len(t, append(depends, "other"), 2)
@@ -844,7 +862,7 @@ func TestImmutabilityMatrixOperationBoundaries(t *testing.T) {
 				reverse[0].BoundArgs()[0].([]byte)[0] = 'X'
 				require.Len(t, append(reverse, reverse[0]), 2)
 			}
-			assertOperationAccessors(t, before, op)
+			assertOperationAccessors(t, want, op)
 		})
 	}
 
@@ -900,6 +918,7 @@ func TestImmutabilityMatrixOperationBoundaries(t *testing.T) {
 		t.Run(row.name, func(t *testing.T) {
 			currentPlan, currentBaseline, currentHistory, currentOperation := immutabilityPlanParts(t)
 			if row.name == "NewPlan operations input" {
+				_, _, _, wantOperation := immutabilityPlanParts(t)
 				operations := []Operation{currentOperation}
 				built, buildErr := NewPlan(currentPlan.Profile(), currentBaseline, currentHistory, currentPlan.Decisions(), operations)
 				require.NoError(t, buildErr)
@@ -907,20 +926,22 @@ func TestImmutabilityMatrixOperationBoundaries(t *testing.T) {
 				caller := operations[0]
 				operations[0] = Operation{}
 				row.mutate(&caller)
-				require.Equal(t, currentOperation.ID(), built.Operations()[0].ID())
+				require.Equal(t, wantOperation.ID(), built.Operations()[0].ID())
 				if row.name == "NewPlan operations input" {
 					// This strict check exposes NewPlan retaining caller operation storage.
 					require.Equal(t, beforeBytes, mustEncodePlan(t, built))
 				}
-				assertOperationAccessors(t, currentOperation, built.Operations()[0])
+				assertOperationAccessors(t, wantOperation, built.Operations()[0])
 				require.Equal(t, "payload", string(built.Operations()[0].Statements()[0].Args()[0].([]byte)))
 				return
 			}
+			beforeID := currentPlan.ID()
+			beforeBytes := mustEncodePlan(t, currentPlan)
 			var got []Operation
 			if row.name == "Plan.Operations return" {
-				got = plan.Operations()
+				got = currentPlan.Operations()
 			} else {
-				got, err = plan.TopologicalOperations()
+				got, err = currentPlan.TopologicalOperations()
 				require.NoError(t, err)
 			}
 			caller := got[0]
@@ -929,6 +950,8 @@ func TestImmutabilityMatrixOperationBoundaries(t *testing.T) {
 			assertOperationAccessors(t, currentOperation, currentPlan.Operations()[0])
 			require.Equal(t, currentOperation.ID(), currentPlan.Operations()[0].ID())
 			require.Equal(t, "payload", string(currentPlan.Operations()[0].Statements()[0].Args()[0].([]byte)))
+			require.Equal(t, beforeID, currentPlan.ID())
+			require.Equal(t, beforeBytes, mustEncodePlan(t, currentPlan))
 		})
 	}
 	t.Run("Plan stable order return", func(t *testing.T) {

@@ -68,6 +68,12 @@ func NewResolvedChanges(baseline Catalog, steps []ResolvedCatalogStep, decisions
 	if out.renamedObjects == nil {
 		out.renamedObjects = make([]BaselineRename, 0)
 	}
+	for i := range out.steps {
+		out.steps[i] = ResolvedCatalogStep{
+			operation: out.steps[i].operation,
+			after:     cloneCatalog(out.steps[i].after),
+		}
+	}
 	for i := range out.operations {
 		out.operations[i] = cloneOperation(out.operations[i])
 	}
