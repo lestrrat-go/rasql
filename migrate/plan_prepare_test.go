@@ -1,9 +1,12 @@
 package migrate
 
 import (
+	"context"
 	"database/sql"
+	"database/sql/driver"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/lestrrat-go/rasql/dialect"
@@ -37,6 +40,80 @@ func TestPrepareChangePlanBeforeDatabase(t *testing.T) {
 	require.Equal(t, prepared.operations[0].afterDigest, after)
 	_, err = prepared.expectedPrefixDigest(2)
 	require.Error(t, err)
+}
+
+func TestPreparedChangePlanSchedule(t *testing.T) {
+	database, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = database.Close() })
+	runner, err := New(database, dialect.SQLite())
+	require.NoError(t, err)
+	emptyPlan := runnerPlanWithOperations(t, "rasql_schema_migrations", engineprofile.SQLite, nil)
+	empty, err := prepareChangePlan(runner, emptyPlan)
+	require.NoError(t, err)
+	require.Empty(t, empty.operations)
+	require.False(t, empty.hasForbidden)
+	baselineDigest := emptyPlan.Baseline().Catalog().CatalogDigest()
+	prefix, err := empty.expectedPrefixDigest(0)
+	require.NoError(t, err)
+	require.Equal(t, baselineDigest, prefix)
+	_, err = empty.expectedPrefixDigest(-1)
+	require.Error(t, err)
+	_, err = empty.expectedPrefixDigest(1)
+	require.Error(t, err)
+
+	first := scheduleOperationWithArgs(t, "first", nil, changeplan.TransactionRequired, changeplan.Digest{11}, []any{[]byte("payload"), time.Unix(123, 456)})
+	second := scheduleOperation(t, "second", []changeplan.OperationID{"first"}, changeplan.TransactionEngineDefault, changeplan.Digest{12})
+	third := scheduleOperation(t, "third", []changeplan.OperationID{"second"}, changeplan.TransactionForbidden, changeplan.Digest{13})
+	mixedPlan := runnerPlanWithOperations(t, "rasql_schema_migrations", engineprofile.SQLite, []changeplan.Operation{third, second, first})
+	prepared, err := prepareChangePlan(runner, mixedPlan)
+	require.NoError(t, err)
+	require.Len(t, prepared.operations, 3)
+	require.True(t, prepared.hasForbidden)
+	require.Equal(t, []changeplan.OperationID{"first", "second", "third"}, []changeplan.OperationID{
+		prepared.operations[0].operation.ID(), prepared.operations[1].operation.ID(), prepared.operations[2].operation.ID(),
+	})
+	require.Equal(t, []resolvedChangePlanMode{planModeRequired, planModeRequired, planModeForbidden}, []resolvedChangePlanMode{
+		prepared.operations[0].mode, prepared.operations[1].mode, prepared.operations[2].mode,
+	})
+	for index, operation := range prepared.operations {
+		require.Equal(t, index, operation.index)
+		require.NotEmpty(t, operation.operation.Statements()[0].SQL())
+		before, err := prepared.expectedPrefixDigest(index)
+		require.NoError(t, err)
+		require.Equal(t, operation.beforeDigest, before)
+		after, err := prepared.expectedPrefixDigest(index + 1)
+		require.NoError(t, err)
+		require.Equal(t, operation.afterDigest, after)
+	}
+	for _, index := range []int{-1, 4} {
+		_, err := prepared.expectedPrefixDigest(index)
+		require.Error(t, err)
+	}
+	operations, err := mixedPlan.TopologicalOperations()
+	require.NoError(t, err)
+	operations[0] = third
+	require.Equal(t, changeplan.OperationID("first"), prepared.operations[0].operation.ID())
+	statements := prepared.operations[0].operation.Statements()
+	args := statements[0].Args()
+	require.Len(t, args, 2)
+	args[0].([]byte)[0] = 'X'
+	args[1] = time.Unix(0, 0)
+	require.Equal(t, []byte("payload"), prepared.operations[0].operation.Statements()[0].Args()[0])
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPrepareChangePlanUsesNoDatabaseConnection(t *testing.T) {
+	calls := 0
+	database := sql.OpenDB(recordingConnector{calls: &calls})
+	t.Cleanup(func() { _ = database.Close() })
+	runner, err := New(database, dialect.SQLite())
+	require.NoError(t, err)
+	_, err = prepareChangePlan(runner, runnerPlanWithOperations(t, "rasql_schema_migrations", engineprofile.SQLite, nil))
+	require.NoError(t, err)
+	_, err = prepareChangePlan(runner, changeplan.Plan{})
+	require.Error(t, err)
+	require.Zero(t, calls)
 }
 
 func TestPrepareChangePlanRejectsBeforeConnection(t *testing.T) {
@@ -82,6 +159,35 @@ func TestPrepareChangePlanRejectsOversizedDerivedNames(t *testing.T) {
 	_, err = prepareChangePlan(mysqlRunner, mysqlPlan)
 	require.Error(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPrepareChangePlanIdentifierBoundaries(t *testing.T) {
+	for _, item := range []struct {
+		name, history string
+		dialect       dialect.Dialect
+		engine        engineprofile.EngineID
+		valid         bool
+	}{
+		{"postgresql maximum", strings.Repeat("h", 49), dialect.PostgreSQL(), engineprofile.PostgreSQL, true},
+		{"postgresql over maximum", strings.Repeat("h", 50), dialect.PostgreSQL(), engineprofile.PostgreSQL, false},
+		{"mysql maximum", strings.Repeat("h", 50), dialect.MySQL(), engineprofile.MySQL, true},
+		{"mysql over maximum", strings.Repeat("h", 51), dialect.MySQL(), engineprofile.MySQL, false},
+	} {
+		t.Run(item.name, func(t *testing.T) {
+			database, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = database.Close() })
+			runner, err := NewWithHistoryTable(database, item.dialect, item.history)
+			require.NoError(t, err)
+			_, err = prepareChangePlan(runner, runnerPlan(t, item.history, item.engine, changeplan.TransactionEngineDefault))
+			if item.valid {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
 }
 
 func runnerFor(t *testing.T, database *sql.DB, d dialect.Dialect) Runner {
@@ -134,6 +240,80 @@ func runnerPlanWithMode(t *testing.T, history string, engine engineprofile.Engin
 	require.NoError(t, err)
 	return plan
 }
+
+func runnerPlanWithOperations(t *testing.T, history string, engine engineprofile.EngineID, operations []changeplan.Operation) changeplan.Plan {
+	t.Helper()
+	profileID := "sqlite-3.35"
+	version := engineprofile.Version{Known: true, Major: 3, Minor: 35}
+	switch engine {
+	case engineprofile.PostgreSQL:
+		profileID, version = "postgresql-16", engineprofile.Version{Known: true, Major: 16}
+	case engineprofile.MySQL:
+		profileID, version = "mysql-8.4", engineprofile.Version{Known: true, Major: 8, Minor: 4}
+	}
+	profile, err := engineprofile.Builtin(profileID, version)
+	require.NoError(t, err)
+	catalogProfile, err := changeplan.NewProfile(runnerProfileSource{value: profile})
+	require.NoError(t, err)
+	object, err := changeplan.NewCatalogObject("starting", schema.TableDef{Schema: "main", Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
+	require.NoError(t, err)
+	catalog, err := changeplan.NewCatalog(runnerProfileSource{value: profile}, "runner-test", []changeplan.CatalogObject{object})
+	require.NoError(t, err)
+	profileDigest, err := changeplan.ProfileDigest(catalogProfile)
+	require.NoError(t, err)
+	catalogDigest, err := changeplan.CatalogDigest(catalog)
+	require.NoError(t, err)
+	identity, err := changeplan.NewCatalogIdentity(engine, profileDigest, catalogDigest, changeplan.Digest{3})
+	require.NoError(t, err)
+	baselineObject, err := changeplan.NewBaselineObject("starting", "table", "main", "users")
+	require.NoError(t, err)
+	baseline, err := changeplan.NewBaselineIdentity(identity, "runner-test", []changeplan.BaselineObject{baselineObject}, []changeplan.BaselineRename{})
+	require.NoError(t, err)
+	historyIdentity, err := changeplan.NewHistoryIdentity("main", history)
+	require.NoError(t, err)
+	decisions := make([]changeplan.Decision, 0)
+	for _, operation := range operations {
+		if operation.Kind() != changeplan.OperationBackfill {
+			continue
+		}
+		decision, decisionErr := changeplan.NewDecision(changeplan.DecisionID("decision-"+string(operation.ID())), changeplan.DecisionSupplyBackfill, operation.Objects()[0], "", "", true, "runner test")
+		require.NoError(t, decisionErr)
+		decisions = append(decisions, decision)
+	}
+	plan, err := changeplan.NewPlan(catalogProfile, baseline, historyIdentity, decisions, operations)
+	require.NoError(t, err)
+	return plan
+}
+
+func scheduleOperation(t *testing.T, id string, dependsOn []changeplan.OperationID, mode changeplan.TransactionMode, digest changeplan.Digest) changeplan.Operation {
+	return scheduleOperationWithArgs(t, id, dependsOn, mode, digest, nil)
+}
+
+func scheduleOperationWithArgs(t *testing.T, id string, dependsOn []changeplan.OperationID, mode changeplan.TransactionMode, digest changeplan.Digest, args []any) changeplan.Operation {
+	t.Helper()
+	kind := changeplan.OperationAddColumn
+	if len(args) > 0 {
+		kind = changeplan.OperationBackfill
+	}
+	operation, err := changeplan.NewOperation(changeplan.OperationID(id), kind, dependsOn, []changeplan.ObjectID{"starting"}, nil, nil, digest, []stmt.Statement{stmt.New(sqltext.Text("ALTER TABLE users ADD COLUMN value TEXT"), args...)}, mode, false, nil)
+	require.NoError(t, err)
+	return operation
+}
+
+type recordingConnector struct {
+	calls *int
+}
+
+func (c recordingConnector) Connect(context.Context) (driver.Conn, error) {
+	*c.calls++
+	return nil, driver.ErrBadConn
+}
+
+func (c recordingConnector) Driver() driver.Driver { return recordingDriver{} }
+
+type recordingDriver struct{}
+
+func (recordingDriver) Open(string) (driver.Conn, error) { return nil, driver.ErrBadConn }
 
 type runnerProfileSource struct{ value engineprofile.Profile }
 
