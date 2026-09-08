@@ -28,7 +28,7 @@ func (d nestedPredUsersDecoder) DecodeRow(src rasql.ScanSource, row *store.Users
 type nestedPredUsersColumns struct {
 	ID        rasql.Column[store.UsersRow, int64]
 	Email     rasql.Column[store.UsersRow, string]
-	Nickname  rasql.NullColumn[store.UsersRow, string]
+	Nickname  rasql.NullColumn[store.UsersRow, *string]
 	Status    rasql.Column[store.UsersRow, string]
 	FirstName rasql.Column[store.UsersRow, string]
 	LastName  rasql.Column[store.UsersRow, string]
@@ -45,42 +45,42 @@ func nestedPredUsersQuery() (rasql.Query[store.UsersRow], nestedPredUsersColumns
 		return rasql.Query[store.UsersRow]{}, nestedPredUsersColumns{}, err
 	}
 	var cols nestedPredUsersColumns
-	if cols.ID, err = rasql.BindColumn[store.UsersRow, int64](source, users.IDRef().Name(), ""); err != nil {
+	if cols.ID, err = rasql.BindTypedColumn(users.ID()); err != nil {
 		return rasql.Query[store.UsersRow]{}, nestedPredUsersColumns{}, err
 	}
-	if cols.Email, err = rasql.BindColumn[store.UsersRow, string](source, users.EmailRef().Name(), ""); err != nil {
+	if cols.Email, err = rasql.BindTypedColumn(users.Email()); err != nil {
 		return rasql.Query[store.UsersRow]{}, nestedPredUsersColumns{}, err
 	}
-	if cols.Nickname, err = rasql.BindNullColumn[store.UsersRow, string](source, users.NicknameRef().Name(), ""); err != nil {
+	if cols.Nickname, err = rasql.BindNullTypedColumn(users.Nickname()); err != nil {
 		return rasql.Query[store.UsersRow]{}, nestedPredUsersColumns{}, err
 	}
-	if cols.Status, err = rasql.BindColumn[store.UsersRow, string](source, users.StatusRef().Name(), ""); err != nil {
+	if cols.Status, err = rasql.BindTypedColumn(users.Status()); err != nil {
 		return rasql.Query[store.UsersRow]{}, nestedPredUsersColumns{}, err
 	}
-	if cols.FirstName, err = rasql.BindColumn[store.UsersRow, string](source, users.FirstNameRef().Name(), ""); err != nil {
+	if cols.FirstName, err = rasql.BindTypedColumn(users.FirstName()); err != nil {
 		return rasql.Query[store.UsersRow]{}, nestedPredUsersColumns{}, err
 	}
-	if cols.LastName, err = rasql.BindColumn[store.UsersRow, string](source, users.LastNameRef().Name(), ""); err != nil {
+	if cols.LastName, err = rasql.BindTypedColumn(users.LastName()); err != nil {
 		return rasql.Query[store.UsersRow]{}, nestedPredUsersColumns{}, err
 	}
 	result, err := rasql.NewResultSchema(
-		rasql.ResultColumn{Name: users.IDRef().Name(), Type: def.Columns[0].Type},
-		rasql.ResultColumn{Name: users.EmailRef().Name(), Type: def.Columns[1].Type},
-		rasql.ResultColumn{Name: users.NicknameRef().Name(), Type: def.Columns[2].Type, Nullable: true},
-		rasql.ResultColumn{Name: users.StatusRef().Name(), Type: def.Columns[3].Type},
-		rasql.ResultColumn{Name: users.FirstNameRef().Name(), Type: def.Columns[4].Type},
-		rasql.ResultColumn{Name: users.LastNameRef().Name(), Type: def.Columns[5].Type},
+		rasql.ResultColumn{Name: users.ID().Name(), Type: def.Columns[0].Type},
+		rasql.ResultColumn{Name: users.Email().Name(), Type: def.Columns[1].Type},
+		rasql.ResultColumn{Name: users.Nickname().Name(), Type: def.Columns[2].Type, Nullable: true},
+		rasql.ResultColumn{Name: users.Status().Name(), Type: def.Columns[3].Type},
+		rasql.ResultColumn{Name: users.FirstName().Name(), Type: def.Columns[4].Type},
+		rasql.ResultColumn{Name: users.LastName().Name(), Type: def.Columns[5].Type},
 	)
 	if err != nil {
 		return rasql.Query[store.UsersRow]{}, nestedPredUsersColumns{}, err
 	}
 	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
-		rasql.Item(users.IDRef().Name(), cols.ID.Expr(), def.Columns[0].Type, ""),
-		rasql.Item(users.EmailRef().Name(), cols.Email.Expr(), def.Columns[1].Type, ""),
-		rasql.NullItem(users.NicknameRef().Name(), cols.Nickname.NullExpr(), def.Columns[2].Type, ""),
-		rasql.Item(users.StatusRef().Name(), cols.Status.Expr(), def.Columns[3].Type, ""),
-		rasql.Item(users.FirstNameRef().Name(), cols.FirstName.Expr(), def.Columns[4].Type, ""),
-		rasql.Item(users.LastNameRef().Name(), cols.LastName.Expr(), def.Columns[5].Type, ""),
+		rasql.Item(users.ID().Name(), cols.ID.Expr(), def.Columns[0].Type, ""),
+		rasql.Item(users.Email().Name(), cols.Email.Expr(), def.Columns[1].Type, ""),
+		rasql.NullItem(users.Nickname().Name(), cols.Nickname.NullExpr(), def.Columns[2].Type, ""),
+		rasql.Item(users.Status().Name(), cols.Status.Expr(), def.Columns[3].Type, ""),
+		rasql.Item(users.FirstName().Name(), cols.FirstName.Expr(), def.Columns[4].Type, ""),
+		rasql.Item(users.LastName().Name(), cols.LastName.Expr(), def.Columns[5].Type, ""),
 	}, nestedPredUsersDecoder{result: result})
 	if err != nil {
 		return rasql.Query[store.UsersRow]{}, nestedPredUsersColumns{}, err
@@ -163,8 +163,14 @@ func Example_rasql_nested_predicates() {
 
 	// Every level of the tree renders its own parentheses, so the SQL groups
 	// the way the Go code nests rather than by the database's operator
-	// precedence.
-	// SQL: SELECT users.id, users.email, users.nickname, users.status, users.first_name, users.last_name FROM users WHERE (users.email LIKE ? AND (users.id < ? OR (users.id > ? AND users.nickname IS NOT NULL))) ORDER BY users.id ASC
+	// precedence. Render proves it, rather than a comment merely claiming it.
+	statement, err := rasql.Render(selected, dialect.SQLite())
+	if err != nil {
+		fmt.Printf("failed to render statement: %s\n", err)
+		return
+	}
+	fmt.Println(statement.SQL())
+
 	found, err := rasql.All(ctx, executor, selected)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
@@ -175,6 +181,7 @@ func Example_rasql_nested_predicates() {
 	}
 
 	// Output:
+	// SELECT "users"."id" AS "id", "users"."email" AS "email", "users"."nickname" AS "nickname", "users"."status" AS "status", "users"."first_name" AS "first_name", "users"."last_name" AS "last_name" FROM "users" WHERE (("users"."email" LIKE ?) AND (("users"."id" < ?) OR (("users"."id" > ?) AND ("users"."nickname" IS NOT NULL)))) ORDER BY "users"."id"
 	// 5 ada@example.com
 	// 25 alan@example.com
 }

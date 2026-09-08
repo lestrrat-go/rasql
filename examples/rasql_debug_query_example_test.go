@@ -8,23 +8,8 @@ import (
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/examples/store"
+	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
-
-// statementPrinter is a debug-only rasql.Handle. It follows the same
-// QueryContext contract as *sql.DB, but prints statements instead of running them.
-type statementPrinter struct{}
-
-func (statementPrinter) QueryContext(_ context.Context, query string, arguments ...any) (*sql.Rows, error) {
-	fmt.Println(query)
-	fmt.Printf("%v\n", arguments)
-	return nil, nil
-}
-
-func (statementPrinter) ExecContext(_ context.Context, query string, arguments ...any) (sql.Result, error) {
-	fmt.Println(query)
-	fmt.Printf("%v\n", arguments)
-	return nil, fmt.Errorf("statementPrinter does not execute statements")
-}
 
 // debugQueryUsersDecoder decodes every column of the users table into a
 // store.UsersRow, reusing the generated ScanRow method rather than restating
@@ -43,7 +28,7 @@ func (d debugQueryUsersDecoder) DecodeRow(src rasql.ScanSource, row *store.Users
 type debugQueryUsersColumns struct {
 	ID        rasql.Column[store.UsersRow, int64]
 	Email     rasql.Column[store.UsersRow, string]
-	Nickname  rasql.NullColumn[store.UsersRow, string]
+	Nickname  rasql.NullColumn[store.UsersRow, *string]
 	Status    rasql.Column[store.UsersRow, string]
 	FirstName rasql.Column[store.UsersRow, string]
 	LastName  rasql.Column[store.UsersRow, string]
@@ -60,42 +45,42 @@ func debugQueryUsersQuery() (rasql.Query[store.UsersRow], debugQueryUsersColumns
 		return rasql.Query[store.UsersRow]{}, debugQueryUsersColumns{}, err
 	}
 	var cols debugQueryUsersColumns
-	if cols.ID, err = rasql.BindColumn[store.UsersRow, int64](source, users.IDRef().Name(), ""); err != nil {
+	if cols.ID, err = rasql.BindTypedColumn(users.ID()); err != nil {
 		return rasql.Query[store.UsersRow]{}, debugQueryUsersColumns{}, err
 	}
-	if cols.Email, err = rasql.BindColumn[store.UsersRow, string](source, users.EmailRef().Name(), ""); err != nil {
+	if cols.Email, err = rasql.BindTypedColumn(users.Email()); err != nil {
 		return rasql.Query[store.UsersRow]{}, debugQueryUsersColumns{}, err
 	}
-	if cols.Nickname, err = rasql.BindNullColumn[store.UsersRow, string](source, users.NicknameRef().Name(), ""); err != nil {
+	if cols.Nickname, err = rasql.BindNullTypedColumn(users.Nickname()); err != nil {
 		return rasql.Query[store.UsersRow]{}, debugQueryUsersColumns{}, err
 	}
-	if cols.Status, err = rasql.BindColumn[store.UsersRow, string](source, users.StatusRef().Name(), ""); err != nil {
+	if cols.Status, err = rasql.BindTypedColumn(users.Status()); err != nil {
 		return rasql.Query[store.UsersRow]{}, debugQueryUsersColumns{}, err
 	}
-	if cols.FirstName, err = rasql.BindColumn[store.UsersRow, string](source, users.FirstNameRef().Name(), ""); err != nil {
+	if cols.FirstName, err = rasql.BindTypedColumn(users.FirstName()); err != nil {
 		return rasql.Query[store.UsersRow]{}, debugQueryUsersColumns{}, err
 	}
-	if cols.LastName, err = rasql.BindColumn[store.UsersRow, string](source, users.LastNameRef().Name(), ""); err != nil {
+	if cols.LastName, err = rasql.BindTypedColumn(users.LastName()); err != nil {
 		return rasql.Query[store.UsersRow]{}, debugQueryUsersColumns{}, err
 	}
 	result, err := rasql.NewResultSchema(
-		rasql.ResultColumn{Name: users.IDRef().Name(), Type: def.Columns[0].Type},
-		rasql.ResultColumn{Name: users.EmailRef().Name(), Type: def.Columns[1].Type},
-		rasql.ResultColumn{Name: users.NicknameRef().Name(), Type: def.Columns[2].Type, Nullable: true},
-		rasql.ResultColumn{Name: users.StatusRef().Name(), Type: def.Columns[3].Type},
-		rasql.ResultColumn{Name: users.FirstNameRef().Name(), Type: def.Columns[4].Type},
-		rasql.ResultColumn{Name: users.LastNameRef().Name(), Type: def.Columns[5].Type},
+		rasql.ResultColumn{Name: users.ID().Name(), Type: def.Columns[0].Type},
+		rasql.ResultColumn{Name: users.Email().Name(), Type: def.Columns[1].Type},
+		rasql.ResultColumn{Name: users.Nickname().Name(), Type: def.Columns[2].Type, Nullable: true},
+		rasql.ResultColumn{Name: users.Status().Name(), Type: def.Columns[3].Type},
+		rasql.ResultColumn{Name: users.FirstName().Name(), Type: def.Columns[4].Type},
+		rasql.ResultColumn{Name: users.LastName().Name(), Type: def.Columns[5].Type},
 	)
 	if err != nil {
 		return rasql.Query[store.UsersRow]{}, debugQueryUsersColumns{}, err
 	}
 	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
-		rasql.Item(users.IDRef().Name(), cols.ID.Expr(), def.Columns[0].Type, ""),
-		rasql.Item(users.EmailRef().Name(), cols.Email.Expr(), def.Columns[1].Type, ""),
-		rasql.NullItem(users.NicknameRef().Name(), cols.Nickname.NullExpr(), def.Columns[2].Type, ""),
-		rasql.Item(users.StatusRef().Name(), cols.Status.Expr(), def.Columns[3].Type, ""),
-		rasql.Item(users.FirstNameRef().Name(), cols.FirstName.Expr(), def.Columns[4].Type, ""),
-		rasql.Item(users.LastNameRef().Name(), cols.LastName.Expr(), def.Columns[5].Type, ""),
+		rasql.Item(users.ID().Name(), cols.ID.Expr(), def.Columns[0].Type, ""),
+		rasql.Item(users.Email().Name(), cols.Email.Expr(), def.Columns[1].Type, ""),
+		rasql.NullItem(users.Nickname().Name(), cols.Nickname.NullExpr(), def.Columns[2].Type, ""),
+		rasql.Item(users.Status().Name(), cols.Status.Expr(), def.Columns[3].Type, ""),
+		rasql.Item(users.FirstName().Name(), cols.FirstName.Expr(), def.Columns[4].Type, ""),
+		rasql.Item(users.LastName().Name(), cols.LastName.Expr(), def.Columns[5].Type, ""),
 	}, debugQueryUsersDecoder{result: result})
 	if err != nil {
 		return rasql.Query[store.UsersRow]{}, debugQueryUsersColumns{}, err
@@ -103,16 +88,44 @@ func debugQueryUsersQuery() (rasql.Query[store.UsersRow], debugQueryUsersColumns
 	return rasql.Select(source.Source(), projection), cols, nil
 }
 
+// Example_rasql_debug_query renders a typed query's SQL with rasql.Render, which
+// needs no database connection at all, and then runs the same query against a
+// real database to show how many rows it returns.
 func Example_rasql_debug_query() {
-	// This example prints the SQL for a typed query without opening a database.
-	// rasql.New accepts *sql.DB, *sql.Tx, or another rasql.Handle. This
-	// debug Handle lets the example show the generated statement without a database.
-	db, err := rasql.New(statementPrinter{}, dialect.PostgreSQL())
+	base, cols, err := debugQueryUsersQuery()
+	if err != nil {
+		fmt.Printf("failed to build users query: %s\n", err)
+		return
+	}
+	selected := base.Where(rasql.EqualValue(cols.ID.Expr(), int64(42)))
+
+	// Render lowers the query to SQL text for a chosen dialect without
+	// opening a database, which is exactly what inspecting a query before it
+	// ever reaches a server needs.
+	statement, err := rasql.Render(selected, dialect.PostgreSQL())
+	if err != nil {
+		fmt.Printf("failed to render statement: %s\n", err)
+		return
+	}
+	fmt.Println(statement.SQL())
+	fmt.Println(statement.Args())
+
+	ctx := context.Background()
+	database, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		fmt.Printf("failed to open SQLite database: %s\n", err)
+		return
+	}
+	defer func() { _ = database.Close() }()
+	// An in-memory SQLite database is per connection, so keep this example on one.
+	database.SetMaxOpenConns(1)
+
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
-	profile, err := rasql.EngineProfileFromVersion("postgresql-17", 17, 0, 0)
+	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 40, 0)
 	if err != nil {
 		fmt.Printf("failed to describe engine profile: %s\n", err)
 		return
@@ -122,32 +135,24 @@ func Example_rasql_debug_query() {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
 	}
-
-	base, cols, err := debugQueryUsersQuery()
-	if err != nil {
-		fmt.Printf("failed to build users query: %s\n", err)
+	users := store.Users()
+	if err := rasql.CreateTable(ctx, db, users); err != nil {
+		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 
-	// statementPrinter answers every query with no rows at all rather than an
-	// empty result set, so the executor's own column-count check is what
-	// fails once it looks for the six columns the query projects: a real
-	// database always returns as many columns as the statement asks for, and
-	// this is what tells the two apart.
-	rows, err := rasql.Rows(context.Background(), executor, base.Where(rasql.EqualValue(cols.ID.Expr(), int64(42))))
+	// The table is empty, so a real database reports zero rows rather than
+	// failing the way a fake one that answers every query with no columns at
+	// all would.
+	rows, err := rasql.All(ctx, executor, selected)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return
 	}
-	for _, err := range rows {
-		if err != nil {
-			fmt.Printf("failed to query users: %s\n", err)
-			return
-		}
-	}
+	fmt.Printf("%d result rows\n", len(rows))
 
 	// Output:
 	// SELECT "users"."id" AS "id", "users"."email" AS "email", "users"."nickname" AS "nickname", "users"."status" AS "status", "users"."first_name" AS "first_name", "users"."last_name" AS "last_name" FROM "users" WHERE ("users"."id" = $1)
 	// [42]
-	// failed to query users: result_columns_mismatch at result.columns: column count differs from prepared schema
+	// 0 result rows
 }

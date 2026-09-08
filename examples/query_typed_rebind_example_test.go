@@ -64,12 +64,12 @@ func Example_rebindTypedResult() {
 		fmt.Printf("failed to bind users source: %s\n", err)
 		return
 	}
-	id, err := rasql.BindColumn[store.UsersRow, int64](source, users.IDRef().Name(), "")
+	id, err := rasql.BindTypedColumn(users.ID())
 	if err != nil {
 		fmt.Printf("failed to bind id column: %s\n", err)
 		return
 	}
-	email, err := rasql.BindColumn[store.UsersRow, string](source, users.EmailRef().Name(), "")
+	email, err := rasql.BindTypedColumn(users.Email())
 	if err != nil {
 		fmt.Printf("failed to bind email column: %s\n", err)
 		return
@@ -92,6 +92,15 @@ func Example_rebindTypedResult() {
 	// dto keeps base's WHERE and reprojects to email instead of id.
 	dto := rasql.Project(base.Plan(), emailProjection)
 
+	// Render proves the WHERE really carried over into the reprojected query,
+	// rather than just trusting Project to have kept it.
+	statement, err := rasql.Render(dto, dialect.PostgreSQL())
+	if err != nil {
+		fmt.Printf("failed to render statement: %s\n", err)
+		return
+	}
+	fmt.Println(statement.SQL())
+
 	found, err := rasql.One(ctx, executor, dto)
 	if err != nil {
 		fmt.Printf("failed to query user: %s\n", err)
@@ -99,5 +108,6 @@ func Example_rebindTypedResult() {
 	}
 	fmt.Println(found)
 	// Output:
+	// SELECT "users"."email" AS "email" FROM "users" WHERE ("users"."id" = $1)
 	// rebind@example.com
 }

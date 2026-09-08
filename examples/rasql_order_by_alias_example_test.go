@@ -12,14 +12,12 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
-// userDisplayName holds the decoded id and the aliased, possibly-NULL
-// nickname. The typed operator set has no COALESCE wrapper, and no canonical
-// entry point lets a hand-written query.Expression stand in a projection
-// either, so this example orders by a nullable aliased column directly
-// instead of a nickname-falls-back-to-email expression.
+// userDisplayName holds the decoded id and the aliased display name.
+// DisplayName falls back from nickname to email with CoalesceExpr, so it is
+// never NULL even though nickname, the column it is drawn from, is.
 type userDisplayName struct {
 	ID          int64
-	DisplayName rasql.Nullable[string]
+	DisplayName string
 }
 
 type userDisplayNameDecoder struct{ result rasql.ResultSchema }
@@ -82,17 +80,23 @@ func Example_rasql_order_by_alias() {
 		fmt.Printf("failed to bind users source: %s\n", err)
 		return
 	}
-	id, err := rasql.BindColumn[store.UsersRow, int64](source, users.IDRef().Name(), "")
+	id, err := rasql.BindTypedColumn(users.ID())
 	if err != nil {
 		fmt.Printf("failed to bind id column: %s\n", err)
 		return
 	}
-	email, err := rasql.BindColumn[store.UsersRow, string](source, users.EmailRef().Name(), "")
+	// email and nickname are both bound by column name rather than through
+	// users.Email() and users.Nickname(): CoalesceExpr requires the same Go
+	// type on its nullable value and its fallback, but a generated accessor
+	// always mirrors the row's own field type, string for email and *string
+	// for the nullable nickname. Binding both explicitly as string is what
+	// gives CoalesceExpr a matching pair; no accessor bridges that gap.
+	email, err := rasql.BindColumn[store.UsersRow, string](source, "email", "")
 	if err != nil {
 		fmt.Printf("failed to bind email column: %s\n", err)
 		return
 	}
-	nickname, err := rasql.BindNullColumn[store.UsersRow, string](source, users.NicknameRef().Name(), "")
+	nickname, err := rasql.BindNullColumn[store.UsersRow, string](source, "nickname", "")
 	if err != nil {
 		fmt.Printf("failed to bind nickname column: %s\n", err)
 		return
@@ -100,15 +104,17 @@ func Example_rasql_order_by_alias() {
 
 	result, err := rasql.NewResultSchema(
 		rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}},
-		rasql.ResultColumn{Name: "display_name", Type: schema.TextType{}, Nullable: true},
+		rasql.ResultColumn{Name: "display_name", Type: schema.TextType{}},
 	)
 	if err != nil {
 		fmt.Printf("failed to build result schema: %s\n", err)
 		return
 	}
 	// displayName is written once and used in both the projection and the
-	// OrderBy below.
-	displayName := rasql.NullItem("display_name", nickname.NullExpr(), schema.TextType{}, "")
+	// OrderBy below. CoalesceExpr falls back to email whenever nickname is
+	// NULL, so display_name is never NULL even though nickname is.
+	displayNameValue := rasql.CoalesceExpr(nickname.NullExpr(), email.Expr())
+	displayName := rasql.Item("display_name", displayNameValue, schema.TextType{}, "")
 	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
 		rasql.Item("id", id.Expr(), schema.IntegerType{}, ""),
 		displayName,
@@ -118,7 +124,15 @@ func Example_rasql_order_by_alias() {
 		return
 	}
 
-	// SQL: SELECT users.id, users.nickname AS display_name FROM users ORDER BY display_name DESC
+	statement, err := rasql.Render(
+		rasql.Select(source.Source(), projection).OrderBy(rasql.DescResult(displayName)),
+		dialect.SQLite())
+	if err != nil {
+		fmt.Printf("failed to render statement: %s\n", err)
+		return
+	}
+	fmt.Println(statement.SQL())
+
 	rows, err := rasql.All(ctx, executor,
 		rasql.Select(source.Source(), projection).OrderBy(rasql.DescResult(displayName)))
 	if err != nil {
@@ -126,11 +140,7 @@ func Example_rasql_order_by_alias() {
 		return
 	}
 	for _, user := range rows {
-		if user.DisplayName.Valid {
-			fmt.Println(user.ID, user.DisplayName.Value)
-		} else {
-			fmt.Println(user.ID, "NULL")
-		}
+		fmt.Println(user.ID, user.DisplayName)
 	}
 
 	// A second query would order by a result name two projected items report:
@@ -148,7 +158,8 @@ func Example_rasql_order_by_alias() {
 	}
 
 	// Output:
+	// SELECT "users"."id" AS "id", COALESCE("users"."nickname", "users"."email") AS "display_name" FROM "users" ORDER BY "display_name" DESC
+	// 2 bob@example.com
 	// 1 Ada
-	// 2 NULL
 	// invalid_schema at columns[1].name: duplicates id
 }
