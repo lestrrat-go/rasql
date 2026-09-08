@@ -1,13 +1,10 @@
 package generate_test
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
-	"github.com/lestrrat-go/rasql/internal/compilerlock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -85,13 +82,6 @@ func TestNewEmitterInputOwnsConstructorInputs(t *testing.T) {
 	require.Equal(t, "Status", constructed.Mappings.Scalars[0].GoType)
 }
 
-func TestLegacyStoreRejectsCustomCodecBeforePlanning(t *testing.T) {
-	in, _ := emitterFixture(t)
-	if _, err := generate.HistoricalStoreForTest(in); err == nil {
-		t.Fatal("legacy store accepted an unrepresentable codec")
-	}
-}
-
 func TestEmitterInputRejectsMissingOrConflictingPolicy(t *testing.T) {
 	in, config := emitterFixture(t)
 	cases := []struct {
@@ -117,38 +107,6 @@ func TestEmitterInputRejectsMissingOrConflictingPolicy(t *testing.T) {
 	config.Objects = nil
 	if _, err := generate.NewEmitterInput(in.Catalog, in.Semantic, in.Go, config, in.Mappings); err == nil {
 		t.Fatal("missing generation policy was accepted")
-	}
-}
-
-func TestLegacyStoreCanonicalSelfForeignKeyRelations(t *testing.T) {
-	for _, test := range []struct {
-		name     string
-		nullable bool
-	}{
-		{name: "required", nullable: false},
-		{name: "nullable", nullable: true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			in := canonicalSelfForeignKeyEmitterInput(t, test.nullable)
-			store, err := generate.HistoricalStoreForTest(in)
-			require.NoError(t, err)
-			plan, err := store.Plan()
-			require.NoError(t, err)
-			var source string
-			for _, file := range plan.Files() {
-				if filepath.Base(file.Path) == "employees_gen.go" {
-					source = string(file.Source)
-					break
-				}
-			}
-			require.NotEmpty(t, source)
-			require.Contains(t, source, "func (t EmployeesTable) Manager()")
-			require.Contains(t, source, "func (t EmployeesTable) Employees()")
-			require.Contains(t, source, "func (r EmployeesTableManagerRelation) Join()")
-			require.Contains(t, source, "func (r EmployeesTableManagerRelation) Load(")
-			require.NotContains(t, source, "EmployeesEmployees")
-			require.NotContains(t, source, "ManagerEmployees")
-		})
 	}
 }
 
@@ -248,87 +206,3 @@ func manyThroughEmitterFixture(t *testing.T) generate.EmitterInput {
 	return in
 }
 
-func TestLegacyStoreUsesConfiguredAccessorRowAndFile(t *testing.T) {
-	in := plainEmitterFixture(t)
-	in.Generation.Objects[0] = compilerir.ObjectGoName{ID: "users", Source: "Users", Row: "PersonRow", Create: "PersonCreate", Patch: "PersonPatch", File: "people_gen.go"}
-	in.Go.Objects[0].SourceName = "Users"
-	in.Go.Objects[0].Row.Name = "PersonRow"
-	in.Go.Objects[0].Row.DecoderName = "PersonRowDecoder"
-	in.Go.Objects[0].Create.Name = "PersonCreate"
-	in.Go.Objects[0].Patch.Name = "PersonPatch"
-	in.Go.Files = []compilerir.GoFile{{Path: "people_gen.go"}}
-	store, err := generate.HistoricalStoreForTest(in)
-	if err != nil {
-		t.Fatal(err)
-	}
-	root := t.TempDir()
-	if err := os.Mkdir(filepath.Join(root, "generated"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	store.Root = root
-	plan, err := store.Plan()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, file := range plan.Files() {
-		if filepath.Base(file.Path) == "people_gen.go" {
-			return
-		}
-	}
-	t.Fatal("configured generated file was not planned")
-}
-
-func TestLegacyStoreRejectsIndependentMutationNames(t *testing.T) {
-	in := plainEmitterFixture(t)
-	in.Generation.Objects[0].Create = "OtherCreate"
-	in.Go.Objects[0].Create.Name = "OtherCreate"
-	if err := in.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := generate.HistoricalStoreForTest(in); err == nil {
-		t.Fatal("legacy store accepted independent mutation naming")
-	}
-}
-
-func TestLockRoundTripRebuildsIdenticalLegacyPlan(t *testing.T) {
-	in := plainEmitterFixture(t)
-	gen := in.Generation.Clone()
-	for i := range gen.Objects {
-		gen.Objects[i].Source = "Users"
-		gen.Objects[i].Row = "UsersRow"
-		gen.Objects[i].Create = "UsersCreate"
-		gen.Objects[i].Patch = "UsersPatch"
-	}
-	lock := compilerlock.File{Format: compilerlock.FormatVersion, Compiler: "rasql", Engine: compilerlock.EngineRecord{Dialect: "sqlite", Version: "3", Profile: "sqlite-3.35"}, Catalog: compilerlock.FromPhysical(in.Catalog), Generation: compilerlock.GenerationRecord{Package: gen.Package, Output: gen.Output, Emitter: gen.Emitter, Prune: gen.Prune}}
-	for _, object := range gen.Objects {
-		lock.Generation.Objects = append(lock.Generation.Objects, compilerlock.ObjectNameRecord{ID: string(object.ID), Source: object.Source, Row: object.Row, Create: object.Create, Patch: object.Patch, File: object.File})
-	}
-	lock.Source = compilerlock.SourceRecord{Kind: "live", Identity: "fixture"}
-	var err error
-	lock.Digests, err = compilerlock.BuildDigests(compilerlock.DigestInputs{Source: compilerlock.SourceDigestInput{Record: lock.Source, Engine: lock.Engine}, Generation: gen})
-	require.NoError(t, err)
-	encoded, err := compilerlock.Encode(lock)
-	require.NoError(t, err)
-	decoded, err := compilerlock.Decode(encoded)
-	require.NoError(t, err)
-	catalog := compilerlock.PhysicalFromCatalog(decoded)
-	semantic, diagnostics := compilerir.BuildSemantic(catalog, compilerir.MappingConfig{}, nil)
-	require.Empty(t, diagnostics)
-	rebuiltConfig := compilerir.GoConfig{Package: decoded.Generation.Package, Output: decoded.Generation.Output, Emitter: decoded.Generation.Emitter, Prune: decoded.Generation.Prune}
-	for _, object := range decoded.Generation.Objects {
-		rebuiltConfig.Objects = append(rebuiltConfig.Objects, compilerir.ObjectGoName{ID: compilerir.ObjectID(object.ID), Source: object.Source, Row: object.Row, Create: object.Create, Patch: object.Patch, File: object.File})
-	}
-	model, diagnostics := compilerir.BuildGo(semantic, rebuiltConfig)
-	require.Empty(t, diagnostics)
-	rebuilt, err := generate.NewEmitterInput(catalog, semantic, model, rebuiltConfig, compilerir.MappingConfig{})
-	require.NoError(t, err)
-	originalStore, err := generate.HistoricalStoreForTest(in)
-	require.NoError(t, err)
-	rebuiltStore, err := generate.HistoricalStoreForTest(rebuilt)
-	require.NoError(t, err)
-	originalPlan, err := originalStore.Plan()
-	require.NoError(t, err)
-	rebuiltPlan, err := rebuiltStore.Plan()
-	require.NoError(t, err)
-	require.Equal(t, originalPlan.Files(), rebuiltPlan.Files())
-}
