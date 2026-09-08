@@ -80,7 +80,7 @@ func TestPreparedChangePlanSchedule(t *testing.T) {
 	expectedBefore := []changeplan.Digest{mixedPlan.Baseline().Catalog().CatalogDigest(), {11}, {12}}
 	expectedAfter := []changeplan.Digest{{11}, {12}, {13}}
 	expectedArguments := [][]any{{[]byte("payload"), time.Unix(123, 456)}, {}, {}}
-	for pass := 0; pass < 2; pass++ {
+	assertPrepared := func() {
 		for index, operation := range prepared.operations {
 			require.Equal(t, index, operation.index)
 			require.Equal(t, expectedIDs[index], operation.operation.ID())
@@ -95,7 +95,9 @@ func TestPreparedChangePlanSchedule(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, operation.afterDigest, after)
 		}
+		require.True(t, prepared.hasForbidden)
 	}
+	assertPrepared()
 	firstArgs := prepared.operations[0].operation.Statements()[0].Args()
 	require.Equal(t, []byte("payload"), firstArgs[0])
 	require.Equal(t, time.Unix(123, 456), firstArgs[1])
@@ -105,17 +107,17 @@ func TestPreparedChangePlanSchedule(t *testing.T) {
 	}
 	operations, err := mixedPlan.TopologicalOperations()
 	require.NoError(t, err)
-	operations[0] = third
-	require.Equal(t, changeplan.OperationID("first"), prepared.operations[0].operation.ID())
-	statements := prepared.operations[0].operation.Statements()
+	statements := operations[0].Statements()
 	args := statements[0].Args()
 	require.Len(t, args, 2)
-	require.Equal(t, []byte("payload"), args[0])
-	require.Equal(t, time.Unix(123, 456), args[1])
 	args[0].([]byte)[0] = 'X'
 	args[1] = time.Unix(0, 0)
-	require.Equal(t, []byte("payload"), prepared.operations[0].operation.Statements()[0].Args()[0])
-	require.Equal(t, time.Unix(123, 456), prepared.operations[0].operation.Statements()[0].Args()[1])
+	operations[0] = third
+	require.Equal(t, changeplan.OperationID("first"), prepared.operations[0].operation.ID())
+	returnedStatements := prepared.operations[0].operation.Statements()
+	returnedArgs := returnedStatements[0].Args()
+	returnedArgs[0].([]byte)[0] = 'Y'
+	returnedStatements[0] = stmt.New(sqltext.Text("mutated"))
 	profile := mixedPlan.Profile()
 	capabilities := profile.Capabilities()
 	capabilities.TransactionalDDL = false
@@ -126,9 +128,14 @@ func TestPreparedChangePlanSchedule(t *testing.T) {
 	baselineObjects := baseline.Objects()
 	baselineObjects[0] = changeplan.BaselineObject{}
 	require.Equal(t, "runner-test", prepared.baseline.SourceIdentity())
+	require.Equal(t, changeplan.ObjectID("starting"), prepared.baseline.Objects()[0].ID())
 	history := mixedPlan.History()
 	require.Equal(t, "rasql_schema_migrations", history.Table())
+	history = changeplan.HistoryIdentity{}
+	require.Empty(t, history.Table())
+	require.Equal(t, "rasql_schema_migrations", mixedPlan.History().Table())
 	require.Equal(t, "rasql_schema_migrations", prepared.history.Table())
+	assertPrepared()
 	require.Zero(t, *calls)
 }
 

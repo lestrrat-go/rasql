@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/internal/dbtest"
 	"github.com/lestrrat-go/rasql/migrate/changeplan"
 	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/lestrrat-go/rasql/stmt"
@@ -130,17 +131,33 @@ func TestIncompleteChangePlanErrorOwnershipAndPrimarySelection(t *testing.T) {
 
 	cleanup := errors.New("cleanup failed")
 	unrelatedIncomplete := newIncompleteChangePlanError(mustIncomplete(t, prepared, 0, 2, 1, ChangePlanStagePostconditions, -1, 2, ChangePlanOperationUnknown), errors.New("unrelated"))
-	firstResult, returned := changePlanExecutionResult(nil, errors.Join(typed, cleanup))
+	directResult, directReturned := changePlanExecutionResult(nil, typed)
+	require.Same(t, typed, directReturned)
+	require.Equal(t, typedError.Incomplete, *directResult.IncompleteOperation)
+	joined := errors.Join(typed, cleanup)
+	firstResult, returned := changePlanExecutionResult(nil, joined)
 	require.NotNil(t, firstResult.IncompleteOperation)
+	require.Same(t, joined, returned)
+	require.Equal(t, typedError.Incomplete, *firstResult.IncompleteOperation)
+	var joinedTyped *IncompleteChangePlanError
+	require.ErrorAs(t, returned, &joinedTyped)
+	require.ErrorIs(t, returned, cause)
 	require.ErrorIs(t, returned, cleanup)
 	secondResult, returned := changePlanExecutionResult(nil, errors.Join(errors.New("primary"), unrelatedIncomplete))
 	require.Nil(t, secondResult.IncompleteOperation)
 	require.Error(t, returned)
-	orderedResult, _ := changePlanExecutionResult(nil, errors.Join(unrelatedIncomplete, typed))
+	ordered := errors.Join(unrelatedIncomplete, typed)
+	orderedResult, orderedReturned := changePlanExecutionResult(nil, ordered)
 	require.NotNil(t, orderedResult.IncompleteOperation)
+	require.Same(t, ordered, orderedReturned)
 	require.Equal(t, changeplan.OperationID("second"), orderedResult.IncompleteOperation.Operation().ID())
-	wrappedResult, _ := changePlanExecutionResult(nil, fmt.Errorf("wrapped: %w", typed))
+	wrapped := fmt.Errorf("wrapped: %w", typed)
+	wrappedResult, wrappedReturned := changePlanExecutionResult(nil, wrapped)
 	require.NotNil(t, wrappedResult.IncompleteOperation)
+	require.Same(t, wrapped, wrappedReturned)
+	require.ErrorIs(t, wrappedReturned, cause)
+	require.ErrorAs(t, wrappedReturned, &joinedTyped)
+	require.Equal(t, typedError.Incomplete, *wrappedResult.IncompleteOperation)
 }
 
 func TestIncompleteChangePlanResultDeepCopies(t *testing.T) {
@@ -169,7 +186,9 @@ func TestIncompleteChangePlanResultDeepCopies(t *testing.T) {
 	completedArgs[1] = time.Unix(0, 0)
 	completedStatements[0] = stmt.New(sqltext.Text("changed"))
 	require.Equal(t, changeplan.OperationID("first"), result.CompletedOperations[0].ID())
+	assertResultOperation(t, result.CompletedOperations[0])
 	require.Equal(t, "SELECT 1", result.CompletedOperations[0].Statements()[0].SQL())
+	require.Equal(t, "SELECT 2", result.CompletedOperations[0].Statements()[1].SQL())
 	require.Equal(t, []byte("payload"), result.CompletedOperations[0].Statements()[0].Args()[0])
 	require.Equal(t, time.Unix(123, 456), result.CompletedOperations[0].Statements()[0].Args()[1])
 
@@ -180,20 +199,40 @@ func TestIncompleteChangePlanResultDeepCopies(t *testing.T) {
 	namedArgs[1] = time.Unix(1, 2)
 	namedStatements[0] = stmt.New(sqltext.Text("changed"))
 	require.Equal(t, changeplan.OperationID("first"), result.IncompleteOperation.Operation().ID())
+	assertResultOperation(t, result.IncompleteOperation.Operation())
 	require.Equal(t, "SELECT 1", result.IncompleteOperation.Operation().Statements()[0].SQL())
+	require.Equal(t, "SELECT 2", result.IncompleteOperation.Operation().Statements()[1].SQL())
+	require.Equal(t, []byte("payload"), result.IncompleteOperation.Operation().Statements()[0].Args()[0])
+	require.Equal(t, time.Unix(123, 456), result.IncompleteOperation.Operation().Statements()[0].Args()[1])
 
 	affected := result.IncompleteOperation.AffectedOperations()
 	require.Len(t, affected, 1)
-	affected[0] = prepared.operations[2].operation
-	affectedStatements := prepared.operations[0].operation.Statements()
+	affectedStatements := affected[0].Statements()
 	affectedArgs := affectedStatements[0].Args()
 	affectedArgs[0].([]byte)[0] = 'Z'
+	affectedArgs[1] = time.Unix(9, 10)
+	affectedStatements[0] = stmt.New(sqltext.Text("changed"))
+	affected[0] = prepared.operations[2].operation
 	require.Equal(t, changeplan.OperationID("first"), result.IncompleteOperation.AffectedOperations()[0].ID())
+	assertResultOperation(t, result.IncompleteOperation.AffectedOperations()[0])
 	require.Equal(t, []byte("payload"), result.IncompleteOperation.AffectedOperations()[0].Statements()[0].Args()[0])
 	require.Equal(t, time.Unix(123, 456), result.IncompleteOperation.AffectedOperations()[0].Statements()[0].Args()[1])
+	require.Equal(t, "SELECT 2", result.IncompleteOperation.AffectedOperations()[0].Statements()[1].SQL())
 	for range 2 {
 		require.Len(t, result.IncompleteOperation.AffectedOperations(), 1)
 	}
+}
+
+func assertResultOperation(t *testing.T, operation changeplan.Operation) {
+	t.Helper()
+	require.Equal(t, changeplan.OperationID("first"), operation.ID())
+	require.Equal(t, changeplan.OperationNativeSQL, operation.Kind())
+	require.Equal(t, changeplan.Digest{5}, operation.ResultDigest())
+	require.Equal(t, changeplan.TransactionRequired, operation.Transaction())
+	require.False(t, operation.Reversible())
+	require.Empty(t, operation.DependsOn())
+	require.Equal(t, []changeplan.ObjectID{"object"}, operation.Objects())
+	require.Len(t, operation.Statements(), 2)
 }
 
 func TestIncompleteChangePlanErrorInvalidValues(t *testing.T) {
@@ -288,26 +327,83 @@ func TestDirectoryExecutionResultCompatibility(t *testing.T) {
 }
 
 func TestPublicExecutionResultCompatibility(t *testing.T) {
-	database, calls := openRecordingDatabase(t)
-	t.Cleanup(func() { _ = database.Close() })
-	runner, err := New(database, dialect.SQLite())
+	migration := recoveryMatrixMigration()
+	successFixture := dbtest.NewRecovery()
+	database, runner := openRecoveryRunner(t, successFixture)
+	defer func() { _ = database.Close() }()
+	applyResult, applyErr := runner.ApplyResult(t.Context(), AllPending(), migration)
+	require.NoError(t, applyErr)
+	require.Equal(t, []Migration{migration}, applyResult.Completed)
+	require.Nil(t, applyResult.Incomplete)
+	require.Nil(t, applyResult.CompletedOperations)
+	require.Nil(t, applyResult.IncompleteOperation)
+	revertResult, revertErr := runner.RevertResult(t.Context(), Steps(1), migration)
+	require.NoError(t, revertErr)
+	require.Equal(t, []Migration{migration}, revertResult.Completed)
+	require.Nil(t, revertResult.Incomplete)
+	require.Nil(t, revertResult.CompletedOperations)
+	require.Nil(t, revertResult.IncompleteOperation)
+
+	failureFixture := dbtest.NewRecovery()
+	failureFixture.FailMigrationAt(1)
+	failureDatabase, failureRunner := openRecoveryRunner(t, failureFixture)
+	defer func() { _ = failureDatabase.Close() }()
+	failureResult, failureErr := failureRunner.ApplyResult(t.Context(), AllPending(), migration)
+	assertLegacyIncompleteResult(t, failureResult, failureErr, migration, DirectionUp, 1)
+
+	revertFailureFixture := dbtest.NewRecovery()
+	seedDatabase, seedRunner := openRecoveryRunner(t, revertFailureFixture)
+	_, err := seedRunner.ApplyResult(t.Context(), AllPending(), migration)
 	require.NoError(t, err)
-	migration := Migration{
+	_ = seedDatabase.Close()
+	revertFailureFixture.FailMigrationAt(1)
+	revertFailureDatabase, revertFailureRunner := openRecoveryRunner(t, revertFailureFixture)
+	defer func() { _ = revertFailureDatabase.Close() }()
+	revertFailureResult, revertFailureErr := revertFailureRunner.RevertResult(t.Context(), Steps(1), migration)
+	assertLegacyIncompleteResult(t, revertFailureResult, revertFailureErr, migration, DirectionDown, 1)
+
+	recordingDatabase, calls := openRecordingDatabase(t)
+	t.Cleanup(func() { _ = recordingDatabase.Close() })
+	recordingRunner, err := New(recordingDatabase, dialect.SQLite())
+	require.NoError(t, err)
+	recordingMigration := Migration{
 		ID:         "001",
 		Statements: []Statement{{Source: "001.sql", SQL: sqltext.Text("SELECT 1")}},
 		Down:       []Statement{{Source: "001.down.sql", SQL: sqltext.Text("SELECT 1")}},
 	}
-	applyResult, applyErr := runner.ApplyResult(t.Context(), AllPending(), migration)
-	require.Equal(t, ExecutionResult{}, applyResult)
-	require.EqualError(t, applyErr, "migrate: open database connection: driver: bad connection")
-	require.Nil(t, applyResult.CompletedOperations)
-	require.Nil(t, applyResult.IncompleteOperation)
-	revertResult, revertErr := runner.RevertResult(t.Context(), Steps(1), migration)
-	require.Equal(t, ExecutionResult{}, revertResult)
-	require.EqualError(t, revertErr, "migrate: open database connection: driver: bad connection")
-	require.Nil(t, revertResult.CompletedOperations)
-	require.Nil(t, revertResult.IncompleteOperation)
+	recordingApplyResult, recordingApplyErr := recordingRunner.ApplyResult(t.Context(), AllPending(), recordingMigration)
+	require.Equal(t, ExecutionResult{}, recordingApplyResult)
+	require.EqualError(t, recordingApplyErr, "migrate: open database connection: driver: bad connection")
+	require.Nil(t, recordingApplyResult.CompletedOperations)
+	require.Nil(t, recordingApplyResult.IncompleteOperation)
+	recordingRevertResult, recordingRevertErr := recordingRunner.RevertResult(t.Context(), Steps(1), recordingMigration)
+	require.Equal(t, ExecutionResult{}, recordingRevertResult)
+	require.EqualError(t, recordingRevertErr, "migrate: open database connection: driver: bad connection")
+	require.Nil(t, recordingRevertResult.CompletedOperations)
+	require.Nil(t, recordingRevertResult.IncompleteOperation)
 	require.NotZero(t, *calls)
+}
+
+func assertLegacyIncompleteResult(t *testing.T, result ExecutionResult, err error, migration Migration, direction Direction, sourceIndex int) {
+	t.Helper()
+	require.Error(t, err)
+	var incompleteErr *IncompleteMigrationError
+	require.ErrorAs(t, err, &incompleteErr)
+	require.NotNil(t, result.Incomplete)
+	require.Equal(t, migration.ID, result.Incomplete.ID)
+	require.Equal(t, recoveryMatrixChecksum(migration), result.Incomplete.Checksum)
+	require.Equal(t, direction, result.Incomplete.Direction)
+	require.Equal(t, sourceIndex, result.Incomplete.SourceIndex)
+	sources := migration.Statements
+	if direction == DirectionDown {
+		sources = migration.Down
+	}
+	require.Equal(t, sources[sourceIndex].Source, result.Incomplete.Source)
+	require.Equal(t, *result.Incomplete, incompleteErr.Incomplete)
+	require.EqualError(t, incompleteErr.Cause, "execute source: migration SQL failure")
+	require.ErrorContains(t, err, "migration SQL failure")
+	require.Nil(t, result.CompletedOperations)
+	require.Nil(t, result.IncompleteOperation)
 }
 
 func resultPreparedPlan(t *testing.T) preparedChangePlan {
