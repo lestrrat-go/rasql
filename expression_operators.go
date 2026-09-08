@@ -1,0 +1,170 @@
+package rasql
+
+import (
+	"sync/atomic"
+	"time"
+
+	"github.com/lestrrat-go/rasql/query"
+)
+
+// Ordered constrains the operators that need an ordering. time.Time appears
+// as a plain union term rather than ~time.Time, because approximation is only
+// legal for a type that is its own underlying type, and time.Time is a defined
+// struct type. Ordering dates is common enough to be worth the exception.
+type Ordered interface {
+	~int | ~int8 | ~int16 | ~int32 | ~int64 |
+		~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 |
+		~float32 | ~float64 | ~string | time.Time
+}
+
+// comparisonValue binds right with left's codec, exactly as EqualValue does.
+// Threading the codec is the reason these operators exist as typed wrappers:
+// a query.Expression built by hand carries no codec, so a column with a custom
+// codec would bind its unencoded Go representation.
+func comparisonValue[T any](left Expr[T], right T, build func(any, any) query.Binary) Predicate {
+	id := bindID(atomic.AddUint64(&nextBindID, 1))
+	snapshot, copier, err := adoptBind(right, true)
+	bind := query.Bind(bindToken{id: id, value: snapshot, codec: left.codec, copy: copier, err: err})
+	return Predicate{node: build(left.node, bind), source: left.source, bindErr: err}
+}
+
+func comparisonExpr[T any](left, right Expr[T], build func(any, any) query.Binary) Predicate {
+	return Predicate{node: build(left.node, right.node), source: left.source, source2: right.source}
+}
+
+// Ordered comparisons. Each has an Expr form comparing two expressions and a
+// Value form comparing an expression against a Go value.
+
+func GreaterExpr[T Ordered](left, right Expr[T]) Predicate {
+	return comparisonExpr(left, right, query.GreaterThan)
+}
+func GreaterValue[T Ordered](left Expr[T], right T) Predicate {
+	return comparisonValue(left, right, query.GreaterThan)
+}
+func GreaterOrEqualExpr[T Ordered](left, right Expr[T]) Predicate {
+	return comparisonExpr(left, right, query.GreaterThanOrEqual)
+}
+func GreaterOrEqualValue[T Ordered](left Expr[T], right T) Predicate {
+	return comparisonValue(left, right, query.GreaterThanOrEqual)
+}
+func LessExpr[T Ordered](left, right Expr[T]) Predicate {
+	return comparisonExpr(left, right, query.LessThan)
+}
+func LessValue[T Ordered](left Expr[T], right T) Predicate {
+	return comparisonValue(left, right, query.LessThan)
+}
+func LessOrEqualExpr[T Ordered](left, right Expr[T]) Predicate {
+	return comparisonExpr(left, right, query.LessThanOrEqual)
+}
+func LessOrEqualValue[T Ordered](left Expr[T], right T) Predicate {
+	return comparisonValue(left, right, query.LessThanOrEqual)
+}
+
+// String operators. Constraining T to ~string is what stops LOWER(amount)
+// and name LIKE 3 from compiling.
+
+func LikeExpr[T ~string](left, pattern Expr[T]) Predicate {
+	return comparisonExpr(left, pattern, query.Like)
+}
+func LikeValue[T ~string](left Expr[T], pattern T) Predicate {
+	return comparisonValue(left, pattern, query.Like)
+}
+func LowerExpr[T ~string](value Expr[T]) Expr[T] {
+	return Expr[T]{node: query.Lower(value.node), codec: value.codec, source: value.source, bindErr: value.bindErr}
+}
+func UpperExpr[T ~string](value Expr[T]) Expr[T] {
+	return Expr[T]{node: query.Upper(value.node), codec: value.codec, source: value.source, bindErr: value.bindErr}
+}
+func LowerNullExpr[T ~string](value NullExpr[T]) NullExpr[T] {
+	return NullExpr[T]{node: query.Lower(value.node), codec: value.codec, source: value.source, bindErr: value.bindErr}
+}
+func UpperNullExpr[T ~string](value NullExpr[T]) NullExpr[T] {
+	return NullExpr[T]{node: query.Upper(value.node), codec: value.codec, source: value.source, bindErr: value.bindErr}
+}
+
+// Aggregates. Each returns NullExpr because SUM, MAX and AVG are NULL over an
+// empty group even when their input column is NOT NULL. This follows MinExpr,
+// which already made that choice.
+
+func SumExpr[T Ordered](value Expr[T]) NullExpr[T] {
+	return NullExpr[T]{node: query.Sum(value.node), codec: value.codec, source: value.source, bindErr: value.bindErr}
+}
+func SumNullExpr[T Ordered](value NullExpr[T]) NullExpr[T] {
+	return NullExpr[T]{node: query.Sum(value.node), codec: value.codec, source: value.source, bindErr: value.bindErr}
+}
+func MaxExpr[T Ordered](value Expr[T]) NullExpr[T] {
+	return NullExpr[T]{node: query.Max(value.node), codec: value.codec, source: value.source, bindErr: value.bindErr}
+}
+func MaxNullExpr[T Ordered](value NullExpr[T]) NullExpr[T] {
+	return NullExpr[T]{node: query.Max(value.node), codec: value.codec, source: value.source, bindErr: value.bindErr}
+}
+
+// AvgExpr returns float64 rather than T, because the average of integers is
+// not an integer. It carries no codec for the same reason: the result is a
+// new value, not a decoded instance of the input column.
+func AvgExpr[T Ordered](value Expr[T]) NullExpr[float64] {
+	return NullExpr[float64]{node: query.Avg(value.node), source: value.source, bindErr: value.bindErr}
+}
+func AvgNullExpr[T Ordered](value NullExpr[T]) NullExpr[float64] {
+	return NullExpr[float64]{node: query.Avg(value.node), source: value.source, bindErr: value.bindErr}
+}
+
+// InValues takes the first value separately so an empty IN list, which is not
+// legal SQL, cannot be written at all.
+func InValues[T comparable](left Expr[T], first T, rest ...T) Predicate {
+	values := append([]T{first}, rest...)
+	nodes := make([]any, len(values))
+	var bindErr error
+	for i, value := range values {
+		id := bindID(atomic.AddUint64(&nextBindID, 1))
+		snapshot, copier, err := adoptBind(value, true)
+		if err != nil && bindErr == nil {
+			bindErr = err
+		}
+		nodes[i] = query.Bind(bindToken{id: id, value: snapshot, codec: left.codec, copy: copier, err: err})
+	}
+	return Predicate{node: query.In(left.node, nodes...), source: left.source, bindErr: bindErr}
+}
+
+// InQuery reads the subquery's element type from its projection, so the
+// subquery and the left-hand side are checked against each other at compile
+// time. It reports an error rather than deferring one, which is what every
+// other structural composition in this package does.
+func InQuery[T comparable](left Expr[T], q Query[T]) (Predicate, error) {
+	statement, err := subquerySelect(q)
+	if err != nil {
+		return Predicate{}, err
+	}
+	return Predicate{node: query.InSelect(left.node, statement), source: left.source}, nil
+}
+
+func NotInQuery[T comparable](left Expr[T], q Query[T]) (Predicate, error) {
+	statement, err := subquerySelect(q)
+	if err != nil {
+		return Predicate{}, err
+	}
+	return Predicate{node: query.NotInSelect(left.node, statement), source: left.source}, nil
+}
+
+// subquerySelect lowers a typed query to the query package's Select so it can
+// stand inside a predicate. A single projected column is required because a
+// subquery compared against one value has to return one value.
+func subquerySelect[R any](q Query[R]) (query.Select, error) {
+	if err := q.Validate(); err != nil {
+		return query.Select{}, err
+	}
+	if columns := q.Schema().Columns(); len(columns) != 1 {
+		return query.Select{}, planError("invalid_query", "subquery.projection",
+			"a subquery used as a value must project exactly one column")
+	}
+	body, err := queryBody(q.plan)
+	if err != nil {
+		return query.Select{}, err
+	}
+	statement, ok := body.(query.Select)
+	if !ok {
+		return query.Select{}, planError("unsupported_feature", "subquery",
+			"a native query cannot stand inside a predicate")
+	}
+	return statement, nil
+}
