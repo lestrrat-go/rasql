@@ -170,6 +170,29 @@ func SubqueryExpr[T any](q Query[T]) (Expr[T], error) {
 	return Expr[T]{node: query.Scalar(statement)}, nil
 }
 
+// CoalesceExpr returns value when it is not NULL, and fallback otherwise,
+// the typed COALESCE. It takes a NullExpr but returns a plain Expr, because
+// that is exactly what pairing a nullable expression with a fallback that is
+// never NULL proves: the combined result can never be NULL either, so
+// nothing downstream still needs to treat it as one.
+//
+// The returned Expr carries value's codec rather than fallback's. A
+// fallback is ordinarily a bare literal built with Value, which has no
+// codec of its own, while value is usually the column whose codec a later
+// comparison against a Go value needs to encode against.
+func CoalesceExpr[T any](value NullExpr[T], fallback Expr[T]) Expr[T] {
+	bindErr := value.bindErr
+	if bindErr == nil {
+		bindErr = fallback.bindErr
+	}
+	return Expr[T]{
+		node:    query.Coalesce(value.node, fallback.node),
+		codec:   value.codec,
+		source:  value.source,
+		bindErr: bindErr,
+	}
+}
+
 // AscResult orders by a projection's already-computed result rather than
 // recomputing the expression behind it, which is what SELECT ... AS alias ...
 // ORDER BY alias means. Pass the same ProjectionItem the projection was built
