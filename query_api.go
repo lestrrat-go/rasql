@@ -275,6 +275,7 @@ func (r OptionalRelation[R]) Source() Source { return r.source }
 
 type QueryPlan struct {
 	sources             []Source
+	correlations        []Source
 	projection          []ProjectionItem
 	where               []Predicate
 	joins               []query.Join
@@ -354,6 +355,14 @@ func (p QueryPlan) Validate() error {
 	for _, join := range p.joins {
 		allowed[q1SourceIdentity(join.Source())] = struct{}{}
 	}
+	// A declared correlation is an enclosing query's source, so an expression
+	// here may read it even though this plan does not select from it.
+	for i, source := range p.correlations {
+		if source.ref.QualifiedName() == "" {
+			return planError("invalid_source", fmt.Sprintf("plan.correlations[%d]", i), "source is zero")
+		}
+		allowed[q1SourceIdentity(source.ref)] = struct{}{}
+	}
 	for i, item := range p.projection {
 		if item.bindErr != nil {
 			result := planError("unsnapshotable_bind", fmt.Sprintf("plan.projection[%d]", i), item.bindErr.Error())
@@ -415,6 +424,15 @@ func (p QueryPlan) Validate() error {
 		}
 	}
 	for i, term := range p.order {
+		// A result term carries the projection instead of an expression, so
+		// what needs checking against the allowed sources is the expression
+		// that projection computes.
+		if term.result != nil {
+			if err := validateQ1Expression(term.result.expression, allowed, fmt.Sprintf("plan.order[%d]", i)); err != nil {
+				return err
+			}
+			continue
+		}
 		if term.node == nil {
 			return planError("invalid_projection", fmt.Sprintf("plan.order[%d]", i), "order term is zero")
 		}
@@ -549,6 +567,7 @@ func (q Query[R]) Projection() Projection[R] { return q.projection }
 func (q Query[R]) Plan() QueryPlan           { return clonePlan(q.plan) }
 func clonePlan(p QueryPlan) QueryPlan {
 	p.sources = append([]Source(nil), p.sources...)
+	p.correlations = append([]Source(nil), p.correlations...)
 	p.projection = cloneItems(p.projection)
 	p.where = append([]Predicate(nil), p.where...)
 	p.joins = append([]query.Join(nil), p.joins...)
@@ -604,6 +623,24 @@ func (q Query[R]) Having(p Predicate) Query[R] {
 		return q
 	}
 	q.plan.having = append(q.plan.having, p)
+	return q
+}
+// Correlated names the enclosing query's sources this query is allowed to
+// read, which is what makes it a correlated subquery. It has to be called
+// before Where, because Where validates the predicate it is given and nothing
+// yet says an enclosing query is coming.
+//
+// sources is what this query itself reads out of the enclosing one, and it is
+// exactly what this query gets; the enclosing query's other sources stay out
+// of scope. query.Select.WithCorrelation owns the full rule, including what a
+// correlation reaching two levels out has to declare.
+func (q Query[R]) Correlated(sources ...Source) Query[R] {
+	q.plan = clonePlan(q.plan)
+	if q.plan.native != nil {
+		q.plan.planErr = planError("unsupported_feature", "native", "native plans cannot be composed")
+		return q
+	}
+	q.plan.correlations = append(q.plan.correlations, sources...)
 	return q
 }
 func (q Query[R]) OrderBy(terms ...OrderTerm) Query[R] {

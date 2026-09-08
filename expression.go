@@ -260,6 +260,11 @@ type OrderTerm struct {
 	source     string
 	descending bool
 	nulls      NullOrder
+	// result is set by AscResult and DescResult, and names a projection of
+	// this query rather than an expression to recompute. A term carrying one
+	// has no node, which is what the keyset and partition-limit paths already
+	// refuse: paging needs the expression itself to build its comparison.
+	result *ProjectionItem
 }
 
 func AscExpr[T any](value Expr[T]) OrderTerm {
