@@ -172,19 +172,60 @@ func validationContractPath(path []any) string {
 }
 
 type validationContractField struct {
-	path      []any
-	value     any
-	allowNull bool
+	path            []any
+	value           any
+	allowNull       bool
+	missingFragment string
+	nullFragment    string
+	typeFragment    string
+}
+
+func validationContractFieldFragments(path []any, value any) (string, string, string) {
+	key := path[len(path)-1].(string)
+	missing := `missing required wire field "` + key + `"`
+	if key == "value" {
+		for _, part := range path {
+			if part == "args" {
+				return "", "", ""
+			}
+		}
+	}
+	if key == "result_digest" {
+		return missing, "", ""
+	}
+	switch value.(type) {
+	case string:
+		return missing, key + " must be a string", key + " must be a string"
+	case bool:
+		return missing, key + " must be a boolean", key + " must be a boolean"
+	case json.Number:
+		return missing, key + " must be an integer", key + " must be an integer"
+	case []any:
+		return missing, "null array " + key, "array " + key
+	case map[string]any:
+		return missing, "object expected", "object expected"
+	default:
+		return missing, "", ""
+	}
 }
 
 func validationContractWireFields(t *testing.T, root any) []validationContractField {
 	t.Helper()
 	fields := make([]validationContractField, 0, 320)
 	add := func(path ...any) {
-		fields = append(fields, validationContractField{path: path, value: validationContractAt(root, path...)})
+		value := validationContractAt(root, path...)
+		missing, null, wrong := validationContractFieldFragments(path, value)
+		fields = append(fields, validationContractField{path: path, value: value, missingFragment: missing, nullFragment: null, typeFragment: wrong})
 	}
 	for _, key := range []string{"format", "id"} {
 		add(key)
+	}
+	for _, path := range [][]any{
+		{"profile"}, {"baseline"}, {"history"}, {"decisions"}, {"operations"},
+		{"profile", "version"}, {"profile", "capabilities"},
+		{"baseline", "objects"}, {"baseline", "renames"},
+	} {
+		add(path...)
 	}
 	for _, key := range []string{"engine", "custom_name", "version_known", "max_bind_parameters"} {
 		add("profile", key)
@@ -225,14 +266,14 @@ func validationContractWireFields(t *testing.T, root any) []validationContractFi
 		for _, key := range []string{"id", "kind", "depends_on", "objects", "preconditions", "postconditions", "result_digest", "statements", "transaction", "reversible", "reverse_statements"} {
 			add("operations", index, key)
 		}
-		add("operations", index, "statements", 0, "sql")
-		add("operations", index, "statements", 0, "args")
 	}
 	for _, row := range []struct {
 		path []any
 	}{
+		{path: []any{"operations", 0, "preconditions", 0}},
 		{path: []any{"operations", 1, "preconditions", 0}},
 		{path: []any{"operations", 9, "postconditions", 0}},
+		{path: []any{"operations", 10, "preconditions", 0}},
 	} {
 		for _, key := range []string{"object", "path", "operator", "value"} {
 			path := append(append([]any(nil), row.path...), key)
@@ -274,6 +315,14 @@ func validationContractWireFields(t *testing.T, root any) []validationContractFi
 		{path: []any{"operations", 9, "statements", 0, "args", 5}},
 		{path: []any{"operations", 9, "statements", 0, "args", 6}},
 		{path: []any{"operations", 9, "statements", 0, "args", 7}},
+		{path: []any{"operations", 10, "statements", 0, "args", 0}, allowNull: true},
+		{path: []any{"operations", 10, "statements", 0, "args", 1}},
+		{path: []any{"operations", 10, "statements", 0, "args", 2}},
+		{path: []any{"operations", 10, "statements", 0, "args", 3}},
+		{path: []any{"operations", 10, "statements", 0, "args", 4}},
+		{path: []any{"operations", 10, "statements", 0, "args", 5}},
+		{path: []any{"operations", 10, "statements", 0, "args", 6}},
+		{path: []any{"operations", 10, "statements", 0, "args", 7}},
 		{path: []any{"operations", 10, "reverse_statements", 0, "args", 0}, allowNull: true},
 		{path: []any{"operations", 10, "reverse_statements", 0, "args", 1}},
 		{path: []any{"operations", 10, "reverse_statements", 0, "args", 2}},
@@ -313,6 +362,28 @@ func validationContractUnknownField(t *testing.T, data []byte, path ...any) []by
 	return validationContractBytes(t, root)
 }
 
+func validationContractObservedFields(root any) []string {
+	var paths []string
+	var walk func(any, []any)
+	walk = func(value any, path []any) {
+		switch current := value.(type) {
+		case map[string]any:
+			for key, child := range current {
+				childPath := append(append([]any(nil), path...), key)
+				paths = append(paths, validationContractPath(childPath))
+				walk(child, childPath)
+			}
+		case []any:
+			for index, child := range current {
+				walk(child, append(append([]any(nil), path...), index))
+			}
+		}
+	}
+	walk(root, nil)
+	sort.Strings(paths)
+	return paths
+}
+
 func TestValidationContractWireShape(t *testing.T) {
 	valid := validationContractValid(t)
 	for _, test := range []struct {
@@ -331,8 +402,20 @@ func TestValidationContractWireShape(t *testing.T) {
 	validationContractRequireValidNumericRoundTrip(t)
 	reverseValid := validationContractReverseArguments(t, valid)
 	root := validationContractJSON(t, reverseValid).(map[string]any)
+	fields := validationContractWireFields(t, root)
+	staticPaths := make([]string, 0, len(fields))
+	seen := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		path := validationContractPath(field.path)
+		_, duplicate := seen[path]
+		require.False(t, duplicate, "duplicate static field path %s", path)
+		seen[path] = struct{}{}
+		staticPaths = append(staticPaths, path)
+	}
+	sort.Strings(staticPaths)
+	require.Equal(t, validationContractObservedFields(root), staticPaths)
 
-	for _, field := range validationContractWireFields(t, root) {
+	for _, field := range fields {
 		field := field
 		label := validationContractPath(field.path)
 		t.Run("field "+label, func(t *testing.T) {
@@ -359,27 +442,37 @@ func TestValidationContractWireShape(t *testing.T) {
 						require.NoError(t, err)
 						return
 					}
-					validationContractDecodeError(t, data, ErrInvalidWire, "")
+					fragment := field.typeFragment
+					switch test.name {
+					case "missing":
+						fragment = field.missingFragment
+					case "null":
+						fragment = field.nullFragment
+					}
+					validationContractDecodeError(t, data, ErrInvalidWire, fragment)
 				})
 			}
 		})
 	}
 
 	for _, test := range []struct {
-		name string
-		path []any
+		name            string
+		path            []any
+		missingFragment string
+		nullFragment    string
+		typeFragment    string
 	}{
-		{"decisions", []any{"decisions"}},
-		{"operations", []any{"operations"}},
-		{"baseline.objects", []any{"baseline", "objects"}},
-		{"baseline.renames", []any{"baseline", "renames"}},
-		{"operations[1].depends_on", []any{"operations", 1, "depends_on"}},
-		{"operations[0].objects", []any{"operations", 0, "objects"}},
-		{"operations[1].preconditions", []any{"operations", 1, "preconditions"}},
-		{"operations[9].postconditions", []any{"operations", 9, "postconditions"}},
-		{"operations[0].statements", []any{"operations", 0, "statements"}},
-		{"operations[10].reverse_statements", []any{"operations", 10, "reverse_statements"}},
-		{"operations[9].statements[0].args", []any{"operations", 9, "statements", 0, "args"}},
+		{"decisions", []any{"decisions"}, `missing required wire field "decisions"`, "null array decisions", "array decisions"},
+		{"operations", []any{"operations"}, `missing required wire field "operations"`, "null array operations", "array operations"},
+		{"baseline.objects", []any{"baseline", "objects"}, `missing required wire field "objects"`, "null array objects", "array objects"},
+		{"baseline.renames", []any{"baseline", "renames"}, `missing required wire field "renames"`, "null array renames", "array renames"},
+		{"operations[1].depends_on", []any{"operations", 1, "depends_on"}, `missing required wire field "depends_on"`, "null array depends_on", "array depends_on"},
+		{"operations[0].objects", []any{"operations", 0, "objects"}, `missing required wire field "objects"`, "null array objects", "array objects"},
+		{"operations[1].preconditions", []any{"operations", 1, "preconditions"}, `missing required wire field "preconditions"`, "null array preconditions", "array preconditions"},
+		{"operations[9].postconditions", []any{"operations", 9, "postconditions"}, `missing required wire field "postconditions"`, "null array postconditions", "array postconditions"},
+		{"operations[0].statements", []any{"operations", 0, "statements"}, `missing required wire field "statements"`, "null array statements", "array statements"},
+		{"operations[10].reverse_statements", []any{"operations", 10, "reverse_statements"}, `missing required wire field "reverse_statements"`, "null array reverse_statements", "array reverse_statements"},
+		{"operations[9].statements[0].args", []any{"operations", 9, "statements", 0, "args"}, `missing required wire field "args"`, "null array args", "array args"},
 	} {
 		test := test
 		for _, shape := range []struct {
@@ -400,7 +493,14 @@ func TestValidationContractWireShape(t *testing.T) {
 				} else {
 					validationContractSet(copyRoot, shape.value, test.path...)
 				}
-				validationContractDecodeError(t, validationContractBytes(t, copyRoot), ErrInvalidWire, "")
+				fragment := test.typeFragment
+				switch shape.name {
+				case "missing":
+					fragment = test.missingFragment
+				case "null":
+					fragment = test.nullFragment
+				}
+				validationContractDecodeError(t, validationContractBytes(t, copyRoot), ErrInvalidWire, fragment)
 			})
 		}
 	}
@@ -415,8 +515,10 @@ func TestValidationContractWireShape(t *testing.T) {
 		{"baseline object future", []any{"baseline", "objects", 1}},
 		{"baseline rename starting", []any{"baseline", "renames", 0}},
 		{"baseline rename future", []any{"baseline", "renames", 1}},
+		{"precondition create", []any{"operations", 0, "preconditions", 0}},
 		{"precondition", []any{"operations", 1, "preconditions", 0}},
 		{"postcondition", []any{"operations", 9, "postconditions", 0}},
+		{"precondition native", []any{"operations", 10, "preconditions", 0}},
 		{"statement", []any{"operations", 0, "statements", 0}},
 		{"reverse statement", []any{"operations", 10, "reverse_statements", 0}},
 	} {
@@ -435,7 +537,7 @@ func TestValidationContractWireShape(t *testing.T) {
 			t.Run(test.name+" element "+element.name, func(t *testing.T) {
 				copyRoot := validationContractClone(t, root)
 				validationContractSet(copyRoot, element.value, test.path...)
-				validationContractDecodeError(t, validationContractBytes(t, copyRoot), ErrInvalidWire, "")
+				validationContractDecodeError(t, validationContractBytes(t, copyRoot), ErrInvalidWire, "object expected")
 			})
 		}
 	}
@@ -447,7 +549,9 @@ func TestValidationContractWireShape(t *testing.T) {
 	}{
 		{"precondition", []any{"operations", 1, "preconditions", 0}, "preconditions"},
 		{"postcondition", []any{"operations", 9, "postconditions", 0}, "postconditions"},
+		{"precondition native", []any{"operations", 10, "preconditions", 0}, "preconditions"},
 		{"forward argument", []any{"operations", 9, "statements", 0, "args", 0}, "args"},
+		{"native argument", []any{"operations", 10, "statements", 0, "args", 0}, "args"},
 		{"reverse argument", []any{"operations", 10, "reverse_statements", 0, "args", 0}, "args"},
 	} {
 		test := test
@@ -465,7 +569,7 @@ func TestValidationContractWireShape(t *testing.T) {
 			t.Run(test.name+" element "+element.name, func(t *testing.T) {
 				copyRoot := validationContractClone(t, root)
 				validationContractSet(copyRoot, element.value, test.path...)
-				validationContractDecodeError(t, validationContractBytes(t, copyRoot), ErrInvalidWire, "")
+				validationContractDecodeError(t, validationContractBytes(t, copyRoot), ErrInvalidWire, "object expected")
 			})
 		}
 	}
@@ -538,11 +642,19 @@ func TestValidationContractWireShape(t *testing.T) {
 		struct {
 			name string
 			path []any
+		}{"create precondition", []any{"operations", 0, "preconditions", 0}},
+		struct {
+			name string
+			path []any
 		}{"precondition", []any{"operations", 1, "preconditions", 0}},
 		struct {
 			name string
 			path []any
 		}{"postcondition", []any{"operations", 9, "postconditions", 0}},
+		struct {
+			name string
+			path []any
+		}{"native precondition", []any{"operations", 10, "preconditions", 0}},
 	)
 	for _, location := range unknownLocations {
 		location := location
@@ -564,6 +676,14 @@ func TestValidationContractWireShape(t *testing.T) {
 		{"forward string", []any{"operations", 9, "statements", 0, "args", 5}},
 		{"forward bytes_base64", []any{"operations", 9, "statements", 0, "args", 6}},
 		{"forward time_rfc3339nano", []any{"operations", 9, "statements", 0, "args", 7}},
+		{"native null", []any{"operations", 10, "statements", 0, "args", 0}},
+		{"native bool", []any{"operations", 10, "statements", 0, "args", 1}},
+		{"native int64", []any{"operations", 10, "statements", 0, "args", 2}},
+		{"native uint64", []any{"operations", 10, "statements", 0, "args", 3}},
+		{"native float64", []any{"operations", 10, "statements", 0, "args", 4}},
+		{"native string", []any{"operations", 10, "statements", 0, "args", 5}},
+		{"native bytes_base64", []any{"operations", 10, "statements", 0, "args", 6}},
+		{"native time_rfc3339nano", []any{"operations", 10, "statements", 0, "args", 7}},
 		{"reverse null", []any{"operations", 10, "reverse_statements", 0, "args", 0}},
 		{"reverse bool", []any{"operations", 10, "reverse_statements", 0, "args", 1}},
 		{"reverse int64", []any{"operations", 10, "reverse_statements", 0, "args", 2}},
