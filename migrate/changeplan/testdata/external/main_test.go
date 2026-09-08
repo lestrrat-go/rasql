@@ -1,6 +1,7 @@
 package external_test
 
 import (
+	"bytes"
 	"os"
 	"testing"
 
@@ -49,6 +50,9 @@ func TestPublicProfileAndLockBoundary(t *testing.T) {
 	require.Equal(t, operation.Statements()[0].SQL(), plan.Operations()[0].Statements()[0].SQL())
 	encoded, err := changeplan.Encode(plan)
 	require.NoError(t, err)
+	nonCanonical := bytes.Replace(encoded, []byte(`"value":"\"title\""`), []byte(`"value":" \"title\" "`), 1)
+	_, err = changeplan.Decode(nonCanonical)
+	require.Error(t, err)
 	decoded, err := changeplan.Decode(encoded)
 	require.NoError(t, err)
 	reencoded, err := changeplan.Encode(decoded)

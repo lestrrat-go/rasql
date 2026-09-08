@@ -39,6 +39,9 @@ func TestCatalogCopiesDefinitionsAndSupportsResolvedSteps(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "source", resolved.TargetCatalog().SourceIdentity())
 	require.Len(t, resolved.CatalogSteps(), 1)
+	nonLeaf, err := changeplan.NewFact(id, "/columns/0", changeplan.FactOperatorEqual, `{"name":"id","ordinal":0}`)
+	require.NoError(t, err)
+	require.Error(t, changeplan.EvaluateFact(catalog, nonLeaf))
 	_, err = changeplan.NewResolvedChanges(catalog, nil, []changeplan.Decision{}, []changeplan.Operation{}, []changeplan.BaselineObject{}, []changeplan.BaselineRename{})
 	require.Error(t, err)
 }
