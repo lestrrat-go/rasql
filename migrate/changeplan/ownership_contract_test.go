@@ -106,6 +106,18 @@ func TestConstructorValidationCorpus(t *testing.T) {
 	_, err = changeplan.NewOperation("irreversible", changeplan.OperationNativeSQL, nil, []changeplan.ObjectID{"object"}, nil, nil,
 		[]stmt.Statement{stmt.New(sqltext.Text("SELECT 1"))}, changeplan.TransactionForbidden, false, []stmt.Statement{stmt.New(sqltext.Text("SELECT 0"))})
 	require.ErrorIs(t, err, changeplan.ErrInvalidOperation)
+	_, err = changeplan.NewOperation("self", changeplan.OperationNativeSQL, []changeplan.OperationID{"self"}, []changeplan.ObjectID{"object"}, nil, nil,
+		[]stmt.Statement{stmt.New(sqltext.Text("SELECT 1"))}, changeplan.TransactionForbidden, false, []stmt.Statement{})
+	require.ErrorIs(t, err, changeplan.ErrInvalidOperation)
+	_, err = changeplan.NewOperation("missing", changeplan.OperationNativeSQL, []changeplan.OperationID{"absent"}, []changeplan.ObjectID{"object"}, nil, nil,
+		[]stmt.Statement{stmt.New(sqltext.Text("SELECT 1"))}, changeplan.TransactionForbidden, false, []stmt.Statement{})
+	require.NoError(t, err)
+	_, err = changeplan.NewOperation("cycle-a", changeplan.OperationNativeSQL, []changeplan.OperationID{"cycle-b"}, []changeplan.ObjectID{"object"}, nil, nil,
+		[]stmt.Statement{stmt.New(sqltext.Text("SELECT 1"))}, changeplan.TransactionForbidden, false, []stmt.Statement{})
+	require.NoError(t, err)
+	_, err = changeplan.NewOperation("cycle-b", changeplan.OperationNativeSQL, []changeplan.OperationID{"cycle-a"}, []changeplan.ObjectID{"object"}, nil, nil,
+		[]stmt.Statement{stmt.New(sqltext.Text("SELECT 1"))}, changeplan.TransactionForbidden, false, []stmt.Statement{})
+	require.NoError(t, err)
 }
 
 func TestPublicImmutabilityContract(t *testing.T) {
