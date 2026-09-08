@@ -201,6 +201,9 @@ func (r Runner) checkSQLitePlan(
 	if err != nil {
 		return err
 	}
+	if legacy != nil {
+		return planReconciliation(prepared, "", legacy.id, errors.New("legacy migration progress exists"))
+	}
 	catalog, digest, err := readPlanCatalogTx(ctx, tx, prepared, history, prefix)
 	if err != nil {
 		return err
@@ -219,6 +222,9 @@ func (r Runner) checkLockedPlan(
 	entry, legacy, prefix, err := readClassifiedPlanRows(ctx, r, connection, prepared, history, store)
 	if err != nil {
 		return err
+	}
+	if legacy != nil {
+		return planReconciliation(prepared, "", legacy.id, errors.New("legacy migration progress exists"))
 	}
 	catalog, digest, err := readPlanCatalogSnapshot(ctx, connection, prepared, history, prefix)
 	if err != nil {
