@@ -1,12 +1,11 @@
-// Package schemagen creates deterministic Go source from schema descriptors.
-//
-// It is the implementation behind the exported generate package. The two
-// differ in one thing only, and it is the reason this package exists: a
-// caller of generate gets a whole compilation unit back from one call, while
-// rasqlgen writes a package as several files and needs the typed surface
-// without the descriptors that its own schema_gen.go declares. That second
-// form is TableSurfaceSource, which stays here because it is only safe to
-// use alongside the descriptor file rasqlgen writes beside it.
+// Package schemagen holds the pieces of Go-source generation the compact
+// emitter (compact.go) shares with the rest of the package: resolving a
+// package's final names (names.go), resolving a column's Go binding
+// (binding.go), and rendering a schema.TableDef as the Go literal
+// compact.go's schema_gen.go embeds (TableDefinitionLiteral, in this file).
+// This file also holds relationshipSpecs, which computes the relationship
+// methods and types a package's final names must reserve, shared between
+// ResolveNames and the compact emitter's own naming.
 package schemagen
 
 import (
@@ -28,11 +27,15 @@ import (
 // because the method would shadow the embedded rasql.Table or its own methods,
 // or collide with a mapping method declared on the row type.
 //
-// DecodeRow is deliberately absent, and the list is exactly these eight. Nothing
-// emits a DecodeRow method any more, so a decode_row column collides with
-// nothing: PackageSource with such a column returns a nil error and emits an
+// DecodeRow is deliberately absent, and the list is exactly these eight.
+// Nothing emits a DecodeRow method any more, so a decode_row column collides
+// with nothing: a table with such a column renders without error, with an
 // ordinary DecodeRow field. Re-adding it here would reject a legitimate column
 // name for a method that does not exist.
+//
+// reservedRelationshipMethod is this map's only reader now: a relationship
+// whose derived method name lands on one of these is rejected the same way a
+// column's would be.
 var reservedFieldNames = map[string]struct{}{
 	"As":               {},
 	"Column":           {},
@@ -43,10 +46,6 @@ var reservedFieldNames = map[string]struct{}{
 	"Table":            {},
 	"tableRow":         {},
 }
-
-// Validate checks whether packageName and tables can produce Go source.
-// It checks names across all tables, so callers that generate one file per
-// table can still reject collisions between those files before writing any.
 
 // isUsablePackageName reports whether name can head a "package" clause that
 // compiles. token.IsIdentifier already refuses a Go keyword, an empty
@@ -75,151 +74,32 @@ func packageNameError(name string) error {
 	return fmt.Errorf("generate: invalid package name %q: must be a valid Go identifier", name)
 }
 
-// PackageLevelNames returns every identifier the generated package declares at
-// package level for tables, sorted and deduplicated: the per-table type,
-// accessor, descriptor and definition names from TableSurfaceSource and
-// DescriptorSource, each relationship type, each time-scanner type, and the
-// fixed names in reservedPackageNames, which is where Tables and the generated
-// descriptor test's own function name come from.
-//
-// It exists for a caller that adds a declaration of its own to the same
-// package -- a generated query function, say -- and must reject a name the
-// generated files already take, since nothing else would catch it until the
-// package failed to compile. validateVariableNames enforces the same set
-// against the table names themselves and is the reason this list can be
-// derived rather than rendered: both walk the same prepared descriptors.
-//
-// Names declared inside a function body are absent, because they cannot
-// collide with a package-level declaration: descriptorTestSource's own
-// definition loop variable and the scanIndex constants writeRowScan emits
-// inside ScanDestinations are both local.
-
-// PackageSource returns a whole generated package for tables: the row types,
-// table types, column accessors and relationships, together with every
-// table's runtime descriptor. Its output is a complete compilation unit, so
-// a caller that writes it as the only file of a package still compiles.
-
 type SourceOptions struct {
 	Dir   string
 	Names *ResolvedNames
 }
 
-// TableSource returns a whole generated package holding one table. allTables
-// supplies the package-wide descriptors used to derive relationship methods,
-// and only table itself is emitted. generate.TableSource documents what a
-// caller gets, including the one thing a table's own descriptor cannot
-// supply: the generated type of a table at the other end of a relationship.
-
-// TableSurfaceSource returns the same source as TableSource without the
-// table's runtime descriptor, for a caller that writes DescriptorSource's
-// output beside it. Its output alone does not compile: the package-level
-// accessor function it emits reads the table value the descriptor file
-// declares.
-//
-// rasqlgen is that caller. It writes one file per table plus a single
-// schema_gen.go for the whole package, so a descriptor emitted per table
-// would be declared twice.
-
-// descriptorMode says whether schemaSource emits each table's runtime
-// descriptor beside its typed surface. Only the split-file caller leaves it
-// out, and only because it writes those descriptors itself.
-
-// schemaSource emits the typed surface for tables: the row type, its scan
-// methods, the table type, its column accessors, its package-level accessor
-// function, As, and any relationships. Each table's runtime descriptor comes
-// with it unless descriptors says otherwise.
-
-// An empty schema declares nothing, so importing anything would not compile.
-
-// The descriptor literal is the only thing here that names the
-// schema package, so leaving it out leaves the import out too.
-
-// DescriptorSource returns the file holding every table's runtime
-// descriptor. generate.DescriptorSource documents what a caller gets; what
-// matters here is that it is the companion of TableSurfaceSource, not of
-// TableSource, and that its literal is the merged definition prepareSchema
-// produces rather than the input one.
-//
-// It also declares the package-level Tables function, once, after every
-// table's own descriptor: a clone of each table's schema.TableDef, in the
-// same order this file declares them. That makes the generated store
-// self-describing, the same value an owned generator passes to generate.Store.
-
-// Tables always references schema.TableDef, even for a package with no
-// tables at all, so the schema import stays unconditional here; only
-// rasql.TableFrom, used by each table's own descriptor, depends on
-// tables being non-empty.
-
-// writeTablesFunc writes the package-level Tables function descriptorSource
-// declares once: a clone of every table's descriptor, in the same order
-// this file already declares them. Cloning each entry here matches
-// definitionAccessorName's own accessor, which likewise hands back a clone
-// rather than the package-level variable itself, so mutating one entry of
-// the slice a caller gets from Tables cannot reach what the next call
-// returns. That holds however deep the mutation goes, but only because
-// schema.TableDef.Clone owns the depth of a clone: this function relies on
-// that guarantee rather than restating it, and
-// TestGeneratedTablesHandOutIndependentDescriptors in generate/ exercises
-// the emitted function against it.
-
-// writeTableDescriptor writes the unexported schema.TableDef literal, the
-// unexported table value built from it, and the exported accessor that
-// clones the literal for a caller who needs their own copy. The literal
-// variable stays unexported because rasql.TableFrom does not clone: the
-// table value shares its slices in place, so an exported variable would let
-// any importer change a live table by writing to one of its fields.
-
-// descriptorTestFuncName is the name descriptorTestSource gives the test it
-// writes, and the one defining site of that literal outside the checked-in
-// generated files themselves.
-//
-// The generated test is an internal test in the caller's own package, so it
-// shares a declaration space with every hand-written test file beside it. A
-// plain name such as TestGeneratedDefinitionsAreValid is one a person could
-// reasonably write for a test of their own, and a package that already
-// declared it would stop compiling the moment rasqlgen wrote the generated
-// file. Nothing catches that first: rasqlgen inspects only the destination
-// path it writes, never the other files in the package, and the colliding
-// declaration lives in one of those.
-//
-// Naming the generator makes the collision implausible instead of merely
-// unlikely, and the name is a constant rather than derived from the package
-// or the descriptors, so regenerating the same input keeps producing the same
-// bytes.
-//
-// Being fixed does not make it safe on its own: a table named
-// test_rasqlgen_generated_definitions_are_valid derives exactly this
-// identifier for its accessor, and both declarations would land in files
-// rasqlgen writes. reservedPackageNames is what stops that.
+// descriptorTestFuncName was the fixed name the deleted legacy renderer gave
+// the internal test it wrote into every generated package's schema_gen_test.go.
+// The compact emitter's own schema_gen_test.go declares no such test -- it is
+// an empty marker file -- so nothing generated today can collide with this
+// name. It stays reserved anyway, in reservedPackageNames below, as a
+// defensive holdover: a config still using NameOverrides.Objects for a table
+// literally spelled by this constant would otherwise be free to collide with
+// it, and there is no benefit to allowing that.
 const descriptorTestFuncName = "TestRasqlgenGeneratedDefinitionsAreValid"
 
-// reservedPackageNames holds every package-level identifier rasqlgen emits
-// with a fixed spelling rather than deriving it from a table. Both
-// validateVariableNames and PackageLevelNames seed their name sets with these,
-// so a table whose generated name spells one of them, and a caller declaring a
-// name of its own beside the generated files, are each refused with a
-// collision error instead of producing a package with two declarations of the
-// same name.
-//
-// Names derived from a table name are not listed: validateVariableNames already
-// compares those against each other as it walks the input, and PackageLevelNames
-// derives them from the same descriptors. Names a generated type declares as a
-// method rather than at package level are not listed either; reservedFieldNames
-// holds those.
-//
-// "Tables" is here for writeTablesFunc: a table named "tables" generates a
-// package-level accessor spelled Tables (variableName lowercases nothing off
-// a table name that is already one capitalized word), which would collide
-// with the fixed Tables function descriptorSource always declares in
-// schema_gen.go.
+// reservedPackageNames holds package-level identifiers the deleted legacy
+// renderer emitted with a fixed spelling rather than deriving one from a
+// table, plus "Tables", the fixed accessor it declared once per package. The
+// compact emitter declares neither today, so nothing it generates can
+// collide with either name on its own. ResolvedNames.collectPackageNames
+// still seeds every resolved package's name set with them, reserving both
+// defensively rather than assuming the gap stays empty forever.
 var reservedPackageNames = map[string]struct{}{
 	descriptorTestFuncName: {},
 	"Tables":               {},
 }
-
-// DescriptorTestSource returns the generated test that validates every
-// table's descriptor. generate.DescriptorTestSource documents what a caller
-// gets, including why the emitted test is an internal one.
 
 func relationshipTargetSchema(relationship schema.RelationshipDef) string {
 	if relationship.ResolvedReferencedSchema != "" {
@@ -239,44 +119,6 @@ func stringSlicesEqual(left, right []string) bool {
 	}
 	return true
 }
-
-// generatedNameConflict returns the error for a package-level name a table
-// would generate that is already taken. A name rasqlgen always emits, such as
-// descriptorTestFuncName, is reported as reserved, because no other table in
-// the input explains the clash and the caller's only remedy is to rename the
-// table.
-
-// Seed the fixed package-level names rasqlgen writes beside the per-table
-// declarations, so a table whose own generated name spells one of them is
-// refused here instead of producing a package that does not compile.
-
-// timeScannerTypeName is deliberately absent from this set: a RowName can
-// never equal one. It derives from the TABLE name and is always unexported,
-// because descriptorName lowers the leading uppercase run of goName(tableName)
-// and ValidateIdentifier confines a table name to ASCII [A-Za-z_][A-Za-z0-9_]*,
-// so that lowered rune is always ASCII a-z. A stated RowName passes
-// validateExportedGoIdentifier, which requires an uppercase first rune. The two
-// name spaces are disjoint by exportedness.
-//
-// Checked, not assumed: a table with a time column and RowName
-// "UsersTimeScanner" emits both UsersTimeScanner and usersTimeScanner, which
-// are distinct Go identifiers, and the generated package builds and vets clean.
-// Setting RowName to the literal scanner name is rejected, same-table and
-// cross-table. Falsify this by finding an accepted table name whose
-// timeScannerTypeName begins with an uppercase rune.
-
-// validateRowName rejects a stated RowName that collides with another name
-// rasqlgen generates for table's own row, naming RowNamed in the message so
-// the error blames the option a person typed by hand rather than the table.
-// schema.TableDef.Validate, which every entry point into this package runs
-// before validateVariableNames, already guarantees a non-empty RowName is a
-// valid, exported Go identifier, so this checks only collisions specific to
-// the generated surface: a reserved method name, and this table's own
-// accessor, table type, descriptor variable, definition variable, or
-// definition accessor. A collision with another table's generated names,
-// with a relationship type name, or with a fixed name in
-// reservedPackageNames is caught afterward by the shared names set the
-// caller builds from rowTypeName(table).
 
 func relationshipColumnsSupported(child, parent schema.TableDef, relationship schema.RelationshipDef, bindings *generatedBindings) ([]schema.ColumnDef, []schema.ColumnDef, string, BindingRef, bool) {
 	if (relationship.Kind != schema.RelationshipBelongsTo && relationship.Kind != schema.RelationshipHasOne && relationship.Kind != schema.RelationshipHasMany) || len(relationship.Columns) == 0 || len(relationship.Columns) != len(relationship.ReferencedColumns) {
@@ -377,20 +219,19 @@ func tableTypeName(tableName string) string {
 	return variableName(tableName) + "Table"
 }
 
-// DescriptorVarName returns the package-level variable a generated table
-// accessor reads, which is the single declaration a TableSurfaceSource file
-// needs from the descriptor file written beside it. rasqlgen names it when
-// it refuses a run, to say which value a generated file already in the
-// output directory reads and whether that run still declares it. Which
-// files a run may leave behind is decided by their names, not by this one.
+// DescriptorVarName returns the unexported package-level variable a
+// generated table's rasql.Table (or rasql.ReadTable) wrapper is built from:
+// descriptorName's exported form, kept for a caller outside this package
+// that needs to name that variable, such as an error message pointing at a
+// specific generated declaration.
 func DescriptorVarName(tableName string) string {
 	return descriptorName(tableName)
 }
 
 // descriptorName returns the unexported variable name backing an accessor.
-// Distinctness across accessors is enforced by validateVariableNames, which
-// includes descriptor names in its collision set, not by any property of
-// this lowering.
+// Distinctness across accessors is enforced by ResolvedNames.validateCollisions
+// (names.go), which includes descriptor names in its collision set, not by
+// any property of this lowering.
 func descriptorName(tableName string) string {
 	accessor := variableName(tableName)
 	if accessor == "" {
@@ -461,26 +302,6 @@ func goName(name string) string {
 	}
 	return result.String()
 }
-
-// containsIndexExpressions reports whether any table's descriptor names an
-// IndexDef.Expressions, the one place a descriptor literal writes out an
-// explicit []sqltext.Text{...} slice type rather than an untyped string
-// constant. That is the only case needing the sqltext import: every other
-// branded field is written as a bare quoted literal, which converts to
-// sqltext.Text implicitly with no type name in the generated source.
-
-// writeTableType writes the exported wrapper type: the typed table plus one
-// query.ColumnRef field per column, so a mistyped column name fails to compile.
-
-// writeTableColumns writes one accessor method per column, returning a
-// reference to that column on t.
-
-// writeTableAs writes the alias constructor. Its body is fixed regardless of
-// table width: the accessor methods read the embedded table they are called
-// on, so nothing needs rebinding.
-
-// writeRowType writes the exported row type: one field per column, in the
-// order the table declares them.
 
 type relationshipSpec struct {
 	kind                   schema.RelationshipKind
@@ -996,9 +817,6 @@ func reservedRelationshipMethod(name string) bool {
 	return reserved
 }
 
-// writeRowScan writes the direct database/sql scan path and the runtime result
-// column mapping path.
-
 func timeScannerTypeName(tableName string) string {
 	return strings.TrimSuffix(descriptorName(tableName), "Table") + "TimeScanner"
 }
@@ -1008,9 +826,6 @@ func timeScannerTypeName(tableName string) string {
 func scanIndexName(columnName string) string {
 	return "scanIndex" + goName(columnName)
 }
-
-// writeRowColumnValue writes the rasql.ColumnValuer implementation, which is
-// the write-direction counterpart of the scan methods.
 
 // ColumnGoType returns the Go type of a value held by column. It takes the
 // whole column because signedness changes the answer: an unsigned integer
