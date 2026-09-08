@@ -16,18 +16,55 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var goldenCatalogBytes = []byte(`{"engine":{"dialect":"sqlite","version":"3.35.0","profile":"sqlite-3.35"},"objects":[{"id":"starting","kind":"table","schema":"main","name":"users","columns":[{"name":"id","ordinal":0,"logical_kind":"integer","native":null,"nullable":false,"default_sql":"","generated_sql":"","generated_storage":"","identity":"","collation":"","hidden":false,"integer":{"unsigned":false,"display_width":{"value":0,"set":false},"zero_fill":false},"text":null,"decimal":null}],"constraints":[{"name":"","kind":"primary_key","columns":["id"],"reference":null,"expression_sql":"","deferrable":false,"initially_deferred":false,"on_update":"","on_delete":"","deferrability":"","match":"","nulls_not_distinct":false,"include_columns":null,"on_conflict":"","keys":[],"temporal":false,"storage_parameters":[],"tablespace":"","replica_identity":false,"collations":[],"no_inherit":false,"not_valid":false,"not_enforced":false,"delete_set_columns":null}],"indexes":[],"exclusion_constraints":[],"strict":false,"without_rowid":false,"primary_key_autoincrement":false,"primary_key_on_conflict":"","virtual_table_module":"","virtual_table_module_arguments":null}]}`)
+var goldenCatalogBytes = []byte(`{"engine":{"dialect":"sqlite","version":"3.35.0","profile":"sqlite-3.35"},"objects":[{"id":"starting","kind":"table","schema":"main","name":"users","columns":[{"name":"id","ordinal":0,"logical_kind":"integer","native":null,"nullable":false,"default_sql":"","generated_sql":"","generated_storage":"","identity":"","collation":"","hidden":false,"integer":{"unsigned":false,"display_width":{"value":0,"set":false},"zero_fill":false},"text":null,"decimal":null},{"name":"obsolete","ordinal":1,"logical_kind":"text","native":null,"nullable":false,"default_sql":"","generated_sql":"","generated_storage":"","identity":"","collation":"","hidden":false,"integer":null,"text":{"width":{"value":0,"set":false},"fixed":false},"decimal":null}],"constraints":[{"name":"","kind":"primary_key","columns":["id"],"reference":null,"expression_sql":"","deferrable":false,"initially_deferred":false,"on_update":"","on_delete":"","deferrability":"","match":"","nulls_not_distinct":false,"include_columns":null,"on_conflict":"","keys":[],"temporal":false,"storage_parameters":[],"tablespace":"","replica_identity":false,"collations":[],"no_inherit":false,"not_valid":false,"not_enforced":false,"delete_set_columns":null}],"indexes":[],"exclusion_constraints":[],"strict":false,"without_rowid":false,"primary_key_autoincrement":false,"primary_key_on_conflict":"","virtual_table_module":"","virtual_table_module_arguments":null}]}`)
+
+var goldenProfileBytes = []byte(`{"engine":"sqlite","custom_name":"","version_known":true,"version":{"major":3,"minor":35,"patch":0},"max_bind_parameters":999,"capabilities":{"returning":"all","upsert":"on_conflict","conflict_target":true,"default_values":true,"empty_insert":false,"default_values_upsert":false,"subquery_limit":true,"write_subquery_target":true,"partial_index":true,"aggregate_filter":true,"qualified_reference":false,"qualified_index_target":false,"qualified_index_name":true,"match_operator":true,"select_for_update":false,"select_for_share":false,"select_lock_of":false,"select_lock_no_wait":false,"select_lock_skip_locked":false,"upsert_conflict_where":true,"upsert_update_where":true,"window_functions":true,"lateral_joins":false,"savepoints":true,"transactional_ddl":true,"explicit_null_ordering":true,"tuple_comparison":true,"per_parent_limit":"window","update_default":"unsupported"}}`)
+
+var goldenResultDigests = map[string]string{
+	"create-table":     "32cbd61ccba1d1960ab76dc1a5bc60d0c9c9e83b8466cf0aaef3532e2fb52c3f",
+	"add-column":       "b90d0fa234b224995f0025b9fc66853b528ffb8b3a480bcd74c0e38461a6cada",
+	"drop-column":      "aa0b1d569af438bd836975964db704ede1faa4ab386dc82afb343ca4f8ed1651",
+	"rename-column":    "3d1e48907434b56cf1c2b8ce79a55afb5276affcac0f36a25c6e86d0d7995bb1",
+	"alter-column":     "3d1e48907434b56cf1c2b8ce79a55afb5276affcac0f36a25c6e86d0d7995bb1",
+	"create-index":     "fb1e53d4f269f65a90faee4fd7544d5c17d0449786eaec790492ac04a3fa64c4",
+	"drop-index":       "3d1e48907434b56cf1c2b8ce79a55afb5276affcac0f36a25c6e86d0d7995bb1",
+	"add-constraint":   "4ecfb0b7c9362e6ac992adf9a8745a2e2163c737996f655e18dde6b95ab5119f",
+	"drop-constraint":  "3d1e48907434b56cf1c2b8ce79a55afb5276affcac0f36a25c6e86d0d7995bb1",
+	"backfill":         "3d1e48907434b56cf1c2b8ce79a55afb5276affcac0f36a25c6e86d0d7995bb1",
+	"native-sql":       "3d1e48907434b56cf1c2b8ce79a55afb5276affcac0f36a25c6e86d0d7995bb1",
+	"rename-created-1": "62f7d874ef7e87a62a96c4d5cf76c6436a609ba72f867894ccfed1f52074b5ca",
+	"rename-created-2": "c2b6b441719f9fe7f63b1151cf77e11d01ebeb1635efdf100dedf95b62f08971",
+	"drop-table":       "759ac5d2e8de5fd504fb4f413bd4d23ecf5451ea74c4d4db688e6b73ec5c47cf",
+}
+
+type fullContractFixture struct {
+	plan       changeplan.Plan
+	baseline   changeplan.Catalog
+	steps      []changeplan.ResolvedCatalogStep
+	operations []changeplan.Operation
+	decisions  []changeplan.Decision
+	future     changeplan.BaselineObject
+	renamed    []changeplan.BaselineRename
+}
 
 func goldenDigest(data []byte) changeplan.Digest { return changeplan.Digest(sha256.Sum256(data)) }
 
 func fullContractPlan(t *testing.T) changeplan.Plan {
+	return fullContractFixtureForTest(t).plan
+}
+
+func fullContractFixtureForTest(t *testing.T) fullContractFixture {
 	t.Helper()
 	profile := testProfile(t)
 	profileDigest, err := changeplan.ProfileDigest(profile)
 	require.NoError(t, err)
 	starting, err := changeplan.NewBaselineObject("starting", "table", "main", "users")
 	require.NoError(t, err)
-	startingDefinition := schema.TableDef{Schema: "main", Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}}
+	startingDefinition := schema.TableDef{
+		Schema: "main", Name: "users",
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "obsolete", Type: schema.TextType{}}},
+		PrimaryKey: []string{"id"},
+	}
 	startingObject, err := changeplan.NewCatalogObject(starting.ID(), startingDefinition)
 	require.NoError(t, err)
 	future, err := changeplan.NewIntroducedBaselineObject("fixture-source", "create-table", schema.TableDef{
@@ -41,12 +78,12 @@ func fullContractPlan(t *testing.T) changeplan.Plan {
 		return catalog
 	}
 	baselineCatalog := state(startingObject)
-	createdObject, err := changeplan.NewCatalogObject(future.ID(), createdDefinition)
-	require.NoError(t, err)
 	userWithName := startingDefinition
 	userWithName.Columns = append(userWithName.Columns, schema.ColumnDef{Name: "name", Type: schema.TextType{}})
+	userAfterDrop := startingDefinition
+	userAfterDrop.Columns = []schema.ColumnDef{userAfterDrop.Columns[0], schema.ColumnDef{Name: "name", Type: schema.TextType{}}}
 	userWithLabel := startingDefinition
-	userWithLabel.Columns = append(userWithLabel.Columns, schema.ColumnDef{Name: "label", Type: schema.TextType{}})
+	userWithLabel.Columns = []schema.ColumnDef{userWithLabel.Columns[0], schema.ColumnDef{Name: "label", Type: schema.TextType{}}}
 	userWithLabelIndex := userWithLabel
 	userWithLabelIndex.Indexes = []schema.IndexDef{{Name: "users_label", Columns: []string{"label"}}}
 	userWithLabelUnique := userWithLabel
@@ -68,14 +105,16 @@ func fullContractPlan(t *testing.T) changeplan.Plan {
 	}
 	afterStates := []changeplan.Catalog{
 		catalogState(startingDefinition, &createdDefinition), catalogState(userWithName, &createdDefinition),
-		catalogState(startingDefinition, &createdDefinition), catalogState(userWithLabel, &createdDefinition),
+		catalogState(userAfterDrop, &createdDefinition), catalogState(userWithLabel, &createdDefinition),
 		catalogState(userWithLabel, &createdDefinition), catalogState(userWithLabelIndex, &createdDefinition),
 		catalogState(userWithLabel, &createdDefinition), catalogState(userWithLabelUnique, &createdDefinition),
 		catalogState(userWithLabel, &createdDefinition), catalogState(userWithLabel, &createdDefinition),
 		catalogState(userWithLabel, &createdDefinition), catalogState(userWithLabel, &renameCreatedDefinition),
 		catalogState(userWithLabel, &finalCreatedDefinition),
 	}
-	lastState, err := changeplan.NewCatalog(profile, "fixture-source", []changeplan.CatalogObject{createdObject})
+	finalObject, err := changeplan.NewCatalogObject(future.ID(), finalCreatedDefinition)
+	require.NoError(t, err)
+	lastState, err := changeplan.NewCatalog(profile, "fixture-source", []changeplan.CatalogObject{finalObject})
 	require.NoError(t, err)
 	afterStates = append(afterStates, lastState)
 	baselineDigest, err := changeplan.CatalogDigest(baselineCatalog)
@@ -94,7 +133,7 @@ func fullContractPlan(t *testing.T) changeplan.Plan {
 	require.NoError(t, err)
 	present, err := changeplan.NewFact(starting.ID(), "$", changeplan.FactPresent, "")
 	require.NoError(t, err)
-	absent, err := changeplan.NewFact(starting.ID(), "$", changeplan.FactAbsent, "")
+	absent, err := changeplan.NewFact(future.ID(), "$", changeplan.FactAbsent, "")
 	require.NoError(t, err)
 	args := []any{nil, false, int64(-7), uint64(9), float64(1.25), "value", []byte("bytes"), time.Date(2024, 1, 2, 3, 4, 5, 6, time.UTC)}
 	statementWithArgs := stmt.New(sqltext.Text("SELECT ?"), args...)
@@ -108,9 +147,9 @@ func fullContractPlan(t *testing.T) changeplan.Plan {
 		reversible            bool
 		reverse               []stmt.Statement
 	}{
-		{id: "create-table", kind: string(changeplan.OperationCreateTable), transaction: string(changeplan.TransactionRequired), object: future.ID(), statement: plain("CREATE TABLE created (id INTEGER)"), after: afterStates[0]},
+		{id: "create-table", kind: string(changeplan.OperationCreateTable), transaction: string(changeplan.TransactionRequired), object: future.ID(), pre: []changeplan.Fact{absent}, statement: plain("CREATE TABLE created (id INTEGER)"), after: afterStates[0]},
 		{id: "add-column", kind: string(changeplan.OperationAddColumn), transaction: string(changeplan.TransactionForbidden), object: starting.ID(), pre: []changeplan.Fact{present}, statement: plain("ALTER TABLE users ADD COLUMN name TEXT"), after: afterStates[1]},
-		{id: "drop-column", kind: string(changeplan.OperationDropColumn), transaction: string(changeplan.TransactionEngineDefault), object: starting.ID(), statement: plain("ALTER TABLE users DROP COLUMN name"), after: afterStates[2]},
+		{id: "drop-column", kind: string(changeplan.OperationDropColumn), transaction: string(changeplan.TransactionEngineDefault), object: starting.ID(), statement: plain("ALTER TABLE users DROP COLUMN obsolete"), after: afterStates[2]},
 		{id: "rename-column", kind: string(changeplan.OperationRenameColumn), transaction: string(changeplan.TransactionRequired), object: starting.ID(), statement: plain("ALTER TABLE users RENAME COLUMN name TO label"), after: afterStates[3]},
 		{id: "alter-column", kind: string(changeplan.OperationAlterColumn), transaction: string(changeplan.TransactionForbidden), object: starting.ID(), statement: plain("ALTER TABLE users ALTER COLUMN label TYPE TEXT"), after: afterStates[4]},
 		{id: "create-index", kind: string(changeplan.OperationCreateIndex), transaction: string(changeplan.TransactionEngineDefault), object: starting.ID(), statement: plain("CREATE INDEX users_label ON users(label)"), after: afterStates[5]},
@@ -118,7 +157,7 @@ func fullContractPlan(t *testing.T) changeplan.Plan {
 		{id: "add-constraint", kind: string(changeplan.OperationAddConstraint), transaction: string(changeplan.TransactionForbidden), object: starting.ID(), statement: plain("ALTER TABLE users ADD CONSTRAINT users_label_unique UNIQUE(label)"), after: afterStates[7]},
 		{id: "drop-constraint", kind: string(changeplan.OperationDropConstraint), transaction: string(changeplan.TransactionEngineDefault), object: starting.ID(), statement: plain("ALTER TABLE users DROP CONSTRAINT users_label_unique"), after: afterStates[8]},
 		{id: "backfill", kind: string(changeplan.OperationBackfill), transaction: string(changeplan.TransactionRequired), object: starting.ID(), post: []changeplan.Fact{equal}, statement: statementWithArgs, after: afterStates[9]},
-		{id: "native-sql", kind: string(changeplan.OperationNativeSQL), transaction: string(changeplan.TransactionForbidden), object: starting.ID(), pre: []changeplan.Fact{absent}, statement: statementWithArgs, reversible: true, reverse: []stmt.Statement{plain("SELECT 0")}, after: afterStates[10]},
+		{id: "native-sql", kind: string(changeplan.OperationNativeSQL), transaction: string(changeplan.TransactionForbidden), object: starting.ID(), pre: []changeplan.Fact{present}, statement: statementWithArgs, reversible: true, reverse: []stmt.Statement{plain("SELECT 0")}, after: afterStates[10]},
 		{id: "rename-created-1", kind: string(changeplan.OperationRenameTable), transaction: string(changeplan.TransactionEngineDefault), object: future.ID(), statement: plain("ALTER TABLE created RENAME TO renamed"), after: afterStates[11]},
 		{id: "rename-created-2", kind: string(changeplan.OperationRenameTable), transaction: string(changeplan.TransactionRequired), object: future.ID(), statement: plain("ALTER TABLE renamed RENAME TO final"), after: afterStates[12]},
 		{id: "drop-table", kind: string(changeplan.OperationDropTable), transaction: string(changeplan.TransactionRequired), object: starting.ID(), statement: plain("DROP TABLE users"), after: afterStates[13]},
@@ -132,6 +171,7 @@ func fullContractPlan(t *testing.T) changeplan.Plan {
 		mustDecision(t, "native", changeplan.DecisionAcceptNativeSQL, starting.ID(), "", "", "approved"),
 	}
 	operations := make([]changeplan.Operation, 0, len(operationSpec))
+	steps := make([]changeplan.ResolvedCatalogStep, 0, len(operationSpec))
 	for i, spec := range operationSpec {
 		depends := make([]changeplan.OperationID, 0, i)
 		if i > 0 {
@@ -144,10 +184,16 @@ func fullContractPlan(t *testing.T) changeplan.Plan {
 			changeplan.TransactionMode(spec.transaction), spec.reversible, spec.reverse)
 		require.NoError(t, operationErr)
 		operations = append(operations, operation)
+		step, stepErr := changeplan.NewResolvedCatalogStep(operation.ID(), spec.after)
+		require.NoError(t, stepErr)
+		steps = append(steps, step)
 	}
 	plan, err := changeplan.NewPlan(profile, baseline, history, decisions, operations)
 	require.NoError(t, err)
-	return plan
+	return fullContractFixture{
+		plan: plan, baseline: baselineCatalog, steps: steps, operations: operations, decisions: decisions,
+		future: future, renamed: []changeplan.BaselineRename{renameOne, renameTwo},
+	}
 }
 
 func mustDecision(t *testing.T, id changeplan.DecisionID, kind changeplan.DecisionKind, object changeplan.ObjectID, from, to, reason string) changeplan.Decision {
@@ -182,10 +228,12 @@ func TestV1FullGoldenContract(t *testing.T) {
 			SourceDigest  string `json:"source_digest"`
 		} `json:"baseline"`
 		Operations []struct {
-			Kind        string `json:"kind"`
-			Transaction string `json:"transaction"`
-			Reversible  bool   `json:"reversible"`
-			Statements  []struct {
+			ID           string `json:"id"`
+			Kind         string `json:"kind"`
+			Transaction  string `json:"transaction"`
+			Reversible   bool   `json:"reversible"`
+			ResultDigest string `json:"result_digest"`
+			Statements   []struct {
 				Args []struct {
 					Kind string `json:"kind"`
 				} `json:"args"`
@@ -198,11 +246,7 @@ func TestV1FullGoldenContract(t *testing.T) {
 	require.Len(t, wire.Baseline.ProfileDigest, 64)
 	require.Len(t, wire.Baseline.CatalogDigest, 64)
 	require.Len(t, wire.Baseline.SourceDigest, 64)
-	var rawRoot map[string]json.RawMessage
-	require.NoError(t, json.Unmarshal(fixture, &rawRoot))
-	var rawProfile json.RawMessage
-	require.NoError(t, json.Unmarshal(rawRoot["profile"], &rawProfile))
-	require.Equal(t, goldenDigest(bytes.TrimSpace(rawProfile)).String(), wire.Baseline.ProfileDigest)
+	require.Equal(t, goldenDigest(goldenProfileBytes).String(), wire.Baseline.ProfileDigest)
 	require.Equal(t, goldenDigest(goldenCatalogBytes).String(), wire.Baseline.CatalogDigest)
 	require.Equal(t, goldenDigest([]byte("fixture-source")).String(), wire.Baseline.SourceDigest)
 	noID := bytes.Replace(fixture, []byte(`"id":"`+wire.ID+`",`), []byte{}, 1)
@@ -210,10 +254,30 @@ func TestV1FullGoldenContract(t *testing.T) {
 	require.Equal(t, hex.EncodeToString(planDigest[:]), wire.ID)
 	require.Equal(t, plan.ID().String(), wire.ID)
 	require.Equal(t, goldenDigest(goldenCatalogBytes), plan.Baseline().Catalog().CatalogDigest())
+	fixturePlan := fullContractFixtureForTest(t)
+	resolved, err := changeplan.NewResolvedChanges(fixturePlan.baseline, fixturePlan.steps, fixturePlan.decisions,
+		fixturePlan.operations, []changeplan.BaselineObject{fixturePlan.future}, fixturePlan.renamed)
+	require.NoError(t, err)
+	require.Len(t, resolved.CatalogSteps(), len(fixturePlan.operations))
+	for i, operation := range resolved.Operations() {
+		require.Equal(t, fixturePlan.operations[i].ID(), operation.ID())
+		require.Equal(t, goldenResultDigests[string(operation.ID())], operation.ResultDigest().String())
+		require.Equal(t, fixturePlan.steps[i].Operation(), resolved.CatalogSteps()[i].Operation())
+		require.Equal(t, fixturePlan.steps[i].Catalog(), resolved.CatalogSteps()[i].Catalog())
+		catalogDigest, digestErr := changeplan.CatalogDigest(resolved.CatalogSteps()[i].Catalog())
+		require.NoError(t, digestErr)
+		require.Equal(t, operation.ResultDigest(), catalogDigest)
+	}
+	_, usersPresent := resolved.TargetCatalog().ObjectID(schema.ObjectTable, "main", "users")
+	require.False(t, usersPresent)
+	finalID, finalPresent := resolved.TargetCatalog().ObjectID(schema.ObjectTable, "main", "final")
+	require.True(t, finalPresent)
+	require.Equal(t, fixturePlan.future.ID(), finalID)
 
 	wantKinds := map[string]bool{}
 	wantTransactions := map[string]bool{}
 	for _, operation := range wire.Operations {
+		require.Equal(t, goldenResultDigests[operation.ID], operation.ResultDigest)
 		wantKinds[operation.Kind] = true
 		wantTransactions[operation.Transaction] = true
 	}

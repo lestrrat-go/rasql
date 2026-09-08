@@ -13,6 +13,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var goldenLockResultDigests = map[OperationID]string{
+	"add-title": "b55516702ed51811192506587beb5ad9de919eb6f22037f69add20c16eeeae8f",
+	"add-extra": "7c248af01b6d9c328a7b808781a6b8f182c7efe281fba6fa2f9637534bfefa31",
+}
+
 func resultDigestOperation(t *testing.T, id OperationID, dependsOn []OperationID, digest Digest) Operation {
 	t.Helper()
 	operation, err := NewOperation(id, OperationAddColumn, dependsOn, []ObjectID{"starting"}, nil, nil, digest,
@@ -44,6 +49,24 @@ func resultDigestPlanFixture(t *testing.T, digest Digest) Plan {
 	return plan
 }
 
+func resultDigestPlanFromCatalog(t *testing.T, catalog Catalog) Plan {
+	t.Helper()
+	profile := sourceRepairProfile(t)
+	profileDigest, err := ProfileDigest(profile)
+	require.NoError(t, err)
+	catalogDigest, err := CatalogDigest(catalog)
+	require.NoError(t, err)
+	catalogIdentity, err := NewCatalogIdentity(profile.Engine(), profileDigest, catalogDigest, Digest{3})
+	require.NoError(t, err)
+	object, err := NewBaselineObject("starting", "table", "main", "users")
+	require.NoError(t, err)
+	baseline, err := NewBaselineIdentity(catalogIdentity, catalog.SourceIdentity(), []BaselineObject{object}, nil)
+	require.NoError(t, err)
+	returnPlan, err := NewPlan(profile, baseline, mustHistory(t), nil, []Operation{resultDigestOperation(t, "add-value", nil, Digest{1})})
+	require.NoError(t, err)
+	return returnPlan
+}
+
 func TestResultDigestConstructorAndPlanIdentity(t *testing.T) {
 	_, err := NewOperation("missing-digest", OperationAddColumn, nil, []ObjectID{"starting"}, nil, nil, Digest{},
 		[]stmt.Statement{stmt.New(sqltext.Text("ALTER TABLE users ADD COLUMN value TEXT"))}, TransactionRequired, false, nil)
@@ -73,6 +96,12 @@ func TestResultDigestOwnership(t *testing.T) {
 	returned := plan.Operations()
 	returned[0].resultDigest = Digest{9}
 	require.Equal(t, Digest{1}, plan.Operations()[0].ResultDigest())
+	topological, err := plan.TopologicalOperations()
+	require.NoError(t, err)
+	topological[0].resultDigest = Digest{8}
+	topological, err = plan.TopologicalOperations()
+	require.NoError(t, err)
+	require.Equal(t, Digest{1}, topological[0].ResultDigest())
 	reencoded, err := Encode(plan)
 	require.NoError(t, err)
 	require.Equal(t, encoded, reencoded)
@@ -84,12 +113,33 @@ func TestResultDigestOwnership(t *testing.T) {
 	require.NoError(t, err)
 	digest, err := CatalogDigest(catalog)
 	require.NoError(t, err)
+	sourcePlan := resultDigestPlanFromCatalog(t, catalog)
+	sourcePlanBytes, err := Encode(sourcePlan)
+	require.NoError(t, err)
 	definition.Columns[0].Name = "changed"
 	require.Equal(t, digest, func() Digest {
 		value, digestErr := CatalogDigest(catalog)
 		require.NoError(t, digestErr)
 		return value
 	}())
+	sourceReencoded, err := Encode(sourcePlan)
+	require.NoError(t, err)
+	require.Equal(t, sourcePlanBytes, sourceReencoded)
+}
+
+func TestResolvedChangesReturnedCatalogStepsAreOwned(t *testing.T) {
+	baseline, afterValue, _ := resultDigestCatalogs(t)
+	digest, err := CatalogDigest(afterValue)
+	require.NoError(t, err)
+	operation := resultDigestOperation(t, "first", nil, digest)
+	resolved, err := NewResolvedChanges(baseline, []ResolvedCatalogStep{mustResultStep(t, operation.ID(), afterValue)}, nil,
+		[]Operation{operation}, nil, nil)
+	require.NoError(t, err)
+	steps := resolved.CatalogSteps()
+	steps[0].after.physical.Objects[0].Name = "changed"
+	got, err := CatalogDigest(resolved.CatalogSteps()[0].Catalog())
+	require.NoError(t, err)
+	require.Equal(t, digest, got)
 }
 
 func resultDigestCatalogs(t *testing.T) (Catalog, Catalog, Catalog) {
@@ -136,10 +186,11 @@ func TestResolvedChangesUsesStableOrderResultDigests(t *testing.T) {
 		mustResultStep(t, first.ID(), afterMore), mustResultStep(t, second.ID(), afterMore),
 	}, nil, []Operation{second, first}, nil, nil)
 	require.ErrorIs(t, err, ErrInvalidPlan)
+	swappedFirst := resultDigestOperation(t, "first", nil, moreDigest)
 	swapped := resultDigestOperation(t, "second", []OperationID{"first"}, valueDigest)
 	_, err = NewResolvedChanges(baseline, []ResolvedCatalogStep{
-		mustResultStep(t, first.ID(), afterValue), mustResultStep(t, swapped.ID(), afterMore),
-	}, nil, []Operation{swapped, first}, nil, nil)
+		mustResultStep(t, swappedFirst.ID(), afterValue), mustResultStep(t, swapped.ID(), afterMore),
+	}, nil, []Operation{swapped, swappedFirst}, nil, nil)
 	require.ErrorIs(t, err, ErrInvalidPlan)
 }
 
@@ -165,6 +216,9 @@ func TestResultDigestWireIsRequiredStrictAndIdentityBound(t *testing.T) {
 		{name: "missing", invalidWire: true},
 		{name: "null", value: nil, invalidWire: true},
 		{name: "wrong type", value: 7, invalidWire: true},
+		{name: "short", value: "abcd", invalidWire: true},
+		{name: "long", value: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", invalidWire: true},
+		{name: "nonhex", value: "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", invalidWire: true},
 		{name: "uppercase", value: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", invalidWire: true},
 		{name: "all zero", value: digestHex(Digest{}), invalidWire: false},
 	} {
@@ -212,6 +266,10 @@ func TestResultDigestWireIsRequiredStrictAndIdentityBound(t *testing.T) {
 	decoded, err := Decode(append(mutatedBytes, '\n'))
 	require.NoError(t, err)
 	require.Equal(t, Digest{8}, decoded.Operations()[0].ResultDigest())
+	reencoded, err := Encode(decoded)
+	require.NoError(t, err)
+	wantReencoded := append(append([]byte(nil), mutatedBytes...), '\n')
+	require.Equal(t, wantReencoded, reencoded)
 
 	stale := bytes.Replace(encoded, []byte(digestHex(plan.Operations()[0].ResultDigest())), []byte(digestHex(Digest{8})), 1)
 	_, err = Decode(stale)
@@ -245,6 +303,77 @@ func TestFromLockRevalidatesResolvedResultDigest(t *testing.T) {
 	resolved.operations[0].resultDigest = Digest{7}
 	_, err = FromLock(lock, lockProfileForResultDigest(t), mustHistory(t), resolved)
 	require.ErrorIs(t, err, ErrInvalidPlan)
+	resolved.operations[0].resultDigest = digest
+	changedObject, err := NewCatalogObject(tasks, schema.TableDef{Schema: "main", Name: "tasks", Columns: []schema.ColumnDef{
+		{Name: "id", Type: schema.IntegerType{}}, {Name: "payload", Type: schema.BytesType{}},
+		{Name: "title", Type: schema.TextType{}}, {Name: "extra", Type: schema.TextType{}},
+	}})
+	require.NoError(t, err)
+	changedAfter, err := NewCatalogLike(baseline, []CatalogObject{changedObject})
+	require.NoError(t, err)
+	resolved.steps[0].after = changedAfter
+	_, err = FromLock(lock, lockProfileForResultDigest(t), mustHistory(t), resolved)
+	require.ErrorIs(t, err, ErrInvalidPlan)
+}
+
+func TestFromLockReverseSourceOrderResultDigestsRoundTrip(t *testing.T) {
+	lock, err := os.ReadFile("testdata/external/lock.json")
+	require.NoError(t, err)
+	baseline, err := CatalogFromLock(lock)
+	require.NoError(t, err)
+	tasks, ok := baseline.ObjectID(schema.ObjectTable, "main", "tasks")
+	require.True(t, ok)
+	makeAfter := func(columns ...schema.ColumnDef) Catalog {
+		object, objectErr := NewCatalogObject(tasks, schema.TableDef{Schema: "main", Name: "tasks", Columns: columns})
+		require.NoError(t, objectErr)
+		catalog, catalogErr := NewCatalogLike(baseline, []CatalogObject{object})
+		require.NoError(t, catalogErr)
+		return catalog
+	}
+	baseColumns := []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "payload", Type: schema.BytesType{}}}
+	afterTitleColumns := append(append([]schema.ColumnDef(nil), baseColumns...), schema.ColumnDef{Name: "title", Type: schema.TextType{}})
+	afterTitle := makeAfter(afterTitleColumns...)
+	afterExtraColumns := append(append([]schema.ColumnDef(nil), afterTitleColumns...), schema.ColumnDef{Name: "extra", Type: schema.TextType{}})
+	afterExtra := makeAfter(afterExtraColumns...)
+	digestTitle, err := CatalogDigest(afterTitle)
+	require.NoError(t, err)
+	digestExtra, err := CatalogDigest(afterExtra)
+	require.NoError(t, err)
+	first, err := NewOperation("add-title", OperationAddColumn, nil, []ObjectID{tasks}, nil, nil, digestTitle,
+		[]stmt.Statement{stmt.New(sqltext.Text("ALTER TABLE tasks ADD COLUMN title TEXT"))}, TransactionEngineDefault, false, nil)
+	require.NoError(t, err)
+	second, err := NewOperation("add-extra", OperationAddColumn, []OperationID{"add-title"}, []ObjectID{tasks}, nil, nil, digestExtra,
+		[]stmt.Statement{stmt.New(sqltext.Text("ALTER TABLE tasks ADD COLUMN extra TEXT"))}, TransactionRequired, false, nil)
+	require.NoError(t, err)
+	resolved, err := NewResolvedChanges(baseline, []ResolvedCatalogStep{
+		mustResultStep(t, first.ID(), afterTitle), mustResultStep(t, second.ID(), afterExtra),
+	}, nil, []Operation{second, first}, nil, nil)
+	require.NoError(t, err)
+	for _, operation := range resolved.Operations() {
+		require.Equal(t, goldenLockResultDigests[operation.ID()], operation.ResultDigest().String())
+	}
+	plan, err := FromLock(lock, lockProfileForResultDigest(t), mustHistory(t), resolved)
+	require.NoError(t, err)
+	byID := make(map[OperationID]Digest)
+	for _, operation := range plan.Operations() {
+		byID[operation.ID()] = operation.ResultDigest()
+	}
+	require.Equal(t, goldenLockResultDigests[first.ID()], byID[first.ID()].String())
+	require.Equal(t, goldenLockResultDigests[second.ID()], byID[second.ID()].String())
+	encoded, err := Encode(plan)
+	require.NoError(t, err)
+	decoded, err := Decode(encoded)
+	require.NoError(t, err)
+	reencoded, err := Encode(decoded)
+	require.NoError(t, err)
+	require.Equal(t, encoded, reencoded)
+	decodedByID := make(map[OperationID]Digest)
+	for _, operation := range decoded.Operations() {
+		decodedByID[operation.ID()] = operation.ResultDigest()
+	}
+	require.Equal(t, byID, decodedByID)
+	require.Equal(t, goldenLockResultDigests[first.ID()], decodedByID[first.ID()].String())
+	require.Equal(t, goldenLockResultDigests[second.ID()], decodedByID[second.ID()].String())
 }
 
 func lockProfileForResultDigest(t *testing.T) Profile {
