@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/lestrrat-go/rasql/internal/compilerir"
 )
 
 func validOperationKind(kind OperationKind) bool {
@@ -125,13 +127,13 @@ func validatePlanParts(baseline BaselineIdentity, decisions []Decision, operatio
 	if err != nil {
 		return err
 	}
-	decisionsByObjectKind := make(map[string]struct{}, len(decisions))
-	for _, d := range decisions {
-		decisionsByObjectKind[string(d.kind)+"\x00"+string(d.object)] = struct{}{}
-	}
 	operationByID := make(map[OperationID]Operation, len(operations))
 	for _, operation := range operations {
 		operationByID[operation.id] = operation
+	}
+	decisionsByObjectKind := make(map[string]struct{}, len(decisions))
+	for _, decision := range decisions {
+		decisionsByObjectKind[string(decision.kind)+"\x00"+string(decision.object)] = struct{}{}
 	}
 	for _, object := range baseline.objects {
 		if object.introducedBy == "" {
@@ -156,13 +158,6 @@ func validatePlanParts(baseline BaselineIdentity, decisions []Decision, operatio
 			}
 			if !found {
 				return fmt.Errorf("%w: create_table %q lacks a future baseline object", ErrInvalidIdentity, operation.id)
-			}
-		}
-		if operation.kind == OperationRenameTable || operation.kind == OperationRenameColumn {
-			for _, object := range operation.objects {
-				if _, ok := decisionsByObjectKind[string(DecisionRenameObject)+"\x00"+string(object)]; !ok {
-					return fmt.Errorf("%w: rename operation %q lacks rename decision", ErrInvalidDecision, operation.id)
-				}
 			}
 		}
 	}
@@ -195,6 +190,9 @@ func validatePlanParts(baseline BaselineIdentity, decisions []Decision, operatio
 				return fmt.Errorf("%w: rename chain for %q is not dependency ordered", ErrInvalidIdentity, object)
 			}
 		}
+	}
+	if err := validateRenameDecisions(baseline, decisions, operations); err != nil {
+		return err
 	}
 	return validatePrefixes(baseline, operations, order)
 }
@@ -249,14 +247,14 @@ func validateResolvedState(resolved ResolvedChanges, baseline BaselineIdentity) 
 	if err := validatePlanParts(baseline, resolved.decisions, resolved.operations); err != nil {
 		return err
 	}
-	if err := validateRenameDecisions(baseline, resolved.decisions, resolved.operations); err != nil {
-		return err
-	}
 	if err := validateFutureObjectIDs(baseline, resolved.operations); err != nil {
 		return err
 	}
 	order, err := stableOrder(resolved.operations)
 	if err != nil {
+		return err
+	}
+	if err := validateResolvedRenameDecisions(resolved, baseline, order); err != nil {
 		return err
 	}
 	active := make(map[ObjectID]BaselineObject)
@@ -322,9 +320,17 @@ func validateRenameDecisions(baseline BaselineIdentity, decisions []Decision, op
 		return err
 	}
 	renames := make(map[OperationID]BaselineRename, len(baseline.renames))
+	operationByID := make(map[OperationID]Operation, len(operations))
+	for _, operation := range operations {
+		operationByID[operation.id] = operation
+	}
 	for _, rename := range baseline.renames {
 		if _, exists := renames[rename.operation]; exists {
 			return fmt.Errorf("%w: duplicate rename binding", ErrInvalidIdentity)
+		}
+		operation, exists := operationByID[rename.operation]
+		if !exists || operation.kind != OperationRenameTable || len(operation.objects) != 1 || operation.objects[0] != rename.object {
+			return fmt.Errorf("%w: rename binding mismatch", ErrInvalidIdentity)
 		}
 		renames[rename.operation] = rename
 	}
@@ -334,7 +340,24 @@ func validateRenameDecisions(baseline BaselineIdentity, decisions []Decision, op
 			active[object.id] = object
 		}
 	}
-	used := make(map[DecisionID]struct{})
+	used := make([]bool, len(decisions))
+	consume := func(object ObjectID, from, to string, exact bool) error {
+		matches := make([]int, 0, 1)
+		for i, decision := range decisions {
+			if used[i] || decision.kind != DecisionRenameObject || decision.object != object {
+				continue
+			}
+			if exact && (decision.from != from || decision.to != to) {
+				continue
+			}
+			matches = append(matches, i)
+		}
+		if len(matches) != 1 {
+			return fmt.Errorf("%w: rename for %q has %d matching decisions", ErrInvalidDecision, object, len(matches))
+		}
+		used[matches[0]] = true
+		return nil
+	}
 	for _, index := range order {
 		operation := operations[index]
 		if operation.kind == OperationCreateTable {
@@ -353,19 +376,25 @@ func validateRenameDecisions(baseline BaselineIdentity, decisions []Decision, op
 			if !ok {
 				return fmt.Errorf("%w: rename object is inactive", ErrInvalidDecision)
 			}
+			fromNames := []string{decisionName(object.schema, object.name), object.name}
+			toNames := []string{decisionName(rename.toSchema, rename.toName), rename.toName}
 			matches := 0
-			for _, decision := range decisions {
-				fromMatches := decision.from == decisionName(object.schema, object.name) || decision.from == object.name
-				toMatches := decision.to == decisionName(rename.toSchema, rename.toName) || decision.to == rename.toName
-				if decision.kind != DecisionRenameObject || decision.object != rename.object || !fromMatches || !toMatches {
+			matchingIndex := -1
+			for i, decision := range decisions {
+				if used[i] || decision.kind != DecisionRenameObject || decision.object != rename.object {
 					continue
 				}
-				matches++
-				used[decision.id] = struct{}{}
+				fromMatches := decision.from == fromNames[0] || decision.from == fromNames[1]
+				toMatches := decision.to == toNames[0] || decision.to == toNames[1]
+				if fromMatches && toMatches {
+					matches++
+					matchingIndex = i
+				}
 			}
 			if matches != 1 {
 				return fmt.Errorf("%w: rename %q has %d matching decisions", ErrInvalidDecision, operation.id, matches)
 			}
+			used[matchingIndex] = true
 			object.schema, object.name = rename.toSchema, rename.toName
 			active[rename.object] = object
 		}
@@ -375,14 +404,141 @@ func validateRenameDecisions(baseline BaselineIdentity, decisions []Decision, op
 			}
 		}
 	}
-	for _, decision := range decisions {
+	for _, index := range order {
+		operation := operations[index]
+		if operation.kind != OperationRenameColumn {
+			continue
+		}
+		for _, objectID := range operation.objects {
+			if err := consume(objectID, "", "", false); err != nil {
+				return err
+			}
+		}
+	}
+	for i, decision := range decisions {
 		if decision.kind == DecisionRenameObject {
-			if _, ok := used[decision.id]; !ok {
+			if !used[i] {
 				return fmt.Errorf("%w: rename decision %q is unused", ErrInvalidDecision, decision.id)
 			}
 		}
 	}
 	return nil
+}
+
+func validateResolvedRenameDecisions(resolved ResolvedChanges, baseline BaselineIdentity, order []int) error {
+	used := make([]bool, len(resolved.decisions))
+	active := make(map[ObjectID]BaselineObject)
+	futureByCreate := make(map[OperationID]BaselineObject)
+	for _, object := range baseline.objects {
+		if object.introducedBy == "" {
+			active[object.id] = object
+			continue
+		}
+		futureByCreate[object.introducedBy] = object
+	}
+	renamed := make(map[OperationID]BaselineRename, len(baseline.renames))
+	for _, rename := range baseline.renames {
+		renamed[rename.operation] = rename
+	}
+	consume := func(object ObjectID, from, to string) error {
+		matches := make([]int, 0, 1)
+		for i, decision := range resolved.decisions {
+			if used[i] || decision.kind != DecisionRenameObject || decision.object != object || decision.from != from || decision.to != to {
+				continue
+			}
+			matches = append(matches, i)
+		}
+		if len(matches) != 1 {
+			return fmt.Errorf("%w: rename for %q has %d matching decisions", ErrInvalidDecision, object, len(matches))
+		}
+		used[matches[0]] = true
+		return nil
+	}
+	for stepIndex, operationIndex := range order {
+		operation := resolved.operations[operationIndex]
+		switch operation.kind {
+		case OperationCreateTable:
+			object, ok := futureByCreate[operation.id]
+			if !ok {
+				return fmt.Errorf("%w: create %q has no future object", ErrInvalidDecision, operation.id)
+			}
+			active[object.id] = object
+		case OperationRenameTable:
+			rename, ok := renamed[operation.id]
+			if !ok || len(operation.objects) != 1 || operation.objects[0] != rename.object {
+				return fmt.Errorf("%w: rename binding mismatch", ErrInvalidDecision)
+			}
+			object, ok := active[rename.object]
+			if !ok {
+				return fmt.Errorf("%w: rename object is inactive", ErrInvalidDecision)
+			}
+			if err := consume(rename.object, decisionName(object.schema, object.name), decisionName(rename.toSchema, rename.toName)); err != nil {
+				if err := consume(rename.object, object.name, rename.toName); err != nil {
+					return err
+				}
+			}
+			object.schema, object.name = rename.toSchema, rename.toName
+			active[rename.object] = object
+		case OperationRenameColumn:
+			before := resolved.baseline
+			if stepIndex > 0 {
+				before = resolved.steps[stepIndex-1].after
+			}
+			after := resolved.steps[stepIndex].after
+			for _, objectID := range operation.objects {
+				if _, ok := active[objectID]; !ok {
+					return fmt.Errorf("%w: rename object is inactive", ErrInvalidDecision)
+				}
+				from, to, ok := adjacentColumnRename(before, after, objectID)
+				if !ok {
+					return fmt.Errorf("%w: rename %q has no single adjacent column change", ErrInvalidDecision, operation.id)
+				}
+				if err := consume(objectID, from, to); err != nil {
+					return err
+				}
+			}
+		case OperationDropTable:
+			for _, objectID := range operation.objects {
+				delete(active, objectID)
+			}
+		}
+	}
+	for i, decision := range resolved.decisions {
+		if decision.kind == DecisionRenameObject && !used[i] {
+			return fmt.Errorf("%w: rename decision %q is unused", ErrInvalidDecision, decision.id)
+		}
+	}
+	return nil
+}
+
+func adjacentColumnRename(before, after Catalog, objectID ObjectID) (string, string, bool) {
+	var beforeObject, afterObject *compilerir.PhysicalObject
+	for i := range before.physical.Objects {
+		if ObjectID(before.physical.Objects[i].ID) == objectID {
+			beforeObject = &before.physical.Objects[i]
+			break
+		}
+	}
+	for i := range after.physical.Objects {
+		if ObjectID(after.physical.Objects[i].ID) == objectID {
+			afterObject = &after.physical.Objects[i]
+			break
+		}
+	}
+	if beforeObject == nil || afterObject == nil || len(beforeObject.Columns) != len(afterObject.Columns) {
+		return "", "", false
+	}
+	from, to := "", ""
+	for i := range beforeObject.Columns {
+		if beforeObject.Columns[i].Name == afterObject.Columns[i].Name {
+			continue
+		}
+		if from != "" {
+			return "", "", false
+		}
+		from, to = beforeObject.Columns[i].Name, afterObject.Columns[i].Name
+	}
+	return from, to, from != "" && to != ""
 }
 
 func decisionName(schemaName, name string) string {

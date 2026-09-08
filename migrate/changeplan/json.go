@@ -668,8 +668,13 @@ func validateWireShape(data []byte) error {
 		if err := requireBool(operation, "reversible"); err != nil {
 			return err
 		}
-		for _, field := range []string{"depends_on", "objects", "preconditions", "postconditions", "statements", "reverse_statements"} {
+		for _, field := range []string{"preconditions", "postconditions", "statements", "reverse_statements"} {
 			if err := requireArray(operation, field); err != nil {
+				return err
+			}
+		}
+		for _, field := range []string{"depends_on", "objects"} {
+			if err := requireStringArray(operation, field); err != nil {
 				return err
 			}
 		}
@@ -817,6 +822,29 @@ func requireArray(object map[string]json.RawMessage, key string) error {
 	var raw []json.RawMessage
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return fmt.Errorf("%w: array %s", ErrInvalidWire, key)
+	}
+	return nil
+}
+func requireStringArray(object map[string]json.RawMessage, key string) error {
+	value, ok := object[key]
+	if !ok {
+		return fmt.Errorf("%w: missing %s", ErrInvalidWire, key)
+	}
+	if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+		return fmt.Errorf("%w: null array %s", ErrInvalidWire, key)
+	}
+	var raw []json.RawMessage
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return fmt.Errorf("%w: array %s", ErrInvalidWire, key)
+	}
+	for _, element := range raw {
+		if bytes.Equal(bytes.TrimSpace(element), []byte("null")) {
+			return fmt.Errorf("%w: %s element must be a string", ErrInvalidWire, key)
+		}
+		var value string
+		if err := json.Unmarshal(element, &value); err != nil {
+			return fmt.Errorf("%w: %s element must be a string", ErrInvalidWire, key)
+		}
 	}
 	return nil
 }
