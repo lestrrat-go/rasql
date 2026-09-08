@@ -1725,7 +1725,11 @@ func newValidationContractBaselineFixture(t *testing.T) validationContractBaseli
 		require.NoError(t, recordErr)
 		renameRecords = append(renameRecords, record)
 		renameSQL := "ALTER TABLE " + object.Name() + " RENAME TO " + toName
-		rename, renameErr := NewOperation(operationID, OperationRenameTable, nil, []ObjectID{object.ID()}, nil, nil,
+		dependsOn := []OperationID(nil)
+		if i == 1 {
+			dependsOn = []OperationID{"rename-a"}
+		}
+		rename, renameErr := NewOperation(operationID, OperationRenameTable, dependsOn, []ObjectID{object.ID()}, nil, nil,
 			Digest{1}, []stmt.Statement{stmt.New(sqltext.Text(renameSQL))}, TransactionEngineDefault, false, nil)
 		require.NoError(t, renameErr)
 		renames = append(renames, rename)
@@ -1899,18 +1903,13 @@ func TestValidationContractBaselineRenameSemantics(t *testing.T) {
 	})
 	for _, row := range []struct {
 		name   string
-		mutate func([]Operation) []Operation
+		mutate func(*BaselineIdentity, []Operation) []Operation
 	}{
-		{"rename binding missing operation", func(operations []Operation) []Operation {
-			out := make([]Operation, 0, len(operations)-1)
-			for _, operation := range operations {
-				if operation.ID() != "rename-a" {
-					out = append(out, operation)
-				}
-			}
-			return out
+		{"rename binding missing operation", func(baseline *BaselineIdentity, operations []Operation) []Operation {
+			baseline.renames[0].operation = "missing"
+			return operations
 		}},
-		{"rename binding wrong kind", func(operations []Operation) []Operation {
+		{"rename binding wrong kind", func(_ *BaselineIdentity, operations []Operation) []Operation {
 			out := append([]Operation(nil), operations...)
 			for i := range out {
 				if out[i].ID() == "rename-a" {
@@ -1919,20 +1918,20 @@ func TestValidationContractBaselineRenameSemantics(t *testing.T) {
 			}
 			return out
 		}},
-		{"rename binding multiple objects", func(operations []Operation) []Operation {
+		{"rename binding multiple objects", func(_ *BaselineIdentity, operations []Operation) []Operation {
 			out := append([]Operation(nil), operations...)
 			for i := range out {
 				if out[i].ID() == "rename-a" {
-					out[i].objects = append(out[i].objects, "other")
+					out[i].objects = append(out[i].objects, "starting-b")
 				}
 			}
 			return out
 		}},
-		{"rename binding wrong object", func(operations []Operation) []Operation {
+		{"rename binding wrong object", func(_ *BaselineIdentity, operations []Operation) []Operation {
 			out := append([]Operation(nil), operations...)
 			for i := range out {
 				if out[i].ID() == "rename-a" {
-					out[i].objects = []ObjectID{"other"}
+					out[i].objects = []ObjectID{"starting-b"}
 				}
 			}
 			return out
@@ -1940,10 +1939,71 @@ func TestValidationContractBaselineRenameSemantics(t *testing.T) {
 	} {
 		row := row
 		t.Run(row.name, func(t *testing.T) {
-			operations := row.mutate(fixture.plan.Operations())
-			_, err := newPlan(fixture.profile, fixture.plan.Baseline(), fixture.history, fixture.decisions, operations)
+			baseline := fixture.plan.Baseline()
+			operations := row.mutate(&baseline, fixture.plan.Operations())
+			_, err := newPlan(fixture.profile, baseline, fixture.history, fixture.decisions, operations)
 			require.ErrorIs(t, err, ErrInvalidIdentity)
 			require.ErrorContains(t, err, "rename binding mismatch")
+		})
+	}
+}
+
+func TestValidationContractFutureBindingSemantics(t *testing.T) {
+	fixture := newValidationContractBaselineFixture(t)
+	// Future identity entry points remain covered by TestFutureIdentityRejectedAtNewPlan,
+	// TestFutureIdentityRejectedAtEncode, TestFutureIdentityRejectedAtDecode,
+	// TestFutureIdentityRejectedAtNewResolvedChanges, and TestFutureIdentityRejectedAtFromLock.
+	for _, row := range []struct {
+		name, contains string
+		mutate         func(*BaselineIdentity, []Operation)
+		target         error
+	}{
+		{
+			"future missing create", "does not name its create_table operation",
+			func(baseline *BaselineIdentity, _ []Operation) { baseline.objects[2].introducedBy = "missing-create" },
+			ErrInvalidIdentity,
+		},
+		{
+			"future wrong create kind", "does not name its create_table operation",
+			func(baseline *BaselineIdentity, _ []Operation) { baseline.objects[2].introducedBy = "rename-a" },
+			ErrInvalidIdentity,
+		},
+		{
+			"future create has multiple objects", "create_table needs one object",
+			func(_ *BaselineIdentity, operations []Operation) {
+				operations[0].objects = append(operations[0].objects, "starting-a")
+			},
+			ErrInvalidOperation,
+		},
+		{
+			"future create names other object", "does not name its create_table operation",
+			func(baseline *BaselineIdentity, operations []Operation) {
+				operations[0].objects[0] = baseline.objects[3].ID()
+			},
+			ErrInvalidIdentity,
+		},
+		{
+			"create lacks future object", "does not name its create_table operation",
+			func(_ *BaselineIdentity, operations []Operation) { operations[0].objects[0] = "starting-a" },
+			ErrInvalidIdentity,
+		},
+		{
+			"create future introduced_by differs", "does not name its create_table operation",
+			func(baseline *BaselineIdentity, _ []Operation) { baseline.objects[2].introducedBy = "create-b" },
+			ErrInvalidIdentity,
+		},
+	} {
+		row := row
+		t.Run(row.name, func(t *testing.T) {
+			baseline := fixture.plan.Baseline()
+			operations := fixture.plan.Operations()
+			row.mutate(&baseline, operations)
+			_, err := newPlan(fixture.profile, baseline, fixture.history, fixture.decisions, operations)
+			require.ErrorIs(t, err, row.target)
+			require.ErrorContains(t, err, row.contains)
+			if row.name != "future create has multiple objects" {
+				require.ErrorContains(t, err, string(fixture.future[0].ID()))
+			}
 		})
 	}
 }
