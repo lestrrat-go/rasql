@@ -139,6 +139,31 @@ func TestPublicImmutabilityContract(t *testing.T) {
 	require.Equal(t, objectID, gotID)
 }
 
+func TestExclusionCatalogContract(t *testing.T) {
+	definition := schema.TableDef{
+		Schema: "public", Name: "orders", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		ExclusionConstraints: []schema.ExclusionDef{{
+			Name: "orders_excl", Method: "gist",
+			Elements: []schema.ExclusionElementDef{{Expression: "id", Operator: "="}},
+		}},
+	}
+	object, err := changeplan.NewCatalogObject("orders-id", definition)
+	require.NoError(t, err)
+	catalog, err := changeplan.NewCatalog(testProfile(t), "exclusion-source", []changeplan.CatalogObject{object})
+	require.NoError(t, err)
+	wantDigest, err := changeplan.ParseDigest("2dba21deab986af9b26bb1beb8f073d216888add5afd863e786570ee6a69cdca")
+	require.NoError(t, err)
+	gotDigest, err := changeplan.CatalogDigest(catalog)
+	require.NoError(t, err)
+	require.Equal(t, wantDigest, gotDigest)
+	expression, err := changeplan.NewFact("orders-id", "/exclusion_constraints/0/elements/0/expression_sql", changeplan.FactOperatorEqual, `"id"`)
+	require.NoError(t, err)
+	operator, err := changeplan.NewFact("orders-id", "/exclusion_constraints/0/elements/0/operator", changeplan.FactOperatorEqual, `"="`)
+	require.NoError(t, err)
+	require.NoError(t, changeplan.EvaluateFact(catalog, expression))
+	require.NoError(t, changeplan.EvaluateFact(catalog, operator))
+}
+
 func mustEncode(t *testing.T, plan changeplan.Plan) []byte {
 	t.Helper()
 	encoded, err := changeplan.Encode(plan)
