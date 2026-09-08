@@ -358,10 +358,10 @@ func medianScanMetric(values []scanSample, metric func(scanSample) float64) floa
 
 func benchmarkPackage(t *testing.T, root string, env []string, packagePath, benchmarkName string) []byte {
 	t.Helper()
-	command := exec.Command("go", "test", "-mod=mod", "-run", "^$", "-bench", "^"+benchmarkName+"$", "-benchmem", "-cpu", "1", "-benchtime", "750ms", packagePath)
+	command := exec.Command("go", "test", "-mod=mod", "-run", "^$", "-bench", "^"+benchmarkName+"$", "-benchmem", "-cpu", "1", "-benchtime", "3s", packagePath)
 	command.Dir = root
 	command.Env = env
-	t.Logf("scan benchmark %s %s: cpu=1 benchtime=750ms", packagePath, benchmarkName)
+	t.Logf("scan benchmark %s %s: cpu=1 benchtime=3s", packagePath, benchmarkName)
 	output, err := command.CombinedOutput()
 	require.NoError(t, err, "%s", output)
 	return output

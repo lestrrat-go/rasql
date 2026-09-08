@@ -24,6 +24,7 @@ const (
 	integrationStep  = "Run the suite against live databases"
 	verboseFlag      = "-v"
 	countFlag        = "-count"
+	parallelFlag     = "-p"
 )
 
 // TestIntegrationJobListsEveryDBTestGuardedPackage protects the invariant
@@ -309,6 +310,9 @@ func integrationRunPackages(workflow string) ([]string, error) {
 	if cmd.count < 1 {
 		return nil, fmt.Errorf("the %q step's command %q runs each test %d times, so go test executes no test at all in the packages it lists and still exits 0; the job would end green, with %s and every package still in place, having touched no database at all", integrationStep, run, cmd.count, verboseFlag)
 	}
+	if cmd.parallel != 1 {
+		return nil, fmt.Errorf("the %q step's command %q has an effective %s value of %d; it must use %s 1 so package test binaries cannot run alongside one another", integrationStep, run, parallelFlag, cmd.parallel, parallelFlag)
+	}
 	if len(cmd.pkgs) == 0 {
 		return nil, fmt.Errorf("found no package arguments in the %q step's command %q", integrationStep, run)
 	}
@@ -322,10 +326,10 @@ func integrationRunPackages(workflow string) ([]string, error) {
 // for a boolean one donates its value to the package list, and this guard
 // then reports a coverage it cannot actually see.
 //
-// -v and -count are absent from both tables because goTestArgs gives each an
-// arm of its own: their values, not merely their presence, decide whether the
-// listed packages' tests run and are named, so this guard reads the value
-// instead of only stepping over it.
+// -v, -count, and -p are absent from both tables because goTestArgs gives each
+// an arm of its own: their values, not merely their presence, decide whether
+// the listed packages' tests run, are named, and are isolated, so this guard
+// reads each value instead of only stepping over it.
 var goTestBoolFlags = map[string]bool{
 	"-a":          true,
 	"-asan":       true,
@@ -421,8 +425,9 @@ func goTestFlagName(name string) string {
 }
 
 // goTestCommand is what an accepted `go test` command line would actually do:
-// the packages it names, and the effective values of the two flags that decide
-// whether the tests in those packages run at all and are named in the log.
+// the packages it names, and the effective values of the flags that decide
+// whether the tests in those packages run at all, are named in the log, and
+// run without sibling package test binaries.
 //
 // Effective, not as written, is the whole point of the type. go's flag parsing
 // lets a later assignment overturn an earlier one, so a command carrying a
@@ -431,9 +436,10 @@ func goTestFlagName(name string) string {
 // nothing (`go test -count=0 ./...` exits 0 saying "no tests to run"). A guard
 // that looked for the tokens would accept both.
 type goTestCommand struct {
-	pkgs    []string
-	verbose bool
-	count   int
+	pkgs     []string
+	verbose  bool
+	count    int
+	parallel int
 }
 
 // goTestArgs reads the arguments following `go test` into the effect the
@@ -443,17 +449,16 @@ type goTestCommand struct {
 //
 // Anything this parser cannot classify is an error rather than a guess:
 // a bare flag of unknown arity, a value-taking flag with no value left to
-// take, a -v or -count whose value it cannot read, -args (after which go stops
+// take, a -v, -count, or -p whose value it cannot read, -args (after which go stops
 // reading packages at all), and an operand written in neither ./dir/... nor
 // . form.
 //
 // The flags that would leave the job green without running the tests it
 // lists packages for -- a selection filter, a listing flag -- are refused
 // before arity is consulted at all, so neither the joined form nor the
-// separate one can slip past on the shape of its value. -v and -count are the
-// two whose value is read instead, since neither can be refused outright: the
-// step is required to pass -v, and it passes -count=1 on purpose to defeat the
-// test cache.
+// separate one can slip past on the shape of its value. -v, -count, and -p are
+// the values read instead: the step is required to pass -v, passes -count=1 to
+// defeat the test cache, and passes -p 1 to serialize package test binaries.
 func goTestArgs(args []string) (*goTestCommand, error) {
 	// go's own defaults for the flags read here: tests are not named in the
 	// log, and each test runs once.
@@ -511,6 +516,20 @@ func goTestArgs(args []string) (*goTestCommand, error) {
 				return nil, fmt.Errorf("the %q step's command passes %s with the value %q, which this test cannot read as a number of runs (%s)", integrationStep, arg, raw, err)
 			}
 			cmd.count = parsed
+		case flag == parallelFlag:
+			raw := value
+			if !joined {
+				if i+1 == len(args) {
+					return nil, fmt.Errorf("the %q step's command ends with %s, which takes a value", integrationStep, arg)
+				}
+				i++
+				raw = args[i]
+			}
+			parsed, err := strconv.Atoi(raw)
+			if err != nil {
+				return nil, fmt.Errorf("the %q step's command passes %s with the value %q, which this test cannot read as a package parallelism value (%s)", integrationStep, arg, raw, err)
+			}
+			cmd.parallel = parsed
 		case joined, goTestBoolFlags[flag]:
 			// A flag with no bearing on whether the listed packages' tests run
 			// or are named; it needs no value taken from the argument list.
@@ -713,15 +732,63 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "reads the step's package list",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -count=1 -v ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 -v ./alpha/... ."),
 			),
 			want: []string{"./alpha/...", "."},
+		},
+		{
+			name: "reads a joined package parallelism value",
+			workflow: fixtureWorkflow(
+				fixtureStep("Unit tests", "go test ./..."),
+				fixtureStep(integrationStep, "go test -p=1 -count=1 -v ./alpha/... ."),
+			),
+			want: []string{"./alpha/...", "."},
+		},
+		{
+			name: "rejects missing package parallelism",
+			workflow: fixtureWorkflow(
+				fixtureStep("Unit tests", "go test ./..."),
+				fixtureStep(integrationStep, "go test -count=1 -v ./alpha/... ."),
+			),
+			wantErr: "effective -p value of 0",
+		},
+		{
+			name: "rejects zero package parallelism",
+			workflow: fixtureWorkflow(
+				fixtureStep("Unit tests", "go test ./..."),
+				fixtureStep(integrationStep, "go test -p 0 -count=1 -v ./alpha/... ."),
+			),
+			wantErr: "effective -p value of 0",
+		},
+		{
+			name: "rejects a later package parallelism override",
+			workflow: fixtureWorkflow(
+				fixtureStep("Unit tests", "go test ./..."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 -v -p 2 ./alpha/... ."),
+			),
+			wantErr: "effective -p value of 2",
+		},
+		{
+			name: "rejects package parallelism with no value",
+			workflow: fixtureWorkflow(
+				fixtureStep("Unit tests", "go test ./..."),
+				fixtureStep(integrationStep, "go test -p"),
+			),
+			wantErr: "ends with -p",
+		},
+		{
+			name: "rejects a command without package arguments",
+			workflow: fixtureWorkflow(
+				fixtureStep("Unit tests", "go test ./..."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 -v"),
+			),
+			wantErr: "found no package arguments",
 		},
 		{
 			name: "rejects a command that dropped -v",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -count=1 ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 ./alpha/... ."),
 			),
 			wantErr: "does not run its tests verbosely",
 		},
@@ -734,7 +801,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects verbosity turned off in joined form",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -count=1 -v=false ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 -v=false ./alpha/... ."),
 			),
 			wantErr: "does not run its tests verbosely",
 		},
@@ -742,7 +809,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects verbosity a later test-binary flag turns off",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -count=1 -v -test.v=false ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 -v -test.v=false ./alpha/... ."),
 			),
 			wantErr: "does not run its tests verbosely",
 		},
@@ -750,7 +817,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects verbosity turned off in the -- spelling",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -count=1 -v --test.v=false ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 -v --test.v=false ./alpha/... ."),
 			),
 			wantErr: "does not run its tests verbosely",
 		},
@@ -760,7 +827,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "accepts a -v that follows a turned-off spelling",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -count=1 -test.v=false -v ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 -test.v=false -v ./alpha/... ."),
 			),
 			want: []string{"./alpha/...", "."},
 		},
@@ -768,7 +835,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects a -v whose value is not a boolean",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -count=1 -v=sometimes ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 -v=sometimes ./alpha/... ."),
 			),
 			wantErr: "cannot read as a boolean",
 		},
@@ -779,7 +846,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects a count that runs each test zero times",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -v -count=0 ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -v -count=0 ./alpha/... ."),
 			),
 			wantErr: "runs each test 0 times",
 		},
@@ -787,7 +854,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects a zero count written apart from its flag",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -v -count 0 ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -v -count 0 ./alpha/... ."),
 			),
 			wantErr: "runs each test 0 times",
 		},
@@ -795,7 +862,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects the test-binary spelling of a zero count",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -v -test.count=0 ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -v -test.count=0 ./alpha/... ."),
 			),
 			wantErr: "runs each test 0 times",
 		},
@@ -803,7 +870,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects a count that is not a number",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -v -count=once ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -v -count=once ./alpha/... ."),
 			),
 			wantErr: "cannot read as a number of runs",
 		},
@@ -811,15 +878,15 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "does not read a separate count value as a package",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -v -count 2 ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -v -count 2 ./alpha/... ."),
 			),
 			want: []string{"./alpha/...", "."},
 		},
 		{
 			name: "reads past a same-named step in another job",
 			workflow: fixtureWorkflow(
-				fixtureStep(integrationStep, "go test -v ./alpha/... ./beta/... ."),
-				fixtureStep(integrationStep, "go test -v ./alpha/..."),
+				fixtureStep(integrationStep, "go test -p 1 -v ./alpha/... ./beta/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -v ./alpha/..."),
 			),
 			want: []string{"./alpha/..."},
 		},
@@ -827,8 +894,8 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects the same step name twice in the integration job",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -v ./alpha/...")+
-					fixtureStep(integrationStep, "go test -v ./beta/..."),
+				fixtureStep(integrationStep, "go test -p 1 -v ./alpha/...")+
+					fixtureStep(integrationStep, "go test -p 1 -v ./beta/..."),
 			),
 			wantErr: "has 2 steps named",
 		},
@@ -853,7 +920,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects an argument that is neither a flag nor a package",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -v ./alpha/... TestSomething"),
+				fixtureStep(integrationStep, "go test -p 1 -v ./alpha/... TestSomething"),
 			),
 			wantErr: `argument "TestSomething"`,
 		},
@@ -861,7 +928,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "does not read a flag's separate value as a package",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -count=1 -v -coverpkg ./alpha/... -timeout 20m ./beta/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 -v -coverpkg ./alpha/... -timeout 20m ./beta/... ."),
 			),
 			want: []string{"./beta/...", "."},
 		},
@@ -869,7 +936,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects a test filter whose value looks like a package list",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -count=1 -v -run ./alpha/... ./beta/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 -v -run ./alpha/... ./beta/... ."),
 			),
 			wantErr: `passes -run`,
 		},
@@ -877,7 +944,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects a test filter written in joined form",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -v -skip=TestSomething ./alpha/..."),
+				fixtureStep(integrationStep, "go test -p 1 -v -skip=TestSomething ./alpha/..."),
 			),
 			wantErr: `passes -skip=TestSomething`,
 		},
@@ -889,7 +956,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects the test-binary spelling of a filter in joined form",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -count=1 -v -test.run=^$ ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 -v -test.run=^$ ./alpha/... ."),
 			),
 			wantErr: `passes -test.run=^$`,
 		},
@@ -897,7 +964,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects the test-binary spelling of a filter in separate form",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -count=1 -v -test.skip .* ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 -v -test.skip .* ./alpha/... ."),
 			),
 			wantErr: `passes -test.skip`,
 		},
@@ -906,7 +973,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects a listing command in joined form",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -count=1 -v -list=.* ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 -v -list=.* ./alpha/... ."),
 			),
 			wantErr: `passes -list=.*`,
 		},
@@ -914,7 +981,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects a listing command in separate form",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -count=1 -v -list .* ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 -v -list .* ./alpha/... ."),
 			),
 			wantErr: `passes -list`,
 		},
@@ -922,7 +989,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects the test-binary spelling of a listing command",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -count=1 -v -test.list=.* ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 -v -test.list=.* ./alpha/... ."),
 			),
 			wantErr: `passes -test.list=.*`,
 		},
@@ -932,7 +999,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "does not read a test-binary flag's separate value as a package",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -v -test.timeout 20m ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -v -test.timeout 20m ./alpha/... ."),
 			),
 			want: []string{"./alpha/...", "."},
 		},
@@ -940,7 +1007,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects a bare flag of unknown arity",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -v -notaflagthisknows ./alpha/..."),
+				fixtureStep(integrationStep, "go test -p 1 -v -notaflagthisknows ./alpha/..."),
 			),
 			wantErr: "does not know whether that flag takes a separate value",
 		},
@@ -948,7 +1015,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects a value-taking flag with no value",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -v ./alpha/... -timeout"),
+				fixtureStep(integrationStep, "go test -p 1 -v ./alpha/... -timeout"),
 			),
 			wantErr: "ends with -timeout",
 		},
@@ -956,7 +1023,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects a count with no value",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -v ./alpha/... -count"),
+				fixtureStep(integrationStep, "go test -p 1 -v ./alpha/... -count"),
 			),
 			wantErr: "ends with -count",
 		},
@@ -964,7 +1031,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects packages listed after -args",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -v ./alpha/... -args ./beta/..."),
+				fixtureStep(integrationStep, "go test -p 1 -v ./alpha/... -args ./beta/..."),
 			),
 			wantErr: "passes -args",
 		},
@@ -976,7 +1043,7 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-%s`, fixtureStep(integrationStep, "go test -v ./alpha/...")),
+%s`, fixtureStep(integrationStep, "go test -p 1 -v ./alpha/...")),
 			wantErr: fmt.Sprintf("no %q job", integrationJob),
 		},
 	} {
