@@ -2008,6 +2008,85 @@ func TestValidationContractFutureBindingSemantics(t *testing.T) {
 	}
 }
 
+type validationContractRenameDependencyFixture struct {
+	profile    Profile
+	baseline   BaselineIdentity
+	history    HistoryIdentity
+	operations []Operation
+	decisions  []Decision
+}
+
+func newValidationContractRenameDependencyFixture(t *testing.T) validationContractRenameDependencyFixture {
+	t.Helper()
+	profile, identity, object, history := validationContractIdentity(t)
+	records := []BaselineRename{}
+	operations := []Operation{}
+	decisions := []Decision{}
+	for i, names := range [][2]string{{"accounts", "main.users"}, {"customers", "main.accounts"}} {
+		operationID := OperationID("rename-chain-" + string(rune('a'+i)))
+		record, err := NewBaselineRename(operationID, object.ID(), "main", names[0])
+		require.NoError(t, err)
+		records = append(records, record)
+		dependsOn := []OperationID{}
+		if i == 1 {
+			dependsOn = []OperationID{"rename-chain-a"}
+		}
+		renameSQL := "ALTER TABLE users RENAME TO " + names[0]
+		operation, err := NewOperation(operationID, OperationRenameTable, dependsOn, []ObjectID{object.ID()}, nil, nil,
+			Digest{1}, []stmt.Statement{stmt.New(sqltext.Text(renameSQL))}, TransactionEngineDefault, false, nil)
+		require.NoError(t, err)
+		operations = append(operations, operation)
+		decision, err := NewDecision(DecisionID("rename-chain-decision-"+string(rune('a'+i))), DecisionRenameObject,
+			object.ID(), names[1], "main."+names[0], true, "")
+		require.NoError(t, err)
+		decisions = append(decisions, decision)
+	}
+	baseline, err := NewBaselineIdentity(identity, "validation", []BaselineObject{object}, records)
+	require.NoError(t, err)
+	return validationContractRenameDependencyFixture{
+		profile: profile, baseline: baseline, history: history, operations: operations, decisions: decisions,
+	}
+}
+
+func TestValidationContractRenameDependencySemantics(t *testing.T) {
+	fixture := newValidationContractRenameDependencyFixture(t)
+	t.Run("dependency ordered renames succeed", func(t *testing.T) {
+		plan, err := newPlan(fixture.profile, fixture.baseline, fixture.history, fixture.decisions, fixture.operations)
+		require.NoError(t, err)
+		order, err := plan.StableOperationOrder()
+		require.NoError(t, err)
+		require.Equal(t, []OperationID{"rename-chain-a", "rename-chain-b"}, order)
+	})
+	for _, row := range []struct {
+		name   string
+		mutate func([]Operation) []Operation
+	}{
+		{"second rename lacks first dependency", func(operations []Operation) []Operation {
+			out := append([]Operation(nil), operations...)
+			out[1].dependsOn = []OperationID{}
+			return out
+		}},
+		{"second rename depends on unrelated operation", func(operations []Operation) []Operation {
+			out := append([]Operation(nil), operations...)
+			unrelatedSQL := "ALTER TABLE users ADD COLUMN value TEXT"
+			unrelated, err := NewOperation("unrelated", OperationAddColumn, nil, []ObjectID{"object"}, nil, nil,
+				Digest{1}, []stmt.Statement{stmt.New(sqltext.Text(unrelatedSQL))}, TransactionForbidden, false, nil)
+			require.NoError(t, err)
+			out[1].dependsOn = []OperationID{"unrelated"}
+			return append(out, unrelated)
+		}},
+	} {
+		row := row
+		t.Run(row.name, func(t *testing.T) {
+			operations := row.mutate(fixture.operations)
+			_, err := newPlan(fixture.profile, fixture.baseline, fixture.history, fixture.decisions, operations)
+			require.ErrorIs(t, err, ErrInvalidIdentity)
+			require.ErrorContains(t, err, "rename chain")
+			require.ErrorContains(t, err, "not dependency ordered")
+		})
+	}
+}
+
 func validationContractPlanParts(t *testing.T) (Profile, BaselineIdentity, HistoryIdentity, Operation, Decision) {
 	t.Helper()
 	profile, identity, object, history := validationContractIdentity(t)
