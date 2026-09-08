@@ -14,7 +14,6 @@ import (
 
 // ExampleLoadHasManyPlan demonstrates a filtered, ordered, capped relationship load.
 func ExampleLoadHasManyPlan() {
-	// BEGIN(relationship_load)
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		panic(err)
@@ -37,6 +36,5 @@ func ExampleLoadHasManyPlan() {
 		panic(err)
 	}
 	fmt.Println(len(loaded[1]), loaded[1][0].ID, loaded[1][4].ID)
-	// END(relationship_load)
-	// Output: 5 7 2
+	// Output: 5 7 3
 }

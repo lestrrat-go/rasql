@@ -12,8 +12,6 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
-// BEGIN(order_by_alias)
-
 // Example_rasql_order_by_alias binds a projection to a variable once and
 // passes that same variable to both Project and Order, so the ORDER BY reads
 // the projection's already-computed result instead of repeating its
@@ -99,5 +97,3 @@ func Example_rasql_order_by_alias() {
 	// 1 Ada
 	// query: order_by[0]: orders by the result name "id", which 2 projections report, so the ordering is ambiguous; give one of them a distinct alias
 }
-
-// END(order_by_alias)

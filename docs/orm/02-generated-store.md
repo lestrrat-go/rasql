@@ -570,29 +570,29 @@ source is stale.
 Generated tables also expose immutable typed create and patch builders. Create
 setters distinguish omitted defaulted columns, explicit zero values, and NULL
 through `Clear` methods on nullable columns. Patch builders require a typed
-predicate, omit primary-key setters, and can execute through `ExecPatch` or
-read saved rows with `QueryPatchOne` and `QueryPatchAll` when the dialect
-supports `RETURNING`.
+predicate and omit primary-key setters. Execute their plans with `ExecMutation`,
+or attach a projection with `Returning` and read saved rows through the normal
+`Rows`, `All`, `One`, or `Maybe` terminals when the dialect supports `RETURNING`.
 
-Multiple generated create plans can be submitted through `NewBulkPlan` and
-`ExecBulkCreate`. The executor groups only consecutive plans with the same
-inserted-column mask, respects row and actual bind limits, and reports
-completed input ranges separately from a failed batch. Use `Atomic: true` when
-the bulk operation must own rollback or savepoint cleanup.
+Multiple generated create plans can be submitted through `ExecMutationBatch`.
+The executor groups only consecutive plans with the same inserted-column mask,
+respects row and actual bind limits, and reports each input as applied,
+rejected, rolled back, unknown, or unattempted. Use `Atomic: true` when the
+batch must own rollback or savepoint cleanup.
 
-<!-- INCLUDE(examples/typed_bulk_example_test.go#typedBulk) -->
+<!-- INCLUDE(examples/mutation_batch_example_test.go#mutationBatch) -->
 ```go
 first := store.NewUsersCreate().Email("ada@example.com").FirstName("Ada").LastName("Lovelace").Plan()
 second := store.NewUsersCreate().Email("grace@example.com").FirstName("Grace").LastName("Hopper").Plan()
-bulk, _ := rasql.NewBulkPlan(first, second)
-outcome, err := rasql.ExecBulkCreate(context.Background(), db, bulk, rasql.BulkOptions{MaxRows: 100})
+outcome, err := rasql.ExecMutationBatch(context.Background(), executor,
+	[]rasql.MutationPlan{first, second}, rasql.BulkOptions{MaxRows: 100})
 if err != nil {
 	fmt.Println(err)
 	return
 }
-fmt.Println(outcome.Completed)
+fmt.Println(outcome.Inputs)
 ```
-source: [examples/typed_bulk_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/typed_bulk_example_test.go)
+source: [examples/mutation_batch_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/mutation_batch_example_test.go)
 <!-- END INCLUDE -->
 
 ## Next

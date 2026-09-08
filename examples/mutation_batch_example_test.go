@@ -10,23 +10,25 @@ import (
 	"github.com/lestrrat-go/rasql/examples/store"
 )
 
-func Example_typedBulk() {
+func Example_mutationBatch() {
 	database, mock, _ := sqlmock.New()
 	defer func() { _ = database.Close() }()
 	mock.ExpectExec(`INSERT INTO "users" \("email", "first_name", "last_name"\) VALUES \(\?, \?, \?\), \(\?, \?, \?\)`).
 		WithArgs("ada@example.com", "Ada", "Lovelace", "grace@example.com", "Grace", "Hopper").
 		WillReturnResult(sqlmock.NewResult(1, 2))
 	db, _ := rasql.New(database, dialect.SQLite())
-	// BEGIN(typedBulk)
+	profile, _ := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 40, 0)
+	executor, _ := rasql.AsExecutor(db, profile)
+	// BEGIN(mutationBatch)
 	first := store.NewUsersCreate().Email("ada@example.com").FirstName("Ada").LastName("Lovelace").Plan()
 	second := store.NewUsersCreate().Email("grace@example.com").FirstName("Grace").LastName("Hopper").Plan()
-	bulk, _ := rasql.NewBulkPlan(first, second)
-	outcome, err := rasql.ExecBulkCreate(context.Background(), db, bulk, rasql.BulkOptions{MaxRows: 100})
+	outcome, err := rasql.ExecMutationBatch(context.Background(), executor,
+		[]rasql.MutationPlan{first, second}, rasql.BulkOptions{MaxRows: 100})
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
-	fmt.Println(outcome.Completed)
-	// END(typedBulk)
-	// Output: [{0 1}]
+	fmt.Println(outcome.Inputs)
+	// END(mutationBatch)
+	// Output: [1 1]
 }

@@ -45,9 +45,12 @@ that checkout rather than one `go install` put on the PATH. `scripts/rasql.sh`
 is a whole file the walkthrough never shows: it builds `../../cmd/rasql` and
 runs the result. `scripts/generate.sh`, `scripts/migrate.sh`, and
 `scripts/refresh-schema.sh` each add a line to run from the module root and
-call `scripts/rasql.sh` instead of naming `rasql` directly. Nothing else about
-the project changes, and none of this is needed by a project that depends on a
-released rasql.
+call `scripts/rasql.sh` instead of naming `rasql` directly.
+
+`internal/store/docs_examples_test.go` is a compile-only source for short API
+snippets in rasql's reference documentation. It calls the same generated store
+and canonical runtime APIs as the repository, but it is not part of the
+walkthrough steps or the application binary.
 
 ## What is in here
 

@@ -959,7 +959,7 @@ func taskboardBatchPlans() []rasql.MutationPlan {
 func taskboardCanonicalBatch(ctx context.Context, executor rasql.Executor, plans []rasql.MutationPlan) (taskboardBatchResult, error) {
 	result := taskboardBatchResult{}
 	err := rasql.Within(ctx, executor, nil, func(ctx context.Context, tx rasql.Executor) error {
-		outcome, err := rasql.ExecMutationBatch(ctx, tx, plans, rasql.MutationBatchOptions{MaxRows: 500, MaxBindParameters: 999})
+		outcome, err := rasql.ExecMutationBatch(ctx, tx, plans, rasql.BulkOptions{MaxRows: 500, MaxBindParameters: 999})
 		if err != nil {
 			return err
 		}

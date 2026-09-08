@@ -47,7 +47,6 @@ func Example_rasql_where_expressions() {
 	// binds it automatically, and the renderer turns it into the dialect's
 	// placeholder.
 	// SQL: SELECT users.id, users.email FROM users WHERE (users.id > ? AND users.id IS NOT NULL) ORDER BY users.id DESC (argument: 10)
-	// BEGIN(where_expressions)
 	rows, err := rasql.SelectFrom(users).
 		Where(query.And(
 			query.GreaterThan(users.ID().Ref(), 10),
@@ -55,7 +54,6 @@ func Example_rasql_where_expressions() {
 		)).
 		Order(query.Desc(users.ID().Ref())).
 		Query(ctx, db)
-	// END(where_expressions)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return

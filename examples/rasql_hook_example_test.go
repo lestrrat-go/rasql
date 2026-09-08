@@ -38,7 +38,6 @@ func Example_rasql_hook() {
 		return
 	}
 
-	// BEGIN(hook)
 	policy := rasql.HookFunc{
 		BeforeFunc: func(ctx context.Context, operation rasql.Operation) error {
 			if operation.Kind() == rasql.ExecOperation && operation.SQL() == `DELETE FROM "users"` {
@@ -54,7 +53,6 @@ func Example_rasql_hook() {
 		fmt.Printf("failed to install the hook: %s\n", err)
 		return
 	}
-	// END(hook)
 
 	// AllowAll renders the full-table delete the hook is looking for, so the
 	// hook refuses it and the statement never reaches the database.

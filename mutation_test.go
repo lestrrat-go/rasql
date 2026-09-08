@@ -122,7 +122,7 @@ func TestMutationBatchGroupsCompatibleCreates(t *testing.T) {
 		require.NoError(t, err)
 		plans = append(plans, plan)
 	}
-	outcome, err := rasql.ExecMutationBatch(t.Context(), executor, plans, rasql.MutationBatchOptions{MaxRows: 3})
+	outcome, err := rasql.ExecMutationBatch(t.Context(), executor, plans, rasql.BulkOptions{MaxRows: 3})
 	require.NoError(t, err)
 	require.Equal(t, []rasql.InputOutcome{rasql.InputApplied, rasql.InputApplied, rasql.InputApplied, rasql.InputApplied, rasql.InputApplied, rasql.InputApplied}, outcome.Inputs)
 }
@@ -150,7 +150,7 @@ func TestMutationBatchEmitsLogicalInvocation(t *testing.T) {
 		})
 	}))
 	require.NoError(t, err)
-	_, err = rasql.ExecMutationBatch(t.Context(), executor, plans, rasql.MutationBatchOptions{MaxRows: 3})
+	_, err = rasql.ExecMutationBatch(t.Context(), executor, plans, rasql.BulkOptions{MaxRows: 3})
 	require.NoError(t, err)
 	mu.Lock()
 	defer mu.Unlock()
@@ -180,7 +180,7 @@ func TestMutationBatchReportsRejectedBatchAndUnattemptedInputs(t *testing.T) {
 		require.NoError(t, err)
 		plans = append(plans, plan)
 	}
-	outcome, err := rasql.ExecMutationBatch(t.Context(), executor, plans, rasql.MutationBatchOptions{MaxRows: 3, Classifier: mutationRejectClassifier{}})
+	outcome, err := rasql.ExecMutationBatch(t.Context(), executor, plans, rasql.BulkOptions{MaxRows: 3, Classifier: mutationRejectClassifier{}})
 	require.Error(t, err)
 	require.Equal(t, []rasql.InputOutcome{
 		rasql.InputApplied, rasql.InputApplied, rasql.InputApplied,
@@ -196,7 +196,7 @@ func TestMutationBatchCancellationBeforeExecution(t *testing.T) {
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	outcome, err := rasql.ExecMutationBatch(ctx, executor, []rasql.MutationPlan{plan}, rasql.MutationBatchOptions{})
+	outcome, err := rasql.ExecMutationBatch(ctx, executor, []rasql.MutationPlan{plan}, rasql.BulkOptions{})
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, []rasql.InputOutcome{rasql.InputUnattempted}, outcome.Inputs)
 }
@@ -208,7 +208,7 @@ func TestMutationBatchAtomicRollbackStates(t *testing.T) {
 	require.NoError(t, err)
 	second, err := rasql.NewCreatePlan(table, rasql.SetField(id, int64(1)), rasql.SetField(value, "duplicate"))
 	require.NoError(t, err)
-	outcome, err := rasql.ExecMutationBatch(t.Context(), executor, []rasql.MutationPlan{first, second}, rasql.MutationBatchOptions{
+	outcome, err := rasql.ExecMutationBatch(t.Context(), executor, []rasql.MutationPlan{first, second}, rasql.BulkOptions{
 		MaxRows: 1, Atomic: true, Classifier: mutationRejectClassifier{},
 	})
 	require.Error(t, err)

@@ -254,14 +254,14 @@ func Returning[R any](plan MutationPlan, projection Projection[R]) (Query[R], er
 	return result, nil
 }
 
-func ExecMutationBatch(ctx context.Context, executor Executor, plans []MutationPlan, options MutationBatchOptions) (MutationBatchOutcome, error) {
+func ExecMutationBatch(ctx context.Context, executor Executor, plans []MutationPlan, options BulkOptions) (BulkOutcome, error) {
 	if executor == nil {
-		return MutationBatchOutcome{}, fmt.Errorf("rasql: executor must not be nil")
+		return BulkOutcome{}, fmt.Errorf("rasql: executor must not be nil")
 	}
 	if len(plans) == 0 {
-		return MutationBatchOutcome{}, fmt.Errorf("rasql: mutation batch requires at least one plan")
+		return BulkOutcome{}, fmt.Errorf("rasql: mutation batch requires at least one plan")
 	}
-	outcome := MutationBatchOutcome{Inputs: make([]InputOutcome, len(plans))}
+	outcome := BulkOutcome{Inputs: make([]InputOutcome, len(plans))}
 	maxRows := options.MaxRows
 	if maxRows == 0 {
 		maxRows = 1000
@@ -320,7 +320,7 @@ func ExecMutationBatch(ctx context.Context, executor Executor, plans []MutationP
 		return outcome, err
 	}
 	logicalCtx, logicalExecutor, complete := beginLogicalInvocation(ctx, executor, EventMutationBatch)
-	var preparedOutcome MutationBatchOutcome
+	var preparedOutcome BulkOutcome
 	var executionErr error
 	func() {
 		defer func() {
@@ -442,7 +442,7 @@ func encodeCompiledMutation(compiled compiledQuery, executor Executor) (stmt.Sta
 	return encodeStatement(copy, compiled.bindSlots, registry)
 }
 
-func execPreparedMutationBatches(ctx context.Context, executor Executor, prepared []preparedMutationBatch, options MutationBatchOptions, outcome MutationBatchOutcome) (MutationBatchOutcome, error) {
+func execPreparedMutationBatches(ctx context.Context, executor Executor, prepared []preparedMutationBatch, options BulkOptions, outcome BulkOutcome) (BulkOutcome, error) {
 	for _, batch := range prepared {
 		if err := ctx.Err(); err != nil {
 			return outcome, err
@@ -485,13 +485,13 @@ func mutationBindLimit(executor Executor, override int) int {
 	return limit
 }
 
-func execAtomicMutationBatch(ctx context.Context, executor Executor, plans []MutationPlan, options MutationBatchOptions) (MutationBatchOutcome, error) {
+func execAtomicMutationBatch(ctx context.Context, executor Executor, plans []MutationPlan, options BulkOptions) (BulkOutcome, error) {
 	maxRows := options.MaxRows
 	if maxRows == 0 {
 		maxRows = 1000
 	}
 	prepared, err := prepareMutationBatches(executor, plans, maxRows, mutationBindLimit(executor, options.MaxBindParameters))
-	outcome := MutationBatchOutcome{Inputs: make([]InputOutcome, len(plans)), Durability: executorDurability(executor)}
+	outcome := BulkOutcome{Inputs: make([]InputOutcome, len(plans)), Durability: executorDurability(executor)}
 	if err != nil {
 		return outcome, err
 	}
@@ -585,7 +585,7 @@ func execAtomicMutationBatch(ctx context.Context, executor Executor, plans []Mut
 	return outcome, nil
 }
 
-func mutationAttempted(outcome MutationBatchOutcome) []int {
+func mutationAttempted(outcome BulkOutcome) []int {
 	indexes := make([]int, 0, len(outcome.Inputs))
 	for index, state := range outcome.Inputs {
 		if state != InputUnattempted {
@@ -619,6 +619,18 @@ func mutationRows(rows [][]query.Expression) [][]any {
 		}
 	}
 	return result
+}
+
+func sameColumns(left, right []query.ColumnRef) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index].Name() != right[index].Name() {
+			return false
+		}
+	}
+	return true
 }
 
 func makeRange(first, end int) []int {

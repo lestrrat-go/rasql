@@ -40,7 +40,6 @@ func Example_rasql_query_errors() {
 		return
 	}
 
-	// BEGIN(query_errors)
 	rows, err := rasql.SelectFrom(users).Query(ctx, db)
 	if err != nil {
 		// The statement could not be validated or rendered.
@@ -55,7 +54,6 @@ func Example_rasql_query_errors() {
 		}
 		fmt.Println(user.Email)
 	}
-	// END(query_errors)
 
 	// Dropping the table shows which of the two checks catches an execution
 	// failure. The statement still validates and renders, so Query returns no

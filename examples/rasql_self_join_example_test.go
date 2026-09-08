@@ -52,7 +52,6 @@ func Example_rasql_self_join() {
 	}
 
 	// SQL: SELECT employees.id, employees.name, employees.manager_id FROM employees INNER JOIN employees AS manager ON (employees.manager_id = manager.id) ORDER BY employees.id ASC
-	// BEGIN(self_join)
 	manager, err := employees.As("manager")
 	if err != nil {
 		fmt.Printf("failed to alias employees: %s\n", err)
@@ -62,7 +61,6 @@ func Example_rasql_self_join() {
 		Join(rasql.InnerJoin(manager, query.Equal(employees.ManagerID().Ref(), manager.ID()))).
 		OrderAsc(employees.ID().Ref()).
 		Query(ctx, db)
-	// END(self_join)
 	if err != nil {
 		fmt.Printf("failed to query employees: %s\n", err)
 		return

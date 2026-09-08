@@ -44,7 +44,6 @@ func Example_rasql_partial_update() {
 	}
 
 	// SQL: UPDATE users SET email = ? WHERE users.id < ? (arguments: "ada@example.com", 100)
-	// BEGIN(partial_update)
 	statement, err := query.NewUpdate(users.Ref(), query.Set(users.Email().Ref(), "ada@example.com"))
 	if err != nil {
 		fmt.Printf("failed to build update: %s\n", err)
@@ -56,7 +55,6 @@ func Example_rasql_partial_update() {
 		return
 	}
 	result, err := rasql.Exec(ctx, db, statement)
-	// END(partial_update)
 	if err != nil {
 		fmt.Printf("failed to run update: %s\n", err)
 		return

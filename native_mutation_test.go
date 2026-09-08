@@ -133,7 +133,7 @@ func TestNativeMutationBatchRejectsEveryNativePositionBeforeExecution(t *testing
 			raw := &nativeMutationExecutor{dialect: dialect.SQLite()}
 			executor, err := WithEngineProfile(raw, profile)
 			require.NoError(t, err)
-			_, err = ExecMutationBatch(t.Context(), executor, tc.plans(t), MutationBatchOptions{Atomic: true})
+			_, err = ExecMutationBatch(t.Context(), executor, tc.plans(t), BulkOptions{Atomic: true})
 			var planErr *PlanError
 			require.ErrorAs(t, err, &planErr)
 			require.Equal(t, "unsupported_feature", planErr.Code)

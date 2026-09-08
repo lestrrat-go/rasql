@@ -24,27 +24,21 @@ func Example_rasql_sqlite_query() {
 	database.SetMaxOpenConns(1)
 
 	// A DB couples a database handle with the dialect used to render SQL.
-	// BEGIN(new_db)
 	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
-	// END(new_db)
 
 	// store.Users() returns the generated table value, which carries the row
 	// type and one accessor method per column.
-	// BEGIN(bind_table)
 	users := store.Users()
-	// END(bind_table)
 
 	// Create the schema described by the generated table descriptor.
-	// BEGIN(create_table)
 	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	// END(create_table)
 	// Insert encodes the row's fields as bound values, through the mapping
 	// method the generated row type carries.
 	if _, err := rasql.Insert(ctx, db, users, store.UsersRow{ID: 42, Email: "ada@example.com"}); err != nil {

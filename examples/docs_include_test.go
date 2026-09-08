@@ -745,45 +745,26 @@ var execPassageFixtures = []struct {
 	},
 }
 
-// TestDocsQualifyExecWithReturningRule holds the documentation to the rule
-// Client.Exec enforces: it rejects a write statement carrying a RETURNING
-// clause, so prose that sends a caller to Exec must name that exception and the
-// QueryWrite call that reads those rows, rather than route the caller into a
-// failing call.
-func TestDocsQualifyExecWithReturningRule(t *testing.T) {
-	t.Run("fixtures", func(t *testing.T) {
-		for _, fixture := range execPassageFixtures {
-			t.Run(fixture.name, func(t *testing.T) {
-				problem := execPassageProblem(fixture.passage)
-				if fixture.reject {
-					require.NotEmpty(t, problem, "the rule accepts a passage that routes a RETURNING write to Client.Exec:\n%s", fixture.passage)
-					return
-				}
-				require.Empty(t, problem, "the rule rejects a passage that already qualifies Client.Exec: %s", problem)
-			})
-		}
-	})
+// TestDocsDescribeExecutorExecAsLowLevel keeps application writes on the
+// canonical mutation path while documenting the retained low-level boundary.
+func TestDocsDescribeExecutorExecAsLowLevel(t *testing.T) {
+	passages := 0
+	for _, page := range documentationPages(t) {
+		contents, err := os.ReadFile(page)
+		require.NoError(t, err)
 
-	t.Run("documentation", func(t *testing.T) {
-		passages := 0
-		for _, page := range documentationPages(t) {
-			contents, err := os.ReadFile(page)
-			require.NoError(t, err)
-
-			prose := fencedBlock.ReplaceAllString(string(contents), "")
-			for _, paragraph := range strings.Split(prose, "\n\n") {
-				if !execMethod.MatchString(paragraph) {
-					continue
-				}
-				passages++
-				problem := execPassageProblem(paragraph)
-				require.Empty(t, problem,
-					"%s %s; say which call reads those rows instead:\n%s",
-					page, problem, strings.TrimSpace(paragraph))
+		prose := fencedBlock.ReplaceAllString(string(contents), "")
+		for _, paragraph := range strings.Split(prose, "\n\n") {
+			if !strings.Contains(paragraph, "`Executor.Exec`") {
+				continue
 			}
+			passages++
+			require.Contains(t, paragraph, "low-level", "%s must describe Executor.Exec as a low-level boundary", page)
+			require.Contains(t, paragraph, "`stmt.Statement`", "%s must name the input accepted by Executor.Exec", page)
+			require.Contains(t, paragraph, "`ExecMutation`", "%s must direct application writes to ExecMutation", page)
 		}
-		require.NotZero(t, passages, "no Client.Exec passage found in the documentation")
-	})
+	}
+	require.NotZero(t, passages, "no Executor.Exec passage found in the documentation")
 }
 
 // documentationTrees are the directories every markdown file under them is a

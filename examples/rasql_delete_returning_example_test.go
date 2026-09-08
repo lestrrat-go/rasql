@@ -44,13 +44,11 @@ func Example_rasql_delete_returning() {
 	}
 
 	// SQL: DELETE FROM users WHERE users.id = ? RETURNING id, email (argument: 42)
-	// BEGIN(delete_returning_dynamic)
 	builder := dynamic.DeleteFrom(users.Ref()).
 		WhereEqual(users.ID().Ref(), 42).
 		Returning(users.ID().Ref(), users.Email().Ref())
 
 	rows, err := builder.Query(ctx, db)
-	// END(delete_returning_dynamic)
 	if err != nil {
 		fmt.Printf("failed to delete user: %s\n", err)
 		return
@@ -74,14 +72,12 @@ func Example_rasql_delete_returning() {
 	// omitted field would decode as a zero value with nothing to say the
 	// database never sent it.
 	// SQL: DELETE FROM users WHERE users.id = ? RETURNING id, email, nickname, status, first_name, last_name (argument: 43)
-	// BEGIN(delete_returning_typed)
 	typed := rasql.DeleteFrom(users).
 		WhereEqual(users.ID().Ref(), 43).
 		Returning(users.ID().Ref(), users.Email().Ref(), users.Nickname().Ref(),
 			users.Status().Ref(), users.FirstName().Ref(), users.LastName().Ref())
 
 	deleted, err := rasql.QueryDeleteOne[store.UsersRow](ctx, db, typed)
-	// END(delete_returning_typed)
 	if err != nil {
 		fmt.Printf("failed to delete user: %s\n", err)
 		return
