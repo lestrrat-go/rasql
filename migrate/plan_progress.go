@@ -27,9 +27,13 @@ type planProgressStore struct {
 var planCheckpointWriteHook = func(string) error { return nil }
 
 func newPlanProgressStore(prepared preparedChangePlan, history resolvedPlanHistory) (planProgressStore, error) {
-	dialectValue, err := planHistoryDialect(prepared.profile.Engine)
+	dialectValue, err := resolvedHistoryDialect(history)
 	if err != nil {
 		return planProgressStore{}, err
+	}
+	expectedEngine, ok := engineForDialect(dialectValue.Name())
+	if !ok || expectedEngine != prepared.profile.Engine {
+		return planProgressStore{}, fmt.Errorf("migrate: resolved plan history dialect %q does not match plan engine %d", dialectValue.Name(), prepared.profile.Engine)
 	}
 	if history.qualifiedPlanSQL == "" || history.planProgressTable.Name == "" {
 		return planProgressStore{}, errors.New("migrate: plan progress history is incomplete")
