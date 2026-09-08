@@ -309,17 +309,17 @@ func sortedStringPairs(values map[string]string) []map[string]string {
 	return out
 }
 
-func CatalogDigest(c compilerir.PhysicalCatalog) (Digest, error) {
-	if err := c.Validate(); err != nil {
+func CatalogDigest(c Catalog) (Digest, error) {
+	if err := c.validate(); err != nil {
 		return Digest{}, fmt.Errorf("%w: catalog: %v", ErrInvalidIdentity, err)
 	}
-	b, err := marshalNoHTML(catalogValue(c))
+	b, err := marshalNoHTML(catalogValue(c.physical))
 	if err != nil {
 		return Digest{}, err
 	}
 	return sha256Digest(b), nil
 }
-func EvaluateFacts(c compilerir.PhysicalCatalog, facts []Fact) error {
+func EvaluateFacts(c Catalog, facts []Fact) error {
 	for _, fact := range facts {
 		if err := EvaluateFact(c, fact); err != nil {
 			return err
@@ -327,15 +327,15 @@ func EvaluateFacts(c compilerir.PhysicalCatalog, facts []Fact) error {
 	}
 	return nil
 }
-func EvaluateFact(c compilerir.PhysicalCatalog, fact Fact) error {
-	if err := c.Validate(); err != nil {
+func EvaluateFact(c Catalog, fact Fact) error {
+	if err := c.validate(); err != nil {
 		return fmt.Errorf("%w: catalog: %v", ErrInvalidFact, err)
 	}
 	if err := validateFact(fact); err != nil {
 		return err
 	}
 	var object map[string]any
-	for _, candidate := range c.Objects {
+	for _, candidate := range c.physical.Objects {
 		if ObjectID(candidate.ID) == fact.object {
 			object = physicalObjectValue(candidate)
 			break
@@ -363,6 +363,11 @@ func EvaluateFact(c compilerir.PhysicalCatalog, fact Fact) error {
 	case FactOperatorEqual:
 		if !present {
 			return fmt.Errorf("%w: %s is absent", ErrFactMismatch, fact.path)
+		}
+		if fact.path != "$" {
+			if _, object := value.(map[string]any); object {
+				return fmt.Errorf("%w: equality path %s selects an object", ErrInvalidFact, fact.path)
+			}
 		}
 		actual, err := canonicalJSON(mustJSON(value))
 		if err != nil {

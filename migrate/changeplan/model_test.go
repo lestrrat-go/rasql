@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/migrate/changeplan"
+	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/lestrrat-go/rasql/stmt"
 	"github.com/stretchr/testify/require"
@@ -38,7 +38,7 @@ func testBaseline(t *testing.T, future changeplan.BaselineObject, renames ...cha
 	require.NoError(t, err)
 	catalog, err := changeplan.NewCatalogIdentity(engineprofile.SQLite, profileDigest, changeplan.Digest{2}, changeplan.Digest{3})
 	require.NoError(t, err)
-	starting, err := changeplan.NewBaselineObject("starting", "table", "main", "users", "")
+	starting, err := changeplan.NewBaselineObject("starting", "table", "main", "users")
 	require.NoError(t, err)
 	objects := []changeplan.BaselineObject{starting}
 	if future.ID() != "" {
@@ -50,16 +50,16 @@ func testBaseline(t *testing.T, future changeplan.BaselineObject, renames ...cha
 }
 
 func TestPlanRoundTripAndArgumentIsolation(t *testing.T) {
-	future, err := changeplan.NewBaselineObject("created", "table", "main", "created", "create")
+	future, err := changeplan.NewIntroducedBaselineObject("source", "create", schema.TableDef{Schema: "main", Name: "created", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
 	require.NoError(t, err)
 	baseline := testBaseline(t, future)
 	argument := []byte("value")
 	statement := stmt.New(sqltext.Text("INSERT INTO created VALUES (?)"), argument)
-	operation, err := changeplan.NewOperation("create", changeplan.OperationCreateTable, nil, []changeplan.ObjectID{"created"}, nil, nil, nil, changeplan.TransactionRequired, false, nil)
+	operation, err := changeplan.NewOperation("create", changeplan.OperationCreateTable, nil, []changeplan.ObjectID{future.ID()}, nil, nil, nil, changeplan.TransactionRequired, false, nil)
 	require.NoError(t, err)
-	backfill, err := changeplan.NewOperation("backfill", changeplan.OperationBackfill, []changeplan.OperationID{"create"}, []changeplan.ObjectID{"created"}, nil, nil, []stmt.Statement{statement}, changeplan.TransactionForbidden, false, nil)
+	backfill, err := changeplan.NewOperation("backfill", changeplan.OperationBackfill, []changeplan.OperationID{"create"}, []changeplan.ObjectID{future.ID()}, nil, nil, []stmt.Statement{statement}, changeplan.TransactionForbidden, false, nil)
 	require.NoError(t, err)
-	decision, err := changeplan.NewDecision("backfill-decision", changeplan.DecisionSupplyBackfill, "created", "", "", true, "policy source")
+	decision, err := changeplan.NewDecision("backfill-decision", changeplan.DecisionSupplyBackfill, future.ID(), "", "", true, "policy source")
 	require.NoError(t, err)
 	history, err := changeplan.NewHistoryIdentity("main", "schema_migrations")
 	require.NoError(t, err)
@@ -99,7 +99,11 @@ func TestStableTopologicalOrderUsesOriginalOrder(t *testing.T) {
 }
 
 func TestFactEvaluationUsesRFC6901Paths(t *testing.T) {
-	catalog := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "sqlite", Version: "3.35", Profile: "sqlite-3.35"}, Objects: []compilerir.PhysicalObject{{ID: "starting", Kind: "table", Name: "users", Columns: []compilerir.PhysicalColumn{}}}}
+	profile := testProfile(t)
+	object, err := changeplan.NewCatalogObject("starting", schema.TableDef{Schema: "main", Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
+	require.NoError(t, err)
+	catalog, err := changeplan.NewCatalog(profile, "source", []changeplan.CatalogObject{object})
+	require.NoError(t, err)
 	fact, err := changeplan.NewFact("starting", "/name", changeplan.FactOperatorEqual, `"users"`)
 	require.NoError(t, err)
 	require.Equal(t, changeplan.ObjectID("starting"), fact.Object())

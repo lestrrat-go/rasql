@@ -199,6 +199,133 @@ func validatePlanParts(baseline BaselineIdentity, decisions []Decision, operatio
 	return validatePrefixes(baseline, operations, order)
 }
 
+func validateFutureObjectIDs(baseline BaselineIdentity, operations []Operation) error {
+	creates := make(map[OperationID]Operation)
+	for _, operation := range operations {
+		if operation.kind == OperationCreateTable {
+			creates[operation.id] = operation
+		}
+	}
+	seen := make(map[ObjectID]struct{}, len(baseline.objects))
+	for _, object := range baseline.objects {
+		if _, ok := seen[object.id]; ok {
+			return fmt.Errorf("%w: duplicate occurrence ID %q", ErrInvalidIdentity, object.id)
+		}
+		seen[object.id] = struct{}{}
+		if object.introducedBy == "" {
+			continue
+		}
+		operation, ok := creates[object.introducedBy]
+		if !ok || len(operation.objects) != 1 || operation.objects[0] != object.id {
+			return fmt.Errorf("%w: future object %q has no matching create operation", ErrInvalidIdentity, object.id)
+		}
+		want, err := introducedObjectID(baseline.sourceIdentity, object.introducedBy, object.kind, object.schema, object.name)
+		if err != nil || want != object.id {
+			return fmt.Errorf("%w: future object %q has an invalid deterministic ID", ErrInvalidIdentity, object.id)
+		}
+	}
+	for _, operation := range operations {
+		if operation.kind != OperationCreateTable {
+			continue
+		}
+		if len(operation.objects) != 1 {
+			return fmt.Errorf("%w: create_table needs one object", ErrInvalidOperation)
+		}
+		found := false
+		for _, object := range baseline.objects {
+			if object.introducedBy == operation.id && object.id == operation.objects[0] {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("%w: create operation %q has no future occurrence", ErrInvalidIdentity, operation.id)
+		}
+	}
+	return nil
+}
+
+func validateResolvedState(resolved ResolvedChanges, baseline BaselineIdentity) error {
+	if err := validateFutureObjectIDs(baseline, resolved.operations); err != nil {
+		return err
+	}
+	order, err := stableOrder(resolved.operations)
+	if err != nil {
+		return err
+	}
+	active := make(map[ObjectID]BaselineObject)
+	for _, object := range baseline.objects {
+		if object.introducedBy == "" {
+			active[object.id] = object
+		}
+	}
+	if err := matchActiveCatalog(resolved.baseline, active); err != nil {
+		return err
+	}
+	futureByCreate := make(map[OperationID]BaselineObject)
+	for _, object := range baseline.objects {
+		if object.introducedBy != "" {
+			futureByCreate[object.introducedBy] = object
+		}
+	}
+	renameByOperation := make(map[OperationID]BaselineRename)
+	for _, rename := range baseline.renames {
+		renameByOperation[rename.operation] = rename
+	}
+	for i, index := range order {
+		operation := resolved.operations[index]
+		switch operation.kind {
+		case OperationCreateTable:
+			object, ok := futureByCreate[operation.id]
+			if !ok {
+				return fmt.Errorf("%w: missing future occurrence for %q", ErrInvalidIdentity, operation.id)
+			}
+			if _, exists := active[object.id]; exists {
+				return fmt.Errorf("%w: occurrence %q is already active", ErrInvalidIdentity, object.id)
+			}
+			active[object.id] = object
+		case OperationRenameTable:
+			rename, ok := renameByOperation[operation.id]
+			if !ok {
+				return fmt.Errorf("%w: rename %q is missing binding", ErrInvalidIdentity, operation.id)
+			}
+			object, ok := active[rename.object]
+			if !ok {
+				return fmt.Errorf("%w: rename %q uses inactive occurrence", ErrInvalidIdentity, operation.id)
+			}
+			object.schema, object.name = rename.toSchema, rename.toName
+			active[rename.object] = object
+		case OperationDropTable:
+			for _, id := range operation.objects {
+				if _, ok := active[id]; !ok {
+					return fmt.Errorf("%w: drop uses inactive occurrence %q", ErrInvalidIdentity, id)
+				}
+				delete(active, id)
+			}
+		}
+		if err := matchActiveCatalog(resolved.steps[i].after, active); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func matchActiveCatalog(catalog Catalog, active map[ObjectID]BaselineObject) error {
+	if err := catalog.validate(); err != nil {
+		return err
+	}
+	if len(catalog.physical.Objects) != len(active) {
+		return fmt.Errorf("%w: catalog active occurrence count differs", ErrInvalidPlan)
+	}
+	for _, object := range catalog.physical.Objects {
+		want, ok := active[ObjectID(object.ID)]
+		if !ok || want.kind != object.Kind || want.schema != object.Schema || want.name != object.Name {
+			return fmt.Errorf("%w: catalog occurrence %q differs", ErrInvalidPlan, object.ID)
+		}
+	}
+	return nil
+}
+
 func renameOperations(operations []Operation, order []int) map[ObjectID][]OperationID {
 	out := make(map[ObjectID][]OperationID)
 	for _, index := range order {

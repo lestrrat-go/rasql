@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -16,7 +17,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
+	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/lestrrat-go/rasql/stmt"
 )
@@ -197,16 +200,16 @@ type CatalogIdentity struct {
 	sourceDigest  Digest
 }
 
-func NewCatalogIdentity(engine engineprofile.EngineID, profileDigest, catalogDigest, sourceDigest Digest) (CatalogIdentity, error) {
+func NewCatalogIdentity(engine EngineID, profileDigest, catalogDigest, sourceDigest Digest) (CatalogIdentity, error) {
 	if engine < engineprofile.PostgreSQL || engine > engineprofile.Custom {
 		return CatalogIdentity{}, fmt.Errorf("%w: engine", ErrInvalidIdentity)
 	}
 	return CatalogIdentity{engine: engine, profileDigest: profileDigest, catalogDigest: catalogDigest, sourceDigest: sourceDigest}, nil
 }
-func (c CatalogIdentity) Engine() engineprofile.EngineID { return c.engine }
-func (c CatalogIdentity) ProfileDigest() Digest          { return c.profileDigest }
-func (c CatalogIdentity) CatalogDigest() Digest          { return c.catalogDigest }
-func (c CatalogIdentity) SourceDigest() Digest           { return c.sourceDigest }
+func (c CatalogIdentity) Engine() EngineID      { return c.engine }
+func (c CatalogIdentity) ProfileDigest() Digest { return c.profileDigest }
+func (c CatalogIdentity) CatalogDigest() Digest { return c.catalogDigest }
+func (c CatalogIdentity) SourceDigest() Digest  { return c.sourceDigest }
 
 type BaselineObject struct {
 	id           ObjectID
@@ -215,11 +218,55 @@ type BaselineObject struct {
 	introducedBy OperationID
 }
 
-func NewBaselineObject(id ObjectID, kind, schema, name string, introducedBy OperationID) (BaselineObject, error) {
+func NewBaselineObject(id ObjectID, kind, schema, name string) (BaselineObject, error) {
+	return newBaselineObject(id, kind, schema, name, "")
+}
+
+func NewIntroducedBaselineObject(sourceIdentity string, introducedBy OperationID, definition schema.TableDef) (BaselineObject, error) {
+	if strings.TrimSpace(sourceIdentity) == "" || introducedBy == "" {
+		return BaselineObject{}, fmt.Errorf("%w: introduced object identity is required", ErrInvalidIdentity)
+	}
+	definition = definition.Clone()
+	if err := definition.Validate(); err != nil {
+		return BaselineObject{}, fmt.Errorf("%w: introduced object: %v", ErrInvalidIdentity, err)
+	}
+	id, err := introducedObjectID(sourceIdentity, introducedBy, string(definition.EffectiveKind()), definition.Schema, definition.Name)
+	if err != nil {
+		return BaselineObject{}, err
+	}
+	return newBaselineObject(id, string(definition.EffectiveKind()), definition.Schema, definition.Name, introducedBy)
+}
+
+func newBaselineObject(id ObjectID, kind, schema, name string, introducedBy OperationID) (BaselineObject, error) {
 	if id == "" || strings.TrimSpace(kind) == "" || strings.TrimSpace(name) == "" {
 		return BaselineObject{}, fmt.Errorf("%w: baseline object fields are required", ErrInvalidIdentity)
 	}
 	return BaselineObject{id: id, kind: kind, schema: schema, name: name, introducedBy: introducedBy}, nil
+}
+
+func introducedObjectID(sourceIdentity string, introducedBy OperationID, kind, schemaName, name string) (ObjectID, error) {
+	if strings.TrimSpace(sourceIdentity) == "" || introducedBy == "" {
+		return "", fmt.Errorf("%w: introduced object identity is required", ErrInvalidIdentity)
+	}
+	var namespace bytes.Buffer
+	namespace.WriteString("rasql.object-id/introduced/v1\x00")
+	for _, value := range []string{sourceIdentity, string(introducedBy)} {
+		var length [8]byte
+		binary.BigEndian.PutUint64(length[:], uint64(len(value)))
+		namespace.Write(length[:])
+		namespace.WriteString(value)
+	}
+	physical := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "sqlite", Version: "3.0", Profile: "sqlite-3.35"}, Objects: []compilerir.PhysicalObject{{Kind: kind, Schema: schemaName, Name: name, Columns: []compilerir.PhysicalColumn{{Name: "id", Ordinal: 0, LogicalKind: "integer"}}}}}
+	assigned, diagnostics := compilerir.AssignObjectIDs(physical, compilerir.IdentityInput{SourceIdentity: namespace.String()})
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Level == compilerir.DiagnosticError {
+			return "", fmt.Errorf("%w: introduced object ID: %s", ErrInvalidIdentity, diagnostic.Message)
+		}
+	}
+	if len(assigned.Objects) != 1 || assigned.Objects[0].ID == "" {
+		return "", fmt.Errorf("%w: introduced object ID was not assigned", ErrInvalidIdentity)
+	}
+	return ObjectID(assigned.Objects[0].ID), nil
 }
 func (o BaselineObject) ID() ObjectID              { return o.id }
 func (o BaselineObject) Kind() string              { return o.kind }
@@ -504,6 +551,9 @@ func newPlan(profile Profile, baseline BaselineIdentity, history HistoryIdentity
 		return Plan{}, fmt.Errorf("%w: history table is required", ErrInvalidPlan)
 	}
 	if err := validatePlanParts(baseline, decisions, operations); err != nil {
+		return Plan{}, err
+	}
+	if err := validateFutureObjectIDs(baseline, operations); err != nil {
 		return Plan{}, err
 	}
 	p := Plan{profile: profile, baseline: baseline, history: history}

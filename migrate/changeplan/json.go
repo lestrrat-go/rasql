@@ -194,7 +194,7 @@ func profileFromWire(w profileWire) (Profile, error) {
 	case engineprofile.MySQL:
 		profileID = fmt.Sprintf("mysql-%d.%d", w.Version.Major, w.Version.Minor)
 	case engineprofile.SQLite:
-		profileID = fmt.Sprintf("sqlite-%d.%d", w.Version.Major, w.Version.Minor)
+		profileID = "sqlite-3.35"
 	}
 	return newProfile(profileID, e, w.CustomName, engineprofile.Version{Known: w.VersionKnown, Major: w.Version.Major, Minor: w.Version.Minor, Patch: w.Version.Patch}, c, engineprofile.Limits{MaxBindParameters: w.MaxBindParameters})
 }
@@ -422,6 +422,9 @@ func Encode(p Plan) ([]byte, error) {
 	if err := validatePlanParts(p.baseline, p.decisions, p.operations); err != nil {
 		return nil, err
 	}
+	if err := validateFutureObjectIDs(p.baseline, p.operations); err != nil {
+		return nil, err
+	}
 	if err := validatePlanIdentity(p); err != nil {
 		return nil, err
 	}
@@ -465,6 +468,9 @@ func Decode(data []byte) (Plan, error) {
 		return Plan{}, err
 	}
 	if err := validatePlanIdentity(p); err != nil {
+		return Plan{}, err
+	}
+	if err := validateFutureObjectIDs(p.baseline, p.operations); err != nil {
 		return Plan{}, err
 	}
 	id, err := parseDigest(w.ID)
@@ -705,7 +711,7 @@ func planFromWire(w planWire) (Plan, error) {
 	catalog, _ := NewCatalogIdentity(e, pd, cd, sd)
 	objects := make([]BaselineObject, len(w.Baseline.Objects))
 	for i, x := range w.Baseline.Objects {
-		objects[i], err = NewBaselineObject(ObjectID(x.ID), x.Kind, x.Schema, x.Name, OperationID(x.IntroducedBy))
+		objects[i], err = newBaselineObject(ObjectID(x.ID), x.Kind, x.Schema, x.Name, OperationID(x.IntroducedBy))
 		if err != nil {
 			return Plan{}, err
 		}
@@ -774,6 +780,12 @@ func operationFromWire(w operationWire) (Operation, error) {
 func factsFromWire(in []factWire) ([]Fact, error) {
 	out := make([]Fact, len(in))
 	for i, x := range in {
+		if x.Operator == string(FactOperatorEqual) {
+			canonical, err := canonicalJSON([]byte(x.Value))
+			if err != nil || !bytes.Equal(canonical, []byte(x.Value)) {
+				return nil, fmt.Errorf("%w: non-canonical fact value at index %d", ErrInvalidWire, i)
+			}
+		}
 		var err error
 		out[i], err = NewFact(ObjectID(x.Object), x.Path, FactOperator(x.Operator), x.Value)
 		if err != nil {
@@ -888,9 +900,14 @@ func Write(name string, p Plan) error {
 		_ = f.Close()
 		return err
 	}
-	if _, err := f.Write(b); err != nil {
+	n, err := f.Write(b)
+	if err != nil {
 		_ = f.Close()
 		return err
+	}
+	if n != len(b) {
+		_ = f.Close()
+		return io.ErrShortWrite
 	}
 	if err := f.Sync(); err != nil {
 		_ = f.Close()

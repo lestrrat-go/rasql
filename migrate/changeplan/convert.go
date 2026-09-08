@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/compilerlock"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/sqltext"
@@ -14,24 +13,41 @@ import (
 // ResolvedChanges is the already-lowered migration result consumed by FromLock.
 // It deliberately contains no compiler or database handles.
 type ResolvedChanges struct {
-	baseline       compilerir.PhysicalCatalog
-	target         compilerir.PhysicalCatalog
+	baseline       Catalog
+	steps          []ResolvedCatalogStep
 	decisions      []Decision
 	operations     []Operation
 	futureObjects  []BaselineObject
 	renamedObjects []BaselineRename
 }
 
-func NewResolvedChanges(baseline, target compilerir.PhysicalCatalog, decisions []Decision, operations []Operation, futureObjects []BaselineObject, renames []BaselineRename) (ResolvedChanges, error) {
-	if err := baseline.Validate(); err != nil {
-		return ResolvedChanges{}, fmt.Errorf("%w: baseline catalog: %v", ErrInvalidIdentity, err)
+type ResolvedCatalogStep struct {
+	operation OperationID
+	after     Catalog
+}
+
+func NewResolvedCatalogStep(operation OperationID, after Catalog) (ResolvedCatalogStep, error) {
+	if operation == "" {
+		return ResolvedCatalogStep{}, fmt.Errorf("%w: resolved step operation is required", ErrInvalidPlan)
 	}
-	if err := target.Validate(); err != nil {
-		return ResolvedChanges{}, fmt.Errorf("%w: target catalog: %v", ErrInvalidIdentity, err)
+	if err := after.validate(); err != nil {
+		return ResolvedCatalogStep{}, err
+	}
+	return ResolvedCatalogStep{operation: operation, after: cloneCatalog(after)}, nil
+}
+func (s ResolvedCatalogStep) Operation() OperationID { return s.operation }
+func (s ResolvedCatalogStep) Catalog() Catalog       { return cloneCatalog(s.after) }
+
+func NewResolvedChanges(baseline Catalog, steps []ResolvedCatalogStep, decisions []Decision, operations []Operation, futureObjects []BaselineObject, renames []BaselineRename) (ResolvedChanges, error) {
+	if err := baseline.validate(); err != nil {
+		return ResolvedChanges{}, err
+	}
+	if steps == nil {
+		return ResolvedChanges{}, fmt.Errorf("%w: resolved catalog steps must be nonnil", ErrInvalidPlan)
 	}
 	out := ResolvedChanges{
-		baseline:       baseline.Clone(),
-		target:         target.Clone(),
+		baseline:       cloneCatalog(baseline),
+		steps:          append([]ResolvedCatalogStep(nil), steps...),
 		decisions:      append([]Decision(nil), decisions...),
 		operations:     append([]Operation(nil), operations...),
 		futureObjects:  append([]BaselineObject(nil), futureObjects...),
@@ -43,6 +59,9 @@ func NewResolvedChanges(baseline, target compilerir.PhysicalCatalog, decisions [
 	if out.operations == nil {
 		out.operations = make([]Operation, 0)
 	}
+	if out.steps == nil {
+		out.steps = make([]ResolvedCatalogStep, 0)
+	}
 	if out.futureObjects == nil {
 		out.futureObjects = make([]BaselineObject, 0)
 	}
@@ -52,6 +71,54 @@ func NewResolvedChanges(baseline, target compilerir.PhysicalCatalog, decisions [
 	for i := range out.operations {
 		out.operations[i] = cloneOperation(out.operations[i])
 	}
+	order, err := stableOrder(out.operations)
+	if err != nil {
+		return ResolvedChanges{}, err
+	}
+	if len(out.steps) != len(out.operations) {
+		return ResolvedChanges{}, fmt.Errorf("%w: resolved catalog step count does not match operations", ErrInvalidPlan)
+	}
+	for i := range out.steps {
+		if out.steps[i].operation != out.operations[order[i]].id {
+			return ResolvedChanges{}, fmt.Errorf("%w: resolved catalog steps are not in stable order", ErrInvalidPlan)
+		}
+		if err := out.steps[i].after.validate(); err != nil {
+			return ResolvedChanges{}, err
+		}
+		if !sameCatalogIdentity(out.baseline, out.steps[i].after) {
+			return ResolvedChanges{}, fmt.Errorf("%w: resolved catalog identity differs", ErrInvalidPlan)
+		}
+		before := out.baseline
+		if i > 0 {
+			before = out.steps[i-1].after
+		}
+		if err := EvaluateFacts(before, out.operations[order[i]].preconditions); err != nil {
+			return ResolvedChanges{}, err
+		}
+		if err := EvaluateFacts(out.steps[i].after, out.operations[order[i]].postconditions); err != nil {
+			return ResolvedChanges{}, err
+		}
+	}
+	identity, err := NewCatalogIdentity(catalogEngineID(out.baseline.physical.Engine.Dialect), Digest{}, Digest{}, Digest{})
+	if err != nil {
+		return ResolvedChanges{}, err
+	}
+	objects := make([]BaselineObject, 0, len(out.baseline.physical.Objects)+len(out.futureObjects))
+	for _, object := range out.baseline.physical.Objects {
+		value, err := NewBaselineObject(ObjectID(object.ID), object.Kind, object.Schema, object.Name)
+		if err != nil {
+			return ResolvedChanges{}, err
+		}
+		objects = append(objects, value)
+	}
+	objects = append(objects, out.futureObjects...)
+	baselineIdentity, err := NewBaselineIdentity(identity, out.baseline.sourceIdentity, objects, out.renamedObjects)
+	if err != nil {
+		return ResolvedChanges{}, err
+	}
+	if err := validateResolvedState(out, baselineIdentity); err != nil {
+		return ResolvedChanges{}, err
+	}
 	for _, object := range out.futureObjects {
 		if object.introducedBy == "" {
 			return ResolvedChanges{}, fmt.Errorf("%w: future object %q has no create operation", ErrInvalidIdentity, object.id)
@@ -59,9 +126,24 @@ func NewResolvedChanges(baseline, target compilerir.PhysicalCatalog, decisions [
 	}
 	return out, nil
 }
-func (r ResolvedChanges) BaselineCatalog() compilerir.PhysicalCatalog { return r.baseline.Clone() }
-func (r ResolvedChanges) TargetCatalog() compilerir.PhysicalCatalog   { return r.target.Clone() }
-func (r ResolvedChanges) Decisions() []Decision                       { return append([]Decision(nil), r.decisions...) }
+func (r ResolvedChanges) BaselineCatalog() Catalog { return cloneCatalog(r.baseline) }
+func (r ResolvedChanges) TargetCatalog() Catalog {
+	if len(r.steps) == 0 {
+		return cloneCatalog(r.baseline)
+	}
+	return cloneCatalog(r.steps[len(r.steps)-1].after)
+}
+func (r ResolvedChanges) CatalogSteps() []ResolvedCatalogStep {
+	out := append([]ResolvedCatalogStep(nil), r.steps...)
+	for i := range out {
+		out[i] = ResolvedCatalogStep{operation: out[i].operation, after: cloneCatalog(out[i].after)}
+	}
+	if out == nil {
+		out = make([]ResolvedCatalogStep, 0)
+	}
+	return out
+}
+func (r ResolvedChanges) Decisions() []Decision { return append([]Decision(nil), r.decisions...) }
 func (r ResolvedChanges) Operations() []Operation {
 	out := append([]Operation(nil), r.operations...)
 	for i := range out {
@@ -74,6 +156,19 @@ func (r ResolvedChanges) FutureObjects() []BaselineObject {
 }
 func (r ResolvedChanges) Renames() []BaselineRename {
 	return append([]BaselineRename(nil), r.renamedObjects...)
+}
+
+func catalogEngineID(dialect string) EngineID {
+	switch strings.ToLower(dialect) {
+	case "postgres", "postgresql":
+		return PostgreSQLEngine
+	case "mysql":
+		return MySQLEngine
+	case "sqlite":
+		return SQLiteEngine
+	default:
+		return CustomEngine
+	}
 }
 
 func FromLock(lockJSON []byte, source ProfileSource, history HistoryIdentity, resolved ResolvedChanges) (Plan, error) {
@@ -89,15 +184,19 @@ func FromLock(lockJSON []byte, source ProfileSource, history HistoryIdentity, re
 	if _, err := compilerlock.Encode(file); err != nil {
 		return Plan{}, fmt.Errorf("%w: invalid compiler lock: %v", ErrInvalidPlan, err)
 	}
-	if file.Engine.Profile != profile.ID() || !profileEngineMatches(profile.Engine(), file.Engine.Dialect) {
+	if file.Engine.Profile != profile.ID() || !profileEngineMatches(profile.Engine(), file.Engine.Dialect) || !profileVersionMatches(profile, file.Engine.Version) {
 		return Plan{}, fmt.Errorf("%w: lock engine/profile mismatch", ErrInvalidPlan)
 	}
 	sourceDigest, err := parseDigest(file.Digests.Source)
 	if err != nil {
 		return Plan{}, fmt.Errorf("%w: %v", ErrInvalidSourceDigest, err)
 	}
-	physical := compilerlock.PhysicalFromCatalog(file)
-	catalogDigest, err := CatalogDigest(physical)
+	lockCatalog, err := CatalogFromLock(lockCopy)
+	if err != nil {
+		return Plan{}, err
+	}
+	physical := lockCatalog.physical
+	catalogDigest, err := CatalogDigest(lockCatalog)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -109,9 +208,12 @@ func FromLock(lockJSON []byte, source ProfileSource, history HistoryIdentity, re
 	if err != nil {
 		return Plan{}, err
 	}
+	if !sameCatalogIdentity(lockCatalog, resolved.baseline) || !samePhysicalObjects(lockCatalog.physical, resolved.baseline.physical) {
+		return Plan{}, fmt.Errorf("%w: resolved baseline differs from lock catalog", ErrInvalidPlan)
+	}
 	objects := make([]BaselineObject, 0, len(physical.Objects)+len(resolved.futureObjects))
 	for _, object := range physical.Objects {
-		value, err := NewBaselineObject(ObjectID(object.ID), object.Kind, object.Schema, object.Name, "")
+		value, err := NewBaselineObject(ObjectID(object.ID), object.Kind, object.Schema, object.Name)
 		if err != nil {
 			return Plan{}, err
 		}
@@ -122,43 +224,8 @@ func FromLock(lockJSON []byte, source ProfileSource, history HistoryIdentity, re
 	if err != nil {
 		return Plan{}, err
 	}
-	if !resolved.baselineEquivalent(physical) {
-		return Plan{}, fmt.Errorf("%w: resolved baseline differs from lock catalog", ErrInvalidPlan)
-	}
-	if err := resolved.target.Validate(); err != nil {
-		return Plan{}, fmt.Errorf("%w: resolved target: %v", ErrInvalidPlan, err)
-	}
-	for _, operation := range resolved.operations {
-		if err := EvaluateFacts(resolved.baseline, operation.preconditions); err != nil {
-			return Plan{}, fmt.Errorf("%w: operation %q precondition: %v", ErrInvalidPlan, operation.id, err)
-		}
-		if err := EvaluateFacts(resolved.target, operation.postconditions); err != nil {
-			return Plan{}, fmt.Errorf("%w: operation %q postcondition: %v", ErrInvalidPlan, operation.id, err)
-		}
-	}
-	prior := make([]compilerir.PriorObject, 0, len(physical.Objects))
-	for _, object := range physical.Objects {
-		prior = append(prior, compilerir.PriorObject{ID: object.ID, Kind: object.Kind, Name: compilerir.QualifiedName{Schema: object.Schema, Name: object.Name}})
-	}
-	renames := make([]compilerir.ObjectRename, 0, len(resolved.renamedObjects))
-	for _, rename := range resolved.renamedObjects {
-		renames = append(renames, compilerir.ObjectRename{ID: compilerir.ObjectID(rename.object), To: compilerir.QualifiedName{Schema: rename.toSchema, Name: rename.toName}})
-	}
-	assigned, diagnostics := compilerir.AssignObjectIDs(resolved.target, compilerir.IdentityInput{SourceIdentity: file.Source.Identity, Prior: prior, Renames: renames})
-	for _, diagnostic := range diagnostics {
-		if diagnostic.Level == compilerir.DiagnosticError {
-			return Plan{}, fmt.Errorf("%w: target identity: %s", ErrInvalidPlan, diagnostic.Message)
-		}
-	}
-	assignedByName := make(map[string]compilerir.ObjectID, len(assigned.Objects))
-	for _, object := range assigned.Objects {
-		assignedByName[object.Kind+"\x00"+object.Schema+"\x00"+object.Name] = object.ID
-	}
-	for _, object := range resolved.futureObjects {
-		want := assignedByName[string(object.kind)+"\x00"+object.schema+"\x00"+object.name]
-		if want == "" || ObjectID(want) != object.id {
-			return Plan{}, fmt.Errorf("%w: future object %q has an invalid deterministic ID", ErrInvalidIdentity, object.id)
-		}
+	if err := validateResolvedState(resolved, baseline); err != nil {
+		return Plan{}, err
 	}
 	return newPlan(profile, baseline, history, resolved.decisions, resolved.operations)
 }
@@ -177,6 +244,14 @@ func profileEngineMatches(engine engineprofile.EngineID, dialect string) bool {
 		return false
 	}
 }
+func profileVersionMatches(profile Profile, observed string) bool {
+	version := profile.Version()
+	if !version.Known {
+		return observed == ""
+	}
+	want := fmt.Sprintf("%d.%d.%d", version.Major, version.Minor, version.Patch)
+	return observed == want || (version.Patch == 0 && observed == fmt.Sprintf("%d.%d", version.Major, version.Minor))
+}
 func ProfileDigest(source ProfileSource) (Digest, error) {
 	profile, err := NewProfile(source)
 	if err != nil {
@@ -192,13 +267,8 @@ func profileDigestValue(profile Profile) (Digest, error) {
 	return sha256Digest(b), nil
 }
 func jsonMarshal(value any) ([]byte, error) { return marshalNoHTML(value) }
-func (r ResolvedChanges) baselineEquivalent(lock compilerir.PhysicalCatalog) bool {
-	left, err := CatalogDigest(r.baseline)
-	if err != nil {
-		return false
-	}
-	right, err := CatalogDigest(lock)
-	return err == nil && left == right
+func cloneCatalog(c Catalog) Catalog {
+	return Catalog{physical: c.physical.Clone(), sourceIdentity: c.sourceIdentity}
 }
 
 // NewOperationStatements is a small convenience for producers adapting lowered SQL.
