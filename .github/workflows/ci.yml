@@ -34,7 +34,8 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: '1.26.x'
-      - run: go test -p 1 ./...
+      - name: Run the full suite
+        run: go test -p 1 -count=1 -v ./...
       - run: go vet ./...
       # The sample runs on PostgreSQL, so its tests and its generated-store
       # check both need a live server and run in the "integration" job. This
@@ -68,8 +69,8 @@ jobs:
         # whole module (measured: ~4200 lines) buries the live tests under
         # ~2000 unrelated unit tests. Naming just these packages keeps the
         # log scoped to what this job exists to prove, while ./... still
-        # runs (without -v, and without a DSN) in the "check" job, so no
-        # package's assertions are skipped anywhere.
+        # runs (with -v, and without a DSN) in the "check" job, so every
+        # package's assertions remain covered by one of the two jobs.
         # TestIntegrationJobListsEveryDBTestGuardedPackage reads this exact
         # step and fails when the command stops covering a package whose
         # tests are guarded by internal/dbtest, or carries an argument its

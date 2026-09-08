@@ -20,6 +20,8 @@ const (
 	modulePath       = "github.com/lestrrat-go/rasql"
 	dbtestImportPath = modulePath + "/internal/dbtest"
 	workflowPath     = ".github/workflows/ci.yml"
+	checkJob         = "check"
+	checkStep        = "Run the full suite"
 	integrationJob   = "integration"
 	integrationStep  = "Run the suite against live databases"
 	verboseFlag      = "-v"
@@ -244,6 +246,78 @@ func integrationJobPackages(t *testing.T, path string) []string {
 	return pkgs
 }
 
+// workflowGoTestCommand locates one uniquely named workflow step and parses
+// its single-line go test command. Callers validate the command's effective
+// flags and package list for the job-specific invariant they own.
+func workflowGoTestCommand(workflow, jobName, stepName string) (string, *goTestCommand, error) {
+	lines := strings.Split(workflow, "\n")
+
+	jobs := blockUnder(lines, "jobs:")
+	if len(jobs) == 0 {
+		return "", nil, fmt.Errorf("the workflow has no top-level jobs: key, so its %q job cannot be located", jobName)
+	}
+	job := blockUnder(jobs, jobName+":")
+	if len(job) == 0 {
+		return "", nil, fmt.Errorf("no %q job under jobs:", jobName)
+	}
+	steps := blockUnder(job, "steps:")
+	if len(steps) == 0 {
+		return "", nil, fmt.Errorf("the %q job has no steps: key", jobName)
+	}
+
+	var matched []workflowStep
+	for _, step := range splitSteps(steps) {
+		if step.name == stepName {
+			matched = append(matched, step)
+		}
+	}
+	if len(matched) != 1 {
+		return "", nil, fmt.Errorf("the %q job has %d steps named %q, want exactly 1; update this test to match the workflow", jobName, len(matched), stepName)
+	}
+
+	run := matched[0].run
+	if run == "" {
+		return "", nil, fmt.Errorf("the %q step has no run: key of its own", stepName)
+	}
+	if strings.HasPrefix(run, "|") || strings.HasPrefix(run, ">") {
+		return "", nil, fmt.Errorf("the %q step's run: is a multi-line block (%q), which this test cannot parse; keep it a single `go test` command or update this test", stepName, run)
+	}
+
+	fields := strings.Fields(run)
+	if len(fields) < 2 || fields[0] != "go" || fields[1] != "test" {
+		return "", nil, fmt.Errorf("expected the %q step to run a `go test` command, got %q", stepName, run)
+	}
+
+	cmd, err := goTestArgs(fields[2:])
+	if err != nil {
+		return "", nil, err
+	}
+	return run, cmd, nil
+}
+
+// checkRunCommand reads the check job's uniquely named broad suite step and
+// requires the exact uncached, verbose, serialized command that preserves all
+// performance evidence.
+func checkRunCommand(workflow string) (*goTestCommand, error) {
+	run, cmd, err := workflowGoTestCommand(workflow, checkJob, checkStep)
+	if err != nil {
+		return nil, err
+	}
+	if !cmd.verbose {
+		return nil, fmt.Errorf("the %q step's command %q does not run its tests verbosely; the effective value of %s must be true", checkStep, run, verboseFlag)
+	}
+	if !cmd.countSet || cmd.count != 1 {
+		return nil, fmt.Errorf("the %q step's command %q has an effective %s value of %d; it must use %s 1 to prevent cached performance results", checkStep, run, countFlag, cmd.count, countFlag)
+	}
+	if cmd.parallel != 1 {
+		return nil, fmt.Errorf("the %q step's command %q has an effective %s value of %d; it must use %s 1 so package test binaries cannot run alongside one another", checkStep, run, parallelFlag, cmd.parallel, parallelFlag)
+	}
+	if !slices.Equal(cmd.pkgs, []string{"./..."}) {
+		return nil, fmt.Errorf("the %q step's command %q must run exactly the ./... package, got %v", checkStep, run, cmd.pkgs)
+	}
+	return cmd, nil
+}
+
 // integrationRunPackages returns the package specs the integrationStep of
 // the integrationJob passes to `go test` in the given ci.yml document.
 //
@@ -258,49 +332,7 @@ func integrationJobPackages(t *testing.T, path string) []string {
 // package. And a run: search that keeps walking past the end of its step
 // picks up a neighbouring step's command for the same reason.
 func integrationRunPackages(workflow string) ([]string, error) {
-	lines := strings.Split(workflow, "\n")
-
-	jobs := blockUnder(lines, "jobs:")
-	if len(jobs) == 0 {
-		return nil, fmt.Errorf("the workflow has no top-level jobs: key, so its %q job cannot be located", integrationJob)
-	}
-	job := blockUnder(jobs, integrationJob+":")
-	if len(job) == 0 {
-		return nil, fmt.Errorf("no %q job under jobs:", integrationJob)
-	}
-	steps := blockUnder(job, "steps:")
-	if len(steps) == 0 {
-		return nil, fmt.Errorf("the %q job has no steps: key", integrationJob)
-	}
-
-	var matched []workflowStep
-	for _, step := range splitSteps(steps) {
-		if step.name == integrationStep {
-			matched = append(matched, step)
-		}
-	}
-	if len(matched) != 1 {
-		return nil, fmt.Errorf("the %q job has %d steps named %q, want exactly 1; update this test to match the workflow", integrationJob, len(matched), integrationStep)
-	}
-
-	run := matched[0].run
-	if run == "" {
-		return nil, fmt.Errorf("the %q step has no run: key of its own", integrationStep)
-	}
-	// A block scalar ("run: |") carries its command on the following
-	// lines, which this parser deliberately does not read: the step it
-	// guards is one command long, and accepting a multi-line body would
-	// mean deciding which of its lines is the `go test` invocation.
-	if strings.HasPrefix(run, "|") || strings.HasPrefix(run, ">") {
-		return nil, fmt.Errorf("the %q step's run: is a multi-line block (%q), which this test cannot parse; keep it a single `go test` command or update this test", integrationStep, run)
-	}
-
-	fields := strings.Fields(run)
-	if len(fields) < 2 || fields[0] != "go" || fields[1] != "test" {
-		return nil, fmt.Errorf("expected the %q step to run a `go test` command, got %q", integrationStep, run)
-	}
-
-	cmd, err := goTestArgs(fields[2:])
+	run, cmd, err := workflowGoTestCommand(workflow, integrationJob, integrationStep)
 	if err != nil {
 		return nil, err
 	}
@@ -439,6 +471,7 @@ type goTestCommand struct {
 	pkgs     []string
 	verbose  bool
 	count    int
+	countSet bool
 	parallel int
 }
 
@@ -516,6 +549,7 @@ func goTestArgs(args []string) (*goTestCommand, error) {
 				return nil, fmt.Errorf("the %q step's command passes %s with the value %q, which this test cannot read as a number of runs (%s)", integrationStep, arg, raw, err)
 			}
 			cmd.count = parsed
+			cmd.countSet = true
 		case flag == parallelFlag:
 			raw := value
 			if !joined {
@@ -1056,6 +1090,119 @@ jobs:
 			}
 			require.NoError(t, err, "integrationRunPackages(%s)", tc.workflow)
 			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// TestCheckJobRunsFullSuiteSerially pins the check job's broad command to one
+// uncached, verbose, serialized invocation of every root-module package. The
+// effective values matter because later flag assignments override earlier
+// ones, and a package list that merely resembles ./... can silently omit the
+// performance gate.
+func TestCheckJobRunsFullSuiteSerially(t *testing.T) {
+	data, err := os.ReadFile(workflowPath)
+	require.NoError(t, err, "read %s", workflowPath)
+	_, err = checkRunCommand(string(data))
+	require.NoError(t, err, "%s: could not read the %q job's %q step", workflowPath, checkJob, checkStep)
+
+	validIntegration := fixtureStep(integrationStep, "go test -p 1 -count=1 -v ./alpha/... .")
+	workflowFor := func(checkSteps string) string {
+		return fixtureWorkflow(checkSteps, validIntegration)
+	}
+	for _, tc := range []struct {
+		name    string
+		check   string
+		wantErr string
+	}{
+		{
+			name:  "accepts the exact separate flag command",
+			check: fixtureStep(checkStep, "go test -p 1 -count=1 -v ./..."),
+		},
+		{
+			name:  "accepts joined flag values",
+			check: fixtureStep(checkStep, "go test -p=1 -count=1 -v=true ./..."),
+		},
+		{
+			name:    "rejects missing package parallelism",
+			check:   fixtureStep(checkStep, "go test -count=1 -v ./..."),
+			wantErr: "effective -p value of 0",
+		},
+		{
+			name:    "rejects zero package parallelism",
+			check:   fixtureStep(checkStep, "go test -p 0 -count=1 -v ./..."),
+			wantErr: "effective -p value of 0",
+		},
+		{
+			name:    "rejects malformed package parallelism",
+			check:   fixtureStep(checkStep, "go test -p nope -count=1 -v ./..."),
+			wantErr: "package parallelism value",
+		},
+		{
+			name:    "rejects later package parallelism override",
+			check:   fixtureStep(checkStep, "go test -p 1 -count=1 -v -p 2 ./..."),
+			wantErr: "effective -p value of 2",
+		},
+		{
+			name:    "rejects missing count",
+			check:   fixtureStep(checkStep, "go test -p 1 -v ./..."),
+			wantErr: "must use -count 1",
+		},
+		{
+			name:    "rejects zero count",
+			check:   fixtureStep(checkStep, "go test -p 1 -count=0 -v ./..."),
+			wantErr: "effective -count value of 0",
+		},
+		{
+			name:    "rejects malformed count",
+			check:   fixtureStep(checkStep, "go test -p 1 -count=once -v ./..."),
+			wantErr: "number of runs",
+		},
+		{
+			name:    "rejects later count override",
+			check:   fixtureStep(checkStep, "go test -p 1 -count=1 -v -count 2 ./..."),
+			wantErr: "effective -count value of 2",
+		},
+		{
+			name:    "rejects missing verbosity",
+			check:   fixtureStep(checkStep, "go test -p 1 -count=1 ./..."),
+			wantErr: "does not run its tests verbosely",
+		},
+		{
+			name:    "rejects later disabled verbosity",
+			check:   fixtureStep(checkStep, "go test -p 1 -count=1 -v -test.v=false ./..."),
+			wantErr: "does not run its tests verbosely",
+		},
+		{
+			name:    "rejects a test filter",
+			check:   fixtureStep(checkStep, "go test -p 1 -count=1 -v -run TestSomething ./..."),
+			wantErr: "passes -run",
+		},
+		{
+			name:    "rejects a package omission",
+			check:   fixtureStep(checkStep, "go test -p 1 -count=1 -v ./generate/..."),
+			wantErr: "must run exactly the ./... package",
+		},
+		{
+			name:    "rejects a package replacement",
+			check:   fixtureStep(checkStep, "go test -p 1 -count=1 -v ."),
+			wantErr: "must run exactly the ./... package",
+		},
+		{
+			name: "rejects duplicate named steps",
+			check: fixtureStep(checkStep, "go test -p 1 -count=1 -v ./...") +
+				fixtureStep(checkStep, "go test -p 1 -count=1 -v ./..."),
+			wantErr: "has 2 steps named",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd, err := checkRunCommand(workflowFor(tc.check))
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+				require.Nil(t, cmd)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, []string{"./..."}, cmd.pkgs)
 		})
 	}
 }
