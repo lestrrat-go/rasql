@@ -146,6 +146,53 @@ func NotInQuery[T comparable](left Expr[T], q Query[T]) (Predicate, error) {
 	return Predicate{node: query.NotInSelect(left.node, statement), source: left.source}, nil
 }
 
+// SubqueryExpr lifts a scalar subquery into an Expr[T], the one entry point
+// a scalar subquery reaches the typed expression language through. Unlike
+// InQuery and ExistsQuery, which each build a whole Predicate, this returns
+// a value, so it stands wherever an Expr does: either operand of an ordered
+// comparison, such as GreaterExpr(amount, SubqueryExpr(avgQuery)), or naming
+// a projected column in Item or NullItem, such as
+// Item("count", SubqueryExpr(countQuery), ...). It composes with
+// Query.Correlated exactly like any other typed query, so q may read a
+// column of the enclosing query, and the Expr it returns may itself be
+// lifted a second time into an outer subquery — nesting is just building one
+// Query[T] from another.
+//
+// It reads T from q's own projection the way InQuery does, so q and the
+// context it is lifted into are checked against each other at compile time.
+// q must project exactly one column, the restriction subquerySelect applies
+// to every subquery standing in for a value.
+func SubqueryExpr[T any](q Query[T]) (Expr[T], error) {
+	statement, err := subquerySelect(q)
+	if err != nil {
+		return Expr[T]{}, err
+	}
+	return Expr[T]{node: query.Scalar(statement)}, nil
+}
+
+// CoalesceExpr returns value when it is not NULL, and fallback otherwise,
+// the typed COALESCE. It takes a NullExpr but returns a plain Expr, because
+// that is exactly what pairing a nullable expression with a fallback that is
+// never NULL proves: the combined result can never be NULL either, so
+// nothing downstream still needs to treat it as one.
+//
+// The returned Expr carries value's codec rather than fallback's. A
+// fallback is ordinarily a bare literal built with Value, which has no
+// codec of its own, while value is usually the column whose codec a later
+// comparison against a Go value needs to encode against.
+func CoalesceExpr[T any](value NullExpr[T], fallback Expr[T]) Expr[T] {
+	bindErr := value.bindErr
+	if bindErr == nil {
+		bindErr = fallback.bindErr
+	}
+	return Expr[T]{
+		node:    query.Coalesce(value.node, fallback.node),
+		codec:   value.codec,
+		source:  value.source,
+		bindErr: bindErr,
+	}
+}
+
 // AscResult orders by a projection's already-computed result rather than
 // recomputing the expression behind it, which is what SELECT ... AS alias ...
 // ORDER BY alias means. Pass the same ProjectionItem the projection was built
