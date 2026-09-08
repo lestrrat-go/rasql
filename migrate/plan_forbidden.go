@@ -68,10 +68,9 @@ func recoverForbiddenPlanOperation(
 	entry *planProgressEntry,
 	legacy *progressEntry,
 ) (forbiddenPlanResult, error) {
-	classified, err := classifyPlanProgress(run.prepared, entry)
-	if err != nil || classified.classification != planProgressSame {
+	if err := validateJournalPlanProgress(run.prepared, entry); err != nil {
 		return forbiddenPlanResult{}, rollbackForbiddenDecision(boundary,
-			planReconciliation(run.prepared, "", legacy.id, errors.Join(err, errors.New("journal lacks same-plan checkpoint"))))
+			planReconciliation(run.prepared, "", legacy.id, err))
 	}
 	operationIndex, migration, err := matchingPlanJournal(run.prepared, legacy)
 	if err != nil {
@@ -85,6 +84,11 @@ func recoverForbiddenPlanOperation(
 			planReconciliation(run.prepared, operation.operation.ID(), legacy.id, errors.New("journal operation differs from checkpoint")))
 	}
 	if next == operationIndex+1 {
+		if entry.checkpoint.CatalogDigest() != operation.afterDigest {
+			return forbiddenPlanResult{}, rollbackForbiddenDecision(boundary,
+				planReconciliation(run.prepared, operation.operation.ID(), legacy.id,
+					errors.New("stored digest differs from completed operation")))
+		}
 		catalog, digest, err := readForbiddenCatalog(ctx, connection, boundary, run, next)
 		if err == nil {
 			err = operationFactsMatch(catalog, operation.operation.Postconditions(), digest, operation.afterDigest)
@@ -99,6 +103,18 @@ func recoverForbiddenPlanOperation(
 		return forbiddenPlanResult{}, nil
 	}
 	if legacy.nextIndex > legacy.sourceIndex {
+		candidates, err := readForbiddenCandidates(ctx, connection, boundary, run, operationIndex)
+		if err == nil {
+			_, digest, digestErr := currentForbiddenCatalog(candidates)
+			err = digestErr
+			if err == nil && digest != entry.checkpoint.CatalogDigest() {
+				err = errors.New("live catalog differs from durable statement checkpoint")
+			}
+		}
+		if err != nil {
+			return forbiddenPlanResult{}, rollbackForbiddenDecision(boundary,
+				planReconciliation(run.prepared, operation.operation.ID(), legacy.id, err))
+		}
 		if err := commitForbiddenDecision(ctx, boundary); err != nil {
 			return forbiddenPlanResult{}, err
 		}
@@ -109,12 +125,18 @@ func recoverForbiddenPlanOperation(
 		return forbiddenPlanResult{}, rollbackForbiddenDecision(boundary,
 			planReconciliation(run.prepared, operation.operation.ID(), legacy.id, err))
 	}
-	beforeErr := candidates.beforeErr
-	if beforeErr == nil {
-		beforeErr = operationFactsMatch(candidates.before, operation.operation.Preconditions(), candidates.beforeDigest, operation.beforeDigest)
+	before, beforeDigest, beforeErr := currentForbiddenCatalog(candidates)
+	if beforeErr == nil && beforeDigest != entry.checkpoint.CatalogDigest() {
+		beforeErr = errors.New("live catalog differs from durable statement checkpoint")
 	}
-	afterErr := candidates.afterErr
-	if afterErr == nil {
+	if beforeErr == nil && legacy.sourceIndex == 0 {
+		beforeErr = changeplan.EvaluateFacts(before, operation.operation.Preconditions())
+	}
+	afterErr := errors.New("nonterminal statement outcome is not provable")
+	if legacy.sourceIndex+1 == len(migration.statements) {
+		afterErr = candidates.afterErr
+	}
+	if legacy.sourceIndex+1 == len(migration.statements) && afterErr == nil {
 		afterErr = operationFactsMatch(candidates.after, operation.operation.Postconditions(), candidates.afterDigest, operation.afterDigest)
 	}
 	beforeOK := beforeErr == nil
@@ -134,6 +156,45 @@ func recoverForbiddenPlanOperation(
 		return forbiddenPlanResult{}, err
 	}
 	return executeForbiddenStatements(ctx, connection, run, operation, legacy.sourceIndex)
+}
+
+func validateJournalPlanProgress(prepared preparedChangePlan, entry *planProgressEntry) error {
+	if entry == nil {
+		return errors.New("journal lacks plan checkpoint")
+	}
+	if entry.checkpoint.PlanID() != prepared.id {
+		return errors.New("journal lacks same-plan checkpoint")
+	}
+	if entry.operationCount != len(prepared.operations) {
+		return errors.New("journal operation count differs from plan")
+	}
+	next := entry.checkpoint.NextIndex()
+	if next < 0 || next > entry.operationCount {
+		return errors.New("journal plan checkpoint is outside operation range")
+	}
+	return nil
+}
+
+func currentForbiddenCatalog(
+	candidates planCatalogCandidates,
+) (changeplan.Catalog, changeplan.Digest, error) {
+	if candidates.beforeErr == nil && candidates.afterErr == nil {
+		if candidates.beforeDigest != candidates.afterDigest {
+			return changeplan.Catalog{}, changeplan.Digest{},
+				errors.New("live catalog has ambiguous operation identity")
+		}
+		return candidates.before, candidates.beforeDigest, nil
+	}
+	if candidates.beforeErr == nil {
+		return candidates.before, candidates.beforeDigest, nil
+	}
+	if candidates.afterErr == nil {
+		return candidates.after, candidates.afterDigest, nil
+	}
+	return changeplan.Catalog{}, changeplan.Digest{}, errors.Join(
+		fmt.Errorf("before identity: %w", candidates.beforeErr),
+		fmt.Errorf("after identity: %w", candidates.afterErr),
+	)
 }
 
 func installForbiddenPrefix(
@@ -225,7 +286,7 @@ func executeForbiddenStatements(
 			return forbiddenPlanResult{}, forbiddenIncomplete(run.prepared, operation.index,
 				ChangePlanStageCheckpoint, -1, err)
 		}
-		if err := checkpointPlanJournal(ctx, connection, run, migration, index); err != nil {
+		if err := checkpointPlanJournal(ctx, connection, run, operation, migration, index); err != nil {
 			return forbiddenPlanResult{}, forbiddenIncomplete(run.prepared, operation.index,
 				ChangePlanStageCheckpoint, -1, err)
 		}
@@ -332,19 +393,46 @@ func writePlanJournalIntent(ctx context.Context, connection *sql.Conn, run planR
 	return boundary.Commit(ctx)
 }
 
-func checkpointPlanJournal(ctx context.Context, connection *sql.Conn, run planRunState, migration preparedMigration, index int) error {
+func checkpointPlanJournal(
+	ctx context.Context,
+	connection *sql.Conn,
+	run planRunState,
+	operation preparedPlanOperation,
+	migration preparedMigration,
+	index int,
+) error {
 	runner := planJournalRunner(run)
-	if run.prepared.profile.Engine != changeplan.SQLiteEngine {
-		return runner.checkpointProgress(ctx, connection, migration, DirectionUp, index)
-	}
-	boundary, err := beginSQLitePlanBoundary(ctx, connection)
+	boundary, err := beginForbiddenCheckpointBoundary(ctx, connection, run.prepared.profile.Engine)
 	if err != nil {
 		return err
+	}
+	candidates, err := boundary.readCatalogCandidates(ctx, run.prepared, run.history, operation.index)
+	if err != nil {
+		return rollbackForbiddenDecision(boundary, err)
+	}
+	_, digest, err := currentForbiddenCatalog(candidates)
+	if err != nil {
+		return rollbackForbiddenDecision(boundary, err)
 	}
 	if err := runner.checkpointProgress(ctx, boundary, migration, DirectionUp, index); err != nil {
 		return rollbackForbiddenDecision(boundary, err)
 	}
+	entry := newPlanProgressEntryWithDigest(run.prepared, operation.index, digest)
+	if err := run.store.update(ctx, boundary, entry); err != nil {
+		return rollbackForbiddenDecision(boundary, err)
+	}
 	return boundary.Commit(ctx)
+}
+
+func beginForbiddenCheckpointBoundary(
+	ctx context.Context,
+	connection *sql.Conn,
+	engine changeplan.EngineID,
+) (planApplyBoundary, error) {
+	if engine == changeplan.MySQLEngine {
+		return beginSQLTxPlanBoundary(ctx, connection)
+	}
+	return beginPlanBoundary(ctx, connection, engine)
 }
 
 func restorePlanJournal(

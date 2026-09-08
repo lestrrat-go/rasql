@@ -256,6 +256,9 @@ func readClassifiedPlanRows(
 			return nil, nil, 0, err
 		}
 	}
+	if legacy != nil {
+		return entry, legacy, 0, nil
+	}
 	classified, err := classifyPlanProgress(prepared, entry)
 	if err != nil {
 		return nil, nil, 0, err

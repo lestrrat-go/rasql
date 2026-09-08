@@ -134,6 +134,14 @@ func runRequiredPlanGroup(
 
 func newPlanProgressEntry(prepared preparedChangePlan, index int) planProgressEntry {
 	digest, _ := prepared.expectedPrefixDigest(index)
+	return newPlanProgressEntryWithDigest(prepared, index, digest)
+}
+
+func newPlanProgressEntryWithDigest(
+	prepared preparedChangePlan,
+	index int,
+	digest changeplan.Digest,
+) planProgressEntry {
 	checkpoint, _ := changeplan.NewCheckpoint(prepared.id, index, digest)
 	return planProgressEntry{checkpoint: checkpoint, operationCount: len(prepared.operations)}
 }

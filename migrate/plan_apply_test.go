@@ -116,39 +116,59 @@ func TestSQLiteForbiddenChangePlanRecoversExecutedStatement(t *testing.T) {
 }
 
 func TestSQLiteForbiddenChangePlanResumesAfterDurableStatementCheckpoint(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "checkpoint.sqlite")
-	database, err := sql.Open("sqlite", path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	require.NoError(t, createPlanFixtureTable(t, database, false))
-	plan := sqliteTwoStatementForbiddenPlan(t, database)
-	runner, err := New(database, dialect.SQLite())
-	require.NoError(t, err)
+	for _, test := range []struct {
+		name  string
+		drift bool
+	}{
+		{name: "resume"},
+		{name: "catalog drift", drift: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "checkpoint.sqlite")
+			database, err := sql.Open("sqlite", path)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			require.NoError(t, createPlanFixtureTable(t, database, false))
+			plan := sqliteTwoStatementForbiddenPlan(t, database)
+			runner, err := New(database, dialect.SQLite())
+			require.NoError(t, err)
 
-	intentFailure := errors.New("stop before second intent")
-	originalHook := journalWriteHook
-	intentCalls := 0
-	journalWriteHook = func(stage string) error {
-		if stage == "intent" {
-			intentCalls++
-			if intentCalls == 2 {
-				return intentFailure
+			intentFailure := errors.New("stop before second intent")
+			originalHook := journalWriteHook
+			intentCalls := 0
+			journalWriteHook = func(stage string) error {
+				if stage == "intent" {
+					intentCalls++
+					if intentCalls == 2 {
+						return intentFailure
+					}
+				}
+				return nil
 			}
-		}
-		return nil
+			t.Cleanup(func() { journalWriteHook = originalHook })
+
+			result, err := runner.ApplyChangePlan(t.Context(), plan)
+			require.ErrorIs(t, err, intentFailure)
+			require.NotNil(t, result.IncompleteOperation)
+			require.Equal(t, 2, sqliteColumnCount(t, database, "users"))
+
+			journalWriteHook = originalHook
+			if test.drift {
+				_, err = database.ExecContext(t.Context(), "CREATE TABLE unrelated (id INTEGER PRIMARY KEY)")
+				require.NoError(t, err)
+				result, err = runner.ApplyChangePlan(t.Context(), plan)
+				var reconciliation *ChangePlanReconciliationError
+				require.ErrorAs(t, err, &reconciliation)
+				require.Empty(t, result.CompletedOperations)
+				require.Equal(t, 2, sqliteColumnCount(t, database, "users"))
+				return
+			}
+			result, err = runner.ApplyChangePlan(t.Context(), plan)
+			require.NoError(t, err)
+			require.Len(t, result.CompletedOperations, 1)
+			require.Equal(t, 3, sqliteColumnCount(t, database, "users"))
+		})
 	}
-	t.Cleanup(func() { journalWriteHook = originalHook })
-
-	result, err := runner.ApplyChangePlan(t.Context(), plan)
-	require.ErrorIs(t, err, intentFailure)
-	require.NotNil(t, result.IncompleteOperation)
-	require.Equal(t, 2, sqliteColumnCount(t, database, "users"))
-
-	journalWriteHook = originalHook
-	result, err = runner.ApplyChangePlan(t.Context(), plan)
-	require.NoError(t, err)
-	require.Len(t, result.CompletedOperations, 1)
-	require.Equal(t, 3, sqliteColumnCount(t, database, "users"))
 }
 
 func TestSQLiteRequiredChangePlanRollsBackWholeGroup(t *testing.T) {
