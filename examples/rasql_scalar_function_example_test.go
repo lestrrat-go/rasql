@@ -8,15 +8,31 @@ import (
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/examples/store"
-	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/schema"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
+// userNickname holds the decoded id and a possibly-NULL nickname. The typed
+// operator set has no COALESCE wrapper and no entry point for a hand-built
+// query.Expression, so this example reads the nullable column directly
+// rather than a nickname-falls-back-to-email expression.
+type userNickname struct {
+	ID       int64
+	Nickname rasql.Nullable[string]
+}
+
+type userNicknameDecoder struct{ result rasql.ResultSchema }
+
+func (d userNicknameDecoder) ResultSchema() rasql.ResultSchema { return d.result }
+func (d userNicknameDecoder) Presence() []rasql.Presence       { return nil }
+func (d userNicknameDecoder) DecodeRow(src rasql.ScanSource, row *userNickname) error {
+	return src.Scan(&row.ID, &row.Nickname)
+}
+
+// Example_rasql_scalar_function looks a user up by email regardless of case
+// with LowerExpr, then reads every user's id and nickname in id order.
+// nickname is the users column declared nullable.
 func Example_rasql_scalar_function() {
-	// This example looks a user up by email regardless of case with LOWER,
-	// then reads every user's display name, falling back to their email with
-	// COALESCE when no nickname is set. nickname is the users column declared
-	// nullable, which is what gives COALESCE a real NULL to fall back from.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -33,70 +49,100 @@ func Example_rasql_scalar_function() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
-	users := store.Users()
-	// A local result type holds the decoded id and display name. The name
-	// column is COALESCE(nickname, email) under an alias rather than a stored
-	// column, so store.UsersRow has no field it could land in.
-	type userName struct {
-		ID   int64
-		Name string
+	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 40, 0)
+	if err != nil {
+		fmt.Printf("failed to describe engine profile: %s\n", err)
+		return
 	}
+	executor, err := rasql.AsExecutor(db, profile)
+	if err != nil {
+		fmt.Printf("failed to create executor: %s\n", err)
+		return
+	}
+	users := store.Users()
 	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 
 	nick := "Ada"
-	for _, user := range []store.UsersRow{
-		{ID: 1, Email: "Ada@Example.com", Nickname: &nick},
-		{ID: 2, Email: "bob@example.com", Nickname: nil},
-	} {
-		if _, err := rasql.Insert(ctx, db, users, user); err != nil {
-			fmt.Printf("failed to insert user: %s\n", err)
-			return
-		}
+	if _, err := rasql.ExecMutation(ctx, executor, store.NewUsersCreate().ID(1).Email("Ada@Example.com").Nickname(&nick).FirstName("First").LastName("Last").Plan()); err != nil {
+		fmt.Printf("failed to insert user: %s\n", err)
+		return
+	}
+	if _, err := rasql.ExecMutation(ctx, executor, store.NewUsersCreate().ID(2).Email("bob@example.com").FirstName("First").LastName("Last").Plan()); err != nil {
+		fmt.Printf("failed to insert user: %s\n", err)
+		return
 	}
 
-	// LOWER(email) matches "Ada@Example.com" against the lower-case literal a
+	source, err := rasql.SourceOf(users, "")
+	if err != nil {
+		fmt.Printf("failed to bind users source: %s\n", err)
+		return
+	}
+	id, err := rasql.BindColumn[store.UsersRow, int64](source, users.IDRef().Name(), "")
+	if err != nil {
+		fmt.Printf("failed to bind id column: %s\n", err)
+		return
+	}
+	email, err := rasql.BindColumn[store.UsersRow, string](source, users.EmailRef().Name(), "")
+	if err != nil {
+		fmt.Printf("failed to bind email column: %s\n", err)
+		return
+	}
+	nickname, err := rasql.BindNullColumn[store.UsersRow, string](source, users.NicknameRef().Name(), "")
+	if err != nil {
+		fmt.Printf("failed to bind nickname column: %s\n", err)
+		return
+	}
+
+	result, err := rasql.NewResultSchema(
+		rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}},
+		rasql.ResultColumn{Name: "nickname", Type: schema.TextType{}, Nullable: true},
+	)
+	if err != nil {
+		fmt.Printf("failed to build result schema: %s\n", err)
+		return
+	}
+	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
+		rasql.Item("id", id.Expr(), schema.IntegerType{}, ""),
+		rasql.NullItem("nickname", nickname.NullExpr(), schema.TextType{}, ""),
+	}, userNicknameDecoder{result: result})
+	if err != nil {
+		fmt.Printf("failed to build projection: %s\n", err)
+		return
+	}
+	base := rasql.Select(source.Source(), projection)
+
+	// LowerExpr matches "Ada@Example.com" against the lower-case literal a
 	// caller would type, regardless of how the stored value was cased.
-	// SQL: SELECT users.id, COALESCE(users.nickname, users.email) AS name FROM users WHERE LOWER(users.email) = ? (argument: "ada@example.com")
-	byEmail, err := rasql.DecodeFrom[userName](users).
-		Project(users.ID().Ref(), query.Coalesce(users.Nickname().Ref(), users.Email().Ref()).As("name")).
-		Where(query.Equal(query.Lower(users.Email().Ref()), "ada@example.com")).
-		Query(ctx, db)
+	// SQL: SELECT users.id, users.nickname FROM users WHERE LOWER(users.email) = ? (argument: "ada@example.com")
+	byEmail, err := rasql.All(ctx, executor,
+		base.Where(rasql.EqualValue(rasql.LowerExpr(email.Expr()), "ada@example.com")))
 	if err != nil {
 		fmt.Printf("failed to query user by email: %s\n", err)
 		return
 	}
-	for user, err := range byEmail {
-		if err != nil {
-			fmt.Printf("failed to query user by email: %s\n", err)
-			return
-		}
-		fmt.Println(user.Name)
+	for _, user := range byEmail {
+		fmt.Println(user.Nickname.Value)
 	}
 
-	// COALESCE(nickname, email) reads every user's display name, falling
-	// back to the email once nickname is NULL.
-	// SQL: SELECT users.id, COALESCE(users.nickname, users.email) AS name FROM users ORDER BY users.id ASC
-	names, err := rasql.DecodeFrom[userName](users).
-		Project(users.ID().Ref(), query.Coalesce(users.Nickname().Ref(), users.Email().Ref()).As("name")).
-		OrderAsc(users.ID().Ref()).
-		Query(ctx, db)
+	// SQL: SELECT users.id, users.nickname FROM users ORDER BY users.id ASC
+	names, err := rasql.All(ctx, executor, base.OrderBy(rasql.AscExpr(id.Expr())))
 	if err != nil {
 		fmt.Printf("failed to query user names: %s\n", err)
 		return
 	}
-	for user, err := range names {
-		if err != nil {
-			fmt.Printf("failed to query user names: %s\n", err)
-			return
+	for _, user := range names {
+		if user.Nickname.Valid {
+			fmt.Println(user.ID, user.Nickname.Value)
+		} else {
+			fmt.Println(user.ID, "NULL")
 		}
-		fmt.Println(user.ID, user.Name)
 	}
 
 	// Output:
 	// Ada
 	// 1 Ada
-	// 2 bob@example.com
+	// 2 NULL
 }
