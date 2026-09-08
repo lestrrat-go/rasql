@@ -1112,7 +1112,15 @@ func TestValidationContractArgumentGrammar(t *testing.T) {
 func validationContractFactCatalog(t *testing.T) Catalog {
 	t.Helper()
 	object, err := NewCatalogObject("orders-id", schema.TableDef{
-		Schema: "public", Name: "orders", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		Schema: "public", Name: "orders", Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "status", Type: schema.OpaqueType{}, NativeType: &schema.NativeTypeDef{
+				Dialect: "postgresql", Schema: "public", Name: "status", Kind: schema.NativeEnum,
+				Arguments: []string{"new", "done"},
+			}},
+		},
+		UniqueConstraints:    []schema.UniqueDef{{Name: "orders_unique", Columns: []string{"id"}}},
+		Indexes:              []schema.IndexDef{{Name: "orders_index", Columns: []string{"id"}}},
 		ExclusionConstraints: []schema.ExclusionDef{{Name: "orders_exclusion", Method: "gist", Elements: []schema.ExclusionElementDef{{Expression: "id", Operator: "="}}}},
 	})
 	require.NoError(t, err)
@@ -1140,28 +1148,38 @@ func TestValidationContractFactSemantics(t *testing.T) {
 			require.ErrorContains(t, err, row.contains)
 		})
 	}
+	data := validationContractValid(t)
+	root := validationContractJSON(t, data)
+	validationContractSet(root, `{ "x": 1 }`, "operations", 9, "postconditions", 0, "value")
+	data = validationContractBytes(t, root)
+	require.True(t, json.Valid(data))
+	validationContractDecodeError(t, validationContractRehash(t, data), ErrInvalidWire, "non-canonical fact value")
+
 	catalog := validationContractFactCatalog(t)
 	for _, row := range []struct {
-		name, path, operator, value string
-		target                      error
+		name, path, operator, value, contains string
+		target                                error
 	}{
-		{"leading zero index", "/columns/00/name", "equal", `"id"`, ErrInvalidFact},
-		{"negative index", "/columns/-1/name", "equal", `"id"`, ErrFactMismatch},
-		{"nonnumeric index", "/columns/nope/name", "equal", `"id"`, ErrFactMismatch},
-		{"out of range index", "/columns/4/name", "equal", `"id"`, ErrFactMismatch},
-		{"path crosses null", "/columns/0/native/name", "equal", `"x"`, ErrInvalidFact},
-		{"path crosses string", "/columns/0/name/value", "equal", `"x"`, ErrInvalidFact},
-		{"path crosses boolean", "/columns/0/nullable/value", "equal", `"x"`, ErrInvalidFact},
-		{"unknown object field", "/does_not_exist", "equal", `"x"`, ErrFactMismatch},
-		{"unknown nested field", "/columns/0/does_not_exist", "equal", `"x"`, ErrFactMismatch},
-		{"malformed tilde escape", "/columns~2/name", "equal", `"x"`, ErrInvalidFact},
-		{"trailing tilde", "/columns/0/name~", "equal", `"x"`, ErrInvalidFact},
-		{"equal column object", "/columns/0", "equal", `{}`, ErrInvalidFact},
-		{"equal exclusion object", "/exclusion_constraints/0", "equal", `{}`, ErrInvalidFact},
-		{"present missing object", "$", "present", "", ErrFactMismatch},
-		{"equal missing object", "/does_not_exist", "equal", `"x"`, ErrFactMismatch},
-		{"absent existing object", "$", "absent", "", ErrFactMismatch},
-		{"absent missing object", "$", "absent", "", nil},
+		{"leading zero index", "/columns/00/name", "equal", `"id"`, "array index \"00\" is non-canonical", ErrInvalidFact},
+		{"negative index", "/columns/-1/name", "equal", `"id"`, "array index \"-1\" is invalid", ErrFactMismatch},
+		{"nonnumeric index", "/columns/nope/name", "equal", `"id"`, "array index \"nope\" is invalid", ErrFactMismatch},
+		{"out of range index", "/columns/4/name", "equal", `"id"`, "array index \"4\" is invalid", ErrFactMismatch},
+		{"path crosses null", "/columns/0/native/name", "equal", `"x"`, "path crosses null", ErrInvalidFact},
+		{"path crosses string", "/columns/0/name/value", "equal", `"x"`, "path crosses scalar", ErrInvalidFact},
+		{"path crosses boolean", "/columns/0/nullable/value", "equal", `"x"`, "path crosses scalar", ErrInvalidFact},
+		{"unknown object field", "/does_not_exist", "equal", `"x"`, "path segment \"does_not_exist\" is unknown", ErrFactMismatch},
+		{"unknown nested field", "/columns/0/does_not_exist", "equal", `"x"`, "path segment \"does_not_exist\" is unknown", ErrFactMismatch},
+		{"malformed tilde escape", "/columns~2/name", "equal", `"x"`, "malformed escape", ErrInvalidFact},
+		{"trailing tilde", "/columns/0/name~", "equal", `"x"`, "malformed escape", ErrInvalidFact},
+		{"equal column object", "/columns/0", "equal", `{}`, "equality path /columns/0 selects an object", ErrInvalidFact},
+		{"equal native object", "/columns/1/native", "equal", `{}`, "equality path /columns/1/native selects an object", ErrInvalidFact},
+		{"equal constraint object", "/constraints/0", "equal", `{}`, "equality path /constraints/0 selects an object", ErrInvalidFact},
+		{"equal index object", "/indexes/0", "equal", `{}`, "equality path /indexes/0 selects an object", ErrInvalidFact},
+		{"equal exclusion object", "/exclusion_constraints/0", "equal", `{}`, "equality path /exclusion_constraints/0 selects an object", ErrInvalidFact},
+		{"present missing object", "$", "present", "", "object \"missing\" is missing", ErrFactMismatch},
+		{"equal missing object", "/does_not_exist", "equal", `"x"`, "object \"missing\" is missing", ErrFactMismatch},
+		{"absent existing object", "$", "absent", "", "$ is present", ErrFactMismatch},
+		{"absent missing object", "$", "absent", "", "", nil},
 	} {
 		row := row
 		t.Run(row.name, func(t *testing.T) {
@@ -1176,6 +1194,7 @@ func TestValidationContractFactSemantics(t *testing.T) {
 				require.NoError(t, err)
 			} else {
 				require.ErrorIs(t, err, row.target)
+				require.ErrorContains(t, err, row.contains)
 			}
 		})
 	}
