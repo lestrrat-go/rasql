@@ -1710,7 +1710,8 @@ func newValidationContractBaselineFixture(t *testing.T) validationContractBaseli
 	for i, object := range future {
 		operationID := OperationID("create-" + string(rune('a'+i)))
 		operation, operationErr := NewOperation(operationID, OperationCreateTable, nil, []ObjectID{object.ID()}, nil, nil,
-			Digest{1}, []stmt.Statement{stmt.New(sqltext.Text("CREATE TABLE " + object.Name()))}, TransactionRequired, false, nil)
+			Digest{1}, []stmt.Statement{stmt.New(sqltext.Text("CREATE TABLE " + object.Name()))},
+			TransactionRequired, false, nil)
 		require.NoError(t, operationErr)
 		creates = append(creates, operation)
 	}
@@ -1723,8 +1724,9 @@ func newValidationContractBaselineFixture(t *testing.T) validationContractBaseli
 		record, recordErr := NewBaselineRename(operationID, object.ID(), "main", toName)
 		require.NoError(t, recordErr)
 		renameRecords = append(renameRecords, record)
+		renameSQL := "ALTER TABLE " + object.Name() + " RENAME TO " + toName
 		rename, renameErr := NewOperation(operationID, OperationRenameTable, nil, []ObjectID{object.ID()}, nil, nil,
-			Digest{1}, []stmt.Statement{stmt.New(sqltext.Text("ALTER TABLE " + object.Name() + " RENAME TO " + toName))}, TransactionEngineDefault, false, nil)
+			Digest{1}, []stmt.Statement{stmt.New(sqltext.Text(renameSQL))}, TransactionEngineDefault, false, nil)
 		require.NoError(t, renameErr)
 		renames = append(renames, rename)
 		decision, decisionErr := NewDecision(DecisionID("decision-"+string(rune('a'+i))), DecisionRenameObject, object.ID(),
@@ -1745,9 +1747,37 @@ func newValidationContractBaselineFixture(t *testing.T) validationContractBaseli
 	}
 }
 
+func validationContractIdentityWithEngine(identity CatalogIdentity, engine EngineID) CatalogIdentity {
+	identity.engine = engine
+	return identity
+}
+
 func TestValidationContractBaselineSemantics(t *testing.T) {
 	fixture := newValidationContractBaselineFixture(t)
 	allObjects := func() []BaselineObject { return append([]BaselineObject(nil), fixture.objects...) }
+	engineZero := validationContractIdentityWithEngine(fixture.identity, 0)
+	engineAboveCustom := validationContractIdentityWithEngine(fixture.identity, CustomEngine+1)
+	for _, row := range []struct {
+		name, id, kind, objectName, schemaName string
+		valid                                  bool
+	}{
+		{"constructor baseline object blank id", "", "table", "users", "main", false},
+		{"constructor baseline object blank kind", "object", "", "users", "main", false},
+		{"constructor baseline object blank name", "object", "table", "", "main", false},
+		{"constructor baseline object blank schema succeeds", "object", "table", "users", "", true},
+	} {
+		row := row
+		t.Run(row.name, func(t *testing.T) {
+			object, err := NewBaselineObject(ObjectID(row.id), row.kind, row.schemaName, row.objectName)
+			if row.valid {
+				require.NoError(t, err)
+				require.Equal(t, "", object.Schema())
+				return
+			}
+			require.ErrorIs(t, err, ErrInvalidIdentity)
+			require.ErrorContains(t, err, "baseline object fields are required")
+		})
+	}
 	for _, row := range []struct {
 		name     string
 		identity CatalogIdentity
@@ -1756,18 +1786,59 @@ func TestValidationContractBaselineSemantics(t *testing.T) {
 		target   error
 		contains string
 	}{
-		{"baseline catalog engine zero", func() CatalogIdentity { value := fixture.identity; value.engine = 0; return value }(), fixture.source, allObjects, ErrInvalidIdentity, "catalog or source identity is empty"},
-		{"baseline catalog engine above custom", func() CatalogIdentity { value := fixture.identity; value.engine = CustomEngine + 1; return value }(), fixture.source, allObjects, ErrInvalidIdentity, "catalog or source identity is empty"},
+		{
+			"baseline catalog engine zero", engineZero, fixture.source,
+			allObjects, ErrInvalidIdentity, "catalog or source identity is empty",
+		},
+		{
+			"baseline catalog engine above custom", engineAboveCustom, fixture.source,
+			allObjects, ErrInvalidIdentity, "catalog or source identity is empty",
+		},
 		{"baseline source empty", fixture.identity, "", allObjects, ErrInvalidIdentity, "source identity is required"},
-		{"baseline source whitespace", fixture.identity, "   ", allObjects, ErrInvalidIdentity, "source identity is required"},
-		{"baseline object blank id", fixture.identity, fixture.source, func() []BaselineObject { objects := allObjects(); objects[0].id = ""; return objects }, ErrInvalidIdentity, "incomplete baseline object"},
-		{"baseline object blank kind", fixture.identity, fixture.source, func() []BaselineObject { objects := allObjects(); objects[0].kind = ""; return objects }, ErrInvalidIdentity, "incomplete baseline object"},
-		{"baseline object blank name", fixture.identity, fixture.source, func() []BaselineObject { objects := allObjects(); objects[0].name = ""; return objects }, ErrInvalidIdentity, "incomplete baseline object"},
-		{"baseline object blank schema remains valid", fixture.identity, fixture.source, func() []BaselineObject { objects := allObjects(); objects[0].schema = ""; return objects }, nil, ""},
-		{"duplicate starting id", fixture.identity, fixture.source, func() []BaselineObject { objects := allObjects(); objects[1].id = objects[0].id; return objects }, ErrInvalidIdentity, "duplicate object ID"},
-		{"duplicate starting and future id", fixture.identity, fixture.source, func() []BaselineObject { objects := allObjects(); objects[2].id = objects[0].id; return objects }, ErrInvalidIdentity, "duplicate object ID"},
-		{"duplicate future id", fixture.identity, fixture.source, func() []BaselineObject { objects := allObjects(); objects[3].id = objects[2].id; return objects }, ErrInvalidIdentity, "duplicate object ID"},
-		{"duplicate active qualified name", fixture.identity, fixture.source, func() []BaselineObject { objects := allObjects(); objects[1].name = objects[0].name; return objects }, ErrInvalidIdentity, "duplicate qualified name"},
+		{
+			"baseline source whitespace", fixture.identity, "   ", allObjects,
+			ErrInvalidIdentity, "source identity is required",
+		},
+		{"baseline object blank id", fixture.identity, fixture.source, func() []BaselineObject {
+			objects := allObjects()
+			objects[0].id = ""
+			return objects
+		}, ErrInvalidIdentity, "incomplete baseline object"},
+		{"baseline object blank kind", fixture.identity, fixture.source, func() []BaselineObject {
+			objects := allObjects()
+			objects[0].kind = ""
+			return objects
+		}, ErrInvalidIdentity, "incomplete baseline object"},
+		{"baseline object blank name", fixture.identity, fixture.source, func() []BaselineObject {
+			objects := allObjects()
+			objects[0].name = ""
+			return objects
+		}, ErrInvalidIdentity, "incomplete baseline object"},
+		{"baseline object blank schema remains valid", fixture.identity, fixture.source, func() []BaselineObject {
+			objects := allObjects()
+			objects[0].schema = ""
+			return objects
+		}, nil, ""},
+		{"duplicate starting id", fixture.identity, fixture.source, func() []BaselineObject {
+			objects := allObjects()
+			objects[1].id = objects[0].id
+			return objects
+		}, ErrInvalidIdentity, "duplicate object ID"},
+		{"duplicate starting and future id", fixture.identity, fixture.source, func() []BaselineObject {
+			objects := allObjects()
+			objects[2].id = objects[0].id
+			return objects
+		}, ErrInvalidIdentity, "duplicate object ID"},
+		{"duplicate future id", fixture.identity, fixture.source, func() []BaselineObject {
+			objects := allObjects()
+			objects[3].id = objects[2].id
+			return objects
+		}, ErrInvalidIdentity, "duplicate object ID"},
+		{"duplicate active qualified name", fixture.identity, fixture.source, func() []BaselineObject {
+			objects := allObjects()
+			objects[1].name = objects[0].name
+			return objects
+		}, ErrInvalidIdentity, "duplicate qualified name"},
 		{"equal names different schemas succeeds", fixture.identity, fixture.source, func() []BaselineObject {
 			objects := allObjects()
 			objects[1].schema = "other"
@@ -1784,6 +1855,95 @@ func TestValidationContractBaselineSemantics(t *testing.T) {
 			}
 			require.ErrorIs(t, err, row.target)
 			require.ErrorContains(t, err, row.contains)
+		})
+	}
+}
+
+func TestValidationContractBaselineRenameSemantics(t *testing.T) {
+	fixture := newValidationContractBaselineFixture(t)
+	for _, row := range []struct {
+		name, operation  string
+		object           ObjectID
+		toSchema, toName string
+		valid            bool
+	}{
+		{"rename constructor blank operation", "", fixture.starting[0].ID(), "main", "accounts", false},
+		{"rename constructor blank object", "rename", "", "main", "accounts", false},
+		{"rename constructor blank to name", "rename", fixture.starting[0].ID(), "main", "", false},
+		{"rename constructor blank schema succeeds", "rename", fixture.starting[0].ID(), "", "accounts", true},
+	} {
+		row := row
+		t.Run(row.name, func(t *testing.T) {
+			_, err := NewBaselineRename(OperationID(row.operation), row.object, row.toSchema, row.toName)
+			if row.valid {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, ErrInvalidIdentity)
+			require.ErrorContains(t, err, "baseline rename fields are required")
+		})
+	}
+	t.Run("rename missing object", func(t *testing.T) {
+		renames := append([]BaselineRename(nil), fixture.renameRecords...)
+		renames[0].object = "missing"
+		_, err := NewBaselineIdentity(fixture.identity, fixture.source, fixture.objects, renames)
+		require.ErrorIs(t, err, ErrInvalidIdentity)
+		require.ErrorContains(t, err, "rename object \"missing\" is absent")
+	})
+	t.Run("duplicate rename operation binding", func(t *testing.T) {
+		renames := append([]BaselineRename(nil), fixture.renameRecords...)
+		renames[1].operation = renames[0].operation
+		_, err := NewBaselineIdentity(fixture.identity, fixture.source, fixture.objects, renames)
+		require.ErrorIs(t, err, ErrInvalidIdentity)
+		require.ErrorContains(t, err, "duplicate rename operation")
+	})
+	for _, row := range []struct {
+		name   string
+		mutate func([]Operation) []Operation
+	}{
+		{"rename binding missing operation", func(operations []Operation) []Operation {
+			out := make([]Operation, 0, len(operations)-1)
+			for _, operation := range operations {
+				if operation.ID() != "rename-a" {
+					out = append(out, operation)
+				}
+			}
+			return out
+		}},
+		{"rename binding wrong kind", func(operations []Operation) []Operation {
+			out := append([]Operation(nil), operations...)
+			for i := range out {
+				if out[i].ID() == "rename-a" {
+					out[i].kind = OperationAddColumn
+				}
+			}
+			return out
+		}},
+		{"rename binding multiple objects", func(operations []Operation) []Operation {
+			out := append([]Operation(nil), operations...)
+			for i := range out {
+				if out[i].ID() == "rename-a" {
+					out[i].objects = append(out[i].objects, "other")
+				}
+			}
+			return out
+		}},
+		{"rename binding wrong object", func(operations []Operation) []Operation {
+			out := append([]Operation(nil), operations...)
+			for i := range out {
+				if out[i].ID() == "rename-a" {
+					out[i].objects = []ObjectID{"other"}
+				}
+			}
+			return out
+		}},
+	} {
+		row := row
+		t.Run(row.name, func(t *testing.T) {
+			operations := row.mutate(fixture.plan.Operations())
+			_, err := newPlan(fixture.profile, fixture.plan.Baseline(), fixture.history, fixture.decisions, operations)
+			require.ErrorIs(t, err, ErrInvalidIdentity)
+			require.ErrorContains(t, err, "rename binding mismatch")
 		})
 	}
 }
