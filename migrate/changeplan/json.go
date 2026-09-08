@@ -19,7 +19,7 @@ import (
 
 type planWire struct {
 	Format     string          `json:"format"`
-	ID         string          `json:"id"`
+	ID         string          `json:"id,omitempty"`
 	Profile    profileWire     `json:"profile"`
 	Baseline   baselineWire    `json:"baseline"`
 	History    historyWire     `json:"history"`
@@ -142,10 +142,11 @@ func marshalNoHTML(value any) ([]byte, error) {
 	return bytes.TrimSuffix(buffer.Bytes(), []byte{'\n'}), nil
 }
 
-func profileToWire(p engineprofile.Profile) profileWire {
-	c := p.Capabilities
-	return profileWire{Engine: engineName(p.Engine), CustomName: p.CustomName, VersionKnown: p.Version.Known,
-		Version: versionWire{p.Version.Major, p.Version.Minor, p.Version.Patch}, MaxBindParameters: p.Limits.MaxBindParameters,
+func profileToWire(p Profile) profileWire {
+	value := p.profile
+	c := value.Capabilities
+	return profileWire{Engine: engineName(value.Engine), CustomName: value.CustomName, VersionKnown: value.Version.Known,
+		Version: versionWire{value.Version.Major, value.Version.Minor, value.Version.Patch}, MaxBindParameters: value.Limits.MaxBindParameters,
 		Capabilities: capabilitiesWire{Returning: returningName(c.Returning), Upsert: upsertName(c.Upsert), ConflictTarget: c.ConflictTarget,
 			DefaultValues: c.DefaultValues, EmptyInsert: c.EmptyInsert, DefaultValuesUpsert: c.DefaultValuesUpsert,
 			SubqueryLimit: c.SubqueryLimit, WriteSubqueryTarget: c.WriteSubqueryTarget, PartialIndex: c.PartialIndex,
@@ -157,24 +158,24 @@ func profileToWire(p engineprofile.Profile) profileWire {
 			ExplicitNullOrdering: c.ExplicitNullOrdering, TupleComparison: c.TupleComparison, PerParentLimit: perParentName(c.PerParentLimit),
 			UpdateDefault: updateDefaultName(c.UpdateDefault)}}
 }
-func profileFromWire(w profileWire) (engineprofile.Profile, error) {
+func profileFromWire(w profileWire) (Profile, error) {
 	e, ok := parseEngine(w.Engine)
 	if !ok {
-		return engineprofile.Profile{}, fmt.Errorf("%w: engine", ErrInvalidWire)
+		return Profile{}, fmt.Errorf("%w: engine", ErrInvalidWire)
 	}
 	c := engineprofile.Capabilities{}
 	var err error
 	if c.Returning, err = parseReturning(w.Capabilities.Returning); err != nil {
-		return engineprofile.Profile{}, err
+		return Profile{}, err
 	}
 	if c.Upsert, err = parseUpsert(w.Capabilities.Upsert); err != nil {
-		return engineprofile.Profile{}, err
+		return Profile{}, err
 	}
 	if c.PerParentLimit, err = parsePerParent(w.Capabilities.PerParentLimit); err != nil {
-		return engineprofile.Profile{}, err
+		return Profile{}, err
 	}
 	if c.UpdateDefault, err = parseUpdateDefault(w.Capabilities.UpdateDefault); err != nil {
-		return engineprofile.Profile{}, err
+		return Profile{}, err
 	}
 	capWire := w.Capabilities
 	c.ConflictTarget, c.DefaultValues, c.EmptyInsert, c.DefaultValuesUpsert = capWire.ConflictTarget, capWire.DefaultValues, capWire.EmptyInsert, capWire.DefaultValuesUpsert
@@ -195,7 +196,7 @@ func profileFromWire(w profileWire) (engineprofile.Profile, error) {
 	case engineprofile.SQLite:
 		profileID = fmt.Sprintf("sqlite-%d.%d", w.Version.Major, w.Version.Minor)
 	}
-	return engineprofile.New(profileID, e, w.CustomName, engineprofile.Version{Known: w.VersionKnown, Major: w.Version.Major, Minor: w.Version.Minor, Patch: w.Version.Patch}, c, engineprofile.Limits{MaxBindParameters: w.MaxBindParameters})
+	return newProfile(profileID, e, w.CustomName, engineprofile.Version{Known: w.VersionKnown, Major: w.Version.Major, Minor: w.Version.Minor, Patch: w.Version.Patch}, c, engineprofile.Limits{MaxBindParameters: w.MaxBindParameters})
 }
 func engineName(e engineprofile.EngineID) string {
 	switch e {
@@ -421,6 +422,9 @@ func Encode(p Plan) ([]byte, error) {
 	if err := validatePlanParts(p.baseline, p.decisions, p.operations); err != nil {
 		return nil, err
 	}
+	if err := validatePlanIdentity(p); err != nil {
+		return nil, err
+	}
 	computed, err := planDigest(p)
 	if err != nil {
 		return nil, err
@@ -460,6 +464,9 @@ func Decode(data []byte) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
+	if err := validatePlanIdentity(p); err != nil {
+		return Plan{}, err
+	}
 	id, err := parseDigest(w.ID)
 	if err != nil {
 		return Plan{}, err
@@ -473,6 +480,20 @@ func Decode(data []byte) (Plan, error) {
 		return Plan{}, fmt.Errorf("%w: plan ID mismatch", ErrInvalidWire)
 	}
 	return p, nil
+}
+
+func validatePlanIdentity(p Plan) error {
+	if p.baseline.catalog.engine != p.profile.Engine() {
+		return fmt.Errorf("%w: baseline engine does not match profile", ErrInvalidPlan)
+	}
+	digest, err := profileDigestValue(p.profile)
+	if err != nil {
+		return err
+	}
+	if digest != p.baseline.catalog.profileDigest {
+		return fmt.Errorf("%w: baseline profile digest does not match profile", ErrInvalidPlan)
+	}
+	return nil
 }
 
 func validateWireShape(data []byte) error {
@@ -678,7 +699,7 @@ func planFromWire(w planWire) (Plan, error) {
 		return Plan{}, err
 	}
 	e, ok := parseEngine(w.Baseline.Engine)
-	if !ok || e != profile.Engine {
+	if !ok || e != profile.Engine() {
 		return Plan{}, fmt.Errorf("%w: baseline engine", ErrInvalidWire)
 	}
 	catalog, _ := NewCatalogIdentity(e, pd, cd, sd)

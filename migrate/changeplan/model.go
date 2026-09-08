@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"reflect"
 	"strings"
 	"time"
 
@@ -27,6 +28,78 @@ type PlanID Digest
 type ObjectID string
 type OperationID string
 type DecisionID string
+
+type EngineID = engineprofile.EngineID
+type EngineVersion = engineprofile.Version
+type EngineCapabilities = engineprofile.Capabilities
+type EngineLimits = engineprofile.Limits
+
+const (
+	PostgreSQLEngine EngineID = engineprofile.PostgreSQL
+	MySQLEngine      EngineID = engineprofile.MySQL
+	SQLiteEngine     EngineID = engineprofile.SQLite
+	CustomEngine     EngineID = engineprofile.Custom
+)
+
+type ProfileSource interface {
+	ID() string
+	Engine() EngineID
+	Version() EngineVersion
+	Capabilities() EngineCapabilities
+	Limits() EngineLimits
+}
+
+type Profile struct {
+	profile engineprofile.Profile
+}
+
+func NewProfile(source ProfileSource) (Profile, error) {
+	if nilProfileSource(source) {
+		return Profile{}, fmt.Errorf("%w: profile source is nil", ErrInvalidPlan)
+	}
+	id := source.ID()
+	engine := source.Engine()
+	version := source.Version()
+	caps := source.Capabilities()
+	limits := source.Limits()
+	customName := ""
+	if engine == engineprofile.Custom {
+		const prefix = "custom:"
+		if !strings.HasPrefix(id, prefix) || len(id) == len(prefix) {
+			return Profile{}, fmt.Errorf("%w: custom profile ID must have a name", ErrInvalidPlan)
+		}
+		customName = id[len(prefix):]
+	}
+	return newProfile(id, engine, customName, version, caps, limits)
+}
+
+func newProfile(id string, engine engineprofile.EngineID, customName string, version engineprofile.Version, caps engineprofile.Capabilities, limits engineprofile.Limits) (Profile, error) {
+	value, err := engineprofile.New(id, engine, customName, version, caps, limits)
+	if err != nil {
+		return Profile{}, err
+	}
+	return Profile{profile: value}, nil
+}
+
+func nilProfileSource(source ProfileSource) bool {
+	if source == nil {
+		return true
+	}
+	value := reflect.ValueOf(source)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
+func (p Profile) ID() string                       { return p.profile.ID }
+func (p Profile) Engine() EngineID                 { return p.profile.Engine }
+func (p Profile) CustomName() string               { return p.profile.CustomName }
+func (p Profile) Version() EngineVersion           { return p.profile.Version }
+func (p Profile) Capabilities() EngineCapabilities { return p.profile.Capabilities }
+func (p Profile) Limits() EngineLimits             { return p.profile.Limits }
 
 func (d Digest) String() string { return hex.EncodeToString(d[:]) }
 func (d PlanID) String() string { return Digest(d).String() }
@@ -244,6 +317,8 @@ func NewFact(object ObjectID, path string, operator any, canonicalValue string) 
 		canonicalValue = string(canonical)
 	} else if canonicalValue != "" {
 		return Fact{}, fmt.Errorf("%w: non-equal facts have no value", ErrInvalidFact)
+	} else if path != "$" {
+		return Fact{}, fmt.Errorf("%w: present/absent facts require the object path", ErrInvalidFact)
 	}
 	if operatorValue != FactOperatorEqual && path == "" {
 		return Fact{}, fmt.Errorf("%w: path is required", ErrInvalidFact)
@@ -406,17 +481,22 @@ func (o Operation) ReverseStatements() []stmt.Statement { return cloneStatements
 
 type Plan struct {
 	id         PlanID
-	profile    engineprofile.Profile
+	profile    Profile
 	baseline   BaselineIdentity
 	history    HistoryIdentity
 	decisions  []Decision
 	operations []Operation
 }
 
-func NewPlan(profile engineprofile.Profile, baseline BaselineIdentity, history HistoryIdentity, decisions []Decision, operations []Operation) (Plan, error) {
-	if err := engineprofile.Validate(profile); err != nil {
+func NewPlan(source ProfileSource, baseline BaselineIdentity, history HistoryIdentity, decisions []Decision, operations []Operation) (Plan, error) {
+	profile, err := NewProfile(source)
+	if err != nil {
 		return Plan{}, err
 	}
+	return newPlan(profile, baseline, history, decisions, operations)
+}
+
+func newPlan(profile Profile, baseline BaselineIdentity, history HistoryIdentity, decisions []Decision, operations []Operation) (Plan, error) {
 	if err := validateBaseline(baseline); err != nil {
 		return Plan{}, err
 	}
@@ -427,6 +507,9 @@ func NewPlan(profile engineprofile.Profile, baseline BaselineIdentity, history H
 		return Plan{}, err
 	}
 	p := Plan{profile: profile, baseline: baseline, history: history}
+	if err := validatePlanIdentity(p); err != nil {
+		return Plan{}, err
+	}
 	p.decisions = append([]Decision(nil), decisions...)
 	p.operations = append([]Operation(nil), operations...)
 	if p.decisions == nil {
@@ -442,11 +525,11 @@ func NewPlan(profile engineprofile.Profile, baseline BaselineIdentity, history H
 	p.id = PlanID(digest)
 	return p, nil
 }
-func (p Plan) ID() PlanID                     { return p.id }
-func (p Plan) Profile() engineprofile.Profile { return p.profile }
-func (p Plan) Baseline() BaselineIdentity     { return cloneBaseline(p.baseline) }
-func (p Plan) History() HistoryIdentity       { return p.history }
-func (p Plan) Decisions() []Decision          { return append([]Decision(nil), p.decisions...) }
+func (p Plan) ID() PlanID                 { return p.id }
+func (p Plan) Profile() Profile           { return p.profile }
+func (p Plan) Baseline() BaselineIdentity { return cloneBaseline(p.baseline) }
+func (p Plan) History() HistoryIdentity   { return p.history }
+func (p Plan) Decisions() []Decision      { return append([]Decision(nil), p.decisions...) }
 func (p Plan) Operations() []Operation {
 	out := append([]Operation(nil), p.operations...)
 	for i := range out {

@@ -54,6 +54,9 @@ func validateBaseline(b BaselineIdentity) error {
 			return fmt.Errorf("%w: duplicate object ID %q", ErrInvalidIdentity, object.id)
 		}
 		ids[object.id] = struct{}{}
+		if object.introducedBy != "" {
+			continue
+		}
 		key := object.schema + "\x00" + object.name
 		if _, ok := names[key]; ok {
 			return fmt.Errorf("%w: duplicate qualified name %q", ErrInvalidIdentity, object.name)
@@ -186,7 +189,7 @@ func validatePlanParts(baseline BaselineIdentity, decisions []Decision, operatio
 			}
 		}
 	}
-	for object, renameIDs := range renameOperations(operations) {
+	for object, renameIDs := range renameOperations(operations, order) {
 		for i := 1; i < len(renameIDs); i++ {
 			if !dependsTransitively(operationByID, renameIDs[i], renameIDs[i-1], make(map[OperationID]struct{})) {
 				return fmt.Errorf("%w: rename chain for %q is not dependency ordered", ErrInvalidIdentity, object)
@@ -196,9 +199,10 @@ func validatePlanParts(baseline BaselineIdentity, decisions []Decision, operatio
 	return validatePrefixes(baseline, operations, order)
 }
 
-func renameOperations(operations []Operation) map[ObjectID][]OperationID {
+func renameOperations(operations []Operation, order []int) map[ObjectID][]OperationID {
 	out := make(map[ObjectID][]OperationID)
-	for _, operation := range operations {
+	for _, index := range order {
+		operation := operations[index]
 		if operation.kind != OperationRenameTable {
 			continue
 		}
@@ -323,7 +327,7 @@ func validatePrefixes(baseline BaselineIdentity, operations []Operation, order [
 			renamed[id] = struct{}{}
 		default:
 			for _, id := range operation.objects {
-				if _, ok := objects[id]; !ok && operation.kind != OperationDropTable && operation.kind != OperationDropColumn && operation.kind != OperationDropIndex && operation.kind != OperationDropConstraint {
+				if _, ok := objects[id]; !ok {
 					return fmt.Errorf("%w: operation references inactive object %q", ErrInvalidIdentity, id)
 				}
 			}

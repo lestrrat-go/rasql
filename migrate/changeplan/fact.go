@@ -310,6 +310,9 @@ func sortedStringPairs(values map[string]string) []map[string]string {
 }
 
 func CatalogDigest(c compilerir.PhysicalCatalog) (Digest, error) {
+	if err := c.Validate(); err != nil {
+		return Digest{}, fmt.Errorf("%w: catalog: %v", ErrInvalidIdentity, err)
+	}
 	b, err := marshalNoHTML(catalogValue(c))
 	if err != nil {
 		return Digest{}, err
@@ -325,6 +328,9 @@ func EvaluateFacts(c compilerir.PhysicalCatalog, facts []Fact) error {
 	return nil
 }
 func EvaluateFact(c compilerir.PhysicalCatalog, fact Fact) error {
+	if err := c.Validate(); err != nil {
+		return fmt.Errorf("%w: catalog: %v", ErrInvalidFact, err)
+	}
 	if err := validateFact(fact); err != nil {
 		return err
 	}
@@ -378,18 +384,24 @@ func walkFactPath(root map[string]any, path string) (bool, any, error) {
 	}
 	current := any(root)
 	for _, raw := range strings.Split(path[1:], "/") {
+		if !validPointerToken(raw) {
+			return false, nil, fmt.Errorf("%w: malformed escape", ErrInvalidFact)
+		}
 		segment := strings.ReplaceAll(strings.ReplaceAll(raw, "~1", "/"), "~0", "~")
 		switch value := current.(type) {
 		case map[string]any:
 			next, ok := value[segment]
 			if !ok {
-				return false, nil, nil
+				return false, nil, fmt.Errorf("%w: path segment %q is unknown", ErrFactMismatch, segment)
 			}
 			current = next
 		case []any:
+			if segment == "" || (len(segment) > 1 && segment[0] == '0') {
+				return false, nil, fmt.Errorf("%w: array index %q is non-canonical", ErrInvalidFact, segment)
+			}
 			index, err := strconv.Atoi(segment)
 			if err != nil || index < 0 || index >= len(value) {
-				return false, nil, nil
+				return false, nil, fmt.Errorf("%w: array index %q is invalid", ErrFactMismatch, segment)
 			}
 			current = value[index]
 		default:
@@ -397,5 +409,17 @@ func walkFactPath(root map[string]any, path string) (bool, any, error) {
 		}
 	}
 	return true, current, nil
+}
+func validPointerToken(token string) bool {
+	for i := 0; i < len(token); i++ {
+		if token[i] != '~' {
+			continue
+		}
+		if i+1 == len(token) || (token[i+1] != '0' && token[i+1] != '1') {
+			return false
+		}
+		i++
+	}
+	return true
 }
 func sha256Digest(data []byte) Digest { return Digest(sha256Sum(data)) }

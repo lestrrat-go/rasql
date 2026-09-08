@@ -12,16 +12,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func testProfile(t *testing.T) engineprofile.Profile {
+type testProfileSource struct{ value engineprofile.Profile }
+
+func (s testProfileSource) ID() string                        { return s.value.ID }
+func (s testProfileSource) Engine() changeplan.EngineID       { return s.value.Engine }
+func (s testProfileSource) Version() changeplan.EngineVersion { return s.value.Version }
+func (s testProfileSource) Capabilities() changeplan.EngineCapabilities {
+	return s.value.Capabilities
+}
+func (s testProfileSource) Limits() changeplan.EngineLimits { return s.value.Limits }
+
+func testProfile(t *testing.T) changeplan.Profile {
 	t.Helper()
 	profile, err := engineprofile.Builtin("sqlite-3.35", engineprofile.Version{Known: true, Major: 3, Minor: 35})
 	require.NoError(t, err)
-	return profile
+	snapshot, err := changeplan.NewProfile(testProfileSource{value: profile})
+	require.NoError(t, err)
+	return snapshot
 }
 
 func testBaseline(t *testing.T, future changeplan.BaselineObject, renames ...changeplan.BaselineRename) changeplan.BaselineIdentity {
 	t.Helper()
-	catalog, err := changeplan.NewCatalogIdentity(engineprofile.SQLite, changeplan.Digest{1}, changeplan.Digest{2}, changeplan.Digest{3})
+	profile := testProfile(t)
+	profileDigest, err := changeplan.ProfileDigest(profile)
+	require.NoError(t, err)
+	catalog, err := changeplan.NewCatalogIdentity(engineprofile.SQLite, profileDigest, changeplan.Digest{2}, changeplan.Digest{3})
 	require.NoError(t, err)
 	starting, err := changeplan.NewBaselineObject("starting", "table", "main", "users", "")
 	require.NoError(t, err)
@@ -84,7 +99,7 @@ func TestStableTopologicalOrderUsesOriginalOrder(t *testing.T) {
 }
 
 func TestFactEvaluationUsesRFC6901Paths(t *testing.T) {
-	catalog := compilerir.PhysicalCatalog{Objects: []compilerir.PhysicalObject{{ID: "starting", Kind: "table", Name: "users", Columns: []compilerir.PhysicalColumn{}}}}
+	catalog := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "sqlite", Version: "3.35", Profile: "sqlite-3.35"}, Objects: []compilerir.PhysicalObject{{ID: "starting", Kind: "table", Name: "users", Columns: []compilerir.PhysicalColumn{}}}}
 	fact, err := changeplan.NewFact("starting", "/name", changeplan.FactOperatorEqual, `"users"`)
 	require.NoError(t, err)
 	require.Equal(t, changeplan.ObjectID("starting"), fact.Object())
