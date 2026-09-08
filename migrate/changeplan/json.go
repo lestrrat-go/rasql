@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"time"
 
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
@@ -509,6 +510,11 @@ func validateWireShape(data []byte) error {
 	if err := requireKeys(root, "format", "id", "profile", "baseline", "history", "decisions", "operations"); err != nil {
 		return err
 	}
+	for _, key := range []string{"format", "id"} {
+		if err := requireString(root, key); err != nil {
+			return err
+		}
+	}
 	if err := requireArray(root, "decisions"); err != nil {
 		return err
 	}
@@ -522,12 +528,28 @@ func validateWireShape(data []byte) error {
 	if err := requireKeys(profile, "engine", "custom_name", "version_known", "version", "max_bind_parameters", "capabilities"); err != nil {
 		return err
 	}
+	for _, key := range []string{"engine", "custom_name"} {
+		if err := requireString(profile, key); err != nil {
+			return err
+		}
+	}
+	if err := requireBool(profile, "version_known"); err != nil {
+		return err
+	}
+	if err := requireInt(profile, "max_bind_parameters"); err != nil {
+		return err
+	}
 	version, err := objectRaw(profile, "version")
 	if err != nil {
 		return err
 	}
 	if err := requireKeys(version, "major", "minor", "patch"); err != nil {
 		return err
+	}
+	for _, key := range []string{"major", "minor", "patch"} {
+		if err := requireInt(version, key); err != nil {
+			return err
+		}
 	}
 	caps, err := objectRaw(profile, "capabilities")
 	if err != nil {
@@ -545,12 +567,27 @@ func validateWireShape(data []byte) error {
 	if err := requireKeys(caps, capKeys...); err != nil {
 		return err
 	}
+	for _, key := range []string{"returning", "upsert", "per_parent_limit", "update_default"} {
+		if err := requireString(caps, key); err != nil {
+			return err
+		}
+	}
+	for _, key := range []string{"conflict_target", "default_values", "empty_insert", "default_values_upsert", "subquery_limit", "write_subquery_target", "partial_index", "aggregate_filter", "qualified_reference", "qualified_index_target", "qualified_index_name", "match_operator", "select_for_update", "select_for_share", "select_lock_of", "select_lock_no_wait", "select_lock_skip_locked", "upsert_conflict_where", "upsert_update_where", "window_functions", "lateral_joins", "savepoints", "transactional_ddl", "explicit_null_ordering", "tuple_comparison"} {
+		if err := requireBool(caps, key); err != nil {
+			return err
+		}
+	}
 	baseline, err := objectRaw(root, "baseline")
 	if err != nil {
 		return err
 	}
 	if err := requireKeys(baseline, "engine", "profile_digest", "catalog_digest", "source_digest", "source_identity", "objects", "renames"); err != nil {
 		return err
+	}
+	for _, key := range []string{"engine", "profile_digest", "catalog_digest", "source_digest", "source_identity"} {
+		if err := requireString(baseline, key); err != nil {
+			return err
+		}
 	}
 	if err := requireArray(baseline, "objects"); err != nil {
 		return err
@@ -566,6 +603,11 @@ func validateWireShape(data []byte) error {
 		if err := requireKeys(object, "id", "kind", "schema", "name", "introduced_by"); err != nil {
 			return err
 		}
+		for _, key := range []string{"id", "kind", "schema", "name", "introduced_by"} {
+			if err := requireString(object, key); err != nil {
+				return err
+			}
+		}
 	}
 	for _, raw := range rawArray(baseline, "renames") {
 		rename, err := objectRawBytes(raw)
@@ -575,6 +617,11 @@ func validateWireShape(data []byte) error {
 		if err := requireKeys(rename, "operation", "object", "to_schema", "to_name"); err != nil {
 			return err
 		}
+		for _, key := range []string{"operation", "object", "to_schema", "to_name"} {
+			if err := requireString(rename, key); err != nil {
+				return err
+			}
+		}
 	}
 	history, err := objectRaw(root, "history")
 	if err != nil {
@@ -582,6 +629,11 @@ func validateWireShape(data []byte) error {
 	}
 	if err := requireKeys(history, "schema", "table"); err != nil {
 		return err
+	}
+	for _, key := range []string{"schema", "table"} {
+		if err := requireString(history, key); err != nil {
+			return err
+		}
 	}
 	for _, raw := range rawArray(root, "decisions") {
 		decision, err := objectRawBytes(raw)
@@ -591,6 +643,14 @@ func validateWireShape(data []byte) error {
 		if err := requireKeys(decision, "id", "kind", "object", "from", "to", "accepted", "reason"); err != nil {
 			return err
 		}
+		for _, key := range []string{"id", "kind", "object", "from", "to", "reason"} {
+			if err := requireString(decision, key); err != nil {
+				return err
+			}
+		}
+		if err := requireBool(decision, "accepted"); err != nil {
+			return err
+		}
 	}
 	for _, raw := range rawArray(root, "operations") {
 		operation, err := objectRawBytes(raw)
@@ -598,6 +658,14 @@ func validateWireShape(data []byte) error {
 			return err
 		}
 		if err := requireKeys(operation, "id", "kind", "depends_on", "objects", "preconditions", "postconditions", "statements", "transaction", "reversible", "reverse_statements"); err != nil {
+			return err
+		}
+		for _, key := range []string{"id", "kind", "transaction"} {
+			if err := requireString(operation, key); err != nil {
+				return err
+			}
+		}
+		if err := requireBool(operation, "reversible"); err != nil {
 			return err
 		}
 		for _, field := range []string{"depends_on", "objects", "preconditions", "postconditions", "statements", "reverse_statements"} {
@@ -614,6 +682,11 @@ func validateWireShape(data []byte) error {
 				if err := requireKeys(fact, "object", "path", "operator", "value"); err != nil {
 					return err
 				}
+				for _, key := range []string{"object", "path", "operator", "value"} {
+					if err := requireString(fact, key); err != nil {
+						return err
+					}
+				}
 			}
 		}
 		for _, field := range []string{"statements", "reverse_statements"} {
@@ -623,6 +696,9 @@ func validateWireShape(data []byte) error {
 					return err
 				}
 				if err := requireKeys(statement, "sql", "args"); err != nil {
+					return err
+				}
+				if err := requireString(statement, "sql"); err != nil {
 					return err
 				}
 				if err := requireArray(statement, "args"); err != nil {
@@ -636,6 +712,12 @@ func validateWireShape(data []byte) error {
 					if err := requireKeys(arg, "kind", "value"); err != nil {
 						return err
 					}
+					if err := requireString(arg, "kind"); err != nil {
+						return err
+					}
+					if err := requireArgValueType(arg); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -647,6 +729,80 @@ func requireKeys(object map[string]json.RawMessage, keys ...string) error {
 		if _, ok := object[key]; !ok {
 			return fmt.Errorf("%w: missing required wire field %q", ErrInvalidWire, key)
 		}
+	}
+	return nil
+}
+
+func requireString(object map[string]json.RawMessage, key string) error {
+	var value string
+	raw, ok := object[key]
+	if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) || json.Unmarshal(raw, &value) != nil {
+		return fmt.Errorf("%w: %s must be a string", ErrInvalidWire, key)
+	}
+	return nil
+}
+
+func requireBool(object map[string]json.RawMessage, key string) error {
+	var value bool
+	raw, ok := object[key]
+	if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) || json.Unmarshal(raw, &value) != nil {
+		return fmt.Errorf("%w: %s must be a boolean", ErrInvalidWire, key)
+	}
+	return nil
+}
+
+func requireInt(object map[string]json.RawMessage, key string) error {
+	var value int64
+	raw, ok := object[key]
+	if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) || json.Unmarshal(raw, &value) != nil {
+		return fmt.Errorf("%w: %s must be an integer", ErrInvalidWire, key)
+	}
+	return nil
+}
+
+func requireArgValueType(arg map[string]json.RawMessage) error {
+	var kind string
+	if err := json.Unmarshal(arg["kind"], &kind); err != nil {
+		return fmt.Errorf("%w: argument kind", ErrInvalidWire)
+	}
+	raw := bytes.TrimSpace(arg["value"])
+	if kind == "null" {
+		if !bytes.Equal(raw, []byte("null")) {
+			return fmt.Errorf("%w: null argument value", ErrInvalidWire)
+		}
+		return nil
+	}
+	if bytes.Equal(raw, []byte("null")) {
+		return fmt.Errorf("%w: argument %s cannot be null", ErrInvalidWire, kind)
+	}
+	switch kind {
+	case "bool":
+		var value bool
+		if json.Unmarshal(raw, &value) != nil {
+			return fmt.Errorf("%w: bool argument", ErrInvalidWire)
+		}
+	case "int64":
+		var value int64
+		if json.Unmarshal(raw, &value) != nil {
+			return fmt.Errorf("%w: int64 argument", ErrInvalidWire)
+		}
+	case "uint64":
+		var value uint64
+		if json.Unmarshal(raw, &value) != nil {
+			return fmt.Errorf("%w: uint64 argument", ErrInvalidWire)
+		}
+	case "float64":
+		var value float64
+		if json.Unmarshal(raw, &value) != nil || math.IsNaN(value) || math.IsInf(value, 0) {
+			return fmt.Errorf("%w: float64 argument", ErrInvalidWire)
+		}
+	case "string", "bytes_base64", "time_rfc3339nano":
+		var value string
+		if json.Unmarshal(raw, &value) != nil {
+			return fmt.Errorf("%w: string argument", ErrInvalidWire)
+		}
+	default:
+		return nil
 	}
 	return nil
 }

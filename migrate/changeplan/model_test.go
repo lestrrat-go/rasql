@@ -55,7 +55,7 @@ func TestPlanRoundTripAndArgumentIsolation(t *testing.T) {
 	baseline := testBaseline(t, future)
 	argument := []byte("value")
 	statement := stmt.New(sqltext.Text("INSERT INTO created VALUES (?)"), argument)
-	operation, err := changeplan.NewOperation("create", changeplan.OperationCreateTable, nil, []changeplan.ObjectID{future.ID()}, nil, nil, nil, changeplan.TransactionRequired, false, nil)
+	operation, err := changeplan.NewOperation("create", changeplan.OperationCreateTable, nil, []changeplan.ObjectID{future.ID()}, nil, nil, []stmt.Statement{stmt.New(sqltext.Text("CREATE TABLE created (id INTEGER)"))}, changeplan.TransactionRequired, false, []stmt.Statement{})
 	require.NoError(t, err)
 	backfill, err := changeplan.NewOperation("backfill", changeplan.OperationBackfill, []changeplan.OperationID{"create"}, []changeplan.ObjectID{future.ID()}, nil, nil, []stmt.Statement{statement}, changeplan.TransactionForbidden, false, nil)
 	require.NoError(t, err)

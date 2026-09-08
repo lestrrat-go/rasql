@@ -5,6 +5,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/migrate/changeplan"
 	"github.com/lestrrat-go/rasql/schema"
+	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/lestrrat-go/rasql/stmt"
 	"github.com/stretchr/testify/require"
 )
@@ -31,7 +32,7 @@ func TestCatalogCopiesDefinitionsAndSupportsResolvedSteps(t *testing.T) {
 	require.NoError(t, err)
 	fact, err := changeplan.NewFact(id, "/columns/1/name", changeplan.FactOperatorEqual, `"title"`)
 	require.NoError(t, err)
-	operation, err := changeplan.NewOperation("alter", changeplan.OperationAddColumn, []changeplan.OperationID{}, []changeplan.ObjectID{id}, nil, []changeplan.Fact{fact}, nil, changeplan.TransactionEngineDefault, false, []stmt.Statement{})
+	operation, err := changeplan.NewOperation("alter", changeplan.OperationAddColumn, []changeplan.OperationID{}, []changeplan.ObjectID{id}, nil, []changeplan.Fact{fact}, []stmt.Statement{stmt.New(sqltext.Text("ALTER TABLE tasks ADD COLUMN title TEXT"))}, changeplan.TransactionEngineDefault, false, []stmt.Statement{})
 	require.NoError(t, err)
 	step, err := changeplan.NewResolvedCatalogStep(operation.ID(), after)
 	require.NoError(t, err)

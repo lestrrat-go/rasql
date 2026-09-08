@@ -448,6 +448,9 @@ func NewOperation(
 	if len(objects) == 0 {
 		return Operation{}, fmt.Errorf("%w: operation needs an object", ErrInvalidOperation)
 	}
+	if len(statements) == 0 {
+		return Operation{}, fmt.Errorf("%w: operation needs forward SQL", ErrInvalidOperation)
+	}
 	if kind != OperationBackfill && kind != OperationNativeSQL {
 		if err := validateStatements(statements, false); err != nil {
 			return Operation{}, err

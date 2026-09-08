@@ -2,6 +2,7 @@ package changeplan
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -225,88 +226,18 @@ func sortedWirePairs(values map[string]string) []catalogPairWire {
 	}
 	return out
 }
-func physicalObjectValue(object compilerir.PhysicalObject) map[string]any {
-	value := map[string]any{"id": string(object.ID), "kind": object.Kind, "schema": object.Schema, "name": object.Name,
-		"columns": make([]any, len(object.Columns)), "constraints": make([]any, len(object.Constraints)), "indexes": make([]any, len(object.Indexes)),
-		"exclusion_constraints": make([]any, len(object.ExclusionConstraints)), "strict": object.Strict, "without_rowid": object.WithoutRowID,
-		"primary_key_autoincrement": object.PrimaryKeyAutoincrement, "primary_key_on_conflict": object.PrimaryKeyOnConflict,
-		"virtual_table_module": object.VirtualTableModule, "virtual_table_module_arguments": append([]string(nil), object.VirtualTableModuleArguments...)}
-	columns := value["columns"].([]any)
-	for i, column := range object.Columns {
-		entry := map[string]any{"name": column.Name, "ordinal": column.Ordinal, "logical_kind": column.LogicalKind, "native": nativeValue(column.Native), "nullable": column.Nullable,
-			"default_sql": column.DefaultSQL, "generated_sql": column.GeneratedSQL, "generated_storage": column.GeneratedStorage, "identity": column.Identity, "collation": column.Collation, "hidden": column.Hidden,
-			"integer": integerValue(column.Integer), "text": textValue(column.Text), "decimal": decimalValue(column.Decimal)}
-		columns[i] = entry
+func canonicalObjectValue(object compilerir.PhysicalObject) (map[string]any, error) {
+	encoded, err := marshalNoHTML(catalogObjectValue(object))
+	if err != nil {
+		return nil, err
 	}
-	constraints := value["constraints"].([]any)
-	for i, constraint := range object.Constraints {
-		constraints[i] = physicalConstraintValue(constraint)
+	var value map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
 	}
-	indexes := value["indexes"].([]any)
-	for i, index := range object.Indexes {
-		indexes[i] = physicalIndexValue(index)
-	}
-	exclusions := value["exclusion_constraints"].([]any)
-	for i, exclusion := range object.ExclusionConstraints {
-		exclusions[i] = map[string]any{"name": exclusion.Name, "method": exclusion.Method, "elements": exclusion.Elements, "predicate_sql": exclusion.PredicateSQL, "deferrability": exclusion.Deferrability}
-	}
-	return value
-}
-func nativeValue(value *compilerir.NativeType) any {
-	if value == nil {
-		return nil
-	}
-	out := map[string]any{"dialect": value.Dialect, "schema": value.Schema, "name": value.Name, "kind": value.Kind, "arguments": append([]string(nil), value.Arguments...)}
-	out["element"] = nativeValue(value.Element)
-	return out
-}
-func integerValue(value *compilerir.IntegerTypeFacts) any {
-	if value == nil {
-		return nil
-	}
-	return map[string]any{"unsigned": value.Unsigned, "display_width": map[string]any{"value": value.DisplayWidth.Value, "set": value.DisplayWidth.Set}, "zero_fill": value.ZeroFill}
-}
-func textValue(value *compilerir.TextTypeFacts) any {
-	if value == nil {
-		return nil
-	}
-	return map[string]any{"width": map[string]any{"value": value.Width.Value, "set": value.Width.Set}, "fixed": value.Fixed}
-}
-func decimalValue(value *compilerir.DecimalTypeFacts) any {
-	if value == nil {
-		return nil
-	}
-	return map[string]any{"precision": value.Precision, "scale": map[string]any{"value": value.Scale.Value, "set": value.Scale.Set}, "unsigned": value.Unsigned, "zero_fill": value.ZeroFill}
-}
-func physicalConstraintValue(value compilerir.PhysicalConstraint) map[string]any {
-	return map[string]any{"name": value.Name, "kind": value.Kind, "columns": append([]string(nil), value.Columns...), "reference": referenceValue(value.Reference), "expression_sql": value.ExpressionSQL,
-		"deferrable": value.Deferrable, "initially_deferred": value.InitiallyDeferred, "on_update": value.OnUpdate, "on_delete": value.OnDelete, "deferrability": value.Deferrability, "match": value.Match,
-		"nulls_not_distinct": value.NullsNotDistinct, "include_columns": append([]string(nil), value.IncludeColumns...), "on_conflict": value.OnConflict, "keys": value.Keys, "temporal": value.Temporal,
-		"storage_parameters": sortedStringPairs(value.StorageParameters), "tablespace": value.Tablespace, "replica_identity": value.ReplicaIdentity, "collations": sortedStringPairs(value.Collations),
-		"no_inherit": value.NoInherit, "not_valid": value.NotValid, "not_enforced": value.NotEnforced, "delete_set_columns": append([]string(nil), value.DeleteSetColumns...)}
-}
-func referenceValue(value *compilerir.ForeignReference) any {
-	if value == nil {
-		return nil
-	}
-	return map[string]any{"schema": value.Schema, "object": value.Object, "columns": append([]string(nil), value.Columns...)}
-}
-func physicalIndexValue(value compilerir.PhysicalIndex) map[string]any {
-	return map[string]any{"name": value.Name, "unique": value.Unique, "method": value.Method, "key_form": value.KeyForm, "parts": value.Parts, "predicate_sql": value.PredicateSQL,
-		"include_columns": append([]string(nil), value.IncludeColumns...), "invisible": value.Invisible, "not_valid": value.NotValid, "storage_parameters": sortedStringPairs(value.StorageParameters), "tablespace": value.Tablespace,
-		"replica_identity": value.ReplicaIdentity, "nulls_not_distinct": value.NullsNotDistinct}
-}
-func sortedStringPairs(values map[string]string) []map[string]string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	out := make([]map[string]string, len(keys))
-	for i, key := range keys {
-		out[i] = map[string]string{"key": key, "value": values[key]}
-	}
-	return out
+	return value, nil
 }
 
 func CatalogDigest(c Catalog) (Digest, error) {
@@ -335,9 +266,13 @@ func EvaluateFact(c Catalog, fact Fact) error {
 		return err
 	}
 	var object map[string]any
+	var err error
 	for _, candidate := range c.physical.Objects {
 		if ObjectID(candidate.ID) == fact.object {
-			object = physicalObjectValue(candidate)
+			object, err = canonicalObjectValue(candidate)
+			if err != nil {
+				return err
+			}
 			break
 		}
 	}
