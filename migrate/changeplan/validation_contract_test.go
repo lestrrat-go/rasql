@@ -1148,12 +1148,14 @@ func TestValidationContractFactSemantics(t *testing.T) {
 			require.ErrorContains(t, err, row.contains)
 		})
 	}
-	data := validationContractValid(t)
-	root := validationContractJSON(t, data)
-	validationContractSet(root, `{ "x": 1 }`, "operations", 9, "postconditions", 0, "value")
-	data = validationContractBytes(t, root)
-	require.True(t, json.Valid(data))
-	validationContractDecodeError(t, validationContractRehash(t, data), ErrInvalidWire, "non-canonical fact value")
+	t.Run("noncanonical whitespace value", func(t *testing.T) {
+		data := validationContractValid(t)
+		root := validationContractJSON(t, data)
+		validationContractSet(root, `{ "x": 1 }`, "operations", 9, "postconditions", 0, "value")
+		data = validationContractBytes(t, root)
+		require.True(t, json.Valid(data))
+		validationContractDecodeError(t, validationContractRehash(t, data), ErrInvalidWire, "non-canonical fact value")
+	})
 
 	catalog := validationContractFactCatalog(t)
 	for _, row := range []struct {
@@ -1207,6 +1209,8 @@ func TestValidationContractDecisionSemantics(t *testing.T) {
 		from, to, reason string
 		accepted         bool
 	}{
+		{"decision empty id", DecisionAcceptNativeSQL, "", "", "", true},
+		{"decision empty object", DecisionAcceptNativeSQL, "object", "", "", true},
 		{"rename rejected", DecisionRenameObject, "a", "b", "", false}, {"rename empty from", DecisionRenameObject, "", "b", "", true}, {"rename empty to", DecisionRenameObject, "a", "", "", true}, {"rename same from to", DecisionRenameObject, "a", "a", "", true}, {"rename nonempty reason", DecisionRenameObject, "a", "b", "reason", true},
 		{"destructive rejected", DecisionAcceptDestructive, "", "", "approved", false}, {"destructive nonempty from", DecisionAcceptDestructive, "a", "", "approved", true}, {"destructive nonempty to", DecisionAcceptDestructive, "", "b", "approved", true}, {"destructive blank reason", DecisionAcceptDestructive, "", "", " ", true},
 		{"native rejected", DecisionAcceptNativeSQL, "", "", "approved", false}, {"native nonempty from", DecisionAcceptNativeSQL, "a", "", "approved", true}, {"native nonempty to", DecisionAcceptNativeSQL, "", "b", "approved", true}, {"native blank reason", DecisionAcceptNativeSQL, "", "", " ", true},
@@ -1214,36 +1218,101 @@ func TestValidationContractDecisionSemantics(t *testing.T) {
 	} {
 		row := row
 		t.Run(row.name, func(t *testing.T) {
-			_, err := NewDecision("decision", row.kind, "object", row.from, row.to, row.accepted, row.reason)
+			object := "object"
+			if row.name == "decision empty object" {
+				object = ""
+			}
+			id := DecisionID("decision")
+			if row.name == "decision empty id" {
+				id = ""
+			}
+			_, err := NewDecision(id, row.kind, ObjectID(object), row.from, row.to, row.accepted, row.reason)
 			require.ErrorIs(t, err, ErrInvalidDecision)
-			require.ErrorContains(t, err, "invalid")
+			if strings.HasPrefix(row.name, "decision empty") {
+				require.ErrorContains(t, err, "id and object")
+			} else {
+				require.ErrorContains(t, err, "invalid")
+			}
 		})
 	}
 }
 
 func TestValidationContractDecisionBindings(t *testing.T) {
+	for _, row := range []struct {
+		name, decisionID, object, contains string
+	}{
+		{"decision empty id", "", "object-a", "id and object"},
+		{"decision empty object", "decision", "", "id and object"},
+	} {
+		row := row
+		t.Run(row.name, func(t *testing.T) {
+			decision := validationContractDecisionWire(row.decisionID, DecisionAcceptNativeSQL, row.object, "", "", true, "approved")
+			operation := validationContractDecisionOperationWire("native", OperationNativeSQL, []string{"object-a"}, []string{})
+			data := validationContractDecisionPlan(t, []map[string]any{operation}, []map[string]any{decision}, nil, "object-a")
+			validationContractDecodeError(t, data, ErrInvalidDecision, row.contains)
+		})
+	}
+
+	validRename := validationContractDecisionWire("rename-decision", DecisionRenameObject, "object-a", "main.users", "main.accounts", true, "")
+	renameBinding := map[string]any{"operation": "rename", "object": "object-a", "to_schema": "main", "to_name": "accounts"}
+	for _, row := range []struct {
+		name       string
+		operations []map[string]any
+		decisions  []map[string]any
+		objects    []string
+	}{
+		{
+			name:       "rename decision without operation",
+			operations: []map[string]any{validationContractDecisionOperationWire("rename", OperationRenameTable, []string{"object-a"}, nil)},
+			decisions: []map[string]any{
+				validRename,
+				validationContractDecisionWire("unused", DecisionRenameObject, "object-a", "main.accounts", "main.final", true, ""),
+			},
+			objects: []string{"object-a"},
+		},
+		{
+			name: "rename decision for non-rename operation",
+			operations: []map[string]any{
+				validationContractDecisionOperationWire("rename", OperationRenameTable, []string{"object-a"}, nil),
+				validationContractDecisionOperationWire("native", OperationNativeSQL, []string{"object-a"}, []string{"rename"}),
+			},
+			decisions: []map[string]any{
+				validRename,
+				validationContractDecisionWire("native-decision", DecisionAcceptNativeSQL, "object-a", "", "", true, "approved"),
+				validationContractDecisionWire("unused", DecisionRenameObject, "object-a", "main.accounts", "main.final", true, ""),
+			},
+			objects: []string{"object-a"},
+		},
+	} {
+		row := row
+		t.Run(row.name, func(t *testing.T) {
+			data := validationContractDecisionPlan(t, row.operations, row.decisions, []map[string]any{renameBinding}, row.objects...)
+			validationContractDecodeError(t, data, ErrInvalidDecision, "unused")
+		})
+	}
+
 	valid := validationContractValid(t)
 	for _, row := range []struct {
-		name   string
-		mutate func(map[string]any)
+		name, contains string
+		mutate         func(map[string]any)
 	}{
-		{"missing destructive decision", func(root map[string]any) {
+		{"missing destructive decision", "lacks destructive decision", func(root map[string]any) {
 			root["decisions"] = validationContractWithoutDecision(root["decisions"].([]any), "destructive")
 		}},
-		{"wrong-object destructive decision", func(root map[string]any) { validationContractDecisionByID(root, "destructive")["object"] = "other" }},
-		{"missing backfill decision", func(root map[string]any) {
+		{"wrong-object destructive decision", "lacks destructive decision", func(root map[string]any) { validationContractDecisionByID(root, "destructive")["object"] = "other" }},
+		{"missing backfill decision", "lacks backfill decision", func(root map[string]any) {
 			root["decisions"] = validationContractWithoutDecision(root["decisions"].([]any), "backfill")
 		}},
-		{"wrong-object backfill decision", func(root map[string]any) { validationContractDecisionByID(root, "backfill")["object"] = "other" }},
-		{"destructive decision cannot approve backfill", func(root map[string]any) {
+		{"wrong-object backfill decision", "lacks backfill decision", func(root map[string]any) { validationContractDecisionByID(root, "backfill")["object"] = "other" }},
+		{"destructive decision cannot approve backfill", "lacks backfill decision", func(root map[string]any) {
 			validationContractDecisionByID(root, "backfill")["kind"] = "accept_destructive"
 		}},
-		{"missing native decision", func(root map[string]any) {
+		{"missing native decision", "lacks native SQL decision", func(root map[string]any) {
 			root["decisions"] = validationContractWithoutDecision(root["decisions"].([]any), "native")
 		}},
-		{"wrong-object native decision", func(root map[string]any) { validationContractDecisionByID(root, "native")["object"] = "other" }},
-		{"backfill decision cannot approve native", func(root map[string]any) { validationContractDecisionByID(root, "native")["kind"] = "supply_backfill" }},
-		{"duplicate decision id", func(root map[string]any) {
+		{"wrong-object native decision", "lacks native SQL decision", func(root map[string]any) { validationContractDecisionByID(root, "native")["object"] = "other" }},
+		{"backfill decision cannot approve native", "lacks native SQL decision", func(root map[string]any) { validationContractDecisionByID(root, "native")["kind"] = "supply_backfill" }},
+		{"duplicate decision id", "duplicate decision ID", func(root map[string]any) {
 			decisions := root["decisions"].([]any)
 			decisions[1].(map[string]any)["id"] = decisions[0].(map[string]any)["id"]
 		}},
@@ -1252,7 +1321,63 @@ func TestValidationContractDecisionBindings(t *testing.T) {
 		t.Run(row.name, func(t *testing.T) {
 			root := validationContractJSON(t, valid).(map[string]any)
 			row.mutate(root)
-			validationContractDecodeError(t, validationContractRehash(t, validationContractBytes(t, root)), ErrInvalidDecision, "")
+			validationContractDecodeError(t, validationContractRehash(t, validationContractBytes(t, root)), ErrInvalidDecision, row.contains)
+		})
+	}
+
+	for _, kind := range []OperationKind{OperationDropTable, OperationDropColumn, OperationDropIndex, OperationDropConstraint} {
+		kind := kind
+		for _, wrongObject := range []bool{false, true} {
+			name := string(kind) + " missing destructive decision"
+			if wrongObject {
+				name = string(kind) + " wrong-object destructive decision"
+			}
+			t.Run(name, func(t *testing.T) {
+				operationID := string(kind) + "-binding"
+				object := "object-a"
+				decisionObject := object
+				if wrongObject {
+					decisionObject = "object-b"
+				}
+				decisions := []map[string]any{}
+				if wrongObject {
+					decisions = append(decisions, validationContractDecisionWire("destructive", DecisionAcceptDestructive, decisionObject, "", "", true, "approved"))
+				}
+				operation := validationContractDecisionOperationWire(operationID, kind, []string{object}, nil)
+				data := validationContractDecisionPlan(t, []map[string]any{operation}, decisions, nil, object)
+				require.Contains(t, string(data), operationID)
+				_, err := Decode(data)
+				require.ErrorIs(t, err, ErrInvalidDecision)
+				require.ErrorContains(t, err, "lacks destructive decision")
+				require.ErrorContains(t, err, operationID)
+			})
+		}
+	}
+
+	for _, row := range []struct {
+		name, operationID, decisionKind, contains string
+		kind                                      OperationKind
+	}{
+		{"two-object drop only first approved", "drop-two", string(DecisionAcceptDestructive), "lacks destructive decision", OperationDropTable},
+		{"two-object drop only second approved", "drop-two-second", string(DecisionAcceptDestructive), "lacks destructive decision", OperationDropTable},
+		{"two-object backfill only first supplied", "backfill-two", string(DecisionSupplyBackfill), "lacks backfill decision", OperationBackfill},
+		{"two-object native only first approved", "native-two", string(DecisionAcceptNativeSQL), "lacks native SQL decision", OperationNativeSQL},
+	} {
+		row := row
+		t.Run(row.name, func(t *testing.T) {
+			decisionObject := "object-a"
+			unapproved := "object-b"
+			if strings.Contains(row.name, "second") {
+				decisionObject, unapproved = "object-b", "object-a"
+			}
+			operation := validationContractDecisionOperationWire(row.operationID, row.kind, []string{"object-a", "object-b"}, nil)
+			decision := validationContractDecisionWire("policy", DecisionKind(row.decisionKind), decisionObject, "", "", true, "approved")
+			data := validationContractDecisionPlan(t, []map[string]any{operation}, []map[string]any{decision}, nil, "object-a", "object-b")
+			require.Contains(t, string(data), unapproved)
+			_, err := Decode(data)
+			require.ErrorIs(t, err, ErrInvalidDecision)
+			require.ErrorContains(t, err, row.contains)
+			require.ErrorContains(t, err, row.operationID)
 		})
 	}
 }
@@ -1275,6 +1400,56 @@ func validationContractWithoutDecision(values []any, id string) []any {
 		}
 	}
 	return out
+}
+
+func validationContractDecisionWire(id string, kind DecisionKind, object, from, to string, accepted bool, reason string) map[string]any {
+	return map[string]any{
+		"id": id, "kind": string(kind), "object": object, "from": from, "to": to,
+		"accepted": accepted, "reason": reason,
+	}
+}
+
+func validationContractDecisionOperationWire(id string, kind OperationKind, objects, dependsOn []string) map[string]any {
+	if dependsOn == nil {
+		dependsOn = []string{}
+	}
+	sqlText := "DROP TABLE users"
+	if kind == OperationRenameTable {
+		sqlText = "ALTER TABLE users RENAME TO accounts"
+	}
+	if kind == OperationBackfill || kind == OperationNativeSQL {
+		sqlText = "SELECT 1"
+	}
+	return map[string]any{
+		"id": id, "kind": string(kind), "depends_on": dependsOn, "objects": objects,
+		"preconditions": []any{}, "postconditions": []any{}, "result_digest": digestHex(Digest{1}),
+		"statements":  []any{map[string]any{"sql": sqlText, "args": []any{}}},
+		"transaction": string(TransactionForbidden), "reversible": false, "reverse_statements": []any{},
+	}
+}
+
+func validationContractDecisionPlan(t *testing.T, operations []map[string]any, decisions []map[string]any, renames []map[string]any, objectIDs ...string) []byte {
+	t.Helper()
+	if renames == nil {
+		renames = []map[string]any{}
+	}
+	root := validationContractJSON(t, validationContractValid(t)).(map[string]any)
+	objects := make([]any, 0, len(objectIDs))
+	for i, id := range objectIDs {
+		name := "users"
+		if i > 0 {
+			name = "orders"
+		}
+		objects = append(objects, map[string]any{
+			"id": id, "kind": "table", "schema": "main", "name": name, "introduced_by": "",
+		})
+	}
+	baseline := root["baseline"].(map[string]any)
+	baseline["objects"] = objects
+	baseline["renames"] = renames
+	root["decisions"] = decisions
+	root["operations"] = operations
+	return validationContractRehash(t, validationContractBytes(t, root))
 }
 
 func validationContractOperation(t *testing.T, kind OperationKind, objects []ObjectID, statements []stmt.Statement, reverse []stmt.Statement, reversible bool, args ...any) (Operation, error) {
