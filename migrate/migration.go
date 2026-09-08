@@ -11,6 +11,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/lestrrat-go/rasql/migrate/changeplan"
 	"github.com/lestrrat-go/rasql/sqltext"
 )
 
@@ -39,8 +40,10 @@ type IncompleteMigration struct {
 }
 
 type ExecutionResult struct {
-	Completed  []Migration
-	Incomplete *IncompleteMigration
+	Completed           []Migration
+	Incomplete          *IncompleteMigration
+	CompletedOperations []changeplan.Operation
+	IncompleteOperation *IncompleteOperation
 }
 
 type IncompleteMigrationError struct {
