@@ -458,6 +458,9 @@ func NewOperation(
 	if len(objects) == 0 {
 		return Operation{}, fmt.Errorf("%w: operation needs an object", ErrInvalidOperation)
 	}
+	if kind == OperationCreateTable && len(objects) != 1 {
+		return Operation{}, fmt.Errorf("%w: create_table needs one object", ErrInvalidOperation)
+	}
 	if len(statements) == 0 {
 		return Operation{}, fmt.Errorf("%w: operation needs forward SQL", ErrInvalidOperation)
 	}

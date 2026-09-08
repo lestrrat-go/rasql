@@ -682,6 +682,32 @@ func TestValidationContractOperationSemantics(t *testing.T) {
 			_ = operation
 		})
 	}
+	t.Run("create table one object succeeds", func(t *testing.T) {
+		operation, err := NewOperation("create-one", OperationCreateTable, nil, []ObjectID{"object"}, nil, nil,
+			Digest{1}, []stmt.Statement{stmt.New(sqltext.Text("CREATE TABLE created (id INTEGER)"))}, TransactionRequired, false, nil)
+		require.NoError(t, err)
+		require.Equal(t, []ObjectID{"object"}, operation.Objects())
+	})
+	t.Run("create table two objects", func(t *testing.T) {
+		_, err := NewOperation("create-two", OperationCreateTable, nil, []ObjectID{"object", "other"}, nil, nil,
+			Digest{1}, []stmt.Statement{stmt.New(sqltext.Text("CREATE TABLE created (id INTEGER)"))}, TransactionRequired, false, nil)
+		require.ErrorIs(t, err, ErrInvalidOperation)
+		require.ErrorContains(t, err, "create_table needs one object")
+	})
+	t.Run("rename table two objects remains aggregate", func(t *testing.T) {
+		_, identity, object, _ := validationContractIdentity(t)
+		rename, err := NewOperation("rename", OperationRenameTable, nil, []ObjectID{object.ID()}, nil, nil,
+			Digest{1}, []stmt.Statement{stmt.New(sqltext.Text("ALTER TABLE users RENAME TO renamed"))}, TransactionForbidden, false, nil)
+		require.NoError(t, err)
+		rename.objects = []ObjectID{object.ID(), "other"}
+		binding, err := NewBaselineRename("rename", object.ID(), "main", "renamed")
+		require.NoError(t, err)
+		baseline, err := NewBaselineIdentity(identity, "validation", []BaselineObject{object}, []BaselineRename{binding})
+		require.NoError(t, err)
+		err = validateRenameDecisions(baseline, nil, []Operation{rename})
+		require.ErrorIs(t, err, ErrInvalidIdentity)
+		require.ErrorContains(t, err, "rename binding mismatch")
+	})
 	for _, row := range []struct {
 		name  string
 		value any
@@ -875,11 +901,12 @@ func TestValidationContractPlanSemantics(t *testing.T) {
 	require.NoError(t, err)
 	futureBaseline, err := NewBaselineIdentity(baseline.catalog, "validation", []BaselineObject{objectFromBaseline(baseline), future}, nil)
 	require.NoError(t, err)
-	create, err := NewOperation("create", OperationCreateTable, nil, []ObjectID{future.ID(), "object"}, nil, nil, Digest{4}, []stmt.Statement{stmt.New(sqltext.Text("CREATE TABLE created (id INTEGER)"))}, TransactionRequired, false, nil)
+	create, err := NewOperation("create", OperationCreateTable, nil, []ObjectID{future.ID()}, nil, nil, Digest{4}, []stmt.Statement{stmt.New(sqltext.Text("CREATE TABLE created (id INTEGER)"))}, TransactionRequired, false, nil)
 	require.NoError(t, err)
-	_, err = newPlan(profile, futureBaseline, history, nil, []Operation{create})
+	create.objects = []ObjectID{future.ID(), "object"}
+	err = validateFutureObjectIDs(futureBaseline, []Operation{create})
 	require.ErrorIs(t, err, ErrInvalidIdentity)
-	require.ErrorContains(t, err, "does not name its create_table operation")
+	require.ErrorContains(t, err, "no matching create operation")
 }
 
 func objectFromBaseline(b BaselineIdentity) BaselineObject { return b.objects[0] }
