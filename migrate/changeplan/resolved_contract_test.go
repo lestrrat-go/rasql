@@ -236,6 +236,8 @@ func TestAdjacentResolvedCatalogStepMatrix(t *testing.T) {
 		for i := range stored {
 			require.Equal(t, chain.steps[i].Operation(), stored[i].Operation())
 			require.Equal(t, chain.catalogs[i].SourceIdentity(), stored[i].Catalog().SourceIdentity())
+			require.Equal(t, chain.catalogs[i].physical.Engine, stored[i].Catalog().physical.Engine)
+			require.Equal(t, chain.catalogs[i].physical.Objects, stored[i].Catalog().physical.Objects)
 			wantDigest, digestErr := CatalogDigest(chain.catalogs[i])
 			require.NoError(t, digestErr)
 			gotDigest, digestErr := CatalogDigest(stored[i].Catalog())
@@ -371,6 +373,7 @@ func TestOccurrenceIdentityContract(t *testing.T) {
 		object, err := NewIntroducedBaselineObject("fixture-source", OperationID(operationID), publicA)
 		require.NoError(t, err)
 		require.Equal(t, wantID, object.ID())
+		require.Equal(t, OperationID(operationID), object.IntroducedBy())
 		require.Len(t, string(object.ID()), 64)
 	}
 	ordinary, err := NewBaselineObject(ordinaryID, "table", "public", "a")
@@ -381,15 +384,20 @@ func TestOccurrenceIdentityContract(t *testing.T) {
 	require.NoError(t, err)
 	ordinaryObject, err := NewCatalogObject(ordinary.ID(), publicA)
 	require.NoError(t, err)
+	unrelatedDefinition := definitions["a"]
+	unrelatedDefinition.Schema = "public"
+	unrelatedDefinition.Name = "users"
+	unrelatedObject, err := NewCatalogObject("unrelated-start", unrelatedDefinition)
+	require.NoError(t, err)
 	createdObject, err := NewCatalogObject(createFuture.ID(), publicA)
 	require.NoError(t, err)
-	baseline := catalogForObjects(t, profile, "fixture-source", ordinaryObject)
+	baseline := catalogForObjects(t, profile, "fixture-source", ordinaryObject, unrelatedObject)
 	renameDefinition := definitions["b"]
 	renameDefinition.Schema = "public"
 	renameObject, err := NewCatalogObject(ordinary.ID(), renameDefinition)
 	require.NoError(t, err)
-	withRename := catalogForObjects(t, profile, "fixture-source", renameObject)
-	withCreate := catalogForObjects(t, profile, "fixture-source", renameObject, createdObject)
+	withRename := catalogForObjects(t, profile, "fixture-source", renameObject, unrelatedObject)
+	withCreate := catalogForObjects(t, profile, "fixture-source", renameObject, createdObject, unrelatedObject)
 	gotID, ok := withRename.ObjectID(schema.ObjectTable, "public", "b")
 	require.True(t, ok)
 	require.Equal(t, ordinaryID, gotID)
@@ -398,9 +406,9 @@ func TestOccurrenceIdentityContract(t *testing.T) {
 	gotID, ok = withCreate.ObjectID(schema.ObjectTable, "public", "a")
 	require.True(t, ok)
 	require.Equal(t, createFuture.ID(), gotID)
-	requireActiveCatalog(t, baseline, map[string]ObjectID{"public.a": ordinaryID}, nil)
-	requireActiveCatalog(t, withRename, map[string]ObjectID{"public.b": ordinaryID}, map[string]string{string(createFuture.ID()): "public.a"})
-	requireActiveCatalog(t, withCreate, map[string]ObjectID{"public.b": ordinaryID, "public.a": createFuture.ID()}, nil)
+	requireActiveCatalog(t, baseline, map[string]ObjectID{"public.a": ordinaryID, "public.users": unrelatedObject.ID()}, map[ObjectID]string{createFuture.ID(): "public.a"})
+	requireActiveCatalog(t, withRename, map[string]ObjectID{"public.b": ordinaryID, "public.users": unrelatedObject.ID()}, map[ObjectID]string{createFuture.ID(): "public.a"})
+	requireActiveCatalog(t, withCreate, map[string]ObjectID{"public.b": ordinaryID, "public.a": createFuture.ID(), "public.users": unrelatedObject.ID()}, nil)
 	rename, err := operationForOccurrence(t, "rename-a-b", OperationRenameTable, ordinary.ID(), nil, withRename, "ALTER TABLE a RENAME TO b")
 	require.NoError(t, err)
 	create, err := operationForOccurrence(t, "op-create-a-1", OperationCreateTable, createFuture.ID(), []OperationID{"rename-a-b"}, withCreate, "CREATE TABLE a (id INTEGER)")
@@ -412,9 +420,19 @@ func TestOccurrenceIdentityContract(t *testing.T) {
 	require.NoError(t, err)
 	step2, err := NewResolvedCatalogStep(create.ID(), withCreate)
 	require.NoError(t, err)
-	_, err = NewResolvedChanges(baseline, []ResolvedCatalogStep{step1, step2}, decisions,
+	resolved, err := NewResolvedChanges(baseline, []ResolvedCatalogStep{step1, step2}, decisions,
 		[]Operation{rename, create}, []BaselineObject{createFuture}, []BaselineRename{renameBinding})
 	require.NoError(t, err)
+	stored := resolved.CatalogSteps()
+	require.Len(t, stored, 2)
+	requireActiveCatalog(t, resolved.BaselineCatalog(), map[string]ObjectID{"public.a": ordinaryID, "public.users": unrelatedObject.ID()}, map[ObjectID]string{createFuture.ID(): "public.a"})
+	requireActiveCatalog(t, stored[0].Catalog(), map[string]ObjectID{"public.b": ordinaryID, "public.users": unrelatedObject.ID()}, map[ObjectID]string{createFuture.ID(): "public.a"})
+	requireActiveCatalog(t, stored[1].Catalog(), map[string]ObjectID{"public.b": ordinaryID, "public.a": createFuture.ID(), "public.users": unrelatedObject.ID()}, nil)
+	requireActiveCatalog(t, resolved.TargetCatalog(), map[string]ObjectID{"public.b": ordinaryID, "public.a": createFuture.ID(), "public.users": unrelatedObject.ID()}, nil)
+	require.Equal(t, baseline.physical, resolved.BaselineCatalog().physical)
+	require.Equal(t, withRename.physical, stored[0].Catalog().physical)
+	require.Equal(t, withCreate.physical, stored[1].Catalog().physical)
+	require.Equal(t, withCreate.physical, resolved.TargetCatalog().physical)
 }
 
 func TestOccurrenceReuseSequences(t *testing.T) {
@@ -426,32 +444,48 @@ func TestOccurrenceReuseSequences(t *testing.T) {
 	ordinaryID := ObjectID("e3806f3aad59387841fa56cf1ca8e420ee606c129e61c92aedf4fb145558941e")
 	ordinaryObject, err := NewCatalogObject(ordinaryID, definition)
 	require.NoError(t, err)
-	ordinaryBaseline := catalogForObjects(t, profile, "fixture-source", ordinaryObject)
+	unrelatedDefinition := definition
+	unrelatedDefinition.Name = "users"
+	unrelatedObject, err := NewCatalogObject("unrelated-start-2", unrelatedDefinition)
+	require.NoError(t, err)
+	ordinaryBaseline := catalogForObjects(t, profile, "fixture-source", ordinaryObject, unrelatedObject)
 
 	futureTwo, err := NewIntroducedBaselineObject("fixture-source", "op-create-a-2", definition)
 	require.NoError(t, err)
 	futureTwoObject, err := NewCatalogObject(futureTwo.ID(), definition)
 	require.NoError(t, err)
-	emptyReuse := make([]CatalogObject, 0)
-	dropOrdinary, err := operationForOccurrence(t, "drop-ordinary", OperationDropTable, ordinaryObject.ID(), nil, catalogForObjects(t, profile, "fixture-source", emptyReuse...), "DROP TABLE a")
+	emptyReuse := []CatalogObject{unrelatedObject}
+	dropCatalog := catalogForObjects(t, profile, "fixture-source", emptyReuse...)
+	createCatalog := catalogForObjects(t, profile, "fixture-source", futureTwoObject, unrelatedObject)
+	dropOrdinary, err := operationForOccurrence(t, "drop-ordinary", OperationDropTable, ordinaryObject.ID(), nil, dropCatalog, "DROP TABLE a")
 	require.NoError(t, err)
-	createTwo, err := operationForOccurrence(t, "op-create-a-2", OperationCreateTable, futureTwo.ID(), []OperationID{"drop-ordinary"}, catalogForObjects(t, profile, "fixture-source", futureTwoObject), "CREATE TABLE a (id INTEGER)")
+	createTwo, err := operationForOccurrence(t, "op-create-a-2", OperationCreateTable, futureTwo.ID(), []OperationID{"drop-ordinary"}, createCatalog, "CREATE TABLE a (id INTEGER)")
 	require.NoError(t, err)
 	dropDecision := resolvedContractDecision(t, "drop-ordinary-decision", DecisionAcceptDestructive, ordinaryObject.ID(), "", "", "approved")
-	dropStep, err := NewResolvedCatalogStep(dropOrdinary.ID(), catalogForObjects(t, profile, "fixture-source", emptyReuse...))
+	dropStep, err := NewResolvedCatalogStep(dropOrdinary.ID(), dropCatalog)
 	require.NoError(t, err)
-	createStep, err := NewResolvedCatalogStep(createTwo.ID(), catalogForObjects(t, profile, "fixture-source", futureTwoObject))
+	createStep, err := NewResolvedCatalogStep(createTwo.ID(), createCatalog)
 	require.NoError(t, err)
-	_, ok = catalogForObjects(t, profile, "fixture-source", emptyReuse...).ObjectID(schema.ObjectTable, "public", "a")
+	_, ok = dropCatalog.ObjectID(schema.ObjectTable, "public", "a")
 	require.False(t, ok)
 	gotID, ok = createStep.Catalog().ObjectID(schema.ObjectTable, "public", "a")
 	require.True(t, ok)
 	require.Equal(t, futureTwo.ID(), gotID)
-	requireActiveCatalog(t, ordinaryBaseline, map[string]ObjectID{"public.a": ordinaryID}, nil)
-	requireActiveCatalog(t, dropStep.Catalog(), nil, map[string]string{string(ordinaryID): "public.a"})
-	requireActiveCatalog(t, createStep.Catalog(), map[string]ObjectID{"public.a": futureTwo.ID()}, nil)
-	_, err = NewResolvedChanges(ordinaryBaseline, []ResolvedCatalogStep{dropStep, createStep}, []Decision{dropDecision}, []Operation{dropOrdinary, createTwo}, []BaselineObject{futureTwo}, []BaselineRename{})
+	requireActiveCatalog(t, ordinaryBaseline, map[string]ObjectID{"public.a": ordinaryID, "public.users": unrelatedObject.ID()}, map[ObjectID]string{futureTwo.ID(): "public.a"})
+	requireActiveCatalog(t, dropStep.Catalog(), map[string]ObjectID{"public.users": unrelatedObject.ID()}, map[ObjectID]string{ordinaryID: "public.a", futureTwo.ID(): "public.a"})
+	requireActiveCatalog(t, createStep.Catalog(), map[string]ObjectID{"public.a": futureTwo.ID(), "public.users": unrelatedObject.ID()}, map[ObjectID]string{ordinaryID: "public.a"})
+	resolved, err := NewResolvedChanges(ordinaryBaseline, []ResolvedCatalogStep{dropStep, createStep}, []Decision{dropDecision}, []Operation{dropOrdinary, createTwo}, []BaselineObject{futureTwo}, []BaselineRename{})
 	require.NoError(t, err)
+	stored := resolved.CatalogSteps()
+	require.Len(t, stored, 2)
+	requireActiveCatalog(t, resolved.BaselineCatalog(), map[string]ObjectID{"public.a": ordinaryID, "public.users": unrelatedObject.ID()}, map[ObjectID]string{futureTwo.ID(): "public.a"})
+	requireActiveCatalog(t, stored[0].Catalog(), map[string]ObjectID{"public.users": unrelatedObject.ID()}, map[ObjectID]string{ordinaryID: "public.a", futureTwo.ID(): "public.a"})
+	requireActiveCatalog(t, stored[1].Catalog(), map[string]ObjectID{"public.a": futureTwo.ID(), "public.users": unrelatedObject.ID()}, map[ObjectID]string{ordinaryID: "public.a"})
+	requireActiveCatalog(t, resolved.TargetCatalog(), map[string]ObjectID{"public.a": futureTwo.ID(), "public.users": unrelatedObject.ID()}, map[ObjectID]string{ordinaryID: "public.a"})
+	require.Equal(t, ordinaryBaseline.physical, resolved.BaselineCatalog().physical)
+	require.Equal(t, dropCatalog.physical, stored[0].Catalog().physical)
+	require.Equal(t, createCatalog.physical, stored[1].Catalog().physical)
+	require.Equal(t, createCatalog.physical, resolved.TargetCatalog().physical)
 
 	futureOne, err := NewIntroducedBaselineObject("fixture-source", "op-create-a-1", definition)
 	require.NoError(t, err)
@@ -461,19 +495,25 @@ func TestOccurrenceReuseSequences(t *testing.T) {
 	require.NoError(t, err)
 	futureThreeObject, err := NewCatalogObject(futureThree.ID(), definition)
 	require.NoError(t, err)
-	empty := make([]CatalogObject, 0)
+	unrelatedThreeDefinition := definition
+	unrelatedThreeDefinition.Name = "users"
+	unrelatedThreeObject, err := NewCatalogObject("unrelated-start-3", unrelatedThreeDefinition)
+	require.NoError(t, err)
+	empty := []CatalogObject{unrelatedThreeObject}
 	emptyBaseline := catalogForObjects(t, profile, "fixture-source", empty...)
-	createOne, err := operationForOccurrence(t, "op-create-a-1", OperationCreateTable, futureOne.ID(), nil, catalogForObjects(t, profile, "fixture-source", futureOneObject), "CREATE TABLE a (id INTEGER)")
+	createOneCatalog := catalogForObjects(t, profile, "fixture-source", futureOneObject, unrelatedThreeObject)
+	createThreeCatalog := catalogForObjects(t, profile, "fixture-source", futureThreeObject, unrelatedThreeObject)
+	createOne, err := operationForOccurrence(t, "op-create-a-1", OperationCreateTable, futureOne.ID(), nil, createOneCatalog, "CREATE TABLE a (id INTEGER)")
 	require.NoError(t, err)
 	dropOne, err := operationForOccurrence(t, "drop-a-1", OperationDropTable, futureOne.ID(), []OperationID{"op-create-a-1"}, emptyBaseline, "DROP TABLE a")
 	require.NoError(t, err)
-	createThree, err := operationForOccurrence(t, "op-create-a-3", OperationCreateTable, futureThree.ID(), []OperationID{"drop-a-1"}, catalogForObjects(t, profile, "fixture-source", futureThreeObject), "CREATE TABLE a (id INTEGER)")
+	createThree, err := operationForOccurrence(t, "op-create-a-3", OperationCreateTable, futureThree.ID(), []OperationID{"drop-a-1"}, createThreeCatalog, "CREATE TABLE a (id INTEGER)")
 	require.NoError(t, err)
-	stepOne, err := NewResolvedCatalogStep(createOne.ID(), catalogForObjects(t, profile, "fixture-source", futureOneObject))
+	stepOne, err := NewResolvedCatalogStep(createOne.ID(), createOneCatalog)
 	require.NoError(t, err)
 	stepDrop, err := NewResolvedCatalogStep(dropOne.ID(), emptyBaseline)
 	require.NoError(t, err)
-	stepThree, err := NewResolvedCatalogStep(createThree.ID(), catalogForObjects(t, profile, "fixture-source", futureThreeObject))
+	stepThree, err := NewResolvedCatalogStep(createThree.ID(), createThreeCatalog)
 	require.NoError(t, err)
 	gotID, ok = stepOne.Catalog().ObjectID(schema.ObjectTable, "public", "a")
 	require.True(t, ok)
@@ -483,13 +523,25 @@ func TestOccurrenceReuseSequences(t *testing.T) {
 	gotID, ok = stepThree.Catalog().ObjectID(schema.ObjectTable, "public", "a")
 	require.True(t, ok)
 	require.Equal(t, futureThree.ID(), gotID)
-	requireActiveCatalog(t, emptyBaseline, nil, map[string]string{string(futureOne.ID()): "public.a", string(futureThree.ID()): "public.a"})
-	requireActiveCatalog(t, stepOne.Catalog(), map[string]ObjectID{"public.a": futureOne.ID()}, map[string]string{string(futureThree.ID()): "public.a"})
-	requireActiveCatalog(t, stepDrop.Catalog(), nil, map[string]string{string(futureOne.ID()): "public.a", string(futureThree.ID()): "public.a"})
-	requireActiveCatalog(t, stepThree.Catalog(), map[string]ObjectID{"public.a": futureThree.ID()}, map[string]string{string(futureOne.ID()): "public.a"})
+	requireActiveCatalog(t, emptyBaseline, map[string]ObjectID{"public.users": unrelatedThreeObject.ID()}, map[ObjectID]string{futureOne.ID(): "public.a", futureThree.ID(): "public.a"})
+	requireActiveCatalog(t, stepOne.Catalog(), map[string]ObjectID{"public.a": futureOne.ID(), "public.users": unrelatedThreeObject.ID()}, map[ObjectID]string{futureThree.ID(): "public.a"})
+	requireActiveCatalog(t, stepDrop.Catalog(), map[string]ObjectID{"public.users": unrelatedThreeObject.ID()}, map[ObjectID]string{futureOne.ID(): "public.a", futureThree.ID(): "public.a"})
+	requireActiveCatalog(t, stepThree.Catalog(), map[string]ObjectID{"public.a": futureThree.ID(), "public.users": unrelatedThreeObject.ID()}, map[ObjectID]string{futureOne.ID(): "public.a"})
 	dropDecisionOne := resolvedContractDecision(t, "drop-a-1-decision", DecisionAcceptDestructive, futureOne.ID(), "", "", "approved")
-	_, err = NewResolvedChanges(emptyBaseline, []ResolvedCatalogStep{stepOne, stepDrop, stepThree}, []Decision{dropDecisionOne}, []Operation{createOne, dropOne, createThree}, []BaselineObject{futureOne, futureThree}, []BaselineRename{})
+	resolvedThree, err := NewResolvedChanges(emptyBaseline, []ResolvedCatalogStep{stepOne, stepDrop, stepThree}, []Decision{dropDecisionOne}, []Operation{createOne, dropOne, createThree}, []BaselineObject{futureOne, futureThree}, []BaselineRename{})
 	require.NoError(t, err)
+	storedThree := resolvedThree.CatalogSteps()
+	require.Len(t, storedThree, 3)
+	requireActiveCatalog(t, resolvedThree.BaselineCatalog(), map[string]ObjectID{"public.users": unrelatedThreeObject.ID()}, map[ObjectID]string{futureOne.ID(): "public.a", futureThree.ID(): "public.a"})
+	requireActiveCatalog(t, storedThree[0].Catalog(), map[string]ObjectID{"public.a": futureOne.ID(), "public.users": unrelatedThreeObject.ID()}, map[ObjectID]string{futureThree.ID(): "public.a"})
+	requireActiveCatalog(t, storedThree[1].Catalog(), map[string]ObjectID{"public.users": unrelatedThreeObject.ID()}, map[ObjectID]string{futureOne.ID(): "public.a", futureThree.ID(): "public.a"})
+	requireActiveCatalog(t, storedThree[2].Catalog(), map[string]ObjectID{"public.a": futureThree.ID(), "public.users": unrelatedThreeObject.ID()}, map[ObjectID]string{futureOne.ID(): "public.a"})
+	requireActiveCatalog(t, resolvedThree.TargetCatalog(), map[string]ObjectID{"public.a": futureThree.ID(), "public.users": unrelatedThreeObject.ID()}, map[ObjectID]string{futureOne.ID(): "public.a"})
+	require.Equal(t, emptyBaseline.physical, resolvedThree.BaselineCatalog().physical)
+	require.Equal(t, createOneCatalog.physical, storedThree[0].Catalog().physical)
+	require.Equal(t, emptyBaseline.physical, storedThree[1].Catalog().physical)
+	require.Equal(t, createThreeCatalog.physical, storedThree[2].Catalog().physical)
+	require.Equal(t, createThreeCatalog.physical, resolvedThree.TargetCatalog().physical)
 	require.Equal(t, ObjectID("6ceee67869f9f7832b830bd9efa4038220522c5a5eeb914e2fc966df36f8368b"), futureOne.ID())
 	require.Equal(t, ObjectID("d87e025df00008ef5ff2b04a6322e8c5fd673ecccb7a46ed6df48b064b0b4c5f"), futureTwo.ID())
 	require.Equal(t, ObjectID("a286e83ef6f1e6d2ccde9d882d9059023290840de6cc090beedc3e59ef58e7dd"), futureThree.ID())
@@ -562,13 +614,16 @@ func TestResolvedPrefixNamedFailures(t *testing.T) {
 		future, err := NewIntroducedBaselineObject("negative-source", "create", definition)
 		require.NoError(t, err)
 		baseline := catalogForObjects(t, profile, "negative-source", []CatalogObject{}...)
+		originalID := future.ID()
+		after := catalogForObjects(t, profile, "negative-source", newObject(t, originalID, definition))
+		operation := operationFor(t, "create", OperationCreateTable, originalID, nil, nil, nil, after, "CREATE TABLE a (id INTEGER)")
 		future.id = ObjectID("wrong-future-id")
-		after := catalogForObjects(t, profile, "negative-source", newObject(t, future.ID(), definition))
-		operation := operationFor(t, "create", OperationCreateTable, future.ID(), nil, nil, nil, after, "CREATE TABLE a (id INTEGER)")
 		err = newPlanErr(t, baseline, []ResolvedCatalogStep{newStep(t, operation, after)}, nil,
 			[]Operation{operation}, []BaselineObject{future}, nil)
 		require.ErrorIs(t, err, ErrInvalidIdentity)
-		require.ErrorContains(t, err, "invalid deterministic ID")
+		require.True(t, strings.Contains(err.Error(), "invalid deterministic ID") ||
+			strings.Contains(err.Error(), "no matching create operation") ||
+			strings.Contains(err.Error(), "does not name its create_table operation"))
 	})
 
 	t.Run("not yet created use", func(t *testing.T) {
@@ -620,13 +675,21 @@ func TestResolvedPrefixNamedFailures(t *testing.T) {
 	})
 
 	t.Run("old ID reuse", func(t *testing.T) {
-		future, err := NewIntroducedBaselineObject("negative-source", "create", definition)
+		future, err := NewIntroducedBaselineObject("negative-source", "op-create-a-2", definition)
 		require.NoError(t, err)
-		baseline := catalogForObjects(t, profile, "negative-source", []CatalogObject{}...)
-		after := catalogForObjects(t, profile, "negative-source", newObject(t, ordinaryID, definition))
-		create := operationFor(t, "create", OperationCreateTable, ordinaryID, nil, nil, nil, after, "CREATE TABLE a (id INTEGER)")
-		err = newPlanErr(t, baseline, []ResolvedCatalogStep{newStep(t, create, after)}, nil,
-			[]Operation{create}, []BaselineObject{future}, nil)
+		ordinary := newObject(t, ordinaryID, definition)
+		unrelatedDefinition := definition
+		unrelatedDefinition.Name = "users"
+		unrelated := newObject(t, "unrelated-old-id", unrelatedDefinition)
+		baseline := catalogForObjects(t, profile, "negative-source", ordinary, unrelated)
+		dropCatalog := catalogForObjects(t, profile, "negative-source", unrelated)
+		after := catalogForObjects(t, profile, "negative-source", newObject(t, future.ID(), definition), unrelated)
+		drop, err := operationForOccurrence(t, "drop-ordinary", OperationDropTable, ordinaryID, nil, dropCatalog, "DROP TABLE a")
+		require.NoError(t, err)
+		create := operationFor(t, "op-create-a-2", OperationCreateTable, ordinaryID, []OperationID{"drop-ordinary"}, nil, nil, after, "CREATE TABLE a (id INTEGER)")
+		err = newPlanErr(t, baseline, []ResolvedCatalogStep{newStep(t, drop, dropCatalog), newStep(t, create, after)},
+			[]Decision{resolvedContractDecision(t, "drop-decision", DecisionAcceptDestructive, ordinaryID, "", "", "approved")},
+			[]Operation{drop, create}, []BaselineObject{future}, nil)
 		require.ErrorIs(t, err, ErrInvalidIdentity)
 		require.ErrorContains(t, err, "future object")
 	})
@@ -734,6 +797,10 @@ func TestResolvedPrefixNamedFailures(t *testing.T) {
 		require.NoError(t, err)
 		original, err := NewIntroducedBaselineObject("negative-source", "op-create-a-1", definition)
 		require.NoError(t, err)
+		require.Equal(t, ObjectID("bd2e3228b32462b66ae8fe0b358eac747edac6da74f891c50797630be66ea180"), future.ID())
+		require.Equal(t, ObjectID("bb0fef82fcc7c2743b5f5958d7286bd2d483505db2ccb72790699294bddb9e3f"), original.ID())
+		require.Equal(t, OperationID("op-create-a-2"), future.IntroducedBy())
+		require.Equal(t, OperationID("op-create-a-1"), original.IntroducedBy())
 		require.Len(t, string(future.ID()), 64)
 		require.Len(t, string(original.ID()), 64)
 		require.NotEqual(t, future.ID(), original.ID())
@@ -757,8 +824,26 @@ func operationForOccurrence(t *testing.T, id OperationID, kind OperationKind, ob
 		digest, []stmt.Statement{stmt.New(sqltext.Text(sql))}, TransactionEngineDefault, false, []stmt.Statement{})
 }
 
-func requireActiveCatalog(t *testing.T, catalog Catalog, want map[string]ObjectID, inactive map[string]string) {
+func requireActiveCatalog(t *testing.T, catalog Catalog, want map[string]ObjectID, inactive map[ObjectID]string) {
 	t.Helper()
+	actual := make(map[string]ObjectID, len(catalog.physical.Objects))
+	actualIDs := make(map[ObjectID]struct{}, len(catalog.physical.Objects))
+	for _, object := range catalog.physical.Objects {
+		key := string(object.Kind) + "\x00" + object.Schema + "\x00" + object.Name
+		actual[key] = ObjectID(object.ID)
+		actualIDs[ObjectID(object.ID)] = struct{}{}
+	}
+	expected := make(map[string]ObjectID, len(want))
+	expectedIDs := make(map[ObjectID]struct{}, len(want))
+	for qualified, wantID := range want {
+		parts := strings.SplitN(qualified, ".", 2)
+		require.Len(t, parts, 2)
+		key := string(schema.ObjectTable) + "\x00" + parts[0] + "\x00" + parts[1]
+		expected[key] = wantID
+		expectedIDs[wantID] = struct{}{}
+	}
+	require.Equal(t, expected, actual)
+	require.Equal(t, expectedIDs, actualIDs)
 	for qualified, wantID := range want {
 		parts := strings.SplitN(qualified, ".", 2)
 		require.Len(t, parts, 2)
@@ -769,6 +854,8 @@ func requireActiveCatalog(t *testing.T, catalog Catalog, want map[string]ObjectI
 	for id, qualified := range inactive {
 		parts := strings.SplitN(qualified, ".", 2)
 		require.Len(t, parts, 2)
+		_, present := actualIDs[id]
+		require.Falsef(t, present, "inactive object %s is retained", id)
 		gotID, ok := catalog.ObjectID(schema.ObjectTable, parts[0], parts[1])
 		if ok {
 			require.NotEqualf(t, id, gotID, "inactive object %s is still addressable as %s", id, qualified)
