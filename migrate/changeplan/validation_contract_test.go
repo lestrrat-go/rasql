@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/schema"
@@ -55,6 +56,7 @@ func validationContractNumberMutation(t *testing.T, data []byte, token json.Numb
 	root := validationContractClone(t, validationContractJSON(t, data))
 	validationContractSet(root, token, path...)
 	encoded := validationContractBytes(t, root)
+	require.True(t, json.Valid(encoded))
 	require.Contains(t, string(encoded), token.String())
 	return validationContractRehash(t, encoded)
 }
@@ -71,6 +73,7 @@ func validationContractRequireValidNumericRoundTrip(t *testing.T) {
 		{name: "int64 minimum", path: []any{"operations", 9, "statements", 0, "args", 2, "value"}, value: json.Number("-9223372036854775808"), index: 2, want: int64(-9223372036854775808)},
 		{name: "int64 maximum", path: []any{"operations", 9, "statements", 0, "args", 2, "value"}, value: json.Number("9223372036854775807"), index: 2, want: int64(9223372036854775807)},
 		{name: "uint64 maximum", path: []any{"operations", 9, "statements", 0, "args", 3, "value"}, value: json.Number("18446744073709551615"), index: 3, want: uint64(18446744073709551615)},
+		{name: "finite float", path: []any{"operations", 9, "statements", 0, "args", 4, "value"}, value: json.Number("1.25"), index: 4, want: float64(1.25)},
 	} {
 		row := row
 		t.Run(row.name, func(t *testing.T) {
@@ -124,7 +127,22 @@ func validationContractMutation(t *testing.T, data []byte, value any, path ...an
 	t.Helper()
 	root := validationContractClone(t, validationContractJSON(t, data))
 	validationContractSet(root, value, path...)
-	return validationContractRehash(t, validationContractBytes(t, root))
+	encoded := validationContractBytes(t, root)
+	require.True(t, json.Valid(encoded))
+	return validationContractRehash(t, encoded)
+}
+
+func validationContractRawTokenMutation(t *testing.T, data []byte, token string, path ...any) []byte {
+	t.Helper()
+	root := validationContractClone(t, validationContractJSON(t, data))
+	const marker = "__validation_contract_raw_token__"
+	validationContractSet(root, marker, path...)
+	encoded := validationContractBytes(t, root)
+	quotedMarker, err := json.Marshal(marker)
+	require.NoError(t, err)
+	require.Equal(t, 1, bytes.Count(encoded, quotedMarker))
+	encoded = bytes.Replace(encoded, quotedMarker, []byte(token), 1)
+	return encoded
 }
 
 func validationContractDecodeError(t *testing.T, data []byte, target error, contains string) {
@@ -703,6 +721,24 @@ func TestValidationContractWireShape(t *testing.T) {
 
 func TestValidationContractScalarGrammar(t *testing.T) {
 	valid := validationContractValid(t)
+	for _, row := range []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{"plan id short", "abcd", ""},
+		{"plan id long", strings.Repeat("a", 65), ""},
+		{"plan id nonhex", strings.Repeat("z", 64), ""},
+		{"plan id uppercase", strings.Repeat("A", 64), ""},
+		{"plan id stale valid hex", strings.Repeat("0", 64), "plan ID mismatch"},
+	} {
+		row := row
+		t.Run(row.name, func(t *testing.T) {
+			root := validationContractJSON(t, valid)
+			validationContractSet(root, row.value, "id")
+			validationContractDecodeError(t, validationContractBytes(t, root), ErrInvalidWire, row.want)
+		})
+	}
 	for _, test := range []struct {
 		name   string
 		path   []any
@@ -756,27 +792,53 @@ func TestValidationContractScalarGrammar(t *testing.T) {
 		name   string
 		value  any
 		target error
+		rehash bool
 	}{
-		{"zero bind limit", 0, engineprofile.ErrInvalidProfile}, {"negative bind limit", -1, engineprofile.ErrInvalidProfile},
-		{"bind limit integer overflow", 9223372036854775807.0, ErrInvalidWire},
+		{"valid bind limit", json.Number("999"), nil, true},
+		{"zero bind limit", json.Number("0"), engineprofile.ErrInvalidProfile, true},
+		{"negative bind limit", json.Number("-1"), engineprofile.ErrInvalidProfile, true},
+		{"bind limit integer overflow", json.Number("9223372036854775808"), ErrInvalidWire, false},
 	} {
 		row := row
 		t.Run(row.name, func(t *testing.T) {
-			root := validationContractJSON(t, valid)
-			validationContractSet(root, row.value, "profile", "max_bind_parameters")
-			data := validationContractBytes(t, root)
-			if row.name != "bind limit integer overflow" {
-				data = validationContractRehash(t, data)
+			var data []byte
+			if token, ok := row.value.(json.Number); ok && !row.rehash {
+				data = validationContractRawTokenMutation(t, valid, token.String(), "profile", "max_bind_parameters")
+				require.True(t, json.Valid(data))
+			} else {
+				data = validationContractMutation(t, valid, row.value, "profile", "max_bind_parameters")
+			}
+			if row.target == nil {
+				plan, err := Decode(data)
+				require.NoError(t, err)
+				require.Equal(t, 999, plan.Profile().Limits().MaxBindParameters)
+				return
 			}
 			validationContractDecodeError(t, data, row.target, "")
 		})
 	}
 	for _, field := range []string{"major", "minor", "patch"} {
-		for _, value := range []int{-1, 65536} {
-			t.Run(field+" overflow", func(t *testing.T) {
-				copyRoot := validationContractJSON(t, valid)
-				validationContractSet(copyRoot, value, "profile", "version", field)
-				validationContractDecodeError(t, validationContractBytes(t, copyRoot), ErrInvalidWire, "")
+		for _, row := range []struct {
+			name  string
+			value json.Number
+		}{
+			{"below minimum", json.Number("-1")},
+			{"above maximum", json.Number("65536")},
+			{"fractional", json.Number("1.5")},
+			{"string", json.Number(`"1"`)},
+		} {
+			row := row
+			t.Run(field+" "+row.name, func(t *testing.T) {
+				root := validationContractJSON(t, valid)
+				var data []byte
+				if strings.HasPrefix(row.value.String(), `"`) {
+					validationContractSet(root, "1", "profile", "version", field)
+					data = validationContractBytes(t, root)
+				} else {
+					validationContractSet(root, row.value, "profile", "version", field)
+					data = validationContractBytes(t, root)
+				}
+				validationContractDecodeError(t, data, ErrInvalidWire, "")
 			})
 		}
 	}
@@ -866,47 +928,183 @@ func TestValidationContractProfileSemantics(t *testing.T) {
 
 func TestValidationContractArgumentGrammar(t *testing.T) {
 	valid := validationContractValid(t)
-	argumentPaths := map[string][]any{
-		"null":             {"operations", 9, "statements", 0, "args", 0},
-		"bool":             {"operations", 9, "statements", 0, "args", 1},
-		"int64":            {"operations", 9, "statements", 0, "args", 2},
-		"uint64":           {"operations", 9, "statements", 0, "args", 3},
-		"float64":          {"operations", 9, "statements", 0, "args", 4},
-		"string":           {"operations", 9, "statements", 0, "args", 5},
-		"bytes_base64":     {"operations", 9, "statements", 0, "args", 6},
-		"time_rfc3339nano": {"operations", 9, "statements", 0, "args", 7},
+	reverseValid := validationContractReverseArguments(t, valid)
+	argumentPaths := []struct {
+		name string
+		data []byte
+		path []any
+	}{
+		{"forward", valid, []any{"operations", 9, "statements", 0, "args"}},
+		{"native", valid, []any{"operations", 10, "statements", 0, "args"}},
+		{"reverse", reverseValid, []any{"operations", 10, "reverse_statements", 0, "args"}},
 	}
-	for tag, path := range argumentPaths {
-		if tag == "null" {
-			continue
+	tagPaths := []struct {
+		name     string
+		index    int
+		fragment string
+	}{
+		{"null", 0, "null argument value"},
+		{"bool", 1, "argument bool cannot be null"},
+		{"int64", 2, "argument int64 cannot be null"},
+		{"uint64", 3, "argument uint64 cannot be null"},
+		{"float64", 4, "argument float64 cannot be null"},
+		{"string", 5, "argument string cannot be null"},
+		{"bytes_base64", 6, "argument bytes_base64 cannot be null"},
+		{"time_rfc3339nano", 7, "argument time_rfc3339nano cannot be null"},
+	}
+	for _, source := range argumentPaths {
+		source := source
+		for _, tag := range tagPaths {
+			tag := tag
+			if tag.name == "null" {
+				continue
+			}
+			t.Run(source.name+" "+tag.name+" null value", func(t *testing.T) {
+				path := append(append([]any(nil), source.path...), tag.index, "value")
+				data := validationContractMutation(t, source.data, nil, path...)
+				validationContractDecodeError(t, data, ErrInvalidWire, tag.fragment)
+			})
 		}
-		t.Run(tag+" null value", func(t *testing.T) {
-			validationContractDecodeError(t, validationContractMutation(t, valid, nil, append(path, "value")...), ErrInvalidWire, "")
+	}
+
+	for _, source := range argumentPaths {
+		source := source
+		for _, tag := range tagPaths {
+			tag := tag
+			path := append(append([]any(nil), source.path...), tag.index)
+			for _, row := range []struct {
+				name  string
+				value any
+				want  string
+			}{
+				{"false value", false, "null argument value"},
+				{"string value", "value", "null argument value"},
+				{"object value", map[string]any{}, "null argument value"},
+			} {
+				row := row
+				if tag.name != "null" {
+					break
+				}
+				t.Run(source.name+" "+tag.name+" "+row.name, func(t *testing.T) {
+					data := validationContractMutation(t, source.data, row.value, append(path, "value")...)
+					validationContractDecodeError(t, data, ErrInvalidWire, row.want)
+				})
+			}
+		}
+	}
+
+	for _, source := range argumentPaths {
+		source := source
+		for _, row := range []struct {
+			name     string
+			tag      string
+			index    int
+			value    any
+			fragment string
+		}{
+			{"bool string", "bool", 1, "false", "bool argument"},
+			{"bool number", "bool", 1, json.Number("1"), "bool argument"},
+			{"bool object", "bool", 1, map[string]any{}, "bool argument"},
+			{"int64 string", "int64", 2, "1", "int64 argument"},
+			{"int64 fraction", "int64", 2, json.Number("1.5"), "int64 argument"},
+			{"uint64 string", "uint64", 3, "1", "uint64 argument"},
+			{"uint64 fraction", "uint64", 3, json.Number("1.5"), "uint64 argument"},
+			{"uint64 negative", "uint64", 3, json.Number("-1"), "uint64 argument"},
+			{"float64 string", "float64", 4, "1.5", "float64 argument"},
+			{"float64 object", "float64", 4, map[string]any{}, "float64 argument"},
+			{"string boolean", "string", 5, true, "string argument"},
+			{"string number", "string", 5, json.Number("1"), "string argument"},
+			{"string object", "string", 5, map[string]any{}, "string argument"},
+			{"bytes non-string", "bytes_base64", 6, json.Number("1"), "string argument"},
+			{"bytes invalid alphabet", "bytes_base64", 6, "%%%", "bytes argument"},
+			{"bytes bad padding", "bytes_base64", 6, "Yg", "bytes argument"},
+			{"bytes trailing junk", "bytes_base64", 6, "Yg==junk", "bytes argument"},
+			{"time non-string", "time_rfc3339nano", 7, json.Number("1"), "string argument"},
+			{"time malformed", "time_rfc3339nano", 7, "not-time", "time argument"},
+			{"time offset not canonical", "time_rfc3339nano", 7, "2024-01-02T03:04:05+00:00", "non-canonical time argument"},
+			{"time redundant fractional zeros", "time_rfc3339nano", 7, "2024-01-02T03:04:05.000000006000Z", "non-canonical time argument"},
+			{"time date out of range", "time_rfc3339nano", 7, "2024-13-02T03:04:05Z", "time argument"},
+		} {
+			row := row
+			t.Run(source.name+" "+row.name, func(t *testing.T) {
+				path := append(append([]any(nil), source.path...), row.index, "value")
+				data := validationContractMutation(t, source.data, row.value, path...)
+				validationContractDecodeError(t, data, ErrInvalidWire, row.fragment)
+			})
+		}
+	}
+
+	for _, source := range argumentPaths {
+		source := source
+		for _, row := range []struct {
+			name  string
+			index int
+			token json.Number
+			want  string
+		}{
+			{"int64 below minimum", 2, json.Number("-9223372036854775809"), "int64 argument"},
+			{"int64 above maximum", 2, json.Number("9223372036854775808"), "int64 argument"},
+			{"uint64 above maximum", 3, json.Number("18446744073709551616"), "uint64 argument"},
+			{"float64 positive overflow", 4, json.Number("1e309"), "float64 argument"},
+			{"float64 negative overflow", 4, json.Number("-1e309"), "float64 argument"},
+		} {
+			row := row
+			t.Run(source.name+" "+row.name, func(t *testing.T) {
+				path := append(append([]any(nil), source.path...), row.index, "value")
+				data := validationContractNumberMutation(t, source.data, row.token, path...)
+				validationContractDecodeError(t, data, ErrInvalidWire, row.want)
+			})
+		}
+	}
+
+	for _, source := range argumentPaths {
+		source := source
+		for _, row := range []struct {
+			name  string
+			index int
+			token string
+		}{
+			{"float64 NaN", 4, "NaN"},
+			{"float64 Infinity", 4, "Infinity"},
+		} {
+			row := row
+			t.Run(source.name+" "+row.name, func(t *testing.T) {
+				path := append(append([]any(nil), source.path...), row.index, "value")
+				data := validationContractRawTokenMutation(t, source.data, row.token, path...)
+				require.False(t, json.Valid(data))
+				validationContractDecodeError(t, data, ErrInvalidWire, "")
+			})
+		}
+	}
+
+	for _, source := range argumentPaths {
+		source := source
+		t.Run(source.name+" exact nanosecond time", func(t *testing.T) {
+			path := append(append([]any(nil), source.path...), 7, "value")
+			data := validationContractMutation(t, source.data, "2024-01-02T03:04:05.000000006Z", path...)
+			plan, err := Decode(data)
+			require.NoError(t, err)
+			var got any
+			switch source.name {
+			case "reverse":
+				got = plan.Operations()[10].ReverseStatements()[0].Args()[7]
+			case "native":
+				got = plan.Operations()[10].Statements()[0].Args()[7]
+			default:
+				got = plan.Operations()[9].Statements()[0].Args()[7]
+			}
+			want, err := time.Parse(time.RFC3339Nano, "2024-01-02T03:04:05.000000006Z")
+			require.NoError(t, err)
+			require.Equal(t, want, got)
 		})
 	}
-	for _, row := range []struct {
-		name  string
-		path  []any
-		value any
-	}{
-		{"null tag with false", argumentPaths["null"], false}, {"null tag with string", argumentPaths["null"], "value"}, {"null tag with object", argumentPaths["null"], map[string]any{}},
-		{"bool string", argumentPaths["bool"], "false"}, {"bool number", argumentPaths["bool"], 1}, {"bool object", argumentPaths["bool"], map[string]any{}},
-		{"int64 string", argumentPaths["int64"], "1"}, {"int64 fraction", argumentPaths["int64"], 1.5}, {"int64 below minimum", argumentPaths["int64"], -9223372036854775809.0}, {"int64 above maximum", argumentPaths["int64"], 9223372036854775808.0},
-		{"uint64 string", argumentPaths["uint64"], "1"}, {"uint64 fraction", argumentPaths["uint64"], 1.5}, {"uint64 negative", argumentPaths["uint64"], -1}, {"uint64 above maximum", argumentPaths["uint64"], 18446744073709551616.0},
-		{"float64 string", argumentPaths["float64"], "1.5"}, {"float64 object", argumentPaths["float64"], map[string]any{}},
-		{"string boolean", argumentPaths["string"], true}, {"string number", argumentPaths["string"], 1}, {"string object", argumentPaths["string"], map[string]any{}},
-		{"bytes non-string", argumentPaths["bytes_base64"], 1}, {"bytes invalid alphabet", argumentPaths["bytes_base64"], "%%%"}, {"bytes bad padding", argumentPaths["bytes_base64"], "Yg"}, {"bytes trailing junk", argumentPaths["bytes_base64"], "Yg==junk"},
-		{"time non-string", argumentPaths["time_rfc3339nano"], 1}, {"time malformed", argumentPaths["time_rfc3339nano"], "not-time"}, {"time offset not canonical", argumentPaths["time_rfc3339nano"], "2024-01-02T03:04:05+09"}, {"time redundant fractional zeros", argumentPaths["time_rfc3339nano"], "2024-01-02T03:04:05.000000006000Z"}, {"time date out of range", argumentPaths["time_rfc3339nano"], "2024-13-02T03:04:05Z"},
-		{"unknown argument tag", append(append([]any(nil), argumentPaths["bool"]...), "kind"), "unknown"},
-	} {
-		row := row
-		t.Run(row.name, func(t *testing.T) {
-			path := row.path
-			if row.name == "unknown argument tag" {
-				validationContractDecodeError(t, validationContractMutation(t, valid, row.value, path...), ErrInvalidWire, "")
-			} else {
-				validationContractDecodeError(t, validationContractMutation(t, valid, row.value, append(path, "value")...), ErrInvalidWire, "")
-			}
+
+	for _, source := range argumentPaths {
+		source := source
+		t.Run(source.name+" unknown argument tag", func(t *testing.T) {
+			path := append(append([]any(nil), source.path...), 1, "kind")
+			data := validationContractMutation(t, source.data, "unknown", path...)
+			validationContractDecodeError(t, data, ErrInvalidWire, "argument kind")
 		})
 	}
 }
