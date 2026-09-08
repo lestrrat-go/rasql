@@ -220,6 +220,37 @@ rasql migrate verify \
 
 `status` reports `applied`, `pending`, `changed`, `out_of_order`, `unknown`, and `incomplete` migrations. `verify` succeeds only when every supplied migration is `applied`. The command redacts the exact DSN from returned errors. Pass `-history-table` to each database command when the default `rasql_schema_migrations` table name conflicts with an existing application table.
 
+### Apply a reviewed migration plan
+
+Directory migrations remain the default workflow. A serialized migration plan v1 is an optional reviewed artifact that
+binds its operations to an exact engine profile, history identity, starting catalog, facts, and checkpoints.
+
+Inspect a plan without opening a database, check it against a live database without changing schema or metadata, then
+apply it:
+
+```sh
+rasql migrate plan -file db/plans/add-user-nickname.json
+
+rasql migrate plan check \
+  -file db/plans/add-user-nickname.json \
+  -dialect sqlite \
+  -dsn "$DATABASE_URL"
+
+rasql migrate apply \
+  -plan db/plans/add-user-nickname.json \
+  -dialect sqlite \
+  -dsn "$DATABASE_URL"
+```
+
+`plan check` is read-only. It runs no plan SQL and creates no history or progress table. `apply -plan` validates the
+live engine profile, history identity, stored checkpoint, complete catalog digest, and operation facts before it
+continues. It records progress in the plan checkpoint table and never records the plan ID in directory migration
+history. Pass the same `-history-table` used when the plan was created when it differs from the default.
+
+`-to` and `-dry-run` apply only to directory migrations. A typed reconciliation error blocks replay when the database
+state cannot prove whether a nontransactional operation completed. Review and resolve that state before retrying.
+Changing any checked plan content changes its plan ID, so publish and review a new artifact after every change.
+
 If MySQL stops during a migration, `status` shows the source and direction that need review. Use a read-only query returning one non-NULL boolean to reconcile it after checking the database:
 
 ```sh

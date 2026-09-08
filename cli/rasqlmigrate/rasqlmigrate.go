@@ -20,6 +20,7 @@ import (
 	"github.com/lestrrat-go/rasql/internal/dsnredact"
 	"github.com/lestrrat-go/rasql/internal/migrationdir"
 	"github.com/lestrrat-go/rasql/migrate"
+	"github.com/lestrrat-go/rasql/migrate/changeplan"
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/migrate/diff/mysql"
 	"github.com/lestrrat-go/rasql/migrate/diff/postgresql"
@@ -372,13 +373,32 @@ func schemaAnalyzer(name string) (diff.Analyzer, error) {
 }
 
 func runPlan(args []string) error {
+	if len(args) > 0 && args[0] == "check" {
+		return runChangePlanCheck(args[1:])
+	}
 	flags := newFlagSet("plan")
 	directory := flags.String("dir", "", "directory that holds migration directories")
+	file := flags.String("file", "", "serialized migration plan file")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if *directory == "" {
-		return errors.New("plan requires -dir")
+	if len(flags.Args()) != 0 {
+		return errors.New("plan accepts no positional arguments")
+	}
+	if (*directory == "") == (*file == "") {
+		return errors.New("plan requires exactly one of -dir and -file")
+	}
+	if *file != "" {
+		plan, err := changeplan.Read(*file)
+		if err != nil {
+			return fmt.Errorf("read migration plan: %w", err)
+		}
+		output, err := formatChangePlan(plan)
+		if err != nil {
+			return err
+		}
+		_, _ = commandOutput.Write(output)
+		return nil
 	}
 	migrations, err := migrationdir.Load(*directory)
 	if err != nil {
@@ -391,6 +411,7 @@ func runPlan(args []string) error {
 func runApply(args []string) error {
 	flags := newFlagSet("apply")
 	directory := flags.String("dir", "", "directory that holds migration directories")
+	planFile := flags.String("plan", "", "serialized migration plan file")
 	dialectName := flags.String("dialect", "", "postgresql, mysql, or sqlite")
 	dsn := flags.String("dsn", "", "database connection string")
 	historyTable := flags.String("history-table", "", "migration history table name")
@@ -398,6 +419,24 @@ func runApply(args []string) error {
 	dryRun := flags.Bool("dry-run", false, "print the SQL the apply would run without running it")
 	if err := flags.Parse(args); err != nil {
 		return err
+	}
+	if len(flags.Args()) != 0 {
+		return errors.New("apply accepts no positional arguments")
+	}
+	if (*directory == "") == (*planFile == "") {
+		return errors.New("apply requires exactly one of -dir and -plan")
+	}
+	if *planFile != "" {
+		var directoryOnly string
+		flags.Visit(func(flagValue *flag.Flag) {
+			if flagValue.Name == "to" || flagValue.Name == "dry-run" {
+				directoryOnly = flagValue.Name
+			}
+		})
+		if directoryOnly != "" {
+			return fmt.Errorf("apply -%s is valid only with -dir", directoryOnly)
+		}
+		return runChangePlanApply(*planFile, *dialectName, *dsn, *historyTable)
 	}
 	target := migrate.AllPending()
 	if *through != "" {

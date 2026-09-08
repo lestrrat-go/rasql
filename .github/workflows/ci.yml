@@ -53,6 +53,21 @@ jobs:
         working-directory: sample/taskboard
         run: go build ./...
 
+  windows-plan-lock:
+    name: Windows plan lock
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.x'
+      - name: Run native Windows plan-lock tests
+        shell: bash
+        run: >-
+          go test -count=1 -v
+          -run '^(TestPlanLockHashVectors|TestSQLitePlanLockIdentity|TestSQLitePlanLockUnsafeTargets|TestSQLitePlanLockBlocksProcess|TestSQLitePlanLockCancellation)$'
+          ./migrate
+
   integration:
     name: Database integration
     runs-on: ubuntu-latest
