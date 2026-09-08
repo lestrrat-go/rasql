@@ -3,14 +3,14 @@ package rasqlmigrate
 import (
 	"bytes"
 	"database/sql"
+	"encoding/json"
 	"errors"
-	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/lestrrat-go/rasql/cli/rasqlgen"
 	"github.com/lestrrat-go/rasql/internal/catalogread"
-	"github.com/lestrrat-go/rasql/internal/compilerir"
-	"github.com/lestrrat-go/rasql/internal/compilerlock"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/migrate/changeplan"
 	"github.com/lestrrat-go/rasql/sqltext"
@@ -50,7 +50,7 @@ func TestRunSQLiteNonemptyChangePlanFlow(t *testing.T) {
 	dsn := filepath.Join(t.TempDir(), "application.sqlite")
 	database, err := sql.Open("sqlite", dsn)
 	require.NoError(t, err)
-	plan := sqliteCreateTableChangePlan(t, database)
+	plan := sqliteCreateTableChangePlan(t, database, dsn)
 	require.NoError(t, database.Close())
 	planFile := filepath.Join(t.TempDir(), "plan.json")
 	require.NoError(t, changeplan.Write(planFile, plan))
@@ -161,45 +161,29 @@ func emptySQLiteChangePlan(t *testing.T, database *sql.DB) changeplan.Plan {
 	return plan
 }
 
-func sqliteCreateTableChangePlan(t *testing.T, database *sql.DB) changeplan.Plan {
+func sqliteCreateTableChangePlan(t *testing.T, database *sql.DB, dsn string) changeplan.Plan {
 	t.Helper()
+	root := t.TempDir()
+	configPath := filepath.Join(root, "rasql.json")
+	configBytes, err := json.Marshal(map[string]any{
+		"engine":  map[string]string{"dialect": "sqlite", "profile": "sqlite-3.35"},
+		"schema":  map[string]string{"kind": "live", "identity": "cli-create-table"},
+		"package": "store",
+		"output":  "internal/store",
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(configPath, configBytes, 0o600))
+	var output, diagnostics bytes.Buffer
+	require.NoError(t, rasqlgen.RunTopLevelContext(t.Context(),
+		[]string{"schema", "update", "-config", configPath, "-dsn", dsn}, &output, &diagnostics),
+		diagnostics.String())
+	lockBytes, err := os.ReadFile(filepath.Join(root, "rasql.lock.json"))
+	require.NoError(t, err)
+
 	profile, err := engineprofile.Discover(t.Context(), database, engineprofile.SQLite, "sqlite-3.35")
 	require.NoError(t, err)
 	adapted := cliPlanProfile{profile}
 	sourceIdentity := "cli-create-table"
-	version := profile.Version
-	engine := compilerlock.EngineRecord{
-		Dialect: "sqlite",
-		Version: fmt.Sprintf("%d.%d.%d", version.Major, version.Minor, version.Patch),
-		Profile: profile.ID,
-	}
-	source := compilerlock.SourceRecord{Kind: "live", Identity: sourceIdentity}
-	generation := compilerir.GoConfig{Package: "store", Output: "internal/store", Emitter: "compact"}
-	digests, err := compilerlock.BuildDigests(compilerlock.DigestInputs{
-		Source:     compilerlock.SourceDigestInput{Record: source, Engine: engine},
-		Generation: generation,
-	})
-	require.NoError(t, err)
-	lockBytes, err := compilerlock.Encode(compilerlock.File{
-		Format:   compilerlock.FormatVersion,
-		Compiler: "rasql",
-		Source:   source,
-		Engine:   engine,
-		Catalog:  compilerlock.CatalogRecord{Objects: []compilerlock.ObjectRecord{}},
-		Queries:  []compilerlock.QueryRecord{},
-		Generation: compilerlock.GenerationRecord{
-			Package: generation.Package,
-			Output:  generation.Output,
-			Emitter: generation.Emitter,
-			Objects: []compilerlock.ObjectNameRecord{},
-		},
-		Digests: digests,
-		Mappings: compilerlock.MappingRecord{
-			Scalars:   []compilerlock.ScalarMappingRecord{},
-			Relations: []compilerlock.RelationMappingRecord{},
-		},
-	})
-	require.NoError(t, err)
 	baseline, err := changeplan.CatalogFromLock(lockBytes)
 	require.NoError(t, err)
 
