@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/internal/catalogread"
+	"github.com/lestrrat-go/rasql/internal/compilerir"
+	"github.com/lestrrat-go/rasql/internal/compilerlock"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/migrate/changeplan"
 	"github.com/lestrrat-go/rasql/sqltext"
@@ -164,7 +167,40 @@ func sqliteCreateTableChangePlan(t *testing.T, database *sql.DB) changeplan.Plan
 	require.NoError(t, err)
 	adapted := cliPlanProfile{profile}
 	sourceIdentity := "cli-create-table"
-	baseline, err := changeplan.NewCatalog(adapted, sourceIdentity, []changeplan.CatalogObject{})
+	version := profile.Version
+	engine := compilerlock.EngineRecord{
+		Dialect: "sqlite",
+		Version: fmt.Sprintf("%d.%d.%d", version.Major, version.Minor, version.Patch),
+		Profile: profile.ID,
+	}
+	source := compilerlock.SourceRecord{Kind: "live", Identity: sourceIdentity}
+	generation := compilerir.GoConfig{Package: "store", Output: "internal/store", Emitter: "compact"}
+	digests, err := compilerlock.BuildDigests(compilerlock.DigestInputs{
+		Source:     compilerlock.SourceDigestInput{Record: source, Engine: engine},
+		Generation: generation,
+	})
+	require.NoError(t, err)
+	lockBytes, err := compilerlock.Encode(compilerlock.File{
+		Format:   compilerlock.FormatVersion,
+		Compiler: "rasql",
+		Source:   source,
+		Engine:   engine,
+		Catalog:  compilerlock.CatalogRecord{Objects: []compilerlock.ObjectRecord{}},
+		Queries:  []compilerlock.QueryRecord{},
+		Generation: compilerlock.GenerationRecord{
+			Package: generation.Package,
+			Output:  generation.Output,
+			Emitter: generation.Emitter,
+			Objects: []compilerlock.ObjectNameRecord{},
+		},
+		Digests: digests,
+		Mappings: compilerlock.MappingRecord{
+			Scalars:   []compilerlock.ScalarMappingRecord{},
+			Relations: []compilerlock.RelationMappingRecord{},
+		},
+	})
+	require.NoError(t, err)
+	baseline, err := changeplan.CatalogFromLock(lockBytes)
 	require.NoError(t, err)
 
 	const createSQL = "CREATE TABLE users (id INTEGER NOT NULL PRIMARY KEY)"
@@ -178,22 +214,12 @@ func sqliteCreateTableChangePlan(t *testing.T, database *sql.DB) changeplan.Plan
 	require.NoError(t, err)
 	afterObject, err := changeplan.NewCatalogObject(introduced.ID(), afterRead.Tables[0])
 	require.NoError(t, err)
-	after, err := changeplan.NewCatalog(adapted, sourceIdentity, []changeplan.CatalogObject{afterObject})
+	after, err := changeplan.NewCatalogLike(baseline, []changeplan.CatalogObject{afterObject})
 	require.NoError(t, err)
 	_, err = database.ExecContext(t.Context(), "DROP TABLE users")
 	require.NoError(t, err)
 
-	profileDigest, err := changeplan.ProfileDigest(adapted)
-	require.NoError(t, err)
-	baselineDigest, err := changeplan.CatalogDigest(baseline)
-	require.NoError(t, err)
 	afterDigest, err := changeplan.CatalogDigest(after)
-	require.NoError(t, err)
-	identity, err := changeplan.NewCatalogIdentity(changeplan.SQLiteEngine, profileDigest, baselineDigest, changeplan.Digest{1})
-	require.NoError(t, err)
-	baselineIdentity, err := changeplan.NewBaselineIdentity(
-		identity, sourceIdentity, []changeplan.BaselineObject{introduced}, nil,
-	)
 	require.NoError(t, err)
 	history, err := changeplan.NewHistoryIdentity("main", "rasql_schema_migrations")
 	require.NoError(t, err)
@@ -211,7 +237,18 @@ func sqliteCreateTableChangePlan(t *testing.T, database *sql.DB) changeplan.Plan
 		nil,
 	)
 	require.NoError(t, err)
-	plan, err := changeplan.NewPlan(adapted, baselineIdentity, history, nil, []changeplan.Operation{operation})
+	step, err := changeplan.NewResolvedCatalogStep(operation.ID(), after)
+	require.NoError(t, err)
+	resolved, err := changeplan.NewResolvedChanges(
+		baseline,
+		[]changeplan.ResolvedCatalogStep{step},
+		[]changeplan.Decision{},
+		[]changeplan.Operation{operation},
+		[]changeplan.BaselineObject{introduced},
+		[]changeplan.BaselineRename{},
+	)
+	require.NoError(t, err)
+	plan, err := changeplan.FromLock(lockBytes, adapted, history, resolved)
 	require.NoError(t, err)
 	return plan
 }
