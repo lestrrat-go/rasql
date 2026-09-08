@@ -354,7 +354,7 @@ func Within(ctx context.Context, executor Executor, opts *sql.TxOptions, fn Scop
 		callbackCtx = provider.scopeContext()
 	}
 	result := runScopeCallback(callbackCtx, child, fn)
-	cleanupCtx, cancel := atomicCleanupContext(ctx)
+	cleanupCtx, cancel := atomicCleanupContext(callbackCtx)
 	defer cancel()
 	if result.panicked {
 		if setter, ok := finalizer.(scopeCauseSetter); ok {

@@ -148,3 +148,9 @@ docker compose down -v
 ### Skip vs. fail
 
 A DSN variable left unset is treated as an environment fact, not a rasql defect, so it produces a skip naming exactly what to run (see "Live database tests" above). Once a DSN is set, resolution fails the test loudly instead of skipping for anything else that goes wrong: a value the driver cannot parse, or credentials that cannot `CREATE DATABASE`. There is no silent fallback once you have told `internal/dbtest` where to connect.
+
+## D4 conformance evidence
+
+Run the platform-neutral conformance workload with `./scripts/conformance.sh sqlite`. The command unsets live DSNs and runs the SQLite matrix once. Run the required live matrix with `RASQL_TEST_POSTGRES_DSN` and `RASQL_TEST_MYSQL_DSN` set, then use `./scripts/conformance.sh live`; the script fails when a required test is missing or skipped. Set `RASQL_CONFORMANCE_OUTPUT` and `RASQL_CONFORMANCE_LOG` to retain the deterministic JSON record and raw log.
+
+Use `./scripts/bench.sh` for the ten-sample conformance and existing benchmark series. A semantic mismatch produces no performance comparison, and the recorder keeps each raw sample instead of averaging it.

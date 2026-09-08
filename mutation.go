@@ -530,7 +530,7 @@ func execAtomicMutationBatch(ctx context.Context, executor Executor, plans []Mut
 		outcome, executionErr = execPreparedMutationBatches(logicalCtx, logicalExecutor, prepared, options, outcome)
 	}()
 	attempted := mutationAttempted(outcome)
-	cleanupCtx, cancel := atomicCleanupContext(ctx)
+	cleanupCtx, cancel := atomicCleanupContext(logicalCtx)
 	defer cancel()
 	if panicked != nil {
 		rollbackErr := finalizer.Rollback(cleanupCtx)
