@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/migrate/changeplan"
@@ -19,15 +18,15 @@ import (
 )
 
 func TestPrepareChangePlanBeforeDatabase(t *testing.T) {
-	database, mock, err := sqlmock.New()
-	require.NoError(t, err)
+	database, calls := openRecordingDatabase(t)
 	t.Cleanup(func() { _ = database.Close() })
+	var err error
 	runner, err := New(database, dialect.SQLite())
 	require.NoError(t, err)
 	plan := runnerPlan(t, "rasql_schema_migrations", engineprofile.SQLite, changeplan.TransactionForbidden)
 	prepared, err := prepareChangePlan(runner, plan)
 	require.NoError(t, err)
-	require.NoError(t, mock.ExpectationsWereMet())
+	require.Zero(t, *calls)
 	require.Len(t, prepared.operations, 1)
 	require.Equal(t, plan.ID(), prepared.id)
 	require.Equal(t, plan.History().Table()+"_plan_progress", prepared.progressName.bareName)
@@ -43,9 +42,9 @@ func TestPrepareChangePlanBeforeDatabase(t *testing.T) {
 }
 
 func TestPreparedChangePlanSchedule(t *testing.T) {
-	database, mock, err := sqlmock.New()
-	require.NoError(t, err)
+	database, calls := openRecordingDatabase(t)
 	t.Cleanup(func() { _ = database.Close() })
+	var err error
 	runner, err := New(database, dialect.SQLite())
 	require.NoError(t, err)
 	emptyPlan := runnerPlanWithOperations(t, "rasql_schema_migrations", engineprofile.SQLite, nil)
@@ -76,16 +75,30 @@ func TestPreparedChangePlanSchedule(t *testing.T) {
 	require.Equal(t, []resolvedChangePlanMode{planModeRequired, planModeRequired, planModeForbidden}, []resolvedChangePlanMode{
 		prepared.operations[0].mode, prepared.operations[1].mode, prepared.operations[2].mode,
 	})
-	for index, operation := range prepared.operations {
-		require.Equal(t, index, operation.index)
-		require.NotEmpty(t, operation.operation.Statements()[0].SQL())
-		before, err := prepared.expectedPrefixDigest(index)
-		require.NoError(t, err)
-		require.Equal(t, operation.beforeDigest, before)
-		after, err := prepared.expectedPrefixDigest(index + 1)
-		require.NoError(t, err)
-		require.Equal(t, operation.afterDigest, after)
+	expectedIDs := []changeplan.OperationID{"first", "second", "third"}
+	expectedSQL := []string{"ALTER TABLE users ADD COLUMN value TEXT", "ALTER TABLE users ADD COLUMN value TEXT", "ALTER TABLE users ADD COLUMN value TEXT"}
+	expectedBefore := []changeplan.Digest{mixedPlan.Baseline().Catalog().CatalogDigest(), {11}, {12}}
+	expectedAfter := []changeplan.Digest{{11}, {12}, {13}}
+	expectedArguments := [][]any{{[]byte("payload"), time.Unix(123, 456)}, {}, {}}
+	for pass := 0; pass < 2; pass++ {
+		for index, operation := range prepared.operations {
+			require.Equal(t, index, operation.index)
+			require.Equal(t, expectedIDs[index], operation.operation.ID())
+			require.Equal(t, expectedSQL[index], operation.operation.Statements()[0].SQL())
+			require.Equal(t, expectedArguments[index], operation.operation.Statements()[0].Args())
+			require.Equal(t, expectedBefore[index], operation.beforeDigest)
+			require.Equal(t, expectedAfter[index], operation.afterDigest)
+			before, err := prepared.expectedPrefixDigest(index)
+			require.NoError(t, err)
+			require.Equal(t, operation.beforeDigest, before)
+			after, err := prepared.expectedPrefixDigest(index + 1)
+			require.NoError(t, err)
+			require.Equal(t, operation.afterDigest, after)
+		}
 	}
+	firstArgs := prepared.operations[0].operation.Statements()[0].Args()
+	require.Equal(t, []byte("payload"), firstArgs[0])
+	require.Equal(t, time.Unix(123, 456), firstArgs[1])
 	for _, index := range []int{-1, 4} {
 		_, err := prepared.expectedPrefixDigest(index)
 		require.Error(t, err)
@@ -97,29 +110,47 @@ func TestPreparedChangePlanSchedule(t *testing.T) {
 	statements := prepared.operations[0].operation.Statements()
 	args := statements[0].Args()
 	require.Len(t, args, 2)
+	require.Equal(t, []byte("payload"), args[0])
+	require.Equal(t, time.Unix(123, 456), args[1])
 	args[0].([]byte)[0] = 'X'
 	args[1] = time.Unix(0, 0)
 	require.Equal(t, []byte("payload"), prepared.operations[0].operation.Statements()[0].Args()[0])
-	require.NoError(t, mock.ExpectationsWereMet())
+	require.Equal(t, time.Unix(123, 456), prepared.operations[0].operation.Statements()[0].Args()[1])
+	profile := mixedPlan.Profile()
+	capabilities := profile.Capabilities()
+	capabilities.TransactionalDDL = false
+	require.Equal(t, engineprofile.SQLite, prepared.profile.Engine)
+	require.Equal(t, profile.ID(), prepared.profile.ID)
+	require.True(t, prepared.profile.Capabilities.TransactionalDDL)
+	baseline := mixedPlan.Baseline()
+	baselineObjects := baseline.Objects()
+	baselineObjects[0] = changeplan.BaselineObject{}
+	require.Equal(t, "runner-test", prepared.baseline.SourceIdentity())
+	history := mixedPlan.History()
+	require.Equal(t, "rasql_schema_migrations", history.Table())
+	require.Equal(t, "rasql_schema_migrations", prepared.history.Table())
+	require.Zero(t, *calls)
 }
 
 func TestPrepareChangePlanUsesNoDatabaseConnection(t *testing.T) {
-	calls := 0
-	database := sql.OpenDB(recordingConnector{calls: &calls})
+	database, calls := openRecordingDatabase(t)
 	t.Cleanup(func() { _ = database.Close() })
 	runner, err := New(database, dialect.SQLite())
 	require.NoError(t, err)
 	_, err = prepareChangePlan(runner, runnerPlanWithOperations(t, "rasql_schema_migrations", engineprofile.SQLite, nil))
 	require.NoError(t, err)
+	// Unreachable transaction_unknown, missing-dependency, cycle, invalid-profile, and digest rows stay in
+	// changeplan.TestValidationContractScalarGrammar, TestConstructorValidationCorpus, and
+	// TestResultDigestConstructorAndPlanIdentity; this zero Plan still proves the real Encode guard here.
 	_, err = prepareChangePlan(runner, changeplan.Plan{})
 	require.Error(t, err)
-	require.Zero(t, calls)
+	require.Zero(t, *calls)
 }
 
 func TestPrepareChangePlanRejectsBeforeConnection(t *testing.T) {
-	database, mock, err := sqlmock.New()
-	require.NoError(t, err)
+	database, calls := openRecordingDatabase(t)
 	t.Cleanup(func() { _ = database.Close() })
+	var err error
 	runner, err := New(database, dialect.SQLite())
 	require.NoError(t, err)
 	cases := map[string]struct {
@@ -139,13 +170,13 @@ func TestPrepareChangePlanRejectsBeforeConnection(t *testing.T) {
 	}
 	_, err = prepareChangePlan(runner, changeplan.Plan{})
 	require.Error(t, err)
-	require.NoError(t, mock.ExpectationsWereMet())
+	require.Zero(t, *calls)
 }
 
 func TestPrepareChangePlanRejectsOversizedDerivedNames(t *testing.T) {
-	database, mock, err := sqlmock.New()
-	require.NoError(t, err)
+	database, calls := openRecordingDatabase(t)
 	t.Cleanup(func() { _ = database.Close() })
+	var err error
 	postgresHistory := strings.Repeat("h", 54)
 	postgresRunner, err := NewWithHistoryTable(database, dialect.PostgreSQL(), postgresHistory)
 	require.NoError(t, err)
@@ -158,7 +189,7 @@ func TestPrepareChangePlanRejectsOversizedDerivedNames(t *testing.T) {
 	mysqlPlan := runnerPlan(t, mysqlHistory, engineprofile.MySQL, changeplan.TransactionForbidden)
 	_, err = prepareChangePlan(mysqlRunner, mysqlPlan)
 	require.Error(t, err)
-	require.NoError(t, mock.ExpectationsWereMet())
+	require.Zero(t, *calls)
 }
 
 func TestPrepareChangePlanIdentifierBoundaries(t *testing.T) {
@@ -174,9 +205,9 @@ func TestPrepareChangePlanIdentifierBoundaries(t *testing.T) {
 		{"mysql over maximum", strings.Repeat("h", 51), dialect.MySQL(), engineprofile.MySQL, false},
 	} {
 		t.Run(item.name, func(t *testing.T) {
-			database, mock, err := sqlmock.New()
-			require.NoError(t, err)
+			database, calls := openRecordingDatabase(t)
 			t.Cleanup(func() { _ = database.Close() })
+			var err error
 			runner, err := NewWithHistoryTable(database, item.dialect, item.history)
 			require.NoError(t, err)
 			_, err = prepareChangePlan(runner, runnerPlan(t, item.history, item.engine, changeplan.TransactionEngineDefault))
@@ -185,7 +216,7 @@ func TestPrepareChangePlanIdentifierBoundaries(t *testing.T) {
 			} else {
 				require.Error(t, err)
 			}
-			require.NoError(t, mock.ExpectationsWereMet())
+			require.Zero(t, *calls)
 		})
 	}
 }
@@ -302,6 +333,12 @@ func scheduleOperationWithArgs(t *testing.T, id string, dependsOn []changeplan.O
 
 type recordingConnector struct {
 	calls *int
+}
+
+func openRecordingDatabase(t *testing.T) (*sql.DB, *int) {
+	t.Helper()
+	calls := 0
+	return sql.OpenDB(recordingConnector{calls: &calls}), &calls
 }
 
 func (c recordingConnector) Connect(context.Context) (driver.Conn, error) {
