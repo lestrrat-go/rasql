@@ -14,7 +14,7 @@ Then run `rasql migrate <command> [flags]`. The standalone `rasqlmigrate` binary
 
 ## Migration directories
 
-One application keeps one migration root. Each first-level directory in it is one migration ID, and it holds a `.up.sql` source for every step forward with the `.down.sql` that undoes it beside it.
+One application keeps one migration root. Each first-level directory in it is one migration ID, and it holds a `.up.sql` source for every step forward. Add the `.down.sql` that undoes each one beside it when a reverse exists; a migration with none is simply irreversible, and `apply`, `status`, and `verify` all work on it exactly as on any other migration.
 
 ```text
 db/migrations/
@@ -46,10 +46,10 @@ Create these directories yourself with `mkdir`. There is no command that scaffol
 - A migration directory holds sources and no subdirectories. Every source ends in `.up.sql` or `.down.sql`. Any other name fails the load, a plain `.sql` included, which is what turns a misspelled `001_add_nickname.dwon.sql` into an error rather than a silent extra forward source.
 - A migration's forward sources run in ascending filename order, with the same byte comparison and the same need for padding.
 - Its reverse sources run in **descending** filename order, so the migration is undone in the reverse of the order it was done.
-- Every migration needs at least one `.up.sql` and either matching `.down.sql` sources or a `.rasql-irreversible` marker with a reason. A marked migration applies but cannot be reverted. A change that destroys data still writes the reverse that rebuilds the structure when one is proven safe, such as re-adding a dropped column without its rows.
+- Every migration needs at least one `.up.sql`. It may also hold matching `.down.sql` sources; a migration with none of those is simply irreversible, and applies normally. A change that destroys data still writes the reverse that rebuilds the structure when one is proven safe, such as re-adding a dropped column without its rows.
 - A hand-written migration may hold fewer reverse sources than forward ones. One `DROP TABLE` can undo a create-table plus a create-index without an empty file standing in for the second.
 - Every `.down.sql` must share its stem with a `.up.sql` in the same migration. That is the typo check, and it is the only pairing rule.
-- An entry whose name starts with a dot is ignored, except `.rasql-irreversible`, which marks a migration as intentionally irreversible. Other dot files remain ignored, so an editor's swap file does not become a migration.
+- An entry whose name starts with a dot is ignored, so an editor's swap file does not become a migration.
 - A source file must hold something other than whitespace.
 
 The engine enforces the rest at apply time, against the history table rather than the disk. A migration whose recorded bytes no longer match its forward files fails with a checksum error. A new migration whose name sorts before one that is already applied fails as "recorded after a missing migration", rather than running out of order or being skipped. A recorded migration whose directory has since disappeared fails as "was not supplied".
@@ -218,7 +218,7 @@ rasql migrate verify \
 
 `apply` runs every pending migration, oldest first, and prints one `applied<TAB>ID` line per migration followed by a count. Pass `-to ID` to stop at a chosen migration, which applies `ID` and every pending migration before it and leaves the rest pending. Naming a migration that is already applied applies nothing. Pass `-dry-run` to print the forward SQL the run would execute without running it. That dry run reads the history table, so it prints only what is still pending, while [`plan`](#create-and-review-a-migration) prints every supplied source and never opens a database.
 
-`status` reports `applied`, `pending`, `changed`, `out_of_order`, `unknown`, and `incomplete` migrations. `verify` succeeds only when every supplied migration is `applied`. The command redacts the exact DSN from returned errors. Pass `-history-table` to each database command when the default `rasql_schema_migrations` table name conflicts with an existing application table.
+`status` reports `applied`, `pending`, `changed`, `out_of_order`, `unknown`, and `incomplete` migrations, and prints `irreversible` beside any migration that has no `.down.sql` sources, so a rollback can be planned before it is attempted. `verify` succeeds only when every supplied migration is `applied`; whether a migration can be reverted is a separate question from whether it is applied, so `verify` does not report it and a caller checks `status` instead. The command redacts the exact DSN from returned errors. Pass `-history-table` to each database command when the default `rasql_schema_migrations` table name conflicts with an existing application table.
 
 ### Apply a reviewed migration plan
 
@@ -279,6 +279,8 @@ rasql migrate reconcile \
 ## Revert a migration
 
 `rasql migrate revert` undoes applied migrations, newest first, running each one's `.down.sql` sources and deleting its history record. It requires exactly one of `-to` and `-steps`, so a run that names no target reverts nothing rather than choosing a depth for you.
+
+Reaching a migration with no `.down.sql` sources refuses the whole run before any SQL executes, naming that migration, rather than reverting as far as it can and stopping there. Nothing runs and nothing is recorded as reverted; rerun with a shallower `-steps` or a later `-to` that stops short of it.
 
 ```sh
 rasql migrate revert \
