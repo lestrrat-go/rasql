@@ -111,7 +111,7 @@ func runGeneratedCardinalityProfile(t *testing.T, tc profileCase) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(moduleRoot, "recording_driver_test.go"), driverSource, 0o600))
 	modulePath := "example.test/cardinality/" + tc.engine
-	goMod := fmt.Sprintf("module %s\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire github.com/stretchr/testify v1.11.1\n\nreplace github.com/lestrrat-go/rasql => %s\n", modulePath, filepath.ToSlash(repoRoot))
+	goMod := fmt.Sprintf("module %s\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire %s\n\nreplace github.com/lestrrat-go/rasql => %s\n", modulePath, pinnedRequire(t, repoRoot, "github.com/stretchr/testify"), filepath.ToSlash(repoRoot))
 	require.NoError(t, os.WriteFile(filepath.Join(moduleRoot, "go.mod"), []byte(goMod), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(moduleRoot, "cardinality_profile_test.go"), []byte(generatedCardinalityProfileTest(tc, modulePath)), 0o600))
 	command := exec.Command("go", "test", "-run", "^TestGeneratedCardinalityProfile$")
@@ -530,7 +530,7 @@ func runGeneratedProfile(t *testing.T, tc profileCase, records string) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(moduleRoot, "recording_driver_test.go"), driverSource, 0o600))
 	modulePath := "github.com/lestrrat-go/rasql/internal/conformance/fixture/" + tc.engine
-	goMod := fmt.Sprintf("module %s\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire github.com/stretchr/testify v1.11.1\n\nreplace github.com/lestrrat-go/rasql => %s\n", modulePath, filepath.ToSlash(repoRoot))
+	goMod := fmt.Sprintf("module %s\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire %s\n\nreplace github.com/lestrrat-go/rasql => %s\n", modulePath, pinnedRequire(t, repoRoot, "github.com/stretchr/testify"), filepath.ToSlash(repoRoot))
 	require.NoError(t, os.WriteFile(filepath.Join(moduleRoot, "go.mod"), []byte(goMod), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(moduleRoot, "profile_consumer_test.go"), []byte(generatedProfileTest(tc, modulePath)), 0o600))
 	command := exec.Command("go", "test", "-run", "^TestGeneratedProfile$")

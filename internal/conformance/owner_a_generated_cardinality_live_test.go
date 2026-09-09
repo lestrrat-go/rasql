@@ -25,7 +25,7 @@ func runGeneratedLiveFixture(t *testing.T, engine, dsn string) {
 	root := filepath.Join(t.TempDir(), "fixture")
 	require.NoError(t, copyGeneratedStore(filepath.Join("testdata", engine, "internal", "store"), filepath.Join(root, "internal", "store")))
 	modulePath := "example.test/live/" + engine
-	goMod := fmt.Sprintf("module %s\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire %s\n\nreplace github.com/lestrrat-go/rasql => %s\n", modulePath, liveDriverRequirement(engine), filepath.ToSlash(repoRoot))
+	goMod := fmt.Sprintf("module %s\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire %s\n\nreplace github.com/lestrrat-go/rasql => %s\n", modulePath, liveDriverRequirement(t, repoRoot, engine), filepath.ToSlash(repoRoot))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte(goMod), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "cardinality_live_test.go"), []byte(generatedLiveCardinalityTest(engine, modulePath)), 0o600))
 	command := exec.Command("go", "test", "-run", "^TestGeneratedLiveCardinalityRuntime$")
@@ -35,11 +35,12 @@ func runGeneratedLiveFixture(t *testing.T, engine, dsn string) {
 	require.NoError(t, err, string(output))
 }
 
-func liveDriverRequirement(engine string) string {
+func liveDriverRequirement(t *testing.T, repoRoot, engine string) string {
+	t.Helper()
 	if engine == "postgresql" {
-		return "github.com/jackc/pgx/v5 v5.10.0"
+		return pinnedRequire(t, repoRoot, "github.com/jackc/pgx/v5")
 	}
-	return "github.com/go-sql-driver/mysql v1.10.0"
+	return pinnedRequire(t, repoRoot, "github.com/go-sql-driver/mysql")
 }
 
 func generatedLiveCardinalityTest(engine, modulePath string) string {

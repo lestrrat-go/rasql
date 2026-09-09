@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -256,7 +257,7 @@ func TestCompactGeneratedGraphAliasReproducer(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "generated"), 0o755))
 	require.NoError(t, plan.Commit())
-	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/graph\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire modernc.org/sqlite v1.55.0\nreplace github.com/lestrrat-go/rasql => "+repoRoot(t)+"\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/graph\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire "+pinnedRequire(t, "modernc.org/sqlite")+"\nreplace github.com/lestrrat-go/rasql => "+repoRoot(t)+"\n"), 0o600))
 	consumer := `package store_test
 
 import (
@@ -316,7 +317,7 @@ func TestCompactGeneratedGraphSourceMismatchMatrix(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "generated"), 0o755))
 	require.NoError(t, plan.Commit())
-	module := "module example.com/mismatch\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire modernc.org/sqlite v1.55.0\nreplace github.com/lestrrat-go/rasql => " + repoRoot(t) + "\n"
+	module := "module example.com/mismatch\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire " + pinnedRequire(t, "modernc.org/sqlite") + "\nreplace github.com/lestrrat-go/rasql => " + repoRoot(t) + "\n"
 	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte(module), 0o600))
 	consumer := `package store_test
 
@@ -517,4 +518,24 @@ func repoRoot(t *testing.T) string {
 	root, err := filepath.Abs("..")
 	require.NoError(t, err)
 	return root
+}
+
+// pinnedRequire reads the version the repository's own go.mod pins for
+// module, so a scratch fixture's go.mod names a version rasql actually
+// depends on rather than one written down by hand that can drift out of
+// sync with go.mod.
+func pinnedRequire(t *testing.T, module string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "go.mod"))
+	require.NoError(t, err)
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		rest, ok := strings.CutPrefix(line, module+" ")
+		if !ok {
+			continue
+		}
+		return module + " " + strings.Fields(rest)[0]
+	}
+	t.Fatalf("go.mod has no requirement for %s", module)
+	return ""
 }

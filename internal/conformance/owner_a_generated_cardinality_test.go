@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -37,8 +38,16 @@ func TestGeneratedOverdueCardinality(t *testing.T) {
 	require.NoError(t, err)
 	root := filepath.Join(t.TempDir(), "fixture")
 	require.NoError(t, copyGeneratedStore(filepath.Join("testdata", "sqlite", "internal", "store"), filepath.Join(root, "internal", "store")))
-	goMod := fmt.Sprintf("module example.test/generated\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire modernc.org/sqlite v1.40.1\n\nreplace github.com/lestrrat-go/rasql => %s\n", filepath.ToSlash(repoRoot))
+	// The fixture's own go.mod starts from the repository's, rather than
+	// naming modernc.org/sqlite's version by hand: a hand-picked version
+	// drifts from whatever go.mod actually pins and, under CI's
+	// GOPROXY=off, fails to resolve once it does.
+	repoGoMod, err := os.ReadFile(filepath.Join(repoRoot, "go.mod"))
+	require.NoError(t, err)
+	goMod := strings.Replace(string(repoGoMod), "module github.com/lestrrat-go/rasql\n", "module example.test/generated\n", 1)
+	goMod += fmt.Sprintf("\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => %s\n", filepath.ToSlash(repoRoot))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte(goMod), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.sum"), mustReadFile(t, filepath.Join(repoRoot, "go.sum")), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "cardinality_test.go"), []byte(generatedCardinalityTest()), 0o600))
 	command := exec.Command("go", "test", "-run", "^TestGeneratedCardinalityRuntime$")
 	command.Dir = root

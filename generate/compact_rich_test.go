@@ -45,7 +45,7 @@ func TestCompactRichExternalConsumer(t *testing.T) {
 	require.NotContains(t, viewSource, "ActiveUsersCreate")
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "generated"), 0o755))
 	require.NoError(t, plan.Commit())
-	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/rich\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire modernc.org/sqlite v1.55.0\nrequire example.com/domain v1.0.0\nreplace github.com/lestrrat-go/rasql => "+repoRoot(t)+"\nreplace example.com/domain => ./domain\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/rich\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire "+pinnedRequire(t, "modernc.org/sqlite")+"\nrequire example.com/domain v1.0.0\nreplace github.com/lestrrat-go/rasql => "+repoRoot(t)+"\nreplace example.com/domain => ./domain\n"), 0o600))
 	domainDir := filepath.Join(root, "domain")
 	require.NoError(t, os.MkdirAll(domainDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(domainDir, "go.mod"), []byte("module example.com/domain\n\ngo 1.26\n"), 0o600))
