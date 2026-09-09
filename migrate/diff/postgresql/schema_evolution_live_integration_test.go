@@ -149,7 +149,7 @@ CREATE TABLE %s ("id" BIGINT NOT NULL GENERATED ALWAYS AS IDENTITY, "project_id"
 	assertPublicRoundtrip(t, analyzer, base, database, members, projects, tasks)
 	status, err := runner.Status(ctx, migration)
 	require.NoError(t, err)
-	require.Equal(t, []migrate.StatusEntry{{ID: migration.ID, State: migrate.StatusPending}}, status)
+	require.Equal(t, []migrate.StatusEntry{{ID: migration.ID, State: migrate.StatusPending, Reversible: true}}, status)
 }
 
 func TestPostgreSQLSchemaEvolutionOpaqueBackfillArtifact(t *testing.T) {
@@ -242,11 +242,11 @@ func TestPostgreSQLSchemaEvolutionOpaqueBackfillArtifact(t *testing.T) {
 	_, err = runner.Revert(t.Context(), migrate.Steps(1), migration)
 	require.Error(t, err)
 	require.ErrorContains(t, err, migration.ID)
-	require.EqualError(t, err, `migrate: migration "001_opaque" has no reverse SQL source`)
+	require.EqualError(t, err, `migrate: migration "001_opaque" has no reverse SQL source: caller-supplied backfill has no inferred reverse`)
 	require.Equal(t, beforeRevert, inspectPostgreSQLTable(t, database, tasks))
 	status, err := runner.Status(t.Context(), migration)
 	require.NoError(t, err)
-	require.Equal(t, []migrate.StatusEntry{{ID: migration.ID, State: migrate.StatusApplied}}, status)
+	require.Equal(t, []migrate.StatusEntry{{ID: migration.ID, State: migrate.StatusApplied, IrreversibleReason: "caller-supplied backfill has no inferred reverse"}}, status)
 	require.Equal(t, beforeRevertRow, readBackfillRow(t, database, tasks))
 }
 

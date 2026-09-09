@@ -683,6 +683,13 @@ func runStatus(args []string) error {
 		if entry.Incomplete != nil {
 			_, _ = fmt.Fprintf(commandOutput, "  source=%s direction=%s index=%d\n", entry.Incomplete.Source, entry.Incomplete.Direction, entry.Incomplete.SourceIndex)
 		}
+		if entry.State != migrate.StatusUnknown && !entry.Reversible {
+			if entry.IrreversibleReason == "" {
+				_, _ = fmt.Fprintln(commandOutput, "  irreversible")
+				continue
+			}
+			_, _ = fmt.Fprintf(commandOutput, "  irreversible: %s\n", entry.IrreversibleReason)
+		}
 	}
 	return nil
 }

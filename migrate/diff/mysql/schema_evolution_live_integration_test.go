@@ -327,7 +327,7 @@ func TestSchemaEvolutionMySQLBackfillIsIrreversibleLive(t *testing.T) {
 	runner, err := migrate.New(database, dialect.MySQL())
 	require.NoError(t, err)
 	_, err = runner.Revert(t.Context(), migrate.Steps(1), migration)
-	require.EqualError(t, err, `migrate: migration "001_schema_evolution" has no reverse SQL source`)
+	require.EqualError(t, err, `migrate: migration "001_schema_evolution" has no reverse SQL source: caller-supplied MySQL backfill has no inferred reverse`)
 	var afterRefusal struct {
 		State    string
 		Nullable string
