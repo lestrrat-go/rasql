@@ -1,12 +1,9 @@
 package rasql
 
 import (
-	"context"
-	"database/sql"
 	"fmt"
 	"reflect"
 
-	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/mutationcolumn"
 	"github.com/lestrrat-go/rasql/internal/nilcheck"
 	"github.com/lestrrat-go/rasql/query"
@@ -94,7 +91,7 @@ type CreatePlan[T any] struct {
 type PatchPlan[T any] struct {
 	table   Table[T]
 	fields  []MutationField[T]
-	where   query.Predicate
+	where   query.Expression
 	err     error
 	version *versionMutation
 }
@@ -137,13 +134,23 @@ type normalizedCreate[T any] struct {
 	table       query.TableRef
 	columns     []query.ColumnRef
 	values      []any
-	rawValues   []any
 	defaultOnly bool
 }
 
 func NewCreatePlan[T any](table Table[T], fields ...MutationField[T]) (CreatePlan[T], error) {
 	plan := CreatePlan[T]{table: table, fields: append([]MutationField[T](nil), fields...)}
-	plan.err = validateMutationPlan(table, plan.fields, false, query.Predicate{})
+	// TableOf and MustTableOf already refuse a definition that does not
+	// support insert, but a handle can reach this constructor without going
+	// through either of them, so the capability is checked again here. The
+	// error is recorded into plan.err rather than returned early: CreatePlan
+	// already carries a deferred error the same way for its other two
+	// validations below, and lower keeps reading that field, so every
+	// rejection this constructor can produce should reach the caller through
+	// the one path lower already knows about.
+	plan.err = requireTableOperation(table, schema.OperationInsert)
+	if plan.err == nil {
+		plan.err = validateMutationPlan(table, plan.fields, false, nil)
+	}
 	if plan.err == nil {
 		plan.err = validateCreateRequired(table, plan.fields)
 	}
@@ -179,13 +186,41 @@ func createColumnOmissible(definition schema.TableDef, column schema.ColumnDef) 
 	return integer
 }
 
-func NewPatchPlan[T any](table Table[T], where query.Predicate, fields ...MutationField[T]) (PatchPlan[T], error) {
-	plan := PatchPlan[T]{table: table, fields: append([]MutationField[T](nil), fields...), where: where}
-	plan.err = validateMutationPlan(table, plan.fields, true, where)
+type patchPredicate interface {
+	query.Predicate | Predicate
+}
+
+func patchWhereExpression[P patchPredicate](value P) (query.Expression, error) {
+	switch predicate := any(value).(type) {
+	case query.Predicate:
+		return predicate.Expression(), nil
+	case Predicate:
+		if predicate.bindErr != nil {
+			return nil, predicate.bindErr
+		}
+		return predicate.node, nil
+	default:
+		return nil, planError("invalid_mutation", "where", "unsupported predicate")
+	}
+}
+
+func NewPatchPlan[T any, P patchPredicate](table Table[T], where P, fields ...MutationField[T]) (PatchPlan[T], error) {
+	expression, err := patchWhereExpression(where)
+	if err != nil {
+		return PatchPlan[T]{table: table, fields: append([]MutationField[T](nil), fields...), err: err}, err
+	}
+	plan := PatchPlan[T]{table: table, fields: append([]MutationField[T](nil), fields...), where: expression}
+	// Same reasoning as NewCreatePlan: the capability check is recorded into
+	// plan.err rather than returned early, matching how PatchPlan already
+	// defers validateMutationPlan's result to the same field for lower.
+	plan.err = requireTableOperation(table, schema.OperationUpdate)
+	if plan.err == nil {
+		plan.err = validateMutationPlan(table, plan.fields, true, expression)
+	}
 	return plan, plan.err
 }
 
-func validateMutationPlan[T any](table Table[T], fields []MutationField[T], patch bool, where query.Predicate) error {
+func validateMutationPlan[T any](table Table[T], fields []MutationField[T], patch bool, where query.Expression) error {
 	if isNilTable(table) {
 		return fmt.Errorf("rasql: mutation plan table must not be nil")
 	}
@@ -194,7 +229,7 @@ func validateMutationPlan[T any](table Table[T], fields []MutationField[T], patc
 	if len(fields) == 0 {
 		return fmt.Errorf("rasql: mutation plan requires at least one field")
 	}
-	if patch && nilcheck.Is(where.Expression()) {
+	if patch && nilcheck.Is(where) {
 		return fmt.Errorf("rasql: patch plan requires a predicate")
 	}
 	seen := make(map[string]struct{}, len(fields))
@@ -213,9 +248,6 @@ func validateMutationPlan[T any](table Table[T], fields []MutationField[T], patc
 			return fmt.Errorf("rasql: mutation plan contains duplicate column %q", column.Name)
 		}
 		seen[column.Name] = struct{}{}
-		if field.state == mutationDefault && patch {
-			return fmt.Errorf("rasql: DEFAULT field %s is not supported in a patch", column.Name)
-		}
 		if column.GeneratedExpression != "" || column.Identity == schema.IdentityAlways {
 			return fmt.Errorf("rasql: mutation field %q is not writable", column.Name)
 		}
@@ -235,20 +267,6 @@ func (p CreatePlan[T]) lower() (query.Insert, error) {
 		return query.NewInsert(lowered.table, query.Defaults())
 	}
 	return query.NewInsertRows(lowered.table, lowered.columns, [][]any{lowered.values})
-}
-
-func (p CreatePlan[T]) lowerRaw() (query.Insert, error) {
-	if p.err != nil {
-		return query.Insert{}, p.err
-	}
-	lowered, err := p.lowerNormalized()
-	if err != nil {
-		return query.Insert{}, err
-	}
-	if lowered.defaultOnly {
-		return query.NewInsert(lowered.table, query.Defaults())
-	}
-	return query.NewInsertRows(lowered.table, lowered.columns, [][]any{lowered.rawValues})
 }
 
 func (p CreatePlan[T]) lowerNormalized() (normalizedCreate[T], error) {
@@ -273,14 +291,11 @@ func (p CreatePlan[T]) lowerNormalized() (normalizedCreate[T], error) {
 			continue
 		}
 		var value any = field.bound
-		rawValue := field.value
 		if field.state == mutationClear {
 			value = nil
-			rawValue = nil
 		}
 		lowered.columns = append(lowered.columns, p.table.Ref().Column(column.Name))
 		lowered.values = append(lowered.values, value)
-		lowered.rawValues = append(lowered.rawValues, rawValue)
 	}
 	lowered.defaultOnly = len(lowered.columns) == 0
 	return lowered, nil
@@ -305,7 +320,11 @@ func (p PatchPlan[T]) lower() (query.Update, error) {
 		if field.state == mutationClear {
 			value = query.Bind(nil)
 		}
-		assignments = append(assignments, query.Set(p.table.Ref().Column(column.Name), value))
+		if field.state == mutationDefault {
+			assignments = append(assignments, query.SetDefault(p.table.Ref().Column(column.Name)))
+		} else {
+			assignments = append(assignments, query.Set(p.table.Ref().Column(column.Name), value))
+		}
 	}
 	if p.version != nil {
 		assignments = append(assignments, query.Set(p.version.column, query.Add(p.version.column, 1)))
@@ -314,137 +333,11 @@ func (p PatchPlan[T]) lower() (query.Update, error) {
 	if err != nil {
 		return query.Update{}, err
 	}
-	where := p.where.Expression()
+	where := p.where
 	if p.version != nil {
 		where = query.And(where, query.Equal(p.version.column, p.version.expected))
 	}
 	return statement.WithWhere(where)
-}
-
-func (p PatchPlan[T]) lowerRaw() (query.Update, error) {
-	if p.err != nil {
-		return query.Update{}, p.err
-	}
-	columns := p.table.Ref().Definition().Columns
-	byName := make(map[string]MutationField[T], len(p.fields))
-	for _, field := range p.fields {
-		byName[field.column.Name()] = field
-	}
-	assignments := make([]query.Assignment, 0, len(p.fields))
-	for _, column := range columns {
-		field, ok := byName[column.Name]
-		if !ok {
-			continue
-		}
-		value := field.value
-		if field.state == mutationClear {
-			value = query.Bind(nil)
-		}
-		assignments = append(assignments, query.Set(p.table.Ref().Column(column.Name), value))
-	}
-	if p.version != nil {
-		assignments = append(assignments, query.Set(p.version.column, query.Add(p.version.column, 1)))
-	}
-	statement, err := query.NewUpdate(p.table.Ref(), assignments...)
-	if err != nil {
-		return query.Update{}, err
-	}
-	where := p.where.Expression()
-	if p.version != nil {
-		where = query.And(where, query.Equal(p.version.column, p.version.expected))
-	}
-	return statement.WithWhere(where)
-}
-
-func returning[T any](table Table[T]) []query.Projection {
-	columns := table.Ref().Definition().Columns
-	result := make([]query.Projection, len(columns))
-	for i, column := range columns {
-		result[i] = table.Ref().Column(column.Name)
-	}
-	return result
-}
-
-func validateReturningDB(db DB) error {
-	if err := db.Validate(); err != nil {
-		return err
-	}
-	if !db.Dialect().Supports(dialect.CapabilityReturning) {
-		return fmt.Errorf("rasql: dialect %s does not support RETURNING", db.Dialect().Name())
-	}
-	return nil
-}
-
-func ExecCreate[T any](ctx context.Context, db DB, plan CreatePlan[T]) (sql.Result, error) {
-	statement, err := plan.lowerRaw()
-	if err != nil {
-		return nil, err
-	}
-	return Exec(ctx, db, statement)
-}
-
-func QueryCreate[T any](ctx context.Context, db DB, plan CreatePlan[T]) (T, error) {
-	var zero T
-	if plan.err != nil {
-		return zero, plan.err
-	}
-	if err := validateReturningDB(db); err != nil {
-		return zero, err
-	}
-	statement, err := plan.lowerRaw()
-	if err != nil {
-		return zero, err
-	}
-	statement, err = statement.WithReturning(returning(plan.table)...)
-	if err != nil {
-		return zero, err
-	}
-	return QueryWriteOne[T](ctx, db, statement)
-}
-
-func ExecPatch[T any](ctx context.Context, db DB, plan PatchPlan[T]) (sql.Result, error) {
-	statement, err := plan.lowerRaw()
-	if err != nil {
-		return nil, err
-	}
-	return Exec(ctx, db, statement)
-}
-
-func QueryPatchAll[T any](ctx context.Context, db DB, plan PatchPlan[T]) ([]T, error) {
-	if plan.err != nil {
-		return nil, plan.err
-	}
-	if err := validateReturningDB(db); err != nil {
-		return nil, err
-	}
-	statement, err := plan.lowerRaw()
-	if err != nil {
-		return nil, err
-	}
-	statement, err = statement.WithReturning(returning(plan.table)...)
-	if err != nil {
-		return nil, err
-	}
-	return QueryWriteAll[T](ctx, db, statement)
-}
-
-func QueryPatchOne[T any](ctx context.Context, db DB, plan PatchPlan[T]) (T, error) {
-	var zero T
-	if plan.err != nil {
-		return zero, plan.err
-	}
-	if err := validateReturningDB(db); err != nil {
-		return zero, err
-	}
-	statement, err := plan.lowerRaw()
-	if err != nil {
-		return zero, err
-	}
-	statement, err = statement.WithReturning(returning(plan.table)...)
-	if err != nil {
-		return zero, err
-	}
-	return QueryWriteOne[T](ctx, db, statement)
 }
 
 func mutationBind(value any, codec string) (query.Expression, error) {

@@ -102,3 +102,10 @@ func TestBuildSemanticRejectsUnmatchedOpaqueMapping(t *testing.T) {
 		t.Fatalf("unexpected opaque diagnostic: %#v", diagnostics)
 	}
 }
+
+func TestValidateMappingConfigRejectsInvalidRelationName(t *testing.T) {
+	config := compilerir.MappingConfig{Relations: []compilerir.RelationMapping{{Name: "bad-name", Source: "users", From: []string{"id"}, Target: "roles", To: []string{"id"}, Through: compilerir.ThroughMapping{Object: "links", SourceFrom: []string{"user_id"}, SourceTo: []string{"id"}, TargetFrom: []string{"role_id"}, TargetTo: []string{"id"}}}}}
+	if err := compilerir.ValidateMappingConfig(config, "store"); err == nil || !strings.Contains(err.Error(), "valid Go identifier") {
+		t.Fatalf("invalid relation name was accepted: %v", err)
+	}
+}

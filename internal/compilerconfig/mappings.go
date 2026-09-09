@@ -11,7 +11,8 @@ import (
 )
 
 type mappingFile struct {
-	Scalars []mappingScalar `json:"scalars"`
+	Scalars   []mappingScalar    `json:"scalars"`
+	Relations *[]mappingRelation `json:"relations"`
 }
 type mappingScalar struct {
 	Name           string          `json:"name"`
@@ -32,6 +33,21 @@ type mappingMatch struct {
 	Kind        string `json:"kind"`
 	LogicalKind string `json:"logical_kind"`
 }
+type mappingRelation struct {
+	Name    string         `json:"name"`
+	Source  string         `json:"source"`
+	From    []string       `json:"from"`
+	Target  string         `json:"target"`
+	To      []string       `json:"to"`
+	Through mappingThrough `json:"through"`
+}
+type mappingThrough struct {
+	Object     string   `json:"object"`
+	SourceFrom []string `json:"source_from"`
+	SourceTo   []string `json:"source_to"`
+	TargetFrom []string `json:"target_from"`
+	TargetTo   []string `json:"target_to"`
+}
 
 // DecodeMappings decodes a mapping object and rejects unknown or trailing JSON.
 func DecodeMappings(data []byte, packageName string) (compilerir.MappingConfig, error) {
@@ -49,6 +65,9 @@ func DecodeMappings(data []byte, packageName string) (compilerir.MappingConfig, 
 		return compilerir.MappingConfig{}, fmt.Errorf("decode mappings: %w", err)
 	}
 	config := compilerir.MappingConfig{Scalars: make([]compilerir.ScalarMapping, len(file.Scalars))}
+	if file.Relations != nil {
+		config.Relations = make([]compilerir.RelationMapping, len(*file.Relations))
+	}
 	for i, scalar := range file.Scalars {
 		config.Scalars[i] = compilerir.ScalarMapping{
 			Name: scalar.Name, GoType: scalar.GoType, NullableGoType: scalar.NullableGoType,
@@ -59,10 +78,28 @@ func DecodeMappings(data []byte, packageName string) (compilerir.MappingConfig, 
 			config.Scalars[i].Imports[j] = compilerir.GoImport{Path: imp.Path, Alias: imp.Alias}
 		}
 	}
+	for i, relation := range slicesOrEmpty(file.Relations) {
+		config.Relations[i] = compilerir.RelationMapping{
+			Name: relation.Name, Source: compilerir.ObjectID(relation.Source), From: append([]string(nil), relation.From...),
+			Target: compilerir.ObjectID(relation.Target), To: append([]string(nil), relation.To...),
+			Through: compilerir.ThroughMapping{
+				Object:     compilerir.ObjectID(relation.Through.Object),
+				SourceFrom: append([]string(nil), relation.Through.SourceFrom...), SourceTo: append([]string(nil), relation.Through.SourceTo...),
+				TargetFrom: append([]string(nil), relation.Through.TargetFrom...), TargetTo: append([]string(nil), relation.Through.TargetTo...),
+			},
+		}
+	}
 	if err := compilerir.ValidateMappingConfig(config, packageName); err != nil {
 		return compilerir.MappingConfig{}, err
 	}
 	return config, nil
+}
+
+func slicesOrEmpty[T any](values *[]T) []T {
+	if values == nil {
+		return nil
+	}
+	return *values
 }
 
 // ValidateMappings validates an already decoded mapping policy.

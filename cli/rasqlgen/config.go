@@ -12,9 +12,9 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/compilerconfig"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
+	"github.com/lestrrat-go/rasql/internal/compilerquery"
 	"github.com/lestrrat-go/rasql/internal/modroot"
 	"github.com/lestrrat-go/rasql/namedsql"
 	"github.com/lestrrat-go/rasql/schema"
@@ -34,17 +34,10 @@ const maxConfigBytes = 1 << 20
 
 // config is the project's generation settings, read from JSON.
 //
-// It holds what stays the same from run to run. What changes per run stays
-// on the command line: -dsn, because it carries a credential and this file
-// is checked in, and -check, because it selects what one run does rather
-// than what the project is.
-//
-// Every field is optional here and required later, so a file may state only
-// what it overrides and a flag may supply the rest. runGenerate reports what
-// is still missing once the two are merged.
+// It holds what stays the same from run to run. Credentials remain on the
+// command line, and -check selects what one run does.
 type config struct {
-	// Engine and Schema select the lock-backed schema workflow. They are
-	// optional so the deprecated flag-based route remains compatible.
+	// Engine and Schema select the lock-backed schema workflow.
 	Engine *schemaEngineConfig `json:"engine"`
 	Schema *schemaSourceConfig `json:"schema"`
 	// Package is the generated package name.
@@ -127,14 +120,27 @@ type configTables struct {
 	// row name and another table's generated names, which refuses the run.
 	RowNames map[string]string `json:"row_names"`
 
-	Names map[string]generate.ObjectNames `json:"names"`
+	Names map[string]configObjectNames `json:"names"`
 }
 
-func (c config) names() (map[schema.ObjectName]generate.ObjectNames, error) {
+type configObjectNames struct {
+	Accessor  string                       `json:"accessor,omitempty"`
+	TableType string                       `json:"table_type,omitempty"`
+	RowType   string                       `json:"row_type,omitempty"`
+	FileBase  string                       `json:"file_base,omitempty"`
+	Columns   map[string]configColumnNames `json:"columns,omitempty"`
+}
+
+type configColumnNames struct {
+	Field    string `json:"field,omitempty"`
+	Accessor string `json:"accessor,omitempty"`
+}
+
+func (c config) names() (map[schema.ObjectName]configObjectNames, error) {
 	if len(c.Tables.Names) == 0 {
 		return nil, nil
 	}
-	result := make(map[schema.ObjectName]generate.ObjectNames, len(c.Tables.Names))
+	result := make(map[schema.ObjectName]configObjectNames, len(c.Tables.Names))
 	for identity, names := range c.Tables.Names {
 		parts := strings.Split(identity, ".")
 		switch {
@@ -158,6 +164,12 @@ func (c config) names() (map[schema.ObjectName]generate.ObjectNames, error) {
 // here keeps a one-line query in one place, at the cost of escaping every
 // quote the {{bind "name"}} action needs.
 type configQuery struct {
+	ID          compilerir.QueryID               `json:"id"`
+	Engine      string                           `json:"engine"`
+	Operation   string                           `json:"operation"`
+	Cardinality string                           `json:"cardinality"`
+	Parameters  []compilerquery.ValueDeclaration `json:"parameters"`
+	Results     []compilerquery.ValueDeclaration `json:"results"`
 	// Bindings configures explicit Go types for static-query parameters.
 	Bindings map[string]namedsql.ParameterBinding `json:"bindings"`
 
@@ -245,70 +257,19 @@ func loadConfig(path string) (config, error) {
 	if _, err := loaded.mappings(); err != nil {
 		return config{}, fmt.Errorf("generate: parse config %s mappings: %w", path, err)
 	}
-	if loaded.Schema != nil {
-		if len(loaded.Queries) != 0 {
-			return config{}, fmt.Errorf("generate: schema mode does not support queries")
-		}
-		if loaded.Emitter != "" && loaded.Emitter != "legacy" {
-			return config{}, fmt.Errorf("generate: schema mode requires emitter legacy")
-		}
+	if loaded.Emitter != "" && loaded.Emitter != "compact" {
+		return config{}, fmt.Errorf("generate: config emitter %q must be compact", loaded.Emitter)
 	}
 	return loaded, nil
 }
 
-// hints turns the row-name overrides into the map generate.Store takes. A
-// blank override is refused rather than ignored, since a key written with no
-// value is a half-finished edit rather than a request for the default.
-func (c config) hints() (map[string]generate.TableHint, error) {
-	if len(c.Tables.RowNames) == 0 {
-		return nil, nil
+func (c config) compilerQueries(root string) compilerquery.Config {
+	queries := make([]compilerquery.QueryConfig, len(c.Queries))
+	for i, query := range c.Queries {
+		queries[i] = compilerquery.QueryConfig{ID: query.ID, Input: query.Input, Engine: query.Engine, Function: query.Function, Output: query.Output, Operation: query.Operation, Cardinality: query.Cardinality, Parameters: query.Parameters, Results: query.Results}
 	}
-	hints := make(map[string]generate.TableHint, len(c.Tables.RowNames))
-	for table, rowName := range c.Tables.RowNames {
-		if table == "" {
-			return nil, errors.New("generate: config states a row name for an empty table name")
-		}
-		if rowName == "" {
-			return nil, fmt.Errorf("generate: config states an empty row name for table %q", table)
-		}
-		hints[table] = generate.TableHint{RowName: rowName}
-	}
-	return hints, nil
-}
-
-// queries turns the configured templates into generate.Query values,
-// deriving each output file name from its input when the file states none.
-func (c config) queries() ([]generate.Query, error) {
-	if len(c.Queries) == 0 {
-		return nil, nil
-	}
-	queries := make([]generate.Query, len(c.Queries))
-	for index, query := range c.Queries {
-		if query.Input == "" && query.SQL == "" {
-			return nil, fmt.Errorf("generate: config query %d states neither input nor sql", index+1)
-		}
-		if query.Input != "" && query.SQL != "" {
-			return nil, fmt.Errorf("generate: config query %d states both input and sql; a query's template lives in one of them", index+1)
-		}
-		if query.Function == "" {
-			return nil, fmt.Errorf("generate: config query %d states no function", index+1)
-		}
-		output := query.Output
-		switch {
-		case output != "":
-		case query.Input != "":
-			output = derivedQueryOutput(query.Input)
-		default:
-			output = snakeCase(query.Function) + "_gen.go"
-		}
-		bindings := make(map[string]namedsql.ParameterBinding, len(query.Bindings))
-		for name, binding := range query.Bindings {
-			binding.Go = *binding.Go.Clone()
-			bindings[name] = binding
-		}
-		queries[index] = generate.Query{Input: query.Input, SQL: query.SQL, Function: query.Function, Output: output, Bindings: bindings}
-	}
-	return queries, nil
+	mappings, _ := c.mappings()
+	return compilerquery.Config{ModuleRoot: root, Mappings: mappings, Queries: queries}
 }
 
 // derivedQueryOutput names the generated file for a query that states none:

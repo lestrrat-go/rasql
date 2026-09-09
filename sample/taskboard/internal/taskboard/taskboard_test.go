@@ -6,24 +6,30 @@ import (
 
 	"example.com/taskboard/internal/store"
 	"example.com/taskboard/internal/taskboard"
+	"github.com/lestrrat-go/rasql"
 )
 
-func ptr[T any](value T) *T { return &value }
-
-func TestGroupByProject(t *testing.T) {
+func TestOpenProjectGroupsConvertsLoadedGraph(t *testing.T) {
 	due := time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
-	ada := "Ada Lovelace"
-	groups := taskboard.GroupByProject([]store.OpenTask{
-		{ProjectID: 1, ProjectName: "Website refresh", TaskID: 1, Title: "Draft the rollout plan", AssigneeName: &ada},
-		{ProjectID: 1, ProjectName: "Website refresh", TaskID: 2, Title: "Pick a heading typeface"},
-		{ProjectID: 2, ProjectName: "Billing cleanup", TaskID: 3, Title: "Reconcile March invoices", AssigneeName: &ada, DueOn: ptr(due)},
+	ada := store.MembersRow{ID: 7, Name: "Ada Lovelace"}
+	websiteTasks := rasql.LoadedMany[store.OpenTask]{Loaded: true}
+	websiteTasks.Values = append(websiteTasks.Values, store.OpenTask{Row: store.TasksRow{ID: 1, Title: "Draft the rollout plan"}, Assignee: rasql.LoadedOne[store.MembersRow]{Loaded: true, Present: true, Value: &ada}})
+	websiteTasks.Values = append(websiteTasks.Values, store.OpenTask{Row: store.TasksRow{ID: 2, Title: "Pick a heading typeface"}, Assignee: rasql.LoadedOne[store.MembersRow]{Loaded: true}})
+	billingTasks := rasql.LoadedMany[store.OpenTask]{Loaded: true}
+	billingTasks.Values = append(billingTasks.Values, store.OpenTask{Row: store.TasksRow{ID: 3, Title: "Reconcile March invoices", DueOn: rasql.Nullable[time.Time]{Value: due, Valid: true}}, Assignee: rasql.LoadedOne[store.MembersRow]{Loaded: true, Present: true, Value: &ada}})
+	groups, err := taskboard.OpenProjectGroups([]store.OpenProject{
+		{Row: store.ProjectsRow{ID: 1, Name: "Website refresh"}, Tasks: websiteTasks},
+		{Row: store.ProjectsRow{ID: 2, Name: "Billing cleanup"}, Tasks: billingTasks},
 	})
+	if err != nil {
+		t.Fatalf("OpenProjectGroups returned an error: %s", err)
+	}
 
 	if len(groups) != 2 {
-		t.Fatalf("GroupByProject returned %d groups, want 2", len(groups))
+		t.Fatalf("OpenProjectGroups returned %d groups, want 2", len(groups))
 	}
 	if groups[0].ProjectName != "Website refresh" || len(groups[0].Tasks) != 2 {
-		t.Errorf("first group is %q with %d tasks, want \"Website refresh\" with 2", groups[0].ProjectName, len(groups[0].Tasks))
+		t.Errorf("first group is %q with %d tasks, want Website refresh with 2", groups[0].ProjectName, len(groups[0].Tasks))
 	}
 	if got := groups[0].Tasks[1].Assignee; got != taskboard.Unassigned {
 		t.Errorf("task with no owner shows %q, want %q", got, taskboard.Unassigned)
@@ -32,30 +38,61 @@ func TestGroupByProject(t *testing.T) {
 		t.Errorf("task with no due date shows %q, want an empty string", got)
 	}
 	if got := groups[1].Tasks[0].DueOn; got != "2026-08-25" {
-		t.Errorf("due date shows %q, want \"2026-08-25\"", got)
+		t.Errorf("due date shows %q, want 2026-08-25", got)
 	}
 }
 
-// BEGIN(repeated_projects)
-
-func TestGroupByProjectSeparatesRepeatedProjects(t *testing.T) {
-	// The fold trusts the query's ORDER BY. Rows that arrive out of project
-	// order produce one group per run, which is what this pins: the day
-	// somebody drops the ORDER BY, this test says so.
-	groups := taskboard.GroupByProject([]store.OpenTask{
-		{ProjectID: 1, ProjectName: "A", TaskID: 1},
-		{ProjectID: 2, ProjectName: "B", TaskID: 2},
-		{ProjectID: 1, ProjectName: "A", TaskID: 3},
+func TestOpenProjectGroupsPreservesProjectRows(t *testing.T) {
+	groups, err := taskboard.OpenProjectGroups([]store.OpenProject{
+		{Row: store.ProjectsRow{ID: 1, Name: "A"}, Tasks: rasql.LoadedMany[store.OpenTask]{Loaded: true}},
+		{Row: store.ProjectsRow{ID: 2, Name: "B"}, Tasks: rasql.LoadedMany[store.OpenTask]{Loaded: true}},
+		{Row: store.ProjectsRow{ID: 1, Name: "A"}, Tasks: rasql.LoadedMany[store.OpenTask]{Loaded: true}},
 	})
+	if err != nil {
+		t.Fatalf("OpenProjectGroups returned an error: %s", err)
+	}
 	if len(groups) != 3 {
-		t.Fatalf("GroupByProject returned %d groups, want 3", len(groups))
+		t.Fatalf("OpenProjectGroups returned %d groups, want 3", len(groups))
 	}
 }
 
-// END(repeated_projects)
+func TestOpenProjectGroupsOnNoRows(t *testing.T) {
+	if groups, err := taskboard.OpenProjectGroups(nil); err != nil || len(groups) != 0 {
+		t.Errorf("OpenProjectGroups(nil) returned %d groups and %v, want 0 and no error", len(groups), err)
+	}
+}
 
-func TestGroupByProjectOnNoRows(t *testing.T) {
-	if groups := taskboard.GroupByProject(nil); len(groups) != 0 {
-		t.Errorf("GroupByProject(nil) returned %d groups, want 0", len(groups))
+func TestOpenProjectGroupsKeepsLoadedEmptyAndUnloadedState(t *testing.T) {
+	groups, err := taskboard.OpenProjectGroups([]store.OpenProject{
+		{Row: store.ProjectsRow{ID: 1, Name: "Empty"}, Tasks: rasql.LoadedMany[store.OpenTask]{Loaded: true, Values: []store.OpenTask{}}},
+		{Row: store.ProjectsRow{ID: 2, Name: "Unloaded"}},
+	})
+	if err == nil {
+		t.Fatal("OpenProjectGroups accepted an unloaded task collection")
+	}
+	if groups != nil {
+		t.Fatalf("OpenProjectGroups returned groups with unloaded state: %#v", groups)
+	}
+
+	groups, err = taskboard.OpenProjectGroups([]store.OpenProject{{
+		Row:   store.ProjectsRow{ID: 1, Name: "Empty"},
+		Tasks: rasql.LoadedMany[store.OpenTask]{Loaded: true, Values: []store.OpenTask{}},
+	}})
+	if err != nil {
+		t.Fatalf("OpenProjectGroups rejected loaded empty state: %s", err)
+	}
+	if groups[0].Tasks == nil {
+		t.Fatal("loaded empty task collection became nil")
+	}
+}
+
+func TestOpenProjectGroupsRejectsUnloadedAssignee(t *testing.T) {
+	projects := []store.OpenProject{{
+		Row:   store.ProjectsRow{ID: 1, Name: "Project"},
+		Tasks: rasql.LoadedMany[store.OpenTask]{Loaded: true, Values: []store.OpenTask{{Row: store.TasksRow{ID: 7}}}},
+	}}
+	groups, err := taskboard.OpenProjectGroups(projects)
+	if err == nil || groups != nil {
+		t.Fatalf("OpenProjectGroups returned groups=%#v, err=%v for unloaded assignee", groups, err)
 	}
 }

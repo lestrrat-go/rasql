@@ -14,7 +14,10 @@ import (
 	"github.com/lestrrat-go/rasql/internal/catalogread"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/compilerlock"
+	"github.com/lestrrat-go/rasql/internal/compilerquery"
+	"github.com/lestrrat-go/rasql/internal/querygen"
 	"github.com/lestrrat-go/rasql/internal/schemasource"
+	"github.com/lestrrat-go/rasql/querydescribe"
 	"github.com/lestrrat-go/rasql/schema"
 )
 
@@ -55,7 +58,19 @@ func (c command) runSchemaUpdate(args []string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	result, err := schemasource.Materialize(ctx, request, schemasource.DefaultDependencies())
+	deps := schemasource.DefaultDependencies()
+	if c.schemaDependencies != nil {
+		deps = c.schemaDependencies()
+	}
+	if len(cfg.Queries) != 0 && deps.Analyzer == nil {
+		queryConfig := cfg.compilerQueries(root)
+		analyzer, analyzerErr := compilerquery.NewAnalyzer(queryConfig, compilerquery.Describers{PostgreSQL: querydescribe.NewPostgreSQL(), MySQL: querydescribe.NewMySQL(nil), SQLite: querydescribe.NewSQLitePrepare(nil)})
+		if analyzerErr != nil {
+			return analyzerErr
+		}
+		deps.Analyzer = analyzer
+	}
+	result, err := schemasource.Materialize(ctx, request, deps)
 	if err != nil {
 		return fmt.Errorf("schema update: %w", err)
 	}
@@ -78,7 +93,7 @@ func (c command) runSchemaUpdate(args []string) error {
 	}
 	emitter := cfg.Emitter
 	if emitter == "" {
-		emitter = "legacy"
+		emitter = "compact"
 	}
 	generation := compilerir.GoConfig{Package: cfg.Package, Output: cfg.Output, Emitter: emitter, Prune: prune, Scalars: mappings.Scalars}
 	rowNames := cfg.Tables.RowNames
@@ -97,6 +112,15 @@ func (c command) runSchemaUpdate(args []string) error {
 		name = exportGoName(name)
 		generation.Objects = append(generation.Objects, compilerir.ObjectGoName{ID: object.ID, Source: name, Row: name + "Row", Create: name + "Create", Patch: name + "Patch", File: object.Name + "_gen.go"})
 	}
+	for _, query := range result.Queries {
+		configured := queryConfigFor(cfg, query.ID)
+		file := configured.Output
+		if file == "" {
+			file = derivedQueryOutput(configured.Input)
+		}
+		function := configured.Function
+		generation.Queries = append(generation.Queries, compilerir.QueryGoName{ID: query.ID, Function: function, Result: string(query.ID) + "Result", Projection: string(query.ID) + "Projection", Decoder: string(query.ID) + "Decoder", File: file})
+	}
 	goModel, diagnostics := compilerir.BuildGo(semantic, generation)
 	if hasErrors(diagnostics) {
 		return fmt.Errorf("schema update: Go model failed")
@@ -111,24 +135,46 @@ func (c command) runSchemaUpdate(args []string) error {
 			generation.Objects[i].Patch = exportGoName(object.Patch.Name)
 		}
 	}
-	for _, query := range goModel.Queries {
-		generation.Queries = append(generation.Queries, compilerir.QueryGoName{ID: query.ID, Function: query.Name, Result: resultName(query), Projection: query.ProjectionName})
-	}
-	input, err := generate.NewEmitterInput(result.Catalog, semantic, goModel, generation)
+	input, err := generate.NewEmitterInput(result.Catalog, semantic, goModel, generation, mappings)
 	if err != nil {
 		return err
 	}
-	store, err := generate.LegacyStore(input)
+	store, err := renderEmitter(input)
 	if err != nil {
 		return err
 	}
 	store.Root = root
 	store.Dir = cfg.Output
+	goQueries := make(map[compilerir.QueryID]compilerir.GoQuery, len(goModel.Queries))
+	for _, query := range goModel.Queries {
+		goQueries[query.ID] = query
+	}
+	for _, query := range result.Queries {
+		goQuery := goQueries[query.ID]
+		name := queryNameRecord(generation, query.ID)
+		sqlBytes, readErr := os.ReadFile(filepath.Join(root, query.SQLPath))
+		if readErr != nil {
+			return fmt.Errorf("schema update: read query %s: %w", query.SQLPath, readErr)
+		}
+		sqlText, argumentNames, lowerErr := lowerTypedSQL(string(sqlBytes), string(query.ID), query.Engine.Dialect)
+		if lowerErr != nil {
+			return lowerErr
+		}
+		parameters, pairErr := typedValues(query.Parameters, goQuery.Parameters)
+		if pairErr != nil {
+			return pairErr
+		}
+		results, pairErr := typedValues(query.Results, queryFields(goQuery))
+		if pairErr != nil {
+			return pairErr
+		}
+		store.TypedQueries = append(store.TypedQueries, generate.TypedQuery{Function: goQuery.Name, Output: name.File, Engine: query.Engine.Dialect, SQL: sqlText, ArgumentNames: argumentNames, Operation: query.Operation, Cardinality: query.Cardinality, Result: name.Result, Projection: name.Projection, Decoder: name.Decoder, Parameters: parameters, Results: results, Imports: goModel.Imports})
+	}
 	plan, err := store.Plan()
 	if err != nil {
 		return err
 	}
-	lock := compilerlock.File{Format: compilerlock.FormatVersion, Compiler: "rasql", Source: result.Source.Record, Engine: result.Source.Engine, Catalog: compilerlock.CatalogFromPhysical(result.Catalog), Generation: compilerlock.GenerationRecord{Package: generation.Package, Output: generation.Output, Emitter: generation.Emitter, Prune: generation.Prune}}
+	lock := compilerlock.File{Format: compilerlock.FormatVersion, Compiler: "rasql", Source: result.Source.Record, Engine: result.Source.Engine, Catalog: compilerlock.CatalogFromPhysical(result.Catalog), Mappings: compilerlock.FromMappings(mappings), Generation: compilerlock.GenerationRecord{Package: generation.Package, Output: generation.Output, Emitter: generation.Emitter, Prune: generation.Prune}}
 	for _, query := range result.Queries {
 		lock.Queries = append(lock.Queries, compilerlock.QueryFromAnalysis(query))
 	}
@@ -175,6 +221,9 @@ func (c command) runSchemaUpdate(args []string) error {
 		},
 		AfterVerify: func(context.Context, []generate.PublicationEntry) error { return removePending(root) },
 	}
+	if c.beforePublication != nil {
+		c.beforePublication()
+	}
 	if err := plan.CommitPublication(ctx, publication); err != nil {
 		return err
 	}
@@ -182,11 +231,34 @@ func (c command) runSchemaUpdate(args []string) error {
 	return nil
 }
 
-func resultName(query compilerir.GoQuery) string {
+func queryFields(query compilerir.GoQuery) []compilerir.GoField {
 	if query.Result == nil {
-		return ""
+		return nil
 	}
-	return query.Result.Name
+	return append([]compilerir.GoField(nil), query.Result.Fields...)
+}
+
+func typedValues(semantic []compilerir.SemanticValue, goFields []compilerir.GoField) ([]querygen.TypedValue, error) {
+	if len(semantic) != len(goFields) {
+		return nil, fmt.Errorf("typed query value count mismatch: semantic=%d go=%d", len(semantic), len(goFields))
+	}
+	values := make([]querygen.TypedValue, len(semantic))
+	for i := range semantic {
+		if semantic[i].Name != goFields[i].Name || semantic[i].Nullable != goFields[i].Nullable {
+			return nil, fmt.Errorf("typed query value mismatch at %d: semantic %q go %q", i, semantic[i].Name, goFields[i].Name)
+		}
+		values[i] = querygen.TypedValue{Semantic: semantic[i], Go: goFields[i]}
+	}
+	return values, nil
+}
+
+func queryConfigFor(cfg config, id compilerir.QueryID) configQuery {
+	for _, query := range cfg.Queries {
+		if query.ID == id {
+			return query
+		}
+	}
+	return configQuery{}
 }
 
 func schemaObjectName(namespace, name string) schema.ObjectName {
@@ -220,7 +292,8 @@ func catalogScope(cfg config) catalogread.Scope {
 func queryInputs(queries []compilerir.QueryAnalysis) []compilerlock.QueryDigestInput {
 	out := make([]compilerlock.QueryDigestInput, 0, len(queries))
 	for _, q := range queries {
-		out = append(out, compilerlock.QueryDigestInput{ID: string(q.ID), SQL: compilerlock.SourceFile{Path: q.SQLPath, SHA256: q.SQLSHA256}, Operation: q.Operation, Cardinality: q.Cardinality})
+		record := compilerlock.QueryFromAnalysis(q)
+		out = append(out, compilerlock.QueryDigestInput{ID: string(q.ID), SQL: record.SQL, Operation: q.Operation, Parameters: record.Parameters, Results: record.Results, Cardinality: q.Cardinality})
 	}
 	return out
 }

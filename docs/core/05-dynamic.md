@@ -1,200 +1,63 @@
-# Dynamic rows
+# Dynamic results
 
-`rasql/dynamic` reads and writes rows for a column name the program only knows as a string when it runs. Every terminal on this page takes a `rasql.DB`, which carries the database handle and the dialect to render with, and none of them asks for a Go row type: a result arrives as a `dynamic.Row` and the caller reads the values it wants out of it.
+`rasql.DynamicProjection[R]` decodes a result contract assembled at run time without adding a second query builder or
+execution path. Use it when column metadata comes from configuration, a report definition, or another runtime source,
+while the application still has a Go struct for the returned shape.
 
-Reach for it when the column names arrive as data rather than as source code. [Typed queries](../orm/03-typed-queries.md) covers the other side, where a generated table carries the row type and the builder decodes each row into it.
+## Define the contract
 
-## Operation reference
+Create a `rasql.ResultSchema` from ordered `ResultColumn` values. Each column states its name, SQL type, NULL behavior,
+and optional codec. `DynamicProjection[R]` matches those names to exported fields on `R` by `rasql` tag, `json` tag, or
+snake-cased field name. Construction fails before database access when a field is missing, duplicated, unexported, or
+incompatible with the declared SQL type.
 
-Predicates, aggregates, and statement constructors are the same ones [the SQL builder](02-sql-builder.md#operation-reference) lists, because `dynamic` builds `query` statements too.
-
-| Operation | Entry point | Result |
-| --- | --- | --- |
-| `SELECT` without decoding | `dynamic.SelectFrom(table.Ref())` or `dynamic.SelectFromRelation(source)` | `dynamic.SelectBuilder`, yielding `dynamic.Row` |
-| `SELECT` from a hand-built statement | `dynamic.Query(ctx, db, statement)` | `iter.Seq2[dynamic.Row, error]` |
-| `SELECT` with ordered metadata | `dynamic.QueryResult(ctx, db, statement)` | `*dynamic.Result`, with `Header` and positional values |
-| `DELETE` with no Go row type | `dynamic.DeleteFrom(table.Ref())` | `dynamic.DeleteBuilder` |
-| `DELETE` with `RETURNING`, undecoded | `dynamic.DeleteFrom(table.Ref()).Returning(...)` | `dynamic.DeleteReturningBuilder`, yielding `dynamic.Row` |
-| Write with `RETURNING`, undecoded | `query.New….WithReturning(...)` then `dynamic.QueryWrite(ctx, db, statement)` | `iter.Seq2[dynamic.Row, error]` |
-
-## Select builder methods
-
-`dynamic.SelectFrom` takes a `query.TableRef`, while `dynamic.SelectFromRelation` accepts a reusable relation such as a derived
-query or CTE reference. A generated table joins in as `table.Ref()` and a hand-built `query.MustTableRef` works just as well.
-The builder has no generated column accessors, so it names its columns as plain strings.
-
-| Method | Effect |
-| --- | --- |
-| `Select(names…)` | Adds primary-table columns by name. |
-| `Project(projections…)` | Adds columns and function calls directly, and other expressions through `query.Project`. |
-| `Distinct()` | De-duplicates result rows. |
-| `Join(joins…)` | Adds a join built with `rasql.InnerJoin` or `rasql.LeftJoin`. |
-| `Where(expression)` | Adds a predicate from a `query` expression. |
-| `WhereEqual(name, value)` | Adds `column = value` for a primary-table column. |
-| `WhereIn(name, values…)` | Adds `column IN (values…)` for a primary-table column, one placeholder per value. |
-| `GroupBy(expressions…)` | Adds grouping built with the basic query API. |
-| `GroupByColumns(names…)` | Adds primary-table columns to the grouping by name. |
-| `Having(expression)` | Adds a grouped predicate from a `query` expression; combines with `AND` like `Where`. |
-| `Order(orders…)` | Adds ordering built with `query.Asc`/`query.Desc`, or with `query.AscResult`/`query.DescResult` to order by a projection's result name instead. |
-| `OrderAsc(name)`, `OrderDesc(name)` | Adds ordering for a primary-table column. |
-| `Limit(n)`, `Offset(n)` | Pages the result. |
-| `Build(d)` | Renders `stmt.Statement` for a `dialect.Dialect` without executing. |
-| `Query(ctx, db)` | Executes and returns a rangeable `iter.Seq2`; use it for a large result or an early stop. |
-| `QueryResult(ctx, db)` | Returns a lazy `dynamic.Result`; read `Header` for ordered names, then range `Rows` for positional values. |
-| `Count(ctx, db)` | Executes `COUNT(*)` over the matched rows in place of the builder's projections; rejects a builder with `Limit`, `Offset`, or `Distinct` set. |
-
-`dynamic.SelectBuilder` has no `All` or `One`: it has no Go type to collect into, so a caller ranges its `Query` sequence directly or reads one row with `dynamic.Get`.
-
-`Where`, `WhereEqual`, and `WhereIn` accumulate with `AND` here the same way they do on the typed builder, and `WhereIn` rejects an empty value list the same way. [Select builder methods](../orm/03-typed-queries.md#select-builder-methods) states both rules.
-
-`Select` narrows the projection to named columns, which is what makes `Distinct()` meaningful: a builder that projects every column of a table, primary key included, has already made each row unique before `DISTINCT` runs. `GroupByColumns` is the same `names…` form for the grouping.
-
-## Read a row
-
-A `dynamic.Row` holds one result row with its column names. `dynamic.Scan` turns the `*sql.Rows` a `db.QueryRendered` call returns into the same rangeable sequence the builders yield, so a [static template](06-named-sql.md) reads its results the same way a builder does:
-
-<!-- INCLUDE(examples/rasql_static_template_example_test.go#read_dynamic_rows) -->
+<!-- INCLUDE(sample/taskboard/internal/store/docs_examples_test.go#dynamic_projection) -->
 ```go
-for result, err := range dynamic.Scan(sqlRows) {
-	if err != nil {
-		fmt.Printf("failed to query user: %s\n", err)
-		return
-	}
-	email, err := dynamic.Get[string](result, "email")
-	if err != nil {
-		fmt.Printf("failed to read email: %s\n", err)
-		return
-	}
-	fmt.Println(email)
-}
-```
-source: [examples/rasql_static_template_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_static_template_example_test.go)
-<!-- END INCLUDE -->
-
-Read the values of a row in one of three ways:
-
-| Call | Gives |
-| --- | --- |
-| `dynamic.Get[T](result, "email")` | One named value, decoded as `T`. |
-| `dynamic.Assign(result, "email", &value)` | The same value, decoded into an existing destination. |
-| `dynamic.Decode[T](result)` | A whole struct, matching `rasql` tags or snake-cased field names. |
-| `result.Header()` | Ordered `dynamic.Header` metadata, including `Names`, `Len`, and `Index`. |
-| `result.Rows()` | A single-use sequence whose `dynamic.Row` values support `Value` and `Values` by position. |
-| `result.Close()` | Closes an opened cursor or prevents a lazy result from executing. |
-
-A debug `Handle` may return `nil` rows after logging. `dynamic.Scan` reads that as an empty result rather than an error.
-
-`dynamic.Result` keeps the ordered header even when the query returns no rows. `Header.Names()` and `Row.Values()` return fresh slices, while `Row.Value(index)` preserves SQL NULL as `nil, true` and returns `false` outside the header. The result is single-use and closes its cursor on exhaustion, an early break, or an error. A caller that exports columns without knowing their names can write a CSV directly from the header and indexed values:
-
-<!-- INCLUDE(examples/dynamic_csv_example_test.go) -->
-```go
-package examples_test
-
-import (
-	"bytes"
-	"context"
-	"database/sql"
-	"encoding/csv"
-	"fmt"
-
-	"github.com/lestrrat-go/rasql"
-	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/dynamic"
-	"github.com/lestrrat-go/rasql/query"
-	"github.com/lestrrat-go/rasql/schema"
-	"github.com/lestrrat-go/rasql/sqltext"
-	"github.com/lestrrat-go/rasql/stmt"
-	_ "modernc.org/sqlite"
+result, err := rasql.NewResultSchema(
+	rasql.ResultColumn{Name: "display_name", Type: schema.TextType{}},
+	rasql.ResultColumn{Name: "open_tasks", Type: schema.IntegerType{}},
 )
-
-func Example_dynamicCSV() {
-	ctx := context.Background()
-	database, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		fmt.Printf("failed to open database: %s\n", err)
-		return
-	}
-	defer func() { _ = database.Close() }()
-	database.SetMaxOpenConns(1)
-	db, err := rasql.New(database, dialect.SQLite())
-	if err != nil {
-		fmt.Printf("failed to create database: %s\n", err)
-		return
-	}
-	if _, err := db.ExecRendered(ctx, stmt.New(sqltext.Text("CREATE TABLE users (name TEXT, email TEXT)"))); err != nil {
-		fmt.Printf("failed to create table: %s\n", err)
-		return
-	}
-	if _, err := db.ExecRendered(ctx, stmt.New(sqltext.Text("INSERT INTO users VALUES ('Ada', 'ada@example.com')"))); err != nil {
-		fmt.Printf("failed to insert row: %s\n", err)
-		return
-	}
-	users, err := query.NewTableRef(schema.TableDef{Name: "users", Columns: []schema.ColumnDef{
-		{Name: "name", Type: schema.TextType{}},
-		{Name: "email", Type: schema.TextType{}},
-	}})
-	if err != nil {
-		fmt.Printf("failed to define table: %s\n", err)
-		return
-	}
-	statement, err := query.NewSelect(users, users.Column("name").As("display_name"), users.Column("email").As("contact"))
-	if err != nil {
-		fmt.Printf("failed to build query: %s\n", err)
-		return
-	}
-	result, err := dynamic.QueryResult(ctx, db, statement)
-	if err != nil {
-		fmt.Printf("failed to prepare query: %s\n", err)
-		return
-	}
-	defer func() { _ = result.Close() }()
-	header, err := result.Header()
-	if err != nil {
-		fmt.Printf("failed to read header: %s\n", err)
-		return
-	}
-	var output bytes.Buffer
-	writer := csv.NewWriter(&output)
-	if err := writer.Write(header.Names()); err != nil {
-		fmt.Printf("failed to write header: %s\n", err)
-		return
-	}
-	for row, err := range result.Rows() {
-		if err != nil {
-			fmt.Printf("failed to read row: %s\n", err)
-			return
-		}
-		values := make([]string, header.Len())
-		for index := range values {
-			value, ok := row.Value(index)
-			if ok && value != nil {
-				values[index] = fmt.Sprint(value)
-			}
-		}
-		if err := writer.Write(values); err != nil {
-			fmt.Printf("failed to write row: %s\n", err)
-			return
-		}
-	}
-	writer.Flush()
-	if err := writer.Error(); err != nil {
-		fmt.Printf("failed to flush CSV: %s\n", err)
-		return
-	}
-	fmt.Print(output.String())
-
-	// Output:
-	// display_name,contact
-	// Ada,ada@example.com
+if err != nil {
+	return err
 }
+projection, err := rasql.DynamicProjection[docsReportRow](result)
 ```
-source: [examples/dynamic_csv_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/dynamic_csv_example_test.go)
+source: [sample/taskboard/internal/store/docs_examples_test.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/docs_examples_test.go)
 <!-- END INCLUDE -->
 
-## Delete rows
+Nullable columns require a nullable Go destination such as a pointer, slice, map, interface, `sql.Scanner`, or rasql
+nullable value. SQL NULL bypasses value codecs and keeps the destination absent.
 
-`dynamic.DeleteFrom(table.Ref())` builds a delete for a table with no Go row type, and its `Returning(...)` reads the deleted rows back as `dynamic.Row` values from its own `Query`. [Write statements](03-write-statements.md#reading-a-returning-clause) covers the `RETURNING` clause itself, including which dialects have one.
+## Execute it
+
+Pass the projection to `rasql.Select` for a portable query or to `rasql.Native` for engine-specific SQL. Execute the
+resulting `Query[ReportRow]` with `Rows`, `All`, `One`, or `Maybe`, just like a generated projection.
+
+<!-- INCLUDE(sample/taskboard/internal/store/docs_examples_test.go#dynamic_native_query) -->
+```go
+q, err := rasql.Native(
+	rasql.NativeStatement{Engine: "postgresql", SQL: reportSQL, Args: args},
+	projection,
+	rasql.Many,
+)
+if err != nil {
+	return err
+}
+rows, err := rasql.All(ctx, executor, q)
+```
+source: [sample/taskboard/internal/store/docs_examples_test.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/docs_examples_test.go)
+<!-- END INCLUDE -->
+
+The declared result names can arrive in a different order. The runtime binds returned column metadata to the schema,
+rejects missing or unknown columns, and applies codecs by the returned position.
+
+## When to use generated projections
+
+Prefer generated projections when the schema is known during generation. They provide typed column expressions and
+avoid reflection when decoding. `DynamicProjection` is the boundary for runtime metadata; it does not accept arbitrary
+maps and does not make native SQL portable.
 
 ## Next
 
-[The database handle](04-database.md) runs the statements this builder produces, installs hooks, and starts a transaction. [Typed queries](../orm/03-typed-queries.md) decodes rows into a Go type instead.
+[Querying](../02-querying.md) explains portable and native queries. [Named SQL](06-named-sql.md) covers compiling static
+SQL templates, including generated native query functions.

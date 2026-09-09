@@ -18,7 +18,7 @@ import (
 func TestAcceptanceFixturesAreCanonicalAndPhysicallyComplete(t *testing.T) {
 	for _, dialect := range []string{"postgresql", "mysql", "sqlite"} {
 		t.Run(dialect, func(t *testing.T) {
-			path := filepath.Join("testdata", "v1", dialect+".json")
+			path := filepath.Join("testdata", "v2", dialect+".json")
 			encoded, err := os.ReadFile(path)
 			require.NoError(t, err)
 			lock, err := compilerlock.Decode(encoded)
@@ -54,7 +54,7 @@ func canonicalPhysical(c compilerir.PhysicalCatalog) compilerir.PhysicalCatalog 
 
 func TestAcceptanceFixturesCoverQueryCertaintyAndEngineEvidence(t *testing.T) {
 	for _, dialect := range []string{"postgresql", "mysql", "sqlite"} {
-		b, err := os.ReadFile(filepath.Join("testdata", "v1", dialect+".json"))
+		b, err := os.ReadFile(filepath.Join("testdata", "v2", dialect+".json"))
 		require.NoError(t, err)
 		f, err := compilerlock.Decode(b)
 		require.NoError(t, err)
@@ -74,7 +74,7 @@ func TestAcceptanceFixturesCoverQueryCertaintyAndEngineEvidence(t *testing.T) {
 }
 
 func TestAcceptanceFixtureCleanCopiesHaveIdenticalBytes(t *testing.T) {
-	src := filepath.Join("testdata", "v1", "postgresql.json")
+	src := filepath.Join("testdata", "v2", "postgresql.json")
 	b, err := os.ReadFile(src)
 	require.NoError(t, err)
 	left, right := t.TempDir(), t.TempDir()
@@ -93,7 +93,7 @@ func TestAcceptanceFixtureCleanCopiesHaveIdenticalBytes(t *testing.T) {
 }
 
 func TestAcceptanceNormalizationPreservesPositionalArrays(t *testing.T) {
-	b, err := os.ReadFile(filepath.Join("testdata", "v1", "postgresql.json"))
+	b, err := os.ReadFile(filepath.Join("testdata", "v2", "postgresql.json"))
 	require.NoError(t, err)
 	base, err := compilerlock.Decode(b)
 	require.NoError(t, err)

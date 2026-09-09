@@ -69,7 +69,17 @@ type DecodeError struct {
 	Err    error
 }
 
+// Error names the cause only for a column that no codec decoded, where the
+// cause is rasql's own conversion error and rasql controls what it says.
+// A codec's own error text stays out of the message, because a codec is
+// third-party code that may print the value it failed on; that text is still
+// reachable through Unwrap, and TestCodecErrorsHideCodecCauseText holds the
+// line. Without the first case a caller sees only `decode column "total" with
+// codec "" failed`, which names neither the type wanted nor the type received.
 func (e *DecodeError) Error() string {
+	if e.Codec == "" {
+		return fmt.Sprintf("decode column %q failed: %v", e.Column, e.Err)
+	}
 	return fmt.Sprintf("decode column %q with codec %q failed", e.Column, e.Codec)
 }
 func (e *DecodeError) Unwrap() error { return e.Err }
@@ -220,6 +230,14 @@ func encodeStatement(statement stmt.Statement, slots []bindSlot, reg CodecRegist
 			continue
 		}
 		if codec == nil {
+			continue
+		}
+		if value == nil {
+			if name != "" {
+				args[i] = sql.Named(name, nil)
+			} else {
+				args[i] = nil
+			}
 			continue
 		}
 		encoded, err := codec.Encode(value)

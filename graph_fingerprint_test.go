@@ -62,6 +62,12 @@ func TestGraphFingerprintSeparatesProfileDialectAndCapabilities(t *testing.T) {
 	capabilityKey, err := graphInvocationFingerprint(stage, capabilityProfile)
 	require.NoError(t, err)
 	require.NotEqual(t, base, capabilityKey)
+
+	updateDefaultProfile := graphFingerprintProfile()
+	updateDefaultProfile.Capabilities.UpdateDefault = engineprofile.UpdateDefaultExpression
+	updateDefaultKey, err := graphInvocationFingerprint(stage, updateDefaultProfile)
+	require.NoError(t, err)
+	require.NotEqual(t, base, updateDefaultKey)
 }
 
 func TestGraphFingerprintSeparatesLogicalKeyAndStageMetadata(t *testing.T) {
@@ -196,6 +202,7 @@ func TestGraphFingerprintEncodesAllProfileCapabilityFields(t *testing.T) {
 		func(value *EngineCapabilities) { value.TransactionalDDL = true },
 		func(value *EngineCapabilities) { value.ExplicitNullOrdering = true },
 		func(value *EngineCapabilities) { value.TupleComparison = true },
+		func(value *EngineCapabilities) { value.UpdateDefault = engineprofile.UpdateDefaultExpression },
 	}
 	for index, change := range values {
 		profile := baseProfile

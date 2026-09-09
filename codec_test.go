@@ -29,6 +29,17 @@ func TestCodecRegistryCopiesValuesAndRejectsInvalidIDs(t *testing.T) {
 	require.Error(t, err)
 }
 
+// A column that no codec decoded failed inside rasql's own conversion, so its
+// message names the cause. TestCodecErrorsHideCodecCauseText covers the other
+// half of the same rule, where a codec produced the error and its text stays
+// out of the message.
+func TestDecodeErrorNamesItsCauseWithoutACodec(t *testing.T) {
+	cause := errors.New(`expected int64, got []uint8`)
+	err := &DecodeError{Column: "total", Err: cause}
+	require.True(t, errors.Is(err, cause))
+	require.Equal(t, `decode column "total" failed: expected int64, got []uint8`, err.Error())
+}
+
 func TestCodecErrorsHideCodecCauseText(t *testing.T) {
 	secret := errors.New("secret value should not be printed")
 	err := &DecodeError{Column: "payload", Codec: "text", Err: secret}
