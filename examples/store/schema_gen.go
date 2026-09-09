@@ -61,7 +61,8 @@ var usersDef = schema.TableDef{
 		{Name: "first_name", Type: schema.TextType{}},
 		{Name: "last_name", Type: schema.TextType{}},
 	},
-	PrimaryKey: []string{"id"},
+	PrimaryKey:              []string{"id"},
+	PrimaryKeyAutoincrement: true,
 }
 
 var usersTable = UsersTable{rasql.TableFrom[UsersRow](usersDef)}

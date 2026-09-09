@@ -97,6 +97,19 @@ func validateGoGeneration(g compilerir.GoConfig) error {
 func normalizedMappings(m compilerir.MappingConfig) compilerir.MappingConfig {
 	m = m.Clone()
 	sort.Slice(m.Scalars, func(i, j int) bool { return m.Scalars[i].Name < m.Scalars[j].Name })
+	sort.Slice(m.Relations, func(i, j int) bool {
+		a, b := m.Relations[i], m.Relations[j]
+		if a.Source != b.Source {
+			return a.Source < b.Source
+		}
+		if a.Name != b.Name {
+			return a.Name < b.Name
+		}
+		if a.Target != b.Target {
+			return a.Target < b.Target
+		}
+		return a.Through.Object < b.Through.Object
+	})
 	for i := range m.Scalars {
 		sort.Slice(m.Scalars[i].Imports, func(a, b int) bool {
 			if m.Scalars[i].Imports[a].Path != m.Scalars[i].Imports[b].Path {

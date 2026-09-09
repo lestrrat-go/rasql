@@ -14,6 +14,13 @@ func validateResultCapabilities(p engineprofile.Profile, result query.ResultQuer
 
 func validateBodyCapabilities(p engineprofile.Profile, body query.QueryBody) error {
 	switch body := body.(type) {
+	case query.NativeResult:
+		return nil
+	case *query.NativeResult:
+		if body == nil {
+			return fmt.Errorf("native result body must not be nil")
+		}
+		return nil
 	case query.Select:
 		return validateSelectCapabilities(p, body)
 	case *query.Select:
@@ -235,6 +242,9 @@ func validateWriteCapabilities(p engineprofile.Profile, statement query.WriteSta
 		}
 	case query.Update:
 		for _, assignment := range statement.Assignments() {
+			if assignment.IsDefault() && p.Capabilities.UpdateDefault != engineprofile.UpdateDefaultExpression {
+				return unsupported(p, "UPDATE DEFAULT")
+			}
 			if err := validateExpressionCapabilities(p, assignment.Value()); err != nil {
 				return err
 			}

@@ -17,7 +17,9 @@ func Example_typedCreate() {
 		WithArgs("ada@example.com", "Ada", "Lovelace").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	db, _ := rasql.New(database, dialect.SQLite())
-	_, err := rasql.ExecCreate(context.Background(), db, store.NewUsersCreate().Email("ada@example.com").FirstName("Ada").LastName("Lovelace").Plan())
+	profile, _ := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 40, 0)
+	executor, _ := rasql.AsExecutor(db, profile)
+	_, err := rasql.ExecMutation(context.Background(), executor, store.NewUsersCreate().Email("ada@example.com").FirstName("Ada").LastName("Lovelace").Plan())
 	fmt.Println(err)
 	// Output: <nil>
 }

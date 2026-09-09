@@ -11,7 +11,6 @@ import (
 
 	"github.com/lestrrat-go/rasql/catalog"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/inspect"
 	"github.com/lestrrat-go/rasql/internal/dbtest"
 	"github.com/lestrrat-go/rasql/render"
@@ -88,8 +87,7 @@ func TestNativeTypePostgreSQL(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, catalogTables, 1)
 	require.Equal(t, table, catalogTables[0])
-	descriptor, err := generate.DescriptorSource("nativefixture", table)
-	require.NoError(t, err)
+	descriptor := compactDescriptorLiteral(t, table)
 	_, err = parser.ParseFile(token.NewFileSet(), "descriptor.go", descriptor, parser.AllErrors)
 	require.NoError(t, err)
 	require.Contains(t, string(descriptor), enumName)

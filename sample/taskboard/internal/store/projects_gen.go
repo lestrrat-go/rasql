@@ -3,108 +3,189 @@
 package store
 
 import (
-	"context"
-	"fmt"
-
 	"github.com/lestrrat-go/rasql"
-	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/schema"
 )
 
-// ProjectsRow is one row of the "projects" table.
 type ProjectsRow struct {
 	ID   int64
 	Name string
 }
 
-// ScanRow scans each result column directly into its field.
-func (r *ProjectsRow) ScanRow(src rasql.ScanSource) error {
-	return src.Scan(&r.ID, &r.Name)
+var projectsDefinition = schema.TableDef{
+	Kind: schema.ObjectKind("table"),
+	Name: "projects",
+	Columns: []schema.ColumnDef{
+		{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityAlways},
+		{Name: "name", Type: schema.TextType{}},
+	},
+	PrimaryKey: []string{"id"},
 }
 
-// ScanDestinations maps result-column names to fields on r.
-func (r *ProjectsRow) ScanDestinations(columns []string) ([]any, error) {
-	const (
-		scanIndexID = iota
-		scanIndexName
-	)
-	destinations := make([]any, len(columns))
-	scanned := rasql.NewScanMask(2)
-	var discard any
-	for index, column := range columns {
-		switch column {
-		case "id":
-			if !scanned.Mark(scanIndexID) {
-				return nil, fmt.Errorf("duplicate result column %q", column)
-			}
-			destinations[index] = &r.ID
-		case "name":
-			if !scanned.Mark(scanIndexName) {
-				return nil, fmt.Errorf("duplicate result column %q", column)
-			}
-			destinations[index] = &r.Name
-		default:
-			destinations[index] = &discard
-		}
+var projectsTable = rasql.MustTableOf[ProjectsRow](projectsDefinition)
+
+type ProjectsTable struct{ rasql.Table[ProjectsRow] }
+
+func Projects() ProjectsTable { return ProjectsTable{Table: projectsTable} }
+
+func (t ProjectsTable) Source(alias string) (rasql.TypedRelation[ProjectsRow], error) {
+	return rasql.SourceOf[ProjectsRow](t.Table, alias)
+}
+
+type ProjectsColumns struct{}
+
+type ProjectsExpressions struct {
+	ID   rasql.Column[ProjectsRow, int64]
+	Name rasql.Column[ProjectsRow, string]
+}
+
+type OptionalProjectsExpressions struct {
+	ID   rasql.NullColumn[ProjectsRow, int64]
+	Name rasql.NullColumn[ProjectsRow, string]
+}
+
+func (ProjectsColumns) Bind(source rasql.TypedRelation[ProjectsRow]) (ProjectsExpressions, error) {
+	var err error
+	result := ProjectsExpressions{
+		ID:   rasqlgenBind(&err, source, "id", "", rasql.BindColumn[ProjectsRow, int64]),
+		Name: rasqlgenBind(&err, source, "name", "", rasql.BindColumn[ProjectsRow, string]),
 	}
-	return destinations, nil
+	return result, err
 }
 
-// ColumnValue returns the value of the named column.
-func (r ProjectsRow) ColumnValue(name string) (any, bool) {
-	switch name {
-	case "id":
-		return r.ID, true
-	case "name":
-		return r.Name, true
+func (ProjectsColumns) BindOptional(source rasql.OptionalRelation[ProjectsRow]) (OptionalProjectsExpressions, error) {
+	var err error
+	result := OptionalProjectsExpressions{
+		ID:   rasqlgenBind(&err, source, "id", "", rasql.BindOptionalColumn[ProjectsRow, int64]),
+		Name: rasqlgenBind(&err, source, "name", "", rasql.BindOptionalColumn[ProjectsRow, string]),
 	}
-	return nil, false
+	return result, err
 }
 
-// ProjectsTable is the generated table type for the "projects" table.
-type ProjectsTable struct {
-	rasql.Table[ProjectsRow]
+var projectsResultColumns = []rasql.ResultColumn{
+	{Name: "id", Type: schema.IntegerType{}, Codec: ""},
+	{Name: "name", Type: schema.TextType{}, Codec: ""},
+}
+var projectsResultSchema = rasqlgenResultSchema(projectsResultColumns)
+
+type projectsDecoder struct{}
+
+func (projectsDecoder) ResultSchema() rasql.ResultSchema { return projectsResultSchema }
+func (projectsDecoder) Presence() []rasql.Presence       { return nil }
+func (projectsDecoder) DecodeRow(source rasql.ScanSource, row *ProjectsRow) error {
+	return source.Scan(&row.ID, &row.Name)
 }
 
-// ID returns a reference to the "id" column.
-func (t ProjectsTable) ID() query.TypedColumn[ProjectsRow, int64] {
-	return query.TypedColumnOf[ProjectsRow, int64](rasql.ColumnOf(t.Table, "id"))
-}
-func (t ProjectsTable) IDRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
-
-// Name returns a reference to the "name" column.
-func (t ProjectsTable) Name() query.TypedColumn[ProjectsRow, string] {
-	return query.TypedColumnOf[ProjectsRow, string](rasql.ColumnOf(t.Table, "name"))
-}
-func (t ProjectsTable) NameRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "name") }
-
-// Projects returns the descriptor for the "projects" table.
-func Projects() ProjectsTable {
-	return projectsTable
+func (row *ProjectsRow) ScanRow(source rasql.ScanSource) error {
+	return projectsDecoder{}.DecodeRow(source, row)
 }
 
-// As returns the table under alias.
-func (t ProjectsTable) As(alias string) (ProjectsTable, error) {
-	aliased, err := rasql.As(t.Table, alias)
+var projectsOptionalResultSchema = rasqlgenOptionalResultSchema(projectsResultColumns)
+
+type projectsOptionalDecoder struct{}
+
+func (projectsOptionalDecoder) ResultSchema() rasql.ResultSchema { return projectsOptionalResultSchema }
+func (projectsOptionalDecoder) Presence() []rasql.Presence {
+	p, err := rasql.NewPresence("Projects", "id")
 	if err != nil {
-		return ProjectsTable{}, err
+		panic(err)
 	}
-	return ProjectsTable{Table: aliased}, nil
+	return []rasql.Presence{p}
 }
+func (projectsOptionalDecoder) DecodeRow(source rasql.ScanSource, row *ProjectsRow) error {
+	var IDValue rasql.Nullable[int64]
+	var NameValue rasql.Nullable[string]
+	if err := source.Scan(&IDValue, &NameValue); err != nil {
+		return err
+	}
+	rasqlgenAssignNullable(IDValue, &row.ID)
+	rasqlgenAssignNullable(NameValue, &row.Name)
+	return nil
+}
+
+func ProjectsProjection(expressions ProjectsExpressions) (rasql.Projection[ProjectsRow], error) {
+	items := []rasql.ProjectionItem{
+		rasql.Item("id", expressions.ID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("name", expressions.Name.Expr(), schema.TextType{}, ""),
+	}
+	return rasql.NewProjection(items, projectsDecoder{})
+}
+
+func OptionalProjectsProjection(expressions OptionalProjectsExpressions) (rasql.Projection[ProjectsRow], error) {
+	items := []rasql.ProjectionItem{
+		rasql.NullItem("id", expressions.ID.NullExpr(), schema.IntegerType{}, ""),
+		rasql.NullItem("name", expressions.Name.NullExpr(), schema.TextType{}, ""),
+	}
+	return rasql.NewProjection(items, projectsOptionalDecoder{})
+}
+
+func ProjectsGraphKey(source rasql.TypedRelation[ProjectsRow]) (rasql.GraphKey[ProjectsRow], error) {
+	expressions, err := (ProjectsColumns{}).Bind(source)
+	if err != nil {
+		return rasql.GraphKey[ProjectsRow]{}, err
+	}
+	return rasql.NewGraphKey[ProjectsRow](rasql.KeyPart[ProjectsRow, int64](expressions.ID, func(row ProjectsRow) int64 { return row.ID }))
+}
+
+func ProjectsIDPageKey(source rasql.TypedRelation[ProjectsRow], direction rasql.PageDirection) (rasql.PageKey[ProjectsRow], error) {
+	expressions, err := (ProjectsColumns{}).Bind(source)
+	if err != nil {
+		return nil, err
+	}
+	return rasqlgenPageKey(direction, expressions.ID.Expr(), func(row ProjectsRow) int64 { return row.ID })
+}
+
+func ProjectsNamePageKey(source rasql.TypedRelation[ProjectsRow], direction rasql.PageDirection) (rasql.PageKey[ProjectsRow], error) {
+	expressions, err := (ProjectsColumns{}).Bind(source)
+	if err != nil {
+		return nil, err
+	}
+	return rasqlgenPageKey(direction, expressions.Name.Expr(), func(row ProjectsRow) string { return row.Name })
+}
+
+func ProjectsTasksEdge[G, CG any](parentSource rasql.TypedRelation[ProjectsRow], childSource rasql.TypedRelation[TasksRow], children rasql.GraphPlan[TasksRow, CG], options rasql.EdgeOptions, attach func(*G, rasql.LoadedMany[CG])) (rasql.GraphEdge[ProjectsRow, G], error) {
+	parentExpressions, err := (ProjectsColumns{}).Bind(parentSource)
+	if err != nil {
+		return nil, err
+	}
+	childExpressions, err := (TasksColumns{}).Bind(childSource)
+	if err != nil {
+		return nil, err
+	}
+	parent, err := rasql.NewGraphKey[ProjectsRow](rasql.KeyPart[ProjectsRow, int64](parentExpressions.ID, func(row ProjectsRow) int64 { return row.ID }))
+	if err != nil {
+		return nil, err
+	}
+	child, err := rasql.NewGraphKey[TasksRow](rasql.KeyPart[TasksRow, int64](childExpressions.ProjectID, func(row TasksRow) int64 { return row.ProjectID }))
+	if err != nil {
+		return nil, err
+	}
+	return rasql.HasMany("Tasks", parent, child, children, options, attach)
+}
+
+var projectsMutationColumns = func() ProjectsExpressions {
+	source, err := Projects().Source("")
+	if err != nil {
+		panic(err)
+	}
+	value, err := (ProjectsColumns{}).Bind(source)
+	if err != nil {
+		panic(err)
+	}
+	return value
+}()
 
 type ProjectsCreate struct {
 	fields []rasql.MutationField[ProjectsRow]
 }
 
 func NewProjectsCreate() ProjectsCreate { return ProjectsCreate{} }
-
-func (p ProjectsCreate) Name(value string) ProjectsCreate {
-	fields := append([]rasql.MutationField[ProjectsRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[ProjectsRow](Projects().Name(), value))
-	return ProjectsCreate{fields: fields}
+func (v ProjectsCreate) Name(value string) ProjectsCreate {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(projectsMutationColumns.Name, value))
+	return v
 }
-func (p ProjectsCreate) Plan() rasql.CreatePlan[ProjectsRow] {
-	plan, _ := rasql.NewCreatePlan[ProjectsRow](Projects(), p.fields...)
-	return plan
+func (v ProjectsCreate) Plan() (rasql.CreatePlan[ProjectsRow], error) {
+	return rasql.NewCreatePlan(Projects().Table, v.fields...)
 }
 
 type ProjectsPatch struct {
@@ -112,48 +193,10 @@ type ProjectsPatch struct {
 }
 
 func NewProjectsPatch() ProjectsPatch { return ProjectsPatch{} }
-
-func (p ProjectsPatch) Name(value string) ProjectsPatch {
-	fields := append([]rasql.MutationField[ProjectsRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[ProjectsRow](Projects().Name(), value))
-	return ProjectsPatch{fields: fields}
+func (v ProjectsPatch) Name(value string) ProjectsPatch {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(projectsMutationColumns.Name, value))
+	return v
 }
-func (p ProjectsPatch) Where(predicate query.Predicate) (rasql.PatchPlan[ProjectsRow], error) {
-	return rasql.NewPatchPlan[ProjectsRow](Projects(), predicate, p.fields...)
+func (v ProjectsPatch) Where(value rasql.Predicate) (rasql.PatchPlan[ProjectsRow], error) {
+	return rasql.NewPatchPlan(Projects().Table, value, v.fields...)
 }
-
-// ProjectsTableTasksRelation describes the Tasks relationship from ProjectsTable.
-type ProjectsTableTasksRelation struct {
-	Parent    ProjectsTable
-	Child     TasksTable
-	ParentKey rasql.ColumnRef
-	ChildKey  rasql.ColumnRef
-}
-
-// Tasks returns the generated relationship descriptor.
-func (t ProjectsTable) Tasks() ProjectsTableTasksRelation {
-	child := Tasks()
-	parent := t
-	return ProjectsTableTasksRelation{Parent: parent, Child: child, ParentKey: parent.IDRef(), ChildKey: child.ProjectIDRef()}
-}
-
-// Join returns an INNER JOIN for the relationship.
-func (r ProjectsTableTasksRelation) Join() rasql.Join {
-	return rasql.InnerJoin(r.Child, rasql.Equal(r.ParentKey, r.ChildKey))
-}
-
-// LoadWith fetches children with filtering, ordering, caps, and bind batching.
-func (r ProjectsTableTasksRelation) LoadWith(ctx context.Context, db rasql.DB, parents []ProjectsRow, options rasql.RelationshipLoadOptions) (map[int64][]TasksRow, error) {
-	return rasql.LoadHasManyPlan[ProjectsRow, TasksRow, int64](ctx, db, r.Child, []query.ColumnRef{r.ChildKey}, parents, func(row ProjectsRow) int64 { return row.ID }, func(row TasksRow) int64 { return row.ProjectID }, func(key int64) ([]any, bool) { return []any{key}, true }, options)
-}
-
-// Load fetches all children for parents in one query.
-func (r ProjectsTableTasksRelation) Load(ctx context.Context, db rasql.DB, parents []ProjectsRow) (map[int64][]TasksRow, error) {
-	return r.LoadWith(ctx, db, parents, rasql.RelationshipLoadOptions{})
-}
-
-// SourceKey returns the ordered source relationship key.
-func (r ProjectsTableTasksRelation) SourceKey(row ProjectsRow) int64 { return row.ID }
-
-// TargetKey returns the ordered target relationship key.
-func (r ProjectsTableTasksRelation) TargetKey(row TasksRow) int64 { return row.ProjectID }

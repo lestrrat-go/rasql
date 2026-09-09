@@ -915,6 +915,21 @@ Foreign-key constraints:
 
 The `ON DELETE NO ACTION` that `db/shape.sql` spells out does not appear beside `tasks_assignee_id_fkey`. `NO ACTION` is what a foreign key does when no clause names something else, and `\d` prints only the clauses that depart from it. Writing it out anyway is worth the redundancy: the next reader of that file learns that the omission was a decision rather than an oversight.
 
+## Empty the database again
+
+`db/shape.sql` is now a written record of the settled shape, not the way the tables get built. [Chapter 3](03-capture.md) applies that same shape through a tracked migration, and a migration tool that tries to create a table already sitting there fails instead of adopting it. Drop the three tables so the working database is empty again, the same way the probes were dropped above:
+
+```sh
+./scripts/psql.sh -c 'DROP TABLE tasks, projects, members;'
+./scripts/psql.sh -c '\dt'
+```
+
+```text
+DROP TABLE
+
+Did not find any relations.
+```
+
 Commit the shape:
 
 ```sh

@@ -1,0 +1,198 @@
+package generate_test
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+
+	"github.com/lestrrat-go/rasql/generate"
+	"github.com/lestrrat-go/rasql/internal/compilerir"
+	"github.com/lestrrat-go/rasql/internal/querygen"
+	"github.com/lestrrat-go/rasql/internal/scratchmod"
+	"github.com/stretchr/testify/require"
+)
+
+func TestCompactRichExternalConsumer(t *testing.T) {
+	in := richCompactInput(t)
+	store, err := generate.RenderCompact(in)
+	require.NoError(t, err)
+	root := t.TempDir()
+	store.Root, store.Dir = root, "generated"
+	store.TypedQueries = []generate.TypedQuery{{
+		Function: "RichQuery", Output: "query_gen.go", Engine: "sqlite", SQL: "SELECT id, balance FROM users WHERE id = ?",
+		Operation: "select", Cardinality: "many", Result: "RichResult", Decoder: "RichDecoder",
+		Parameters: []querygen.TypedValue{{Go: compilerir.GoField{Name: "after", Type: "int64"}}}, ArgumentNames: []string{"after"},
+		Results: []querygen.TypedValue{{Go: compilerir.GoField{Name: "id", Type: "int64"}, Semantic: compilerir.SemanticValue{Name: "id", LogicalKind: "integer"}}, {Go: compilerir.GoField{Name: "balance", Type: "domain.Money", Codec: "money"}, Semantic: compilerir.SemanticValue{Name: "balance", LogicalKind: "integer"}}},
+		Imports: []compilerir.GoImport{{Path: "example.com/domain", Alias: "domain"}},
+	}}
+	plan, err := store.Plan()
+	require.NoError(t, err)
+	var usersSource, projectsSource, viewSource string
+	for _, file := range plan.Files() {
+		switch filepath.Base(file.Path) {
+		case "users_gen.go":
+			usersSource = string(file.Source)
+		case "projects_gen.go":
+			projectsSource = string(file.Source)
+		case "active_users_gen.go":
+			viewSource = string(file.Source)
+		}
+	}
+	require.Contains(t, usersSource, "func AccountRolesEdge")
+	require.Contains(t, usersSource, "func AccountProjectsEdge")
+	require.Contains(t, projectsSource, "func ProjectOwnerEdge")
+	require.Contains(t, projectsSource, "func (v ProjectCreate) DefaultTitle")
+	require.NotContains(t, viewSource, "ActiveUsersCreate")
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "generated"), 0o755))
+	require.NoError(t, plan.Commit())
+	file, err := scratchmod.ForModule(repoRoot(t), "example.com/rich")
+	require.NoError(t, err)
+	require.NoError(t, file.AddRequire("modernc.org/sqlite", pinnedVersion(t, "modernc.org/sqlite")))
+	require.NoError(t, file.AddRequire("example.com/domain", "v1.0.0"))
+	require.NoError(t, file.AddReplace("example.com/domain", "", "./domain", ""))
+	data, err := scratchmod.Format(file)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), data, 0o600))
+	require.NoError(t, scratchmod.WriteGoSum(root, repoRoot(t)))
+	domainDir := filepath.Join(root, "domain")
+	require.NoError(t, os.MkdirAll(domainDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(domainDir, "go.mod"), []byte("module example.com/domain\n\ngo 1.26\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(domainDir, "money.go"), []byte(richDomainSource), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "generated", "consumer_test.go"), []byte(richConsumerSource), 0o600))
+	command := exec.Command("go", "test", "-mod=mod", "./generated")
+	command.Dir = root
+	// GOCACHE is deliberately not overridden here: the ambient build cache
+	// already holds modernc.org/sqlite and rasql from the surrounding `go
+	// test ./...` run, and a fresh per-call GOCACHE bought no isolation this
+	// correctness check needs -- it only forced that (slow to compile)
+	// dependency from scratch on every call.
+	output, err := command.CombinedOutput()
+	require.NoError(t, err, "%s", output)
+}
+
+func richCompactInput(t *testing.T) generate.EmitterInput {
+	t.Helper()
+	money := &compilerir.NativeType{Dialect: "sqlite", Name: "MONEY", Kind: "other"}
+	users := compilerir.PhysicalObject{ID: "users", Kind: "table", Name: "users", Columns: []compilerir.PhysicalColumn{
+		{Name: "id", LogicalKind: "integer"}, {Name: "nickname", Ordinal: 1, LogicalKind: "text", Nullable: true},
+		{Name: "balance", Ordinal: 2, LogicalKind: "integer", Nullable: true, Native: money},
+	}, Constraints: []compilerir.PhysicalConstraint{{Kind: "primary_key", Columns: []string{"id"}}}}
+	projects := compilerir.PhysicalObject{ID: "projects", Kind: "table", Name: "projects", Columns: []compilerir.PhysicalColumn{
+		{Name: "id", LogicalKind: "integer"}, {Name: "owner_id", Ordinal: 1, LogicalKind: "integer"}, {Name: "title", Ordinal: 2, LogicalKind: "text", DefaultSQL: "'untitled'"},
+	}, Constraints: []compilerir.PhysicalConstraint{{Kind: "primary_key", Columns: []string{"id"}}, {Kind: "foreign_key", Name: "projects_owner_fk", Columns: []string{"owner_id"}, Reference: &compilerir.ForeignReference{Object: "users", Columns: []string{"id"}}}}}
+	roles := compilerir.PhysicalObject{ID: "roles", Kind: "table", Name: "roles", Columns: []compilerir.PhysicalColumn{{Name: "id", LogicalKind: "integer"}}, Constraints: []compilerir.PhysicalConstraint{{Kind: "primary_key", Columns: []string{"id"}}}}
+	links := compilerir.PhysicalObject{ID: "user_roles", Kind: "table", Name: "user_roles", Columns: []compilerir.PhysicalColumn{{Name: "user_id", LogicalKind: "integer"}, {Name: "role_id", Ordinal: 1, LogicalKind: "integer"}}, Constraints: []compilerir.PhysicalConstraint{{Kind: "foreign_key", Name: "user_roles_user_fk", Columns: []string{"user_id"}, Reference: &compilerir.ForeignReference{Object: "users", Columns: []string{"id"}}}, {Kind: "foreign_key", Name: "user_roles_role_fk", Columns: []string{"role_id"}, Reference: &compilerir.ForeignReference{Object: "roles", Columns: []string{"id"}}}}}
+	view := compilerir.PhysicalObject{ID: "active_users", Kind: "view", Name: "active_users", Columns: []compilerir.PhysicalColumn{{Name: "id", LogicalKind: "integer"}, {Name: "nickname", Ordinal: 1, LogicalKind: "text", Nullable: true}, {Name: "balance", Ordinal: 2, LogicalKind: "integer", Nullable: true, Native: money}}}
+	catalog := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "sqlite", Version: "3"}, Objects: []compilerir.PhysicalObject{users, projects, roles, links, view}}
+	mapping := compilerir.ScalarMapping{Name: "money", Match: compilerir.NativeMatch{Dialect: "sqlite", Name: "MONEY", Kind: "other"}, GoType: "domain.Money", Imports: []compilerir.GoImport{{Path: "example.com/domain", Alias: "domain"}}, Codec: "money"}
+	relations := compilerir.MappingConfig{Scalars: []compilerir.ScalarMapping{mapping}, Relations: []compilerir.RelationMapping{{Name: "Roles", Source: "users", From: []string{"id"}, Target: "roles", To: []string{"id"}, Through: compilerir.ThroughMapping{Object: "user_roles", SourceFrom: []string{"user_id"}, SourceTo: []string{"id"}, TargetFrom: []string{"role_id"}, TargetTo: []string{"id"}}}}}
+	semantic, diagnostics := compilerir.BuildSemantic(catalog, relations, nil)
+	for _, diagnostic := range diagnostics {
+		require.NotEqual(t, compilerir.DiagnosticError, diagnostic.Level, diagnostic.Message)
+	}
+	config := compilerir.GoConfig{Package: "store", Output: "generated", Emitter: "compact", Scalars: relations.Scalars, Objects: []compilerir.ObjectGoName{{ID: "users", Source: "Account", Row: "AccountRecord", File: "users_gen.go"}, {ID: "projects", Source: "Project", Row: "ProjectRecord", File: "projects_gen.go"}, {ID: "roles", Source: "Role", Row: "RoleRecord", File: "roles_gen.go"}, {ID: "user_roles", Source: "Membership", Row: "MembershipRecord", File: "user_roles_gen.go"}, {ID: "active_users", Source: "ActiveUser", Row: "ActiveUserRecord", File: "active_users_gen.go"}}}
+	model, diagnostics := compilerir.BuildGo(semantic, config)
+	for _, diagnostic := range diagnostics {
+		require.NotEqual(t, compilerir.DiagnosticError, diagnostic.Level, diagnostic.Message)
+	}
+	in, err := generate.NewEmitterInput(catalog, semantic, model, config, relations)
+	require.NoError(t, err)
+	return in
+}
+
+const richDomainSource = `package domain
+
+import (
+ "database/sql/driver"
+ "fmt"
+)
+
+type Money int64
+type NullableMoney struct { Data Money; Valid bool }
+func (m *Money) Scan(value any) error { switch v := value.(type) { case int64: *m = Money(v); return nil; case []byte: var n int64; _, err := fmt.Sscan(string(v), &n); *m = Money(n); return err }; return fmt.Errorf("money %T", value) }
+func (m Money) Value() (driver.Value, error) { return int64(m), nil }
+func (m *NullableMoney) Scan(value any) error { if value == nil { m.Data, m.Valid = 0, false; return nil }; m.Valid = true; return m.Data.Scan(value) }
+func (m NullableMoney) Value() (driver.Value, error) { if !m.Valid { return nil, nil }; return m.Data.Value() }
+`
+
+const richConsumerSource = `package store_test
+
+import (
+	"context"
+	"database/sql"
+	"database/sql/driver"
+	"fmt"
+ "testing"
+ "github.com/lestrrat-go/rasql"
+ "github.com/lestrrat-go/rasql/dialect"
+ "example.com/domain"
+ store "example.com/rich/generated"
+ _ "modernc.org/sqlite"
+)
+
+type userGraph struct { ID int64 }
+type roleGraph struct { ID int64 }
+type userWithRoles struct { Roles rasql.LoadedMany[roleGraph] }
+type userWithProjects struct { Projects rasql.LoadedMany[projectGraph] }
+type projectGraph struct { ID int64; Owner rasql.LoadedOne[userGraph] }
+
+type recordingScanSource struct {
+ source rasql.ScanSource
+ calls int
+ destinations []string
+}
+func (s *recordingScanSource) Scan(destinations ...any) error {
+ s.calls++
+ for _, destination := range destinations { s.destinations = append(s.destinations, fmt.Sprintf("%T", destination)) }
+ raw := make([]any, len(destinations))
+ scanDestinations := make([]any, len(destinations))
+ for index := range raw { scanDestinations[index] = &raw[index] }
+ if err := s.source.Scan(scanDestinations...); err != nil { return err }
+ for index, destination := range destinations {
+  switch target := destination.(type) {
+  case *rasql.Nullable[int64]: if raw[index] == nil { target.Value, target.Valid = 0, false } else { target.Value, target.Valid = raw[index].(int64), true }
+  case *rasql.Nullable[string]: if raw[index] == nil { target.Value, target.Valid = "", false } else { target.Value, target.Valid = raw[index].(string), true }
+  case *rasql.Nullable[domain.Money]: if raw[index] == nil { target.Value, target.Valid = 0, false } else { target.Value, target.Valid = domain.Money(raw[index].(int64)), true }
+  default: return fmt.Errorf("unexpected optional destination %T", destination)
+  }
+ }
+ return nil
+}
+
+func TestRichCompactRuntime(t *testing.T) {
+ ctx := context.Background()
+ sqlDB, err := sql.Open("sqlite", ":memory:"); if err != nil { t.Fatal(err) }; defer sqlDB.Close(); sqlDB.SetMaxOpenConns(1)
+ if _, err = sqlDB.ExecContext(ctx, "CREATE TABLE users (id INTEGER PRIMARY KEY, nickname TEXT, balance INTEGER); CREATE TABLE projects (id INTEGER PRIMARY KEY, owner_id INTEGER NOT NULL, title TEXT DEFAULT 'untitled'); CREATE TABLE roles (id INTEGER PRIMARY KEY); CREATE TABLE user_roles (user_id INTEGER NOT NULL, role_id INTEGER NOT NULL); CREATE VIEW active_users AS SELECT id, nickname, balance FROM users"); err != nil { t.Fatal(err) }
+ db, err := rasql.New(sqlDB, dialect.SQLite()); if err != nil { t.Fatal(err) }
+ profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 1); if err != nil { t.Fatal(err) }
+ executor, err := rasql.AsExecutor(db, profile); if err != nil { t.Fatal(err) }
+ codecs, err := rasql.NewCodecRegistry(map[rasql.CodecID]rasql.ValueCodec{"money": moneyCodec{}}); if err != nil { t.Fatal(err) }; executor, err = rasql.WithCodecs(executor, codecs); if err != nil { t.Fatal(err) }
+ create, err := store.NewAccountCreate().ID(1).Nickname("Ada").Balance(domain.Money(7)).Plan(); if err != nil { t.Fatal(err) }; if _, err = rasql.ExecMutation(ctx, executor, create); err != nil { t.Fatal(err) }
+ source, err := store.Account().Source("u"); if err != nil { t.Fatal(err) }; expressions, err := (store.AccountColumns{}).Bind(source); if err != nil { t.Fatal(err) }; projection, err := store.AccountProjection(expressions); if err != nil { t.Fatal(err) }; query := rasql.Select(source.Source(), projection).OrderBy(rasql.AscExpr(expressions.ID.Expr())); columns := projection.Schema().Columns(); columns[0].Name = "caller_mutation"; if projection.Schema().Columns()[0].Name != "id" { t.Fatalf("projection schema was mutated: %#v", projection.Schema().Columns()) }
+ rows, err := rasql.All(ctx, executor, query); if err != nil || len(rows) != 1 || rows[0].Balance.Value != domain.Money(7) || !rows[0].Balance.Valid { t.Fatalf("users=%#v err=%v", rows, err) }
+ nilCreate, err := store.NewAccountCreate().ID(2).ClearNickname().ClearBalance().Plan(); if err != nil { t.Fatal(err) }; if _, err = rasql.ExecMutation(ctx, executor, nilCreate); err != nil { t.Fatal(err) }; rows, err = rasql.All(ctx, executor, query); if err != nil || len(rows) != 2 || rows[1].Nickname.Valid || rows[1].Balance.Valid { t.Fatalf("nullable users=%#v err=%v", rows, err) }
+ viewSource, err := store.ActiveUser().Source("v"); if err != nil { t.Fatal(err) }; viewExpressions, err := (store.ActiveUserColumns{}).Bind(viewSource); if err != nil { t.Fatal(err) }; viewProjection, err := store.ActiveUserProjection(viewExpressions); if err != nil { t.Fatal(err) }; viewRows, err := rasql.All(ctx, executor, rasql.Select(viewSource.Source(), viewProjection)); if err != nil || len(viewRows) != 2 { t.Fatalf("view rows=%#v err=%v", viewRows, err) }
+ tx, err := db.Begin(ctx, nil); if err != nil { t.Fatal(err) }; txExecutor, err := rasql.AsExecutor(tx, profile); if err != nil { t.Fatal(err) }; projectCreate, err := store.NewProjectCreate().ID(10).OwnerID(1).Title("initial").Plan(); if err != nil { t.Fatal(err) }; if _, err = rasql.ExecMutation(ctx, txExecutor, projectCreate); err != nil { t.Fatal(err) }; patchSource, err := store.Project().Source(""); if err != nil { t.Fatal(err) }; patchExpressions, err := (store.ProjectColumns{}).Bind(patchSource); if err != nil { t.Fatal(err) }; patchPlan, err := store.NewProjectPatch().Title("changed").Where(rasql.EqualValue(patchExpressions.ID.Expr(), int64(10))); if err != nil { t.Fatal(err) }; patchProjection, err := store.ProjectProjection(patchExpressions); if err != nil { t.Fatal(err) }; returned, err := rasql.Returning(patchPlan, patchProjection); if err != nil { t.Fatal(err) }; if _, err = rasql.One(ctx, txExecutor, returned); err != nil { t.Fatal(err) }; if err = tx.Commit(); err != nil { t.Fatal(err) }; if _, err = sqlDB.ExecContext(ctx, "INSERT INTO projects (id, owner_id, title) VALUES (11, 2, 'null owner fields'), (12, 99, 'missing owner')"); err != nil { t.Fatal(err) }
+ key, err := store.AccountIDPageKey(source, rasql.PageAscending); if err != nil { t.Fatal(err) }; if _, err = rasql.NewPageSpec([]rasql.PageKey[store.AccountRecord]{key}, key); err != nil { t.Fatal(err) }
+	 rich, err := store.RichQuery(1); if err != nil { t.Fatal(err) }; richRows, err := rasql.All(ctx, executor, rich); if err != nil || len(richRows) != 1 || richRows[0].Balance != domain.Money(7) { t.Fatalf("rich=%#v err=%v", richRows, err) }
+ derived, err := rasql.Derive(rich, "d"); if err != nil { t.Fatal(err) }; if _, err = (store.RichQueryBindings{}).Bind(derived); err != nil { t.Fatal(err) }; cte, err := rasql.CTEOf("rich_values", rich); if err != nil { t.Fatal(err) }; cteSource, err := cte.Source("r"); if err != nil { t.Fatal(err) }; if _, err = (store.RichQueryBindings{}).Bind(cteSource); err != nil { t.Fatal(err) }
+ projectSource, err := store.Project().Source("p"); if err != nil { t.Fatal(err) }; projectExpressions, err := (store.ProjectColumns{}).Bind(projectSource); if err != nil { t.Fatal(err) }; projectProjection, err := store.ProjectProjection(projectExpressions); if err != nil { t.Fatal(err) }; projectQuery := rasql.Select(projectSource.Source(), projectProjection).Where(rasql.EqualValue(projectExpressions.ID.Expr(), int64(10))); childSource, err := store.Account().Source("u2"); if err != nil { t.Fatal(err) }; childExpressions, err := (store.AccountColumns{}).Bind(childSource); if err != nil { t.Fatal(err) }; childProjection, err := store.AccountProjection(childExpressions); if err != nil { t.Fatal(err) }; childQuery := rasql.Select(childSource.Source(), childProjection); childPlan, err := rasql.NewGraphPlan(childQuery, func(row store.AccountRecord) userGraph { return userGraph{ID: row.ID} }); if err != nil { t.Fatal(err) }; edge, err := store.ProjectOwnerEdge(projectSource, childSource, childPlan, rasql.EdgeOptions{Order: []rasql.OrderTerm{rasql.AscExpr(childExpressions.ID.Expr())}, PerParentLimit: 2}, func(graph *projectGraph, value rasql.LoadedOne[userGraph]) { graph.Owner = value }); if err != nil { t.Fatal(err) }; graphPlan, err := rasql.NewGraphPlan(projectQuery, func(row store.ProjectRecord) projectGraph { return projectGraph{ID: row.ID} }, edge); if err != nil { t.Fatal(err) }; directValues, err := rasql.LoadGraph(ctx, executor, graphPlan); if err != nil || len(directValues) != 1 || directValues[0].ID != 10 || !directValues[0].Owner.Loaded || !directValues[0].Owner.Present || directValues[0].Owner.Value == nil || directValues[0].Owner.Value.ID != 1 { t.Fatalf("direct graph=%#v err=%v", directValues, err) }
+ inverseEdge, err := store.AccountProjectsEdge(source, projectSource, graphPlan, rasql.EdgeOptions{Order: []rasql.OrderTerm{rasql.AscExpr(projectExpressions.ID.Expr())}}, func(graph *userWithProjects, value rasql.LoadedMany[projectGraph]) { graph.Projects = value }); if err != nil { t.Fatal(err) }; inversePlan, err := rasql.NewGraphPlan(query, func(store.AccountRecord) userWithProjects { return userWithProjects{} }, inverseEdge); if err != nil { t.Fatal(err) }; inverseValues, err := rasql.LoadGraph(ctx, executor, inversePlan); if err != nil || len(inverseValues) != 2 || !inverseValues[0].Projects.Loaded || len(inverseValues[0].Projects.Values) != 1 || inverseValues[0].Projects.Values[0].ID != 10 || !inverseValues[0].Projects.Values[0].Owner.Loaded || inverseValues[0].Projects.Values[0].Owner.Value == nil || inverseValues[0].Projects.Values[0].Owner.Value.ID != 1 || !inverseValues[1].Projects.Loaded || inverseValues[1].Projects.Values == nil || len(inverseValues[1].Projects.Values) != 0 { t.Fatalf("inverse graph=%#v err=%v", inverseValues, err) }
+ if _, err = sqlDB.ExecContext(ctx, "INSERT INTO roles (id) VALUES (9); INSERT INTO user_roles (user_id, role_id) VALUES (1, 9)"); err != nil { t.Fatal(err) }
+ rootSource, err := store.Account().Source("u3"); if err != nil { t.Fatal(err) }; rootExpressions, err := (store.AccountColumns{}).Bind(rootSource); if err != nil { t.Fatal(err) }; rootProjection, err := store.AccountProjection(rootExpressions); if err != nil { t.Fatal(err) }; rootQuery := rasql.Select(rootSource.Source(), rootProjection)
+ junctionSource, err := store.Membership().Source("ur"); if err != nil { t.Fatal(err) }; junctionExpressions, err := (store.MembershipColumns{}).Bind(junctionSource); if err != nil { t.Fatal(err) }
+ rolesSource, err := store.Role().Source("r"); if err != nil { t.Fatal(err) }; rolesExpressions, err := (store.RoleColumns{}).Bind(rolesSource); if err != nil { t.Fatal(err) }; rolesProjection, err := store.RoleProjection(rolesExpressions); if err != nil { t.Fatal(err) }; rolesQuery := rasql.Select(rolesSource.Source(), rolesProjection); rolesPlan, err := rasql.NewGraphPlan(rolesQuery, func(row store.RoleRecord) roleGraph { return roleGraph{ID: row.ID} }); if err != nil { t.Fatal(err) }
+ throughEdge, err := store.AccountRolesEdge(rootSource, junctionSource, rolesSource, rolesPlan, rasql.EdgeOptions{Order: []rasql.OrderTerm{rasql.AscExpr(junctionExpressions.RoleID.Expr())}}, func(graph *userWithRoles, value rasql.LoadedMany[roleGraph]) { graph.Roles = value }); if err != nil { t.Fatal(err) }; throughPlan, err := rasql.NewGraphPlan(rootQuery, func(store.AccountRecord) userWithRoles { return userWithRoles{} }, throughEdge); if err != nil { t.Fatal(err) }; throughValues, err := rasql.LoadGraph(ctx, executor, throughPlan); if err != nil || len(throughValues) != 2 || !throughValues[0].Roles.Loaded || len(throughValues[0].Roles.Values) != 1 || throughValues[0].Roles.Values[0].ID != 9 || !throughValues[1].Roles.Loaded || throughValues[1].Roles.Values == nil || len(throughValues[1].Roles.Values) != 0 { t.Fatalf("through graph=%#v err=%v", throughValues, err) }
+ balanceKey, err := store.AccountBalancePageKey(rootSource, rasql.PageAscending, rasql.NullsLast); if err != nil { t.Fatal(err) }; idKey, err := store.AccountIDPageKey(rootSource, rasql.PageAscending); if err != nil { t.Fatal(err) }; pageSpec, err := rasql.NewPageSpec([]rasql.PageKey[store.AccountRecord]{balanceKey, idKey}, idKey); if err != nil { t.Fatal(err) }; firstPage, err := rasql.PageGraphAfter(ctx, executor, throughPlan, pageSpec, rasql.PagePolicy{DefaultLimit: 1, MaxLimit: 1}, rasql.PageRequest{Limit: 1}); if err != nil || len(firstPage.Values) != 1 || !firstPage.HasMore || firstPage.Next == "" || !firstPage.Values[0].Roles.Loaded || len(firstPage.Values[0].Roles.Values) != 1 || firstPage.Values[0].Roles.Values[0].ID != 9 { t.Fatalf("first page=%#v err=%v", firstPage, err) }; secondPage, err := rasql.PageGraphAfter(ctx, executor, throughPlan, pageSpec, rasql.PagePolicy{DefaultLimit: 1, MaxLimit: 1}, rasql.PageRequest{Limit: 1, After: firstPage.Next}); if err != nil || len(secondPage.Values) != 1 || secondPage.HasMore || secondPage.Next != "" || !secondPage.Values[0].Roles.Loaded || secondPage.Values[0].Roles.Values == nil || len(secondPage.Values[0].Roles.Values) != 0 { t.Fatalf("second page=%#v err=%v", secondPage, err) }
+ optionalSource, err := store.Account().Source("oa"); if err != nil { t.Fatal(err) }; optionalExpressions, err := (store.AccountColumns{}).BindOptional(rasql.Optional(optionalSource)); if err != nil { t.Fatal(err) }; optionalProjection, err := store.OptionalAccountProjection(optionalExpressions); if err != nil { t.Fatal(err) }; optionalQuery := rasql.Select(projectSource.Source(), optionalProjection).LeftJoin(optionalSource.Source(), rasql.EqualOptional(projectExpressions.OwnerID.Expr(), optionalExpressions.ID.NullExpr())).OrderBy(rasql.AscExpr(projectExpressions.ID.Expr())); optionalRows, err := rasql.All(ctx, executor, optionalQuery); if err != nil || len(optionalRows) != 3 || optionalRows[0].ID != 1 || !optionalRows[0].Nickname.Valid || optionalRows[0].Nickname.Value != "Ada" || !optionalRows[0].Balance.Valid || optionalRows[0].Balance.Value != domain.Money(7) || optionalRows[1].ID != 2 || optionalRows[1].Nickname.Valid || optionalRows[1].Balance.Valid || optionalRows[2].ID != 0 || optionalRows[2].Nickname.Valid || optionalRows[2].Balance.Valid { t.Fatalf("optional rows=%#v err=%v", optionalRows, err) }
+ decoder := optionalProjection.Decoder(); if len(decoder.Presence()) != 1 || decoder.Presence()[0].Component() != "Account" || len(decoder.Presence()[0].Columns()) != 1 || decoder.Presence()[0].Columns()[0] != "id" { t.Fatalf("optional presence=%#v", decoder.Presence()) }; rawRows, err := sqlDB.QueryContext(ctx, "SELECT oa.id, oa.nickname, oa.balance FROM projects AS p LEFT JOIN users AS oa ON p.owner_id = oa.id ORDER BY p.id"); if err != nil { t.Fatal(err) }; defer rawRows.Close(); expectedDestinations := []string{"*rasql.Nullable[int64]", "*rasql.Nullable[string]", "*rasql.Nullable[example.com/domain.Money]"}; for rowIndex := 0; rawRows.Next(); rowIndex++ { scan := &recordingScanSource{source: rawRows}; var value store.AccountRecord; if err = decoder.DecodeRow(scan, &value); err != nil { t.Fatal(err) }; if scan.calls != 1 || fmt.Sprint(scan.destinations) != fmt.Sprint(expectedDestinations) { t.Fatalf("optional scan row %d calls=%d destinations=%v", rowIndex, scan.calls, scan.destinations) }; if rowIndex == 0 && (value.ID != 1 || !value.Nickname.Valid || !value.Balance.Valid) || rowIndex == 1 && (value.ID != 2 || value.Nickname.Valid || value.Balance.Valid) || rowIndex == 2 && (value.ID != 0 || value.Nickname.Valid || value.Balance.Valid) { t.Fatalf("optional decoded row %d=%#v", rowIndex, value) } }; if err = rawRows.Err(); err != nil { t.Fatal(err) }
+ if _, err = store.ActiveUser().Source(""); err != nil { t.Fatal(err) }
+}
+
+type moneyCodec struct{}
+func (moneyCodec) Encode(value any) (driver.Value, error) { switch v := value.(type) { case domain.Money: return int64(v), nil; case domain.NullableMoney: if !v.Valid { return nil, nil }; return int64(v.Data), nil; default: return nil, nil } }
+func (moneyCodec) Decode(value any, destination any) error { switch d := destination.(type) { case *domain.Money: return d.Scan(value); case *domain.NullableMoney: return d.Scan(value); default: return nil } }
+func (moneyCodec) EncodeCursor(value any) ([]byte, error) { return []byte(fmt.Sprint(value)), nil }
+func (moneyCodec) DecodeCursor(value []byte) (any, error) { var n int64; _, err := fmt.Sscan(string(value), &n); return domain.Money(n), err }
+`

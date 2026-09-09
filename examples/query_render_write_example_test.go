@@ -9,8 +9,6 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 )
 
-// BEGIN(render_write)
-
 func Example_query_render_write() {
 	// A table description carries everything the DDL and the write
 	// statements need. No row type and no database handle appear here.
@@ -77,5 +75,3 @@ func Example_query_render_write() {
 	// UPDATE "accounts" SET "email" = $1 WHERE ("accounts"."id" = $2)
 	// grace@example.com 1
 }
-
-// END(render_write)

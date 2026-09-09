@@ -232,6 +232,15 @@ type EventsTable struct {
 func (t EventsTable) ID() query.ColumnRef     { return rasql.ColumnOf(t.Table, "id") }
 func (t EventsTable) Action() query.ColumnRef { return rasql.ColumnOf(t.Table, "action") }
 
+// eventDecoder decodes an EventRow from its two columns, in projection order.
+type eventDecoder struct{ result rasql.ResultSchema }
+
+func (d eventDecoder) ResultSchema() rasql.ResultSchema { return d.result }
+func (d eventDecoder) Presence() []rasql.Presence       { return nil }
+func (d eventDecoder) DecodeRow(src rasql.ScanSource, row *EventRow) error {
+	return src.Scan(&row.ID, &row.Action)
+}
+
 func Example_schema_qualified_table() {
 	// This example creates and queries a table through a schema-qualified
 	// descriptor. Schema names a PostgreSQL schema, a MySQL database, or, as
@@ -260,6 +269,16 @@ func Example_schema_qualified_table() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 40, 0)
+	if err != nil {
+		fmt.Printf("failed to describe engine profile: %s\n", err)
+		return
+	}
+	executor, err := rasql.AsExecutor(db, profile)
+	if err != nil {
+		fmt.Printf("failed to create executor: %s\n", err)
+		return
+	}
 
 	// InSchema qualifies the table without changing how any other option works.
 	events := EventsTable{rasql.MustTableOf[EventRow](schema.MustTableDef("events",
@@ -275,14 +294,56 @@ func Example_schema_qualified_table() {
 		return
 	}
 
+	source, err := rasql.SourceOf(events, "")
+	if err != nil {
+		fmt.Printf("failed to bind events source: %s\n", err)
+		return
+	}
+	id, err := rasql.BindColumn[EventRow, int64](source, "id", "")
+	if err != nil {
+		fmt.Printf("failed to bind id column: %s\n", err)
+		return
+	}
+	action, err := rasql.BindColumn[EventRow, string](source, "action", "")
+	if err != nil {
+		fmt.Printf("failed to bind action column: %s\n", err)
+		return
+	}
+
 	// SQL: INSERT INTO audit.events (id, action) VALUES (?, ?) (arguments: 1, "created")
-	if _, err := rasql.Insert(ctx, db, events, EventRow{ID: 1, Action: "created"}); err != nil {
+	createPlan, err := rasql.NewCreatePlan[EventRow](events,
+		rasql.SetField[EventRow](id, int64(1)),
+		rasql.SetField[EventRow](action, "created"),
+	)
+	if err != nil {
+		fmt.Printf("failed to build create plan: %s\n", err)
+		return
+	}
+	if _, err := rasql.ExecMutation(ctx, executor, createPlan); err != nil {
 		fmt.Printf("failed to insert event: %s\n", err)
 		return
 	}
 
+	result, err := rasql.NewResultSchema(
+		rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}},
+		rasql.ResultColumn{Name: "action", Type: schema.TextType{}},
+	)
+	if err != nil {
+		fmt.Printf("failed to build result schema: %s\n", err)
+		return
+	}
+	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
+		rasql.Item("id", id.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("action", action.Expr(), schema.TextType{}, ""),
+	}, eventDecoder{result: result})
+	if err != nil {
+		fmt.Printf("failed to build projection: %s\n", err)
+		return
+	}
+
 	// SQL: SELECT audit.events.id, audit.events.action FROM audit.events WHERE audit.events.id = ? (argument: 1)
-	event, err := rasql.SelectFrom(events).WhereEqual(events.ID(), int64(1)).One(ctx, db)
+	event, err := rasql.One(ctx, executor,
+		rasql.Select(source.Source(), projection).Where(rasql.EqualValue(id.Expr(), int64(1))))
 	if err != nil {
 		fmt.Printf("failed to query events: %s\n", err)
 		return
@@ -372,6 +433,15 @@ type InvoicesTable struct {
 func (t InvoicesTable) ID() query.ColumnRef     { return rasql.ColumnOf(t.Table, "id") }
 func (t InvoicesTable) Amount() query.ColumnRef { return rasql.ColumnOf(t.Table, "amount") }
 
+// invoiceDecoder decodes an InvoiceRow from its two columns, in projection order.
+type invoiceDecoder struct{ result rasql.ResultSchema }
+
+func (d invoiceDecoder) ResultSchema() rasql.ResultSchema { return d.result }
+func (d invoiceDecoder) Presence() []rasql.Presence       { return nil }
+func (d invoiceDecoder) DecodeRow(src rasql.ScanSource, row *InvoiceRow) error {
+	return src.Scan(&row.ID, &row.Amount)
+}
+
 func Example_schema_decimal_column() {
 	// This example declares a schema.DecimalType column, creates its table in
 	// SQLite, and shows that the inserted string round-trips unchanged there.
@@ -388,6 +458,16 @@ func Example_schema_decimal_column() {
 	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to create rasql db: %s\n", err)
+		return
+	}
+	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 40, 0)
+	if err != nil {
+		fmt.Printf("failed to describe engine profile: %s\n", err)
+		return
+	}
+	executor, err := rasql.AsExecutor(db, profile)
+	if err != nil {
+		fmt.Printf("failed to create executor: %s\n", err)
 		return
 	}
 
@@ -409,14 +489,56 @@ func Example_schema_decimal_column() {
 		return
 	}
 
+	source, err := rasql.SourceOf(invoices, "")
+	if err != nil {
+		fmt.Printf("failed to bind invoices source: %s\n", err)
+		return
+	}
+	id, err := rasql.BindColumn[InvoiceRow, int64](source, "id", "")
+	if err != nil {
+		fmt.Printf("failed to bind id column: %s\n", err)
+		return
+	}
+	amount, err := rasql.BindColumn[InvoiceRow, string](source, "amount", "")
+	if err != nil {
+		fmt.Printf("failed to bind amount column: %s\n", err)
+		return
+	}
+
 	// SQL: INSERT INTO invoices (id, amount) VALUES (?, ?) (arguments: 1, "19.99")
-	if _, err := rasql.Insert(ctx, db, invoices, InvoiceRow{ID: 1, Amount: "19.99"}); err != nil {
+	createPlan, err := rasql.NewCreatePlan[InvoiceRow](invoices,
+		rasql.SetField[InvoiceRow](id, int64(1)),
+		rasql.SetField[InvoiceRow](amount, "19.99"),
+	)
+	if err != nil {
+		fmt.Printf("failed to build create plan: %s\n", err)
+		return
+	}
+	if _, err := rasql.ExecMutation(ctx, executor, createPlan); err != nil {
 		fmt.Printf("failed to insert invoice: %s\n", err)
 		return
 	}
 
+	result, err := rasql.NewResultSchema(
+		rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}},
+		rasql.ResultColumn{Name: "amount", Type: schema.TextType{}},
+	)
+	if err != nil {
+		fmt.Printf("failed to build result schema: %s\n", err)
+		return
+	}
+	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
+		rasql.Item("id", id.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("amount", amount.Expr(), schema.TextType{}, ""),
+	}, invoiceDecoder{result: result})
+	if err != nil {
+		fmt.Printf("failed to build projection: %s\n", err)
+		return
+	}
+
 	// SQL: SELECT invoices.id, invoices.amount FROM invoices WHERE invoices.id = ? (argument: 1)
-	invoice, err := rasql.SelectFrom(invoices).WhereEqual(invoices.ID(), int64(1)).One(ctx, db)
+	invoice, err := rasql.One(ctx, executor,
+		rasql.Select(source.Source(), projection).Where(rasql.EqualValue(id.Expr(), int64(1))))
 	if err != nil {
 		fmt.Printf("failed to query invoices: %s\n", err)
 		return
@@ -536,11 +658,6 @@ A bare `schema.TableDef` describes the database. Pairing it with a Go type produ
 
 <!-- INCLUDE(examples/schema_bind_row_type_example_test.go#bind_row_type) -->
 ```go
-type UserRow struct {
-	ID    int64  `rasql:"id"`
-	Email string `rasql:"email"`
-}
-
 users := rasql.MustTableOf[UserRow](definition)
 ```
 source: [examples/schema_bind_row_type_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/schema_bind_row_type_example_test.go)

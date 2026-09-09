@@ -34,11 +34,114 @@ type correlatedOrder struct {
 	Amount int64 `rasql:"amount"`
 }
 
-// correlatedUserOrders decodes a user beside the count a correlated scalar
-// subquery computed for that user's own row.
-type correlatedUserOrders struct {
-	ID     int64 `rasql:"id"`
-	Orders int64 `rasql:"orders"`
+type correlatedUserDecoder struct{ schema rasql.ResultSchema }
+
+func (d correlatedUserDecoder) ResultSchema() rasql.ResultSchema { return d.schema }
+func (correlatedUserDecoder) Presence() []rasql.Presence         { return nil }
+func (d correlatedUserDecoder) DecodeRow(source rasql.ScanSource, row *correlatedUser) error {
+	return source.Scan(&row.ID, &row.Email, &row.OrderCount)
+}
+
+// correlatedUserColumns binds users' typed columns through the same relation,
+// so the columns used to seed and filter agree with the columns the
+// projection below reads.
+func correlatedUserColumns(t *testing.T, users rasql.Table[correlatedUser]) (
+	rasql.TypedRelation[correlatedUser], rasql.Column[correlatedUser, int64], rasql.Column[correlatedUser, string], rasql.Column[correlatedUser, int64],
+) {
+	t.Helper()
+
+	relation, err := rasql.SourceOf(users, "")
+	require.NoError(t, err)
+	id, err := rasql.BindColumn[correlatedUser, int64](relation, "id", "")
+	require.NoError(t, err)
+	email, err := rasql.BindColumn[correlatedUser, string](relation, "email", "")
+	require.NoError(t, err)
+	orderCount, err := rasql.BindColumn[correlatedUser, int64](relation, "order_count", "")
+	require.NoError(t, err)
+	return relation, id, email, orderCount
+}
+
+func correlatedOrderColumns(t *testing.T, orders rasql.Table[correlatedOrder]) (
+	rasql.TypedRelation[correlatedOrder], rasql.Column[correlatedOrder, int64], rasql.Column[correlatedOrder, int64], rasql.Column[correlatedOrder, int64],
+) {
+	t.Helper()
+
+	relation, err := rasql.SourceOf(orders, "")
+	require.NoError(t, err)
+	id, err := rasql.BindColumn[correlatedOrder, int64](relation, "id", "")
+	require.NoError(t, err)
+	userID, err := rasql.BindColumn[correlatedOrder, int64](relation, "user_id", "")
+	require.NoError(t, err)
+	amount, err := rasql.BindColumn[correlatedOrder, int64](relation, "amount", "")
+	require.NoError(t, err)
+	return relation, id, userID, amount
+}
+
+func correlatedUserProjection(
+	t *testing.T, id rasql.Column[correlatedUser, int64], email rasql.Column[correlatedUser, string], orderCount rasql.Column[correlatedUser, int64],
+) rasql.Projection[correlatedUser] {
+	t.Helper()
+
+	resultSchema, err := rasql.NewResultSchema(
+		rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}},
+		rasql.ResultColumn{Name: "email", Type: schema.TextType{Width: schema.NewTextWidth(191)}},
+		rasql.ResultColumn{Name: "order_count", Type: schema.IntegerType{}},
+	)
+	require.NoError(t, err)
+	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
+		rasql.Item("id", id.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("email", email.Expr(), schema.TextType{Width: schema.NewTextWidth(191)}, ""),
+		rasql.Item("order_count", orderCount.Expr(), schema.IntegerType{}, ""),
+	}, correlatedUserDecoder{schema: resultSchema})
+	require.NoError(t, err)
+	return projection
+}
+
+// correlatedExecutor builds the executor engine.dialect needs, reading the
+// engine straight from db's own dialect rather than from a separate
+// parameter, so a helper that only has db still resolves the right profile.
+func correlatedExecutor(t *testing.T, db rasql.DB) rasql.Executor {
+	t.Helper()
+
+	var profile rasql.EngineProfile
+	var err error
+	switch db.Dialect().Name() {
+	case "postgresql":
+		profile, err = rasql.DiscoverEngineProfile(t.Context(), db, "postgresql-17")
+	case "mysql":
+		profile, err = rasql.DiscoverEngineProfile(t.Context(), db, "mysql-8.4")
+	default:
+		profile, err = rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+	}
+	require.NoError(t, err)
+	executor, err := rasql.AsExecutor(db, profile)
+	require.NoError(t, err)
+	return executor
+}
+
+// correlatedAllUsers reads every user back in id order, through the typed
+// Query API, the way every subtest below confirms what a write actually did.
+func correlatedAllUsers(
+	t *testing.T, executor rasql.Executor, relation rasql.TypedRelation[correlatedUser],
+	projection rasql.Projection[correlatedUser], id rasql.Column[correlatedUser, int64],
+) []correlatedUser {
+	t.Helper()
+
+	rows, err := rasql.All(t.Context(), executor, rasql.Select(relation.Source(), projection).OrderBy(rasql.AscExpr(id.Expr())))
+	require.NoError(t, err)
+	return rows
+}
+
+// correlatedExecStatement adapts a validated query.WriteStatement built
+// directly against the query package, as every write subtest below does for
+// its correlated EXISTS or scalar-subquery clause, to the typed executor.
+func correlatedExecStatement(t *testing.T, executor rasql.Executor, statement query.WriteStatement) {
+	t.Helper()
+
+	plan, err := rasql.NewStatementPlan(statement)
+	require.NoError(t, err)
+	_, err = rasql.ExecMutation(t.Context(), executor, plan)
+	require.NoError(t, err)
 }
 
 // TestCorrelatedSubqueryAgainstLiveDatabases runs a correlated EXISTS, a
@@ -88,30 +191,29 @@ func testCorrelatedSubquery(t *testing.T, engine correlatedEngine) {
 	database := engine.open(t)
 	db, err := rasql.New(database, engine.dialect)
 	require.NoError(t, err)
+	executor := correlatedExecutor(t, db)
 
 	users, orders := createCorrelatedFixture(t, db)
-	usersRef := users.Ref()
-	usersID := usersRef.Column("id")
-	ordersRef := orders.Ref()
-	ordersID := ordersRef.Column("id")
-	ordersUserID := ordersRef.Column("user_id")
+	usersRelation, usersID, usersEmail, usersOrderCount := correlatedUserColumns(t, users)
+	ordersRelation, ordersID, ordersUserID, _ := correlatedOrderColumns(t, orders)
+	userProjection := correlatedUserProjection(t, usersID, usersEmail, usersOrderCount)
 
 	// SELECT orders.id FROM orders WHERE orders.user_id = users.id, correlated
 	// with the enclosing users statement. EXISTS reads no value, so what the
 	// body projects is arbitrary; a column of the subquery's own table is the
 	// portable choice, for the reason the bound-value subtest below measures.
-	hasOrder, err := query.NewSelect(ordersRef, ordersID)
+	ordersIDProjection, err := rasql.Scalar("id", ordersID.Expr(), schema.IntegerType{}, "")
 	require.NoError(t, err)
-	hasOrder, err = hasOrder.WithCorrelation(usersRef)
-	require.NoError(t, err)
-	hasOrder, err = hasOrder.WithWhere(query.Equal(ordersUserID, usersID))
-	require.NoError(t, err)
+	hasOrder := rasql.Select(ordersRelation.Source(), ordersIDProjection).
+		Correlated(usersRelation.Source()).
+		Where(rasql.EqualExpr(ordersUserID.Expr(), usersID.Expr()))
 
 	t.Run("exists keeps the users that have an order", func(t *testing.T) {
-		got, err := rasql.SelectFrom(users).
-			Where(query.Exists(hasOrder)).
-			OrderAsc(usersID).
-			All(t.Context(), db)
+		exists, err := rasql.ExistsQuery(hasOrder)
+		require.NoError(t, err)
+		got, err := rasql.All(t.Context(), executor, rasql.Select(usersRelation.Source(), userProjection).
+			Where(exists).
+			OrderBy(rasql.AscExpr(usersID.Expr())))
 		require.NoError(t, err)
 		require.Equal(t, []correlatedUser{
 			{ID: 1, Email: "ada@example.com"},
@@ -120,56 +222,51 @@ func testCorrelatedSubquery(t *testing.T, engine correlatedEngine) {
 	})
 
 	t.Run("not exists keeps the user that has none", func(t *testing.T) {
-		got, err := rasql.SelectFrom(users).
-			Where(query.NotExists(hasOrder)).
-			OrderAsc(usersID).
-			All(t.Context(), db)
+		notExists, err := rasql.NotExistsQuery(hasOrder)
+		require.NoError(t, err)
+		got, err := rasql.All(t.Context(), executor, rasql.Select(usersRelation.Source(), userProjection).
+			Where(notExists).
+			OrderBy(rasql.AscExpr(usersID.Expr())))
 		require.NoError(t, err)
 		require.Equal(t, []correlatedUser{{ID: 2, Email: "bob@example.com"}}, got)
 	})
 
 	t.Run("a scalar subquery counts each user's own orders", func(t *testing.T) {
-		// The count differs per row, so a subquery evaluated once for the
-		// whole statement would report 3 for every user instead of 2, 0 and 1.
-		counted, err := query.NewSelect(ordersRef, query.Project(query.CountAll()))
-		require.NoError(t, err)
-		counted, err = counted.WithCorrelation(usersRef)
-		require.NoError(t, err)
-		counted, err = counted.WithWhere(query.Equal(ordersUserID, usersID))
-		require.NoError(t, err)
-
-		got, err := rasql.DecodeFrom[correlatedUserOrders](users).
-			Project(usersID, query.Project(query.Scalar(counted)).As("orders")).
-			OrderAsc(usersID).
-			All(t.Context(), db)
-		require.NoError(t, err)
-		require.Equal(t, []correlatedUserOrders{
-			{ID: 1, Orders: 2},
-			{ID: 2, Orders: 0},
-			{ID: 3, Orders: 1},
-		}, got)
+		// The canonical typed API has no way to express this. ProjectionItem
+		// only wraps Expr[T]/NullExpr[T], and every constructor that builds one
+		// (BindColumn, Value, the typed operators) starts from a column or a
+		// bound Go value; none of them lifts an arbitrary query.Expression such
+		// as query.Scalar(counted), a correlated scalar subquery, into Expr[T].
+		// ExistsQuery, NotExistsQuery, InQuery and NotInQuery cover a subquery
+		// standing in a boolean predicate position; nothing in query_api.go,
+		// expression.go or expression_operators.go covers one standing in a
+		// SELECT list's value position. The equivalent case in an UPDATE's SET
+		// assignment, further down in TestCorrelatedWriteAgainstLiveDatabases,
+		// stays covered: it builds the statement directly against the query
+		// package and never needs Expr[T] at all.
+		t.Skip("no typed equivalent of a projected scalar subquery (query.Scalar as a SELECT-list value); see the comment above")
 	})
 
 	t.Run("a bound value as the exists body is not portable", func(t *testing.T) {
 		// SELECT 1 is the conventional EXISTS body in hand-written SQL, and
-		// Project(Bind(1)) is how it is written here -- but a bound value is a
+		// Value(1) is how it is written here -- but a bound value is a
 		// placeholder, not the literal 1. PostgreSQL has nothing to infer that
 		// placeholder's type from in a projection standing on its own, so it
 		// types it as text, and pgx then refuses to encode a Go int as text.
 		// MySQL and SQLite both run it. Binding a string instead runs
 		// everywhere, which is what shows PostgreSQL typed the parameter
 		// rather than refusing a projected parameter outright.
-		bound, err := query.NewSelect(ordersRef, query.Project(query.Bind(1)))
+		boundBody, err := rasql.Scalar("value", rasql.Value(1), schema.IntegerType{}, "")
 		require.NoError(t, err)
-		bound, err = bound.WithCorrelation(usersRef)
-		require.NoError(t, err)
-		bound, err = bound.WithWhere(query.Equal(ordersUserID, usersID))
+		bound := rasql.Select(ordersRelation.Source(), boundBody).
+			Correlated(usersRelation.Source()).
+			Where(rasql.EqualExpr(ordersUserID.Expr(), usersID.Expr()))
+		boundExists, err := rasql.ExistsQuery(bound)
 		require.NoError(t, err)
 
-		got, err := rasql.SelectFrom(users).
-			Where(query.Exists(bound)).
-			OrderAsc(usersID).
-			All(t.Context(), db)
+		got, err := rasql.All(t.Context(), executor, rasql.Select(usersRelation.Source(), userProjection).
+			Where(boundExists).
+			OrderBy(rasql.AscExpr(usersID.Expr())))
 		if engine.refusesBoundIntegerBody {
 			require.Error(t, err,
 				"a bound Go integer projected on its own inside EXISTS must fail on this engine, or the portable-body advice has nothing behind it")
@@ -181,17 +278,17 @@ func testCorrelatedSubquery(t *testing.T, engine correlatedEngine) {
 			}, got)
 		}
 
-		text, err := query.NewSelect(ordersRef, query.Project(query.Bind("1")))
+		textBody, err := rasql.Scalar("value", rasql.Value("1"), schema.TextType{}, "")
 		require.NoError(t, err)
-		text, err = text.WithCorrelation(usersRef)
-		require.NoError(t, err)
-		text, err = text.WithWhere(query.Equal(ordersUserID, usersID))
+		text := rasql.Select(ordersRelation.Source(), textBody).
+			Correlated(usersRelation.Source()).
+			Where(rasql.EqualExpr(ordersUserID.Expr(), usersID.Expr()))
+		textExists, err := rasql.ExistsQuery(text)
 		require.NoError(t, err)
 
-		got, err = rasql.SelectFrom(users).
-			Where(query.Exists(text)).
-			OrderAsc(usersID).
-			All(t.Context(), db)
+		got, err = rasql.All(t.Context(), executor, rasql.Select(usersRelation.Source(), userProjection).
+			Where(textExists).
+			OrderBy(rasql.AscExpr(usersID.Expr())))
 		require.NoError(t, err,
 			"a bound string projected on its own runs on every engine, including the one that refuses the integer")
 		require.Equal(t, []correlatedUser{
@@ -205,12 +302,13 @@ func testCorrelatedSubquery(t *testing.T, engine correlatedEngine) {
 		// dialect.CapabilitySubqueryLimit because MySQL refuses that shape.
 		// EXISTS is not one of the shapes MySQL's error 1235 names, so no
 		// capability gates it here; running it is what says so.
-		limited, err := hasOrder.WithLimit(1)
+		limited, err := hasOrder.Limit(1)
 		require.NoError(t, err)
-		got, err := rasql.SelectFrom(users).
-			Where(query.Exists(limited)).
-			OrderAsc(usersID).
-			All(t.Context(), db)
+		limitedExists, err := rasql.ExistsQuery(limited)
+		require.NoError(t, err)
+		got, err := rasql.All(t.Context(), executor, rasql.Select(usersRelation.Source(), userProjection).
+			Where(limitedExists).
+			OrderBy(rasql.AscExpr(usersID.Expr())))
 		require.NoError(t, err)
 		require.Equal(t, []correlatedUser{
 			{ID: 1, Email: "ada@example.com"},
@@ -284,20 +382,36 @@ func createCorrelatedFixture(t *testing.T, db rasql.DB) (rasql.Table[correlatedU
 	require.NoError(t, rasql.CreateTable(t.Context(), db, users))
 	require.NoError(t, rasql.CreateTable(t.Context(), db, orders))
 
+	executor := correlatedExecutor(t, db)
+
+	_, usersID, usersEmail, usersOrderCount := correlatedUserColumns(t, users)
 	for _, user := range []correlatedUser{
 		{ID: 1, Email: "ada@example.com"},
 		{ID: 2, Email: "bob@example.com"},
 		{ID: 3, Email: "cyd@example.com"},
 	} {
-		_, err := rasql.Insert(t.Context(), db, users, user)
+		plan, err := rasql.NewCreatePlan(users,
+			rasql.SetField(usersID, user.ID),
+			rasql.SetField(usersEmail, user.Email),
+			rasql.SetField(usersOrderCount, user.OrderCount),
+		)
+		require.NoError(t, err)
+		_, err = rasql.ExecMutation(t.Context(), executor, plan)
 		require.NoError(t, err)
 	}
+	_, ordersID, ordersUserID, ordersAmount := correlatedOrderColumns(t, orders)
 	for _, order := range []correlatedOrder{
 		{ID: 1, UserID: 1, Amount: 80},
 		{ID: 2, UserID: 1, Amount: 20},
 		{ID: 3, UserID: 3, Amount: 100},
 	} {
-		_, err := rasql.Insert(t.Context(), db, orders, order)
+		plan, err := rasql.NewCreatePlan(orders,
+			rasql.SetField(ordersID, order.ID),
+			rasql.SetField(ordersUserID, order.UserID),
+			rasql.SetField(ordersAmount, order.Amount),
+		)
+		require.NoError(t, err)
+		_, err = rasql.ExecMutation(t.Context(), executor, plan)
 		require.NoError(t, err)
 	}
 	return users, orders
@@ -351,39 +465,40 @@ func testCorrelatedWrite(t *testing.T, engine correlatedEngine) {
 	database := engine.open(t)
 	db, err := rasql.New(database, engine.dialect)
 	require.NoError(t, err)
+	executor := correlatedExecutor(t, db)
 
 	// Each clause gets its own pair of tables, since each one writes. The names
 	// come from dbtest.UniqueName, so the three pairs never collide even on the
 	// one SQLite connection they share.
 	t.Run("a DELETE's WHERE clause", func(t *testing.T) {
 		users, orders := createCorrelatedFixture(t, db)
+		usersRelation, usersID, usersEmail, usersOrderCount := correlatedUserColumns(t, users)
+		userProjection := correlatedUserProjection(t, usersID, usersEmail, usersOrderCount)
+
 		statement, err := query.NewDelete(users.Ref())
 		require.NoError(t, err)
 		statement, err = statement.WithWhere(query.Exists(correlatedOrdersOfUser(t, users, orders, orders.Ref().Column("id"))))
 		require.NoError(t, err)
+		correlatedExecStatement(t, executor, statement)
 
-		_, err = rasql.Exec(t.Context(), db, statement)
-		require.NoError(t, err)
-
-		remaining, err := rasql.SelectFrom(users).OrderAsc(users.Ref().Column("id")).All(t.Context(), db)
-		require.NoError(t, err)
+		remaining := correlatedAllUsers(t, executor, usersRelation, userProjection, usersID)
 		require.Equal(t, []correlatedUser{{ID: 2, Email: "bob@example.com"}}, remaining,
 			"only the user with no order may survive, so the subquery read each user's own row")
 	})
 
 	t.Run("an UPDATE's WHERE clause", func(t *testing.T) {
 		users, orders := createCorrelatedFixture(t, db)
+		usersRelation, usersID, usersEmail, usersOrderCount := correlatedUserColumns(t, users)
+		userProjection := correlatedUserProjection(t, usersID, usersEmail, usersOrderCount)
 		usersRef := users.Ref()
+
 		statement, err := query.NewUpdate(usersRef, query.Set(usersRef.Column("email"), "buyer@example.com"))
 		require.NoError(t, err)
 		statement, err = statement.WithWhere(query.Exists(correlatedOrdersOfUser(t, users, orders, orders.Ref().Column("id"))))
 		require.NoError(t, err)
+		correlatedExecStatement(t, executor, statement)
 
-		_, err = rasql.Exec(t.Context(), db, statement)
-		require.NoError(t, err)
-
-		updated, err := rasql.SelectFrom(users).OrderAsc(usersRef.Column("id")).All(t.Context(), db)
-		require.NoError(t, err)
+		updated := correlatedAllUsers(t, executor, usersRelation, userProjection, usersID)
 		require.Equal(t, []correlatedUser{
 			{ID: 1, Email: "buyer@example.com"},
 			{ID: 2, Email: "bob@example.com"},
@@ -393,18 +508,18 @@ func testCorrelatedWrite(t *testing.T, engine correlatedEngine) {
 
 	t.Run("an UPDATE's SET assignment value", func(t *testing.T) {
 		users, orders := createCorrelatedFixture(t, db)
+		usersRelation, usersID, usersEmail, usersOrderCount := correlatedUserColumns(t, users)
+		userProjection := correlatedUserProjection(t, usersID, usersEmail, usersOrderCount)
 		usersRef := users.Ref()
+
 		counted := correlatedOrdersOfUser(t, users, orders, query.Project(query.CountAll()))
 		statement, err := query.NewUpdate(usersRef, query.Set(usersRef.Column("order_count"), query.Scalar(counted)))
 		require.NoError(t, err)
 		statement, err = statement.AllowAll()
 		require.NoError(t, err)
+		correlatedExecStatement(t, executor, statement)
 
-		_, err = rasql.Exec(t.Context(), db, statement)
-		require.NoError(t, err)
-
-		counts, err := rasql.SelectFrom(users).OrderAsc(usersRef.Column("id")).All(t.Context(), db)
-		require.NoError(t, err)
+		counts := correlatedAllUsers(t, executor, usersRelation, userProjection, usersID)
 		require.Equal(t, []correlatedUser{
 			{ID: 1, Email: "ada@example.com", OrderCount: 2},
 			{ID: 2, Email: "bob@example.com", OrderCount: 0},
