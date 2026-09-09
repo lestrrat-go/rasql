@@ -36,40 +36,8 @@ type ScanSource interface {
 	Scan(...any) error
 }
 
-// Scanner is implemented by row types that scan a statically-known result
-// projection directly into their fields.
-//
-// This is not [database/sql.Scanner], despite the shared name, and one says
-// nothing about the other. A database/sql.Scanner converts a single column
-// value into a single destination, and rasql calls it during that conversion
-// like any other consumer of database/sql. A rasql Scanner reads a whole row:
-// it receives the result set itself as a [ScanSource] and fills every field of
-// the row type, in the order the projection states. A row type may usefully
-// implement both. [ScanValue] is rasql's own single-value operation.
-//
-// Generated row types implement Scanner. Typed queries use it when the builder
-// owns the complete table projection, so the column order is known before the
-// query runs; when it is not, they use [DestinationScanner] instead.
-type Scanner interface {
-	ScanRow(ScanSource) error
-}
-
-// DestinationScanner is implemented by row types that map result-column names
-// to destinations for [ScanSource.Scan]. Generated row types implement it so
-// typed queries can scan a partial or reordered result set without falling
-// back to the reflective decode path.
-//
-// A row type that implements DestinationScanner alone maps whichever columns it
-// chooses to. One that implements [Scanner] as well states that it maps a whole
-// table, which is the pair rasqlgen writes, and a typed write reading a
-// RETURNING clause into such a row type requires the clause to project every
-// column of the table it writes.
-type DestinationScanner interface {
-	ScanDestinations([]string) ([]any, error)
-}
-
-// ScanMask records which columns of a row type a [DestinationScanner.ScanDestinations]
-// call has already mapped, so a result set that names the same column twice is
+// ScanMask records which columns of a row type a ScanDestinations call has
+// already mapped, so a result set that names the same column twice is
 // rejected instead of being scanned into the same field twice.
 //
 // Generated ScanDestinations methods build one with [NewScanMask] and call
