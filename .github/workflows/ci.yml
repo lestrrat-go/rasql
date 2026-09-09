@@ -82,7 +82,7 @@ jobs:
         # accepts -- and it reads the flags it allows for their effective
         # value, since go's own parsing lets a later assignment overturn an
         # earlier one.
-        run: go test -p 1 -count=1 -v ./catalog/... ./cli/rasqlgen/... ./cli/rasqlmigrate/... ./generate/... ./inspect/... ./migrate/... ./render/... ./internal/engineprofile/... .
+        run: go test -p 1 -count=1 -v ./catalog/... ./cli/rasqlgen/... ./cli/rasqlmigrate/... ./generate/... ./inspect/... ./internal/engineprofile/... ./internal/rowvalue/... ./migrate/... ./render/... .
 
       - name: Run D4 conformance matrix
         env:
