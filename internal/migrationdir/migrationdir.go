@@ -9,14 +9,10 @@
 // done; and a dot-prefixed entry is ignored at either level. A migration
 // with no .down.sql sources is simply irreversible; migrate.Runner.Apply and
 // the other forward operations work on it exactly as on any other migration,
-// and only Revert refuses to select it. An optional .rasql-irreversible
-// marker file beside the .up.sql sources records, in writing, why: its
-// contents become the migration's IrreversibleReason, which Revert reports
-// back when it refuses to select a migration that carries no reverse
-// source. cmd/rasqlmigrate reads its -dir with it, and
-// examples/taskboard_store_test.go reads sample/taskboard's migrations with
-// it, so a test that rebuilds a store from migrations applies exactly what
-// the command applies.
+// and only Revert refuses to select it. cmd/rasqlmigrate reads its -dir with
+// it, and examples/taskboard_store_test.go reads sample/taskboard's
+// migrations with it, so a test that rebuilds a store from migrations
+// applies exactly what the command applies.
 package migrationdir
 
 import (
@@ -86,8 +82,6 @@ func loadMigration(directory string, id string) (migrate.Migration, error) {
 	}
 	upFiles := make([]string, 0)
 	downFiles := make([]string, 0)
-	marker := false
-	reason := ""
 	mode := migrate.ExecutionModeAtomic
 	stems := make(map[string]struct{})
 	for _, entry := range entries {
@@ -103,22 +97,6 @@ func loadMigration(directory string, id string) (migrate.Migration, error) {
 				return migrate.Migration{}, fmt.Errorf("migration %q has an invalid execution mode", id)
 			}
 			mode = migrate.ExecutionModeNonTransactional
-			continue
-		}
-		if entry.Name() == ".rasql-irreversible" {
-			if entry.IsDir() {
-				return migrate.Migration{}, fmt.Errorf("migration %q irreversibility marker is a directory", id)
-			}
-			data, err := os.ReadFile(filepath.Join(directory, entry.Name()))
-			if err != nil {
-				return migrate.Migration{}, fmt.Errorf("read migration %q irreversibility marker: %w", id, err)
-			}
-			text := strings.TrimSpace(string(data))
-			if len(data) > 4096 || !utf8.Valid(data) || text == "" {
-				return migrate.Migration{}, fmt.Errorf("migration %q has an invalid irreversibility marker", id)
-			}
-			marker = true
-			reason = text
 			continue
 		}
 		name := entry.Name()
@@ -146,21 +124,17 @@ func loadMigration(directory string, id string) (migrate.Migration, error) {
 		return migrate.Migration{}, fmt.Errorf("migration %q has no %s source", id, upSuffix)
 	}
 	if len(downFiles) == 0 {
-		// No .down.sql sources makes the migration irreversible, whether or
-		// not it carries a marker recording why; the marker only supplies
-		// IrreversibleReason for Revert and Status to report back.
+		// No .down.sql sources makes the migration irreversible. Nothing
+		// else is required to say so; only Revert refuses to select it.
 		statements, err := readStatements(directory, id, upFiles)
 		if err != nil {
 			return migrate.Migration{}, err
 		}
-		migration := migrate.Migration{ID: id, Mode: mode, Statements: statements, IrreversibleReason: reason}
+		migration := migrate.Migration{ID: id, Mode: mode, Statements: statements}
 		if err := migration.Validate(); err != nil {
 			return migrate.Migration{}, err
 		}
 		return migration, nil
-	}
-	if marker {
-		return migrate.Migration{}, fmt.Errorf("migration %q has an irreversibility marker and reverse sources", id)
 	}
 	// A reverse source names the forward source it undoes. Requiring the
 	// stem to match one is the check that catches a misspelled forward

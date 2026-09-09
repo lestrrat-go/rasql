@@ -200,11 +200,10 @@ func exportMigrations(selected []preparedMigration) []Migration {
 	exported := make([]Migration, len(selected))
 	for index, migration := range selected {
 		exported[index] = Migration{
-			ID:                 migration.id,
-			Mode:               migration.mode,
-			Statements:         append([]Statement(nil), migration.statements...),
-			Down:               append([]Statement(nil), migration.down...),
-			IrreversibleReason: migration.irreversibleReason,
+			ID:         migration.id,
+			Mode:       migration.mode,
+			Statements: append([]Statement(nil), migration.statements...),
+			Down:       append([]Statement(nil), migration.down...),
 		}
 	}
 	return exported
@@ -434,20 +433,11 @@ func selectReverts(applied map[string]string, migrations []preparedMigration, ta
 			return nil, fmt.Errorf("migrate: migration %q checksum does not match recorded migration", migration.id)
 		}
 		if len(migration.down) == 0 {
-			return nil, irreversibleError(migration.id, migration.irreversibleReason)
+			return nil, fmt.Errorf("migrate: migration %q has no reverse SQL source", migration.id)
 		}
 		selected = append(selected, migration)
 	}
 	return selected, nil
-}
-
-// irreversibleError reports that a migration has no reverse SQL source,
-// including the author's stated reason when the loader recorded one.
-func irreversibleError(id, reason string) error {
-	if reason == "" {
-		return fmt.Errorf("migrate: migration %q has no reverse SQL source", id)
-	}
-	return fmt.Errorf("migrate: migration %q has no reverse SQL source: %s", id, reason)
 }
 
 // revertCount turns a target into how many of the newest applied migrations

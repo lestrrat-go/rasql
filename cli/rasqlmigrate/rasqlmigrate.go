@@ -121,7 +121,6 @@ func printUsage(output io.Writer, program string) {
 	_, _ = fmt.Fprintln(output, "-dir holds one directory per migration, named for its ID, which you create yourself.")
 	_, _ = fmt.Fprintln(output, "Each holds .up.sql sources, one native SQL statement per file, and optionally the")
 	_, _ = fmt.Fprintln(output, ".down.sql files that undo them; a migration with none of those is simply irreversible.")
-	_, _ = fmt.Fprintln(output, "A .rasql-irreversible file beside the .up.sql sources records why in writing.")
 	_, _ = fmt.Fprintln(output, "Migrations run in directory-name order,")
 	_, _ = fmt.Fprintln(output, "forward sources in ascending filename order and reverse sources in descending order,")
 	_, _ = fmt.Fprintln(output, "so pad the numbers you name them with. The forward sources of an applied migration")
@@ -686,11 +685,7 @@ func runStatus(args []string) error {
 			_, _ = fmt.Fprintf(commandOutput, "  source=%s direction=%s index=%d\n", entry.Incomplete.Source, entry.Incomplete.Direction, entry.Incomplete.SourceIndex)
 		}
 		if entry.State != migrate.StatusUnknown && !entry.Reversible {
-			if entry.IrreversibleReason == "" {
-				_, _ = fmt.Fprintln(commandOutput, "  irreversible")
-				continue
-			}
-			_, _ = fmt.Fprintf(commandOutput, "  irreversible: %s\n", entry.IrreversibleReason)
+			_, _ = fmt.Fprintln(commandOutput, "  irreversible")
 		}
 	}
 	return nil

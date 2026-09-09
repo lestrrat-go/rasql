@@ -70,7 +70,6 @@ func TestLoadAcceptsForwardOnlyMigration(t *testing.T) {
 	require.Len(t, migrations, 1)
 	require.Len(t, migrations[0].Statements, 1)
 	require.Empty(t, migrations[0].Down)
-	require.Empty(t, migrations[0].IrreversibleReason)
 }
 
 func TestLoadRefusals(t *testing.T) {
@@ -164,64 +163,22 @@ func TestLoadIgnoresDotPrefixedEntries(t *testing.T) {
 	require.Len(t, migrations[0].Down, 1)
 }
 
-func TestLoadAcceptsIrreversibleMarker(t *testing.T) {
+// TestLoadIgnoresARasqlIrreversibleFileAsAnyOtherDotEntry requires a leftover
+// .rasql-irreversible file to be treated like any other dot-prefixed entry
+// now that the loader no longer recognizes it: its content, however
+// malformed, changes nothing, and the migration is irreversible only because
+// it has no .down.sql sources.
+func TestLoadIgnoresARasqlIrreversibleFileAsAnyOtherDotEntry(t *testing.T) {
 	root := t.TempDir()
 	writeMigration(t, root, "001_data_change", map[string]string{
 		"001_transform.up.sql": "UPDATE users SET name = upper(name);\n",
-		".rasql-irreversible":  "data transformation cannot be reversed\n",
+		".rasql-irreversible":  string([]byte{0xff}),
 	})
 
 	migrations, err := migrationdir.Load(root)
 	require.NoError(t, err)
 	require.Len(t, migrations, 1)
 	require.Empty(t, migrations[0].Down)
-	require.Equal(t, "data transformation cannot be reversed", migrations[0].IrreversibleReason)
-}
-
-func TestLoadRejectsMalformedIrreversibleArtifacts(t *testing.T) {
-	testCases := []struct {
-		name     string
-		marker   []byte
-		withDown bool
-		expect   string
-	}{
-		{name: "empty", marker: []byte(" \n"), expect: "invalid irreversibility marker"},
-		{name: "invalid utf8", marker: []byte{0xff}, expect: "invalid irreversibility marker"},
-		{name: "reverse source", marker: []byte("reason\n"), withDown: true, expect: "irreversibility marker and reverse sources"},
-	}
-	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			root := t.TempDir()
-			directory := filepath.Join(root, "001_data_change")
-			require.NoError(t, os.MkdirAll(directory, 0o700))
-			require.NoError(t, os.WriteFile(filepath.Join(directory, "001_transform.up.sql"), []byte("UPDATE users SET name = upper(name);\n"), 0o600))
-			require.NoError(t, os.WriteFile(filepath.Join(directory, ".rasql-irreversible"), testCase.marker, 0o600))
-			if testCase.withDown {
-				require.NoError(t, os.WriteFile(filepath.Join(directory, "001_transform.down.sql"), []byte("UPDATE users SET name = lower(name);\n"), 0o600))
-			}
-			_, err := migrationdir.Load(root)
-			require.ErrorContains(t, err, testCase.expect)
-		})
-	}
-
-	t.Run("oversized", func(t *testing.T) {
-		root := t.TempDir()
-		directory := filepath.Join(root, "001_data_change")
-		require.NoError(t, os.MkdirAll(directory, 0o700))
-		require.NoError(t, os.WriteFile(filepath.Join(directory, "001_transform.up.sql"), []byte("UPDATE users SET name = upper(name);\n"), 0o600))
-		require.NoError(t, os.WriteFile(filepath.Join(directory, ".rasql-irreversible"), make([]byte, 4097), 0o600))
-		_, err := migrationdir.Load(root)
-		require.ErrorContains(t, err, "invalid irreversibility marker")
-	})
-
-	t.Run("directory", func(t *testing.T) {
-		root := t.TempDir()
-		directory := filepath.Join(root, "001_data_change")
-		require.NoError(t, os.MkdirAll(filepath.Join(directory, ".rasql-irreversible"), 0o700))
-		require.NoError(t, os.WriteFile(filepath.Join(directory, "001_transform.up.sql"), []byte("UPDATE users SET name = upper(name);\n"), 0o600))
-		_, err := migrationdir.Load(root)
-		require.ErrorContains(t, err, "irreversibility marker is a directory")
-	})
 }
 
 func TestLoadRejectsMalformedExecutionModeArtifacts(t *testing.T) {

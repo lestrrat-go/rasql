@@ -145,38 +145,16 @@ func TestRevertRefusals(t *testing.T) {
 	})
 
 	// A directory migration with no .down.sql sources loads with an empty
-	// Down, whether or not it carries a marker; a Go caller can build the
-	// same shape directly. Either way the whole run is refused, naming the
-	// migration that cannot be undone, rather than reverting down to it and
-	// stopping there.
+	// Down; a Go caller can build the same shape directly. Either way the
+	// whole run is refused, naming the migration that cannot be undone,
+	// rather than reverting down to it and stopping there.
 	t.Run("irreversible migration", func(t *testing.T) {
 		runner, database, migrations := revertFixture(t)
 		migrations[2].Down = nil
 		_, err := runner.Revert(t.Context(), migrate.Steps(2), migrations...)
-		require.ErrorContains(t, err, `migration "003_tasks" has no reverse SQL source`)
+		require.EqualError(t, err, `migrate: migration "003_tasks" has no reverse SQL source`)
 		require.Len(t, appliedIDs(t, database), 3, "a refused revert changes nothing")
 		require.True(t, tableExists(t, database, "projects"))
-	})
-
-	// The reason recorded on a Migration built without a matching
-	// .rasql-irreversible marker is empty, and the refusal says so plainly
-	// rather than inventing punctuation for a reason that was never given.
-	t.Run("irreversible migration without a reason", func(t *testing.T) {
-		runner, _, migrations := revertFixture(t)
-		migrations[2].Down = nil
-		migrations[2].IrreversibleReason = ""
-		_, err := runner.Revert(t.Context(), migrate.Steps(2), migrations...)
-		require.EqualError(t, err, `migrate: migration "003_tasks" has no reverse SQL source`)
-	})
-
-	// A reason the author recorded is included in the refusal, so a caller
-	// sees why in the same message that names the migration.
-	t.Run("irreversible migration with a reason", func(t *testing.T) {
-		runner, _, migrations := revertFixture(t)
-		migrations[2].Down = nil
-		migrations[2].IrreversibleReason = "task history must be kept for audits"
-		_, err := runner.Revert(t.Context(), migrate.Steps(2), migrations...)
-		require.EqualError(t, err, `migrate: migration "003_tasks" has no reverse SQL source: task history must be kept for audits`)
 	})
 
 	t.Run("changed forward source", func(t *testing.T) {

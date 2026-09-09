@@ -303,9 +303,8 @@ func TestSchemaEvolutionMySQLBackfillIsIrreversibleLive(t *testing.T) {
 		require.Equal(t, expected.SQL, string(actual))
 	}
 	require.Empty(t, fixture.Migration.Down)
-	marker, err := os.ReadFile(filepath.Join(fixture.Root, "migrations", "001_schema_evolution", ".rasql-irreversible"))
-	require.NoError(t, err)
-	require.Equal(t, []byte("caller-supplied MySQL backfill has no inferred reverse\n"), marker)
+	_, err = os.Stat(filepath.Join(fixture.Root, "migrations", "001_schema_evolution", ".rasql-irreversible"))
+	require.True(t, os.IsNotExist(err), "an irreversible plan writes no marker file, only the forward sources")
 	database := dbtest.MySQLDB(t)
 	_, err = database.ExecContext(t.Context(), baseline)
 	require.NoError(t, err)
@@ -327,7 +326,7 @@ func TestSchemaEvolutionMySQLBackfillIsIrreversibleLive(t *testing.T) {
 	runner, err := migrate.New(database, dialect.MySQL())
 	require.NoError(t, err)
 	_, err = runner.Revert(t.Context(), migrate.Steps(1), migration)
-	require.EqualError(t, err, `migrate: migration "001_schema_evolution" has no reverse SQL source: caller-supplied MySQL backfill has no inferred reverse`)
+	require.EqualError(t, err, `migrate: migration "001_schema_evolution" has no reverse SQL source`)
 	var afterRefusal struct {
 		State    string
 		Nullable string

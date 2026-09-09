@@ -63,9 +63,9 @@ func TestRevertAgainstLiveDatabases(t *testing.T) {
 
 // TestForwardOnlyMigrationDirectoryAgainstLiveDatabases proves, against
 // PostgreSQL and MySQL rather than only SQLite, that a migration directory
-// with no .down.sql sources and no .rasql-irreversible marker loads, applies
-// forward cleanly, and then makes Revert refuse the whole run by naming the
-// migration that cannot be undone, leaving both tables in place.
+// with no .down.sql sources loads, applies forward cleanly, and then makes
+// Revert refuse the whole run by naming the migration that cannot be
+// undone, leaving both tables in place.
 func TestForwardOnlyMigrationDirectoryAgainstLiveDatabases(t *testing.T) {
 	for _, test := range []struct {
 		name    string

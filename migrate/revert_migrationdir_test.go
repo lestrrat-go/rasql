@@ -16,9 +16,9 @@ import (
 // TestForwardOnlyMigrationDirectoryAppliesAndRefusesRevert proves the loader
 // and the runner together, against a real embedded database rather than a
 // Go-built Migration: a migration directory holding only .up.sql sources,
-// with no .down.sql files and no .rasql-irreversible marker, must load,
-// apply cleanly, and then refuse a revert that reaches it by naming it,
-// rather than being refused at load time as it once was.
+// with no .down.sql files, must load, apply cleanly, and then refuse a
+// revert that reaches it by naming it, rather than being refused at load
+// time as it once was.
 func TestForwardOnlyMigrationDirectoryAppliesAndRefusesRevert(t *testing.T) {
 	root := t.TempDir()
 	reversible := filepath.Join(root, "001_users")
@@ -33,7 +33,6 @@ func TestForwardOnlyMigrationDirectoryAppliesAndRefusesRevert(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, migrations, 2)
 	require.Empty(t, migrations[1].Down, "a migration with no .down.sql sources loads with none, not an error")
-	require.Empty(t, migrations[1].IrreversibleReason, "no marker means no stated reason")
 
 	database, err := sql.Open("sqlite", filepath.Join(root, "application.db"))
 	require.NoError(t, err)
