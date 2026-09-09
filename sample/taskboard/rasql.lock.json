@@ -37,7 +37,7 @@
   },
   "engine": {
     "dialect": "postgresql",
-    "version": "17.11.0",
+    "version": "17.10.0",
     "profile": "postgresql-17"
   },
   "catalog": {
@@ -402,7 +402,7 @@
     ]
   },
   "digests": {
-    "source": "547bc06c7567f889d7640239c758010001e363c96cabf56933489b4bd16a548b",
+    "source": "d259b762f88ce63395dfe5a2585462668be3177a12d899d528703095ee57fa43",
     "mappings": "2223f019a9501fd1b6f8dfc06c959c67e16eadc4bad78f87c16ee97d5e88cb02",
     "queries": "029bf60697d20ba019ed1680dcbd411d4dc71b5ee3628e4b2286fbf2da744214",
     "generation": "21382561dd4c7cbd0d026b75fafa4571ab111a1d95a8b3ccdfa1f27e7d3fa00a"
