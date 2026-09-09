@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/lestrrat-go/rasql/internal/compilerlock"
+	"github.com/lestrrat-go/rasql/internal/scratchmod"
 	"github.com/stretchr/testify/require"
 )
 
@@ -288,14 +289,7 @@ func TestOfflineBuildEnvChild(t *testing.T) {
 // runs through gopkg.in/yaml.v3 to gopkg.in/check.v1) fails.
 func writeBuildModule(t *testing.T, root, repoRoot string) error {
 	t.Helper()
-	repoGoMod, err := os.ReadFile(filepath.Join(repoRoot, "go.mod"))
-	require.NoError(t, err)
-	module := strings.Replace(string(repoGoMod), "module github.com/lestrrat-go/rasql\n", "module example.test/generated\n", 1)
-	module += fmt.Sprintf("\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => %s\n", filepath.ToSlash(repoRoot))
-	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte(module), 0o600); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(root, "go.sum"), mustReadFile(t, filepath.Join(repoRoot, "go.sum")), 0o600)
+	return scratchmod.Write(root, repoRoot, "example.test/generated")
 }
 
 func writeConsumer(root, engine string, rasqlProgram bool) error {
