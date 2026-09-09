@@ -116,7 +116,9 @@ func runGeneratedCardinalityProfile(t *testing.T, tc profileCase) {
 	require.NoError(t, os.WriteFile(filepath.Join(moduleRoot, "cardinality_profile_test.go"), []byte(generatedCardinalityProfileTest(tc, modulePath)), 0o600))
 	command := exec.Command("go", "test", "-run", "^TestGeneratedCardinalityProfile$")
 	command.Dir = moduleRoot
-	command.Env = offlineBuildEnv(t.TempDir())
+	// GOCACHE is deliberately shared, not rooted under t.TempDir(): see
+	// sharedOfflineGOCACHE's comment in generation_test.go.
+	command.Env = offlineBuildEnv(sharedOfflineGOCACHE)
 	output, err := command.CombinedOutput()
 	require.NoError(t, err, string(output))
 }
@@ -535,7 +537,9 @@ func runGeneratedProfile(t *testing.T, tc profileCase, records string) {
 	require.NoError(t, os.WriteFile(filepath.Join(moduleRoot, "profile_consumer_test.go"), []byte(generatedProfileTest(tc, modulePath)), 0o600))
 	command := exec.Command("go", "test", "-run", "^TestGeneratedProfile$")
 	command.Dir = moduleRoot
-	command.Env = append(offlineBuildEnv(t.TempDir()), "RASQL_PROFILE_RECORDS="+records)
+	// GOCACHE is deliberately shared, not rooted under t.TempDir(): see
+	// sharedOfflineGOCACHE's comment in generation_test.go.
+	command.Env = append(offlineBuildEnv(sharedOfflineGOCACHE), "RASQL_PROFILE_RECORDS="+records)
 	output, err := command.CombinedOutput()
 	require.NoError(t, err, string(output))
 }

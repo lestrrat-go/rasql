@@ -51,7 +51,9 @@ func TestGeneratedOverdueCardinality(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "cardinality_test.go"), []byte(generatedCardinalityTest()), 0o600))
 	command := exec.Command("go", "test", "-run", "^TestGeneratedCardinalityRuntime$")
 	command.Dir = root
-	command.Env = offlineBuildEnv(filepath.Join(t.TempDir(), "cache"))
+	// GOCACHE is deliberately shared, not rooted under t.TempDir(): see
+	// sharedOfflineGOCACHE's comment in generation_test.go.
+	command.Env = offlineBuildEnv(sharedOfflineGOCACHE)
 	output, err := command.CombinedOutput()
 	require.NoError(t, err, string(output))
 }

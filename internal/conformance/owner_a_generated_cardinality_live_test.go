@@ -30,7 +30,9 @@ func runGeneratedLiveFixture(t *testing.T, engine, dsn string) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "cardinality_live_test.go"), []byte(generatedLiveCardinalityTest(engine, modulePath)), 0o600))
 	command := exec.Command("go", "test", "-run", "^TestGeneratedLiveCardinalityRuntime$")
 	command.Dir = root
-	command.Env = append(offlineBuildEnv(t.TempDir()), "RASQL_LIVE_DSN="+dsn)
+	// GOCACHE is deliberately shared, not rooted under t.TempDir(): see
+	// sharedOfflineGOCACHE's comment in generation_test.go.
+	command.Env = append(offlineBuildEnv(sharedOfflineGOCACHE), "RASQL_LIVE_DSN="+dsn)
 	output, err := command.CombinedOutput()
 	require.NoError(t, err, string(output))
 }
