@@ -1,7 +1,6 @@
 package rasql_test
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -14,30 +13,6 @@ import (
 type writeUser struct {
 	ID    int64
 	Email string
-}
-
-type generatedReturningUser struct {
-	ID    int64  `rasql:"-"`
-	Email string `rasql:"-"`
-}
-
-func (u *generatedReturningUser) ScanColumns() []string { return []string{"id", "email"} }
-func (u *generatedReturningUser) ScanRow(source rasql.ScanSource) error {
-	return source.Scan(&u.ID, &u.Email)
-}
-func (u *generatedReturningUser) ScanDestinations(columns []string) ([]any, error) {
-	destinations := make([]any, len(columns))
-	for index, column := range columns {
-		switch column {
-		case "id":
-			destinations[index] = &u.ID
-		case "email":
-			destinations[index] = &u.Email
-		default:
-			return nil, fmt.Errorf("unknown column %q", column)
-		}
-	}
-	return destinations, nil
 }
 
 type writeUserDecoder struct{ schema rasql.ResultSchema }
