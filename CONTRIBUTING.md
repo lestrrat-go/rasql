@@ -81,7 +81,7 @@ Changing a chapter that produces code means redoing that step and the ones after
 git -C ../taskboard-steps bundle create "$PWD/sample/taskboard/walkthrough/steps.bundle" --all
 ```
 
-`TestWalkthroughBundleMatchesSample` compares the bundle's last commit with the checked-in copy and fails when the two part company, so editing one without the other stops a green test run. It ignores the `// BEGIN(name)` and `// END(name)` markers, which the checked-in copy carries so a chapter can include part of a file and which a reader following the walkthrough never types. `bundleDivergences` in that test owns the short list of paths allowed to differ, and the sample's own README section "What this copy spells differently" explains why go.mod differs from the walkthrough and why the scripts are on that list.
+`TestWalkthroughBundleMatchesSample` compares the bundle's last commit with the checked-in copy and fails when the two part company, so editing one without redoing the walkthrough stops a green test run. It ignores the `// BEGIN(name)` and `// END(name)` markers, which the checked-in copy carries so a chapter can include part of a file and which a reader following the walkthrough never types. `bundleDivergences` in that test owns the short list of paths allowed to differ. The sample's own README section "What this copy spells differently" explains the adjusted `go.mod` and scripts and the compile-only documentation example that does not ship in the walkthrough application.
 
 A chapter that changes only prose needs none of this.
 
@@ -148,3 +148,9 @@ docker compose down -v
 ### Skip vs. fail
 
 A DSN variable left unset is treated as an environment fact, not a rasql defect, so it produces a skip naming exactly what to run (see "Live database tests" above). Once a DSN is set, resolution fails the test loudly instead of skipping for anything else that goes wrong: a value the driver cannot parse, or credentials that cannot `CREATE DATABASE`. There is no silent fallback once you have told `internal/dbtest` where to connect.
+
+## D4 conformance evidence
+
+Run the platform-neutral conformance workload with `./scripts/conformance.sh sqlite`. The command unsets live DSNs and runs the SQLite matrix once. Run the required live matrix with `RASQL_TEST_POSTGRES_DSN` and `RASQL_TEST_MYSQL_DSN` set, then use `./scripts/conformance.sh live`; the script fails when a required test is missing or skipped. Set `RASQL_CONFORMANCE_OUTPUT` and `RASQL_CONFORMANCE_LOG` to retain the deterministic JSON record and raw log.
+
+Use `./scripts/bench.sh` for the ten-sample conformance and existing benchmark series. A semantic mismatch produces no performance comparison, and the recorder keeps each raw sample instead of averaging it.

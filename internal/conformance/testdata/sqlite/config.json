@@ -1,0 +1,7 @@
+{
+  "engine": "sqlite",
+  "profile": "sqlite-3.35",
+  "dsn_env": "",
+  "driver": "modernc.org/sqlite",
+  "transaction_mode": "explicit-transaction-v1"
+}

@@ -1,0 +1,161 @@
+{
+  "format": "rasql.d4.portable-expected.v1",
+  "portable_signature_digest": "84323fa2347731b0388181443d158e8f333649177acd057a2c828e42d6f24fbb",
+  "workloads": [
+    {
+      "workload": "single_row_read",
+      "outcome": "one",
+      "result_sha256": "6ac079119095fd4fcc6a2bfc76df98b36fdfe2b7c821ccb7d79a274f192435e2",
+      "rows_returned": 1,
+      "measured_rows_consumed": 1,
+      "verification_rows_consumed": 0,
+      "rows_consumed": 1,
+      "verification": {
+        "ids": [
+          1
+        ]
+      }
+    },
+    {
+      "workload": "nullable_join_report",
+      "outcome": "ordered",
+      "result_sha256": "7cac9550d47a8678ffc71f15d6c3eeb1c76246796982b866a11e5e76b5ce879c",
+      "rows_returned": 7,
+      "measured_rows_consumed": 7,
+      "verification_rows_consumed": 0,
+      "rows_consumed": 7,
+      "verification": {
+        "project_ids": [
+          2
+        ]
+      }
+    },
+    {
+      "workload": "typed_sql_report",
+      "outcome": "ordered",
+      "result_sha256": "db611dd796d9899f93b800329ca6acdd174ae9aa29191b0f21274b2831ca88fd",
+      "rows_returned": 2,
+      "measured_rows_consumed": 2,
+      "verification_rows_consumed": 0,
+      "rows_consumed": 2,
+      "verification": {
+        "rows": 2
+      }
+    },
+    {
+      "workload": "create_patch",
+      "outcome": "committed",
+      "result_sha256": "471bbd88525dbaf38e29e08e140383e6fa17cb5b079076587ae2fb50045c04ac",
+      "rows_returned": 1,
+      "measured_rows_consumed": 0,
+      "verification_rows_consumed": 1,
+      "rows_consumed": 1,
+      "verification": {
+        "id": 4001,
+        "committed": true
+      }
+    },
+    {
+      "workload": "bulk_write",
+      "outcome": "committed",
+      "result_sha256": "0604cd3138feed202ef293e062da2f4720f77a05d25ee036a7a01c9cfcdd1f0a",
+      "rows_returned": 0,
+      "measured_rows_consumed": 0,
+      "verification_rows_consumed": 500,
+      "rows_consumed": 500,
+      "verification": {
+        "inputs": 500,
+        "committed": true
+      }
+    },
+    {
+      "workload": "rollback",
+      "outcome": "rolled_back",
+      "result_sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+      "rows_returned": 0,
+      "measured_rows_consumed": 0,
+      "verification_rows_consumed": 0,
+      "rows_consumed": 0,
+      "verification": {
+        "survivors": 0
+      }
+    },
+    {
+      "workload": "bulk_rollback",
+      "outcome": "rolled_back",
+      "result_sha256": "623f2b7b00a64c7f4d805bb97b0488ff6182a8c927b7af5bdaead2cf772e2305",
+      "rows_returned": 0,
+      "measured_rows_consumed": 0,
+      "verification_rows_consumed": 1,
+      "rows_consumed": 1,
+      "verification": {
+        "sentinel": 1,
+        "survivors": 0
+      }
+    },
+    {
+      "workload": "early_exit",
+      "outcome": "early_close",
+      "result_sha256": "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b",
+      "rows_returned": 1,
+      "measured_rows_consumed": 1,
+      "verification_rows_consumed": 1,
+      "rows_consumed": 2,
+      "verification": {
+        "task_id": 1
+      }
+    },
+    {
+      "workload": "cancellation",
+      "outcome": "canceled",
+      "result_sha256": "09c709078558111623ed9b85a94173debb3b4c08a49b7b9d728aec7602a6d095",
+      "rows_returned": 0,
+      "measured_rows_consumed": 3500,
+      "verification_rows_consumed": 3,
+      "rows_consumed": 3503,
+      "verification": {
+        "stages": [
+          "root",
+          "tasks",
+          "assignees"
+        ]
+      }
+    },
+    {
+      "workload": "taskboard_graph_page",
+      "outcome": "50 parents",
+      "result_sha256": "95313c20eb0ea1290e926aac80bee0fee2a93413c54a868af57d2a7abc65d693",
+      "rows_returned": 50,
+      "measured_rows_consumed": 531,
+      "verification_rows_consumed": 0,
+      "rows_consumed": 531,
+      "verification": {
+        "parents": 50
+      }
+    },
+    {
+      "workload": "graph_500_parent_limit",
+      "outcome": "500 parents",
+      "result_sha256": "e4a724ea644396275d85f7e31143ff331be3c75f43c3c34ad938dc81f14a64d0",
+      "rows_returned": 500,
+      "measured_rows_consumed": 5272,
+      "verification_rows_consumed": 0,
+      "rows_consumed": 5272,
+      "verification": {
+        "parents": 500
+      }
+    },
+    {
+      "workload": "unsupported_version",
+      "outcome": "version_error",
+      "result_sha256": "0a58cc52fea4bc76f951dabdbf512f95bf014c5f7495fb2c994dc34a24d4c41c",
+      "rows_returned": 0,
+      "measured_rows_consumed": 0,
+      "verification_rows_consumed": 0,
+      "rows_consumed": 0,
+      "verification": {
+        "version_error": true
+      }
+    }
+  ]
+}

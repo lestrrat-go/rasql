@@ -43,7 +43,7 @@ func TestOfflineDigestRetainsKnownQueryEvidence(t *testing.T) {
 		Parameters: []compilerlock.ValueRecord{parameter}, Results: []compilerlock.ValueRecord{result}, Evidence: compilerlock.EngineEvidence{Dialect: "postgresql", Profile: "postgresql-16"},
 	}
 	source := compilerlock.SourceDigestInput{Record: compilerlock.SourceRecord{Kind: "migrations", Identity: "known-evidence"}, Engine: compilerlock.EngineRecord{Dialect: "postgresql", Profile: "postgresql-16"}}
-	generation := compilerir.GoConfig{Package: "store", Output: "internal/store", Emitter: "legacy", Prune: true, Queries: []compilerir.QueryGoName{{ID: "report", Function: "Report", Result: "ReportResult", Projection: "ReportProjection", Decoder: "ReportDecoder", File: "report_gen.go"}}}
+	generation := compilerir.GoConfig{Package: "store", Output: "internal/store", Emitter: "compact", Prune: true, Queries: []compilerir.QueryGoName{{ID: "report", Function: "Report", Result: "ReportResult", Projection: "ReportProjection", Decoder: "ReportDecoder", File: "report_gen.go"}}}
 	digests, err := compilerlock.BuildDigests(compilerlock.DigestInputs{Source: source, Mappings: compilerir.MappingConfig{}, Queries: []compilerlock.QueryDigestInput{{ID: string(queryRecord.ID), SQL: queryRecord.SQL, Operation: queryRecord.Operation, Parameters: queryRecord.Parameters, Results: queryRecord.Results, Cardinality: queryRecord.Cardinality}}, Generation: generation})
 	require.NoError(t, err)
 	lock := compilerlock.File{Format: compilerlock.FormatVersion, Compiler: "rasql", Source: source.Record, Engine: source.Engine, Queries: []compilerlock.QueryRecord{queryRecord}, Generation: compilerlock.GenerationRecord{Package: generation.Package, Output: generation.Output, Emitter: generation.Emitter, Prune: generation.Prune, Queries: []compilerlock.QueryNameRecord{{ID: "report", Function: "Report", Result: "ReportResult", Projection: "ReportProjection", Decoder: "ReportDecoder", File: "report_gen.go"}}}, Digests: digests}
@@ -225,7 +225,7 @@ func newKnownPostgreSQLFixture(t *testing.T) knownPostgreSQLFixture {
 	config := map[string]any{
 		"engine":  map[string]string{"dialect": "postgresql", "profile": "postgresql-16"},
 		"schema":  map[string]any{"kind": "migrations", "identity": "known-postgresql", "paths": []string{"migrations/*.sql"}},
-		"package": "store", "output": "internal/store", "emitter": "legacy",
+		"package": "store", "output": "internal/store", "emitter": "compact",
 		"queries": []any{map[string]any{
 			"id": "report", "input": "queries/report.sql", "engine": "postgresql", "function": "Report", "output": "report_gen.go",
 			"operation": "select", "cardinality": "many",

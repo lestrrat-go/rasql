@@ -35,6 +35,15 @@ jobs:
         with:
           go-version: '1.26.x'
       - name: Run the full suite
+        # internal/conformance's TestGeneratedFootprintBuild attributes the
+        # performance evidence it writes to the commit that produced it, so
+        # it requires RASQL_CONFORMANCE_COMMIT rather than treating a blank
+        # value as something to skip past; GitHub already knows the commit
+        # this run is testing, so hand it over instead of leaving the test
+        # to guess at one through build-info stamping that a sandboxed
+        # runner can silently fail to produce.
+        env:
+          RASQL_CONFORMANCE_COMMIT: ${{ github.sha }}
         run: go test -p 1 -count=1 -v ./...
       - run: go vet ./...
       # The sample runs on PostgreSQL, so its tests and its generated-store
@@ -43,6 +52,21 @@ jobs:
       - name: Sample module
         working-directory: sample/taskboard
         run: go build ./...
+
+  windows-plan-lock:
+    name: Windows plan lock
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.x'
+      - name: Run native Windows plan-lock tests
+        shell: bash
+        run: >-
+          go test -count=1 -v
+          -run '^(TestPlanLockHashVectors|TestSQLitePlanLockIdentity|TestSQLitePlanLockUnsafeTargets|TestSQLitePlanLockBlocksProcess|TestSQLitePlanLockCancellation)$'
+          ./migrate
 
   integration:
     name: Database integration
@@ -82,7 +106,24 @@ jobs:
         # accepts -- and it reads the flags it allows for their effective
         # value, since go's own parsing lets a later assignment overturn an
         # earlier one.
-        run: go test -p 1 -count=1 -v ./catalog/... ./cli/rasqlgen/... ./cli/rasqlmigrate/... ./generate/... ./inspect/... ./migrate/... ./render/... ./internal/engineprofile/... .
+        run: go test -p 1 -count=1 -v ./catalog/... ./cli/rasqlgen/... ./cli/rasqlmigrate/... ./generate/... ./inspect/... ./internal/engineprofile/... ./internal/rowvalue/... ./migrate/... ./render/... .
+
+      - name: Run D4 conformance matrix
+        env:
+          RASQL_TEST_MYSQL_DSN: root:root@tcp(127.0.0.1:3306)/rasql?parseTime=true
+          RASQL_TEST_POSTGRES_DSN: postgres://rasql:rasql@127.0.0.1:5432/rasql?sslmode=disable
+          RASQL_CONFORMANCE_OUTPUT: ${{ github.workspace }}/.tmp/d4-conformance.json
+          RASQL_CONFORMANCE_LOG: ${{ github.workspace }}/.tmp/d4-conformance.log
+        run: mkdir -p .tmp && ./scripts/conformance.sh live
+      - name: Upload D4 conformance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: d4-conformance-evidence
+          path: |
+            .tmp/d4-conformance.log
+            .tmp/d4-conformance.json
+          if-no-files-found: error
 
       # sample/taskboard is a module of its own. Its offline check reads the
       # checked-in lock and generated files without a database. Its live tests

@@ -1,0 +1,127 @@
+{
+  "emitter": "compact",
+  "engine": {
+    "dialect": "postgresql",
+    "profile": "postgresql-17"
+  },
+  "output": "internal/store",
+  "package": "store",
+  "schema": {
+    "identity": "d4-conformance-postgresql-live-v1",
+    "kind": "migrations",
+    "paths": [
+      "migrations/*.sql"
+    ]
+  },
+  "queries": [
+    {
+      "id": "overdue_task",
+      "input": "queries/overdue_task.sql",
+      "engine": "postgresql",
+      "function": "OverdueTask",
+      "output": "overdue_task_gen.go",
+      "operation": "select",
+      "cardinality": "one",
+      "parameters": [
+        {"name": "projectID", "scalar": "integer", "nullable": false},
+        {"name": "open", "scalar": "boolean", "nullable": false},
+        {"name": "cutoff", "scalar": "time", "nullable": false}
+      ],
+      "results": [
+        {"name": "id", "scalar": "integer", "nullable": false},
+        {"name": "project_id", "scalar": "integer", "nullable": false},
+        {"name": "assignee_id", "scalar": "integer", "nullable": true},
+        {"name": "title", "scalar": "text", "nullable": false},
+        {"name": "is_open", "scalar": "boolean", "nullable": false},
+        {"name": "due_on", "scalar": "time", "nullable": true},
+        {"name": "created_at", "scalar": "time", "nullable": false}
+      ]
+    },
+    {
+      "id": "maybe_overdue_task",
+      "input": "queries/maybe_overdue_task.sql",
+      "engine": "postgresql",
+      "function": "MaybeOverdueTask",
+      "output": "maybe_overdue_task_gen.go",
+      "operation": "select",
+      "cardinality": "maybe",
+      "parameters": [
+        {"name": "projectID", "scalar": "integer", "nullable": false},
+        {"name": "open", "scalar": "boolean", "nullable": false},
+        {"name": "cutoff", "scalar": "time", "nullable": false}
+      ],
+      "results": [
+        {"name": "id", "scalar": "integer", "nullable": false},
+        {"name": "project_id", "scalar": "integer", "nullable": false},
+        {"name": "assignee_id", "scalar": "integer", "nullable": true},
+        {"name": "title", "scalar": "text", "nullable": false},
+        {"name": "is_open", "scalar": "boolean", "nullable": false},
+        {"name": "due_on", "scalar": "time", "nullable": true},
+        {"name": "created_at", "scalar": "time", "nullable": false}
+      ]
+    },
+    {
+      "id": "overdue_tasks",
+      "input": "queries/overdue_tasks.sql",
+      "engine": "postgresql",
+      "function": "OverdueTasks",
+      "output": "overdue_tasks_gen.go",
+      "operation": "select",
+      "cardinality": "many",
+      "parameters": [
+        {
+          "name": "projectID",
+          "scalar": "integer",
+          "nullable": false
+        },
+        {
+          "name": "open",
+          "scalar": "boolean",
+          "nullable": false
+        },
+        {
+          "name": "cutoff",
+          "scalar": "time",
+          "nullable": false
+        }
+      ],
+      "results": [
+        {
+          "name": "id",
+          "scalar": "integer",
+          "nullable": false
+        },
+        {
+          "name": "project_id",
+          "scalar": "integer",
+          "nullable": false
+        },
+        {
+          "name": "assignee_id",
+          "scalar": "integer",
+          "nullable": true
+        },
+        {
+          "name": "title",
+          "scalar": "text",
+          "nullable": false
+        },
+        {
+          "name": "is_open",
+          "scalar": "boolean",
+          "nullable": false
+        },
+        {
+          "name": "due_on",
+          "scalar": "time",
+          "nullable": true
+        },
+        {
+          "name": "created_at",
+          "scalar": "time",
+          "nullable": false
+        }
+      ]
+    }
+  ]
+}
