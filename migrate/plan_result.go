@@ -171,8 +171,11 @@ func newIncompleteChangePlanError(incomplete IncompleteOperation, cause error) e
 	if cause == nil {
 		return fmt.Errorf("migrate: incomplete change plan requires a cause")
 	}
-	if err := validateIncompleteOperation(incomplete); err != nil {
-		return err
+	// incomplete is always produced by newIncompleteOperation, which already validates every
+	// invariant below except this one: a zero-value plan ID only occurs when a caller
+	// constructs an IncompleteOperation by hand rather than through that constructor.
+	if incomplete.planID == (changeplan.PlanID{}) {
+		return fmt.Errorf("migrate: incomplete operation requires a plan ID")
 	}
 	incomplete.affectedOperations = append([]changeplan.Operation(nil), incomplete.affectedOperations...)
 	return &IncompleteChangePlanError{Incomplete: incomplete, Cause: cause}
@@ -186,59 +189,6 @@ func changePlanExecutionResult(completed []changeplan.Operation, err error) (Exe
 		result.IncompleteOperation = &value
 	}
 	return result, err
-}
-
-func validateIncompleteOperation(incomplete IncompleteOperation) error {
-	if incomplete.planID == (changeplan.PlanID{}) {
-		return fmt.Errorf("migrate: incomplete operation requires a plan ID")
-	}
-	if incomplete.operationIndex < 0 || incomplete.operation.ID() == "" {
-		return fmt.Errorf("migrate: incomplete operation identity is invalid")
-	}
-	if !validChangePlanStage(incomplete.stage) || !validChangePlanCertainty(incomplete.certainty) {
-		return fmt.Errorf("migrate: incomplete operation stage or certainty is invalid")
-	}
-	if incomplete.stage == ChangePlanStageStatement {
-		statements := incomplete.operation.Statements()
-		if incomplete.statementIndex < 0 || incomplete.statementIndex >= len(statements) {
-			return fmt.Errorf("migrate: statement index is outside the named operation")
-		}
-	} else if incomplete.statementIndex != -1 {
-		return fmt.Errorf("migrate: non-statement stage requires statement index -1")
-	}
-	if len(incomplete.affectedOperations) == 0 {
-		return fmt.Errorf("migrate: incomplete operation requires affected operations")
-	}
-	seen := make(map[changeplan.OperationID]struct{}, len(incomplete.affectedOperations))
-	for index, operation := range incomplete.affectedOperations {
-		if operation.ID() == "" {
-			return fmt.Errorf("migrate: affected operation %d has no ID", index)
-		}
-		if _, exists := seen[operation.ID()]; exists {
-			return fmt.Errorf("migrate: affected operations contain duplicate %q", operation.ID())
-		}
-		seen[operation.ID()] = struct{}{}
-	}
-	if incomplete.certainty == ChangePlanOperationRolledBack {
-		if incomplete.operation.Transaction() == changeplan.TransactionForbidden {
-			return fmt.Errorf("migrate: forbidden operation cannot be rolled back")
-		}
-		for _, operation := range incomplete.affectedOperations {
-			if operation.Transaction() == changeplan.TransactionForbidden {
-				return fmt.Errorf("migrate: rolled-back operation group contains a forbidden operation")
-			}
-		}
-	}
-	if incomplete.stage == ChangePlanStagePreconditions {
-		if incomplete.affectedOperations[len(incomplete.affectedOperations)-1].ID() == incomplete.operation.ID() {
-			return fmt.Errorf("migrate: precondition operation cannot be affected")
-		}
-	} else if incomplete.stage == ChangePlanStageStatement && incomplete.statementIndex > 0 && incomplete.affectedOperations[len(incomplete.affectedOperations)-1].ID() != incomplete.operation.ID() {
-		return fmt.Errorf("migrate: statement failure must affect the named operation after statement zero")
-	} else if incomplete.stage != ChangePlanStageStatement && incomplete.affectedOperations[len(incomplete.affectedOperations)-1].ID() != incomplete.operation.ID() {
-		return fmt.Errorf("migrate: %s failure must affect the named operation", incomplete.stage)
-	}
-	return nil
 }
 
 func primaryIncompleteChangePlanError(err error) *IncompleteChangePlanError {
