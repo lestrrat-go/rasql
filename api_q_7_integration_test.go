@@ -122,13 +122,20 @@ func TestSQLiteCorrelatedProjectionConstructorsDecode(t *testing.T) {
 	// every order in the table, instead of just this user's, would return
 	// an arbitrary one of the two seeded amounts for both users instead of
 	// each user's own.
+	//
+	// SubqueryExpr returns NullExpr, since a subquery can never promise a
+	// row; CoalesceExpr turns it into the plain Expr Item and Scalar both
+	// require, falling back to the user's own id, exactly as the raw
+	// query.Coalesce this test used to build by hand did. The fallback is
+	// never actually read, since every seeded user has exactly one order.
 	amountProjection, err := rasql.Scalar("amount", ordersAmount.Expr(), schema.IntegerType{}, "")
 	require.NoError(t, err)
 	leafQuery := rasql.Select(ordersSource.Source(), amountProjection).
 		Correlated(usersSource.Source()).
 		Where(rasql.EqualExpr(ordersUserID.Expr(), usersID.Expr()))
-	leafExpr, err := rasql.SubqueryExpr(leafQuery)
+	leafSubquery, err := rasql.SubqueryExpr(leafQuery)
 	require.NoError(t, err)
+	leafExpr := rasql.CoalesceExpr(leafSubquery, usersID.Expr())
 
 	oneLevel := rasql.Select(usersSource.Source(), apiQ7ResultProjection(t, usersID.Expr(), leafExpr)).
 		OrderBy(rasql.AscExpr(usersID.Expr()))
@@ -142,13 +149,18 @@ func TestSQLiteCorrelatedProjectionConstructorsDecode(t *testing.T) {
 	// enclosing users row, so a correlation dropped at either level would
 	// again surface as the wrong amount, or every order's amount, for a
 	// user with more than one order.
+	//
+	// middleExpr needs the same CoalesceExpr treatment as leafExpr above,
+	// and for the same reason: SubqueryExpr's NullExpr cannot stand where
+	// Item wants a plain Expr, and the fallback is never actually read.
 	middleProjection, err := rasql.Scalar("value", leafExpr, schema.IntegerType{}, "")
 	require.NoError(t, err)
 	middleQuery := rasql.Select(ordersSource.Source(), middleProjection).
 		Correlated(usersSource.Source()).
 		Where(rasql.EqualExpr(ordersUserID.Expr(), usersID.Expr()))
-	middleExpr, err := rasql.SubqueryExpr(middleQuery)
+	middleSubquery, err := rasql.SubqueryExpr(middleQuery)
 	require.NoError(t, err)
+	middleExpr := rasql.CoalesceExpr(middleSubquery, usersID.Expr())
 
 	twoLevel := rasql.Select(usersSource.Source(), apiQ7ResultProjection(t, usersID.Expr(), middleExpr)).
 		OrderBy(rasql.AscExpr(usersID.Expr()))

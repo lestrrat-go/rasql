@@ -98,20 +98,26 @@ func subqueryGapQuery(t *testing.T) Query[subqueryGapRow] {
 	require.NoError(t, err)
 
 	// Level two: the amount of the fixed order seeded with id 1, read as a
-	// plain (non-aggregate) scalar subquery so its element type stays a
-	// comparable, ordered, non-null int64 the way InQuery's own subqueries
-	// do — an aggregate such as AVG would come back NullExpr instead, which
-	// GreaterExpr does not accept.
+	// plain (non-aggregate) scalar subquery. SubqueryExpr always returns
+	// NullExpr, since a subquery can never promise a row regardless of what
+	// it selects; CoalesceExpr turns it into the plain, ordered Expr
+	// GreaterExpr requires. The fallback is never actually read here, since
+	// the baseline order seeded with id 1 always exists.
 	baselineProjection, err := Scalar("amount", baselineAmount.Expr(), schema.IntegerType{}, "")
 	require.NoError(t, err)
 	baselineQuery := Select(baseline.Source(), baselineProjection).
 		Where(EqualValue(baselineID.Expr(), int64(1)))
-	baselineExpr, err := SubqueryExpr(baselineQuery)
+	baselineSubquery, err := SubqueryExpr(baselineQuery)
 	require.NoError(t, err)
+	baselineExpr := CoalesceExpr(baselineSubquery, Value(int64(0)))
 
 	// Level one: how many of this customer's orders beat the baseline.
 	// Correlated(c.Source()) is what makes "this customer's" true instead of
 	// "every customer's" — WithCorrelation states the same rule.
+	// bigOrderCountQuery is an aggregate without GROUP BY, so it too always
+	// returns exactly one row; CoalesceExpr turns SubqueryExpr's NullExpr
+	// into the plain Expr Item wants, and its fallback is never actually
+	// read for the same reason.
 	bigOrderCountProjection, err := Scalar("big_order_count", CountRows(), schema.IntegerType{}, "")
 	require.NoError(t, err)
 	bigOrderCountQuery := Select(o.Source(), bigOrderCountProjection).
@@ -120,8 +126,9 @@ func subqueryGapQuery(t *testing.T) Query[subqueryGapRow] {
 			EqualExpr(orderCustomerID.Expr(), customerID.Expr()),
 			GreaterExpr(orderAmount.Expr(), baselineExpr),
 		))
-	bigOrderCountExpr, err := SubqueryExpr(bigOrderCountQuery)
+	bigOrderCountSubquery, err := SubqueryExpr(bigOrderCountQuery)
 	require.NoError(t, err)
+	bigOrderCountExpr := CoalesceExpr(bigOrderCountSubquery, Value(int64(0)))
 
 	result, err := NewResultSchema(
 		ResultColumn{Name: "name", Type: schema.TextType{}},
