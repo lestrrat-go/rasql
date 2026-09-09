@@ -142,60 +142,36 @@ var (
 type DecisionKind string
 
 const (
-	DecisionRenameObject          DecisionKind = "rename_object"
-	DecisionAcceptDestructive     DecisionKind = "accept_destructive"
-	DecisionSupplyBackfill        DecisionKind = "supply_backfill"
-	DecisionAcceptNativeSQL       DecisionKind = "accept_native_sql"
-	DecisionRename                             = DecisionRenameObject
-	DecisionDestructive                        = DecisionAcceptDestructive
-	DecisionBackfill                           = DecisionSupplyBackfill
-	DecisionNativeSQL                          = DecisionAcceptNativeSQL
-	DecisionKindRename                         = DecisionRenameObject
-	DecisionKindAcceptDestructive              = DecisionAcceptDestructive
-	DecisionKindSupplyBackfill                 = DecisionSupplyBackfill
-	DecisionKindAcceptNativeSQL                = DecisionAcceptNativeSQL
+	DecisionRenameObject      DecisionKind = "rename_object"
+	DecisionAcceptDestructive DecisionKind = "accept_destructive"
+	DecisionSupplyBackfill    DecisionKind = "supply_backfill"
+	DecisionAcceptNativeSQL   DecisionKind = "accept_native_sql"
 )
 
 type OperationKind string
 
 const (
-	OperationCreateTable        OperationKind = "create_table"
-	OperationDropTable          OperationKind = "drop_table"
-	OperationRenameTable        OperationKind = "rename_table"
-	OperationAddColumn          OperationKind = "add_column"
-	OperationDropColumn         OperationKind = "drop_column"
-	OperationRenameColumn       OperationKind = "rename_column"
-	OperationAlterColumn        OperationKind = "alter_column"
-	OperationCreateIndex        OperationKind = "create_index"
-	OperationDropIndex          OperationKind = "drop_index"
-	OperationAddConstraint      OperationKind = "add_constraint"
-	OperationDropConstraint     OperationKind = "drop_constraint"
-	OperationBackfill           OperationKind = "backfill"
-	OperationNativeSQL          OperationKind = "native_sql"
-	OperationKindCreateTable                  = OperationCreateTable
-	OperationKindDropTable                    = OperationDropTable
-	OperationKindRenameTable                  = OperationRenameTable
-	OperationKindAddColumn                    = OperationAddColumn
-	OperationKindDropColumn                   = OperationDropColumn
-	OperationKindRenameColumn                 = OperationRenameColumn
-	OperationKindAlterColumn                  = OperationAlterColumn
-	OperationKindCreateIndex                  = OperationCreateIndex
-	OperationKindDropIndex                    = OperationDropIndex
-	OperationKindAddConstraint                = OperationAddConstraint
-	OperationKindDropConstraint               = OperationDropConstraint
-	OperationKindBackfill                     = OperationBackfill
-	OperationKindNativeSQL                    = OperationNativeSQL
+	OperationCreateTable    OperationKind = "create_table"
+	OperationDropTable      OperationKind = "drop_table"
+	OperationRenameTable    OperationKind = "rename_table"
+	OperationAddColumn      OperationKind = "add_column"
+	OperationDropColumn     OperationKind = "drop_column"
+	OperationRenameColumn   OperationKind = "rename_column"
+	OperationAlterColumn    OperationKind = "alter_column"
+	OperationCreateIndex    OperationKind = "create_index"
+	OperationDropIndex      OperationKind = "drop_index"
+	OperationAddConstraint  OperationKind = "add_constraint"
+	OperationDropConstraint OperationKind = "drop_constraint"
+	OperationBackfill       OperationKind = "backfill"
+	OperationNativeSQL      OperationKind = "native_sql"
 )
 
 type TransactionMode string
 
 const (
-	TransactionRequired          TransactionMode = "required"
-	TransactionForbidden         TransactionMode = "forbidden"
-	TransactionEngineDefault     TransactionMode = "engine_default"
-	TransactionModeRequired                      = TransactionRequired
-	TransactionModeForbidden                     = TransactionForbidden
-	TransactionModeEngineDefault                 = TransactionEngineDefault
+	TransactionRequired      TransactionMode = "required"
+	TransactionForbidden     TransactionMode = "forbidden"
+	TransactionEngineDefault TransactionMode = "engine_default"
 )
 
 type FactOperator string
@@ -204,12 +180,6 @@ const (
 	FactOperatorEqual   FactOperator = "equal"
 	FactOperatorAbsent  FactOperator = "absent"
 	FactOperatorPresent FactOperator = "present"
-	FactEqual                        = FactOperatorEqual
-	FactAbsent                       = FactOperatorAbsent
-	FactPresent                      = FactOperatorPresent
-	OperatorEqual                    = FactOperatorEqual
-	OperatorAbsent                   = FactOperatorAbsent
-	OperatorPresent                  = FactOperatorPresent
 )
 
 type CatalogIdentity struct {
