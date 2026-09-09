@@ -6,8 +6,8 @@ used for the due date and nullable assignee changes.
 
 ## Add a migration
 
-Write the next `up.sql` and `down.sql` pair under a new migration ID. Apply
-it to a disposable database and verify the history:
+Write the next `up.sql` under a new migration ID. Apply it to a disposable
+database and verify the history:
 
 ```sh
 rasql migrate apply -dir db/migrations \
@@ -20,7 +20,7 @@ rasql migrate verify -dir db/migrations \
 disposable database uses `rasql` directly instead.
 
 The explicit `schema.paths` list in `rasql.json` must receive the new up
-file at its terminal position. Down files stay out of that list.
+file at its terminal position.
 
 ## Refresh the snapshot
 

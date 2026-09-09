@@ -46,11 +46,8 @@ have to exist for each other:
 ```text
 db/migrations/001_initial/
   001_create_members.up.sql
-  001_create_members.down.sql
   002_create_projects.up.sql
-  002_create_projects.down.sql
   003_create_tasks.up.sql
-  003_create_tasks.down.sql
   004_create_index_tasks_open_by_project.up.sql
 ```
 
@@ -63,18 +60,8 @@ CREATE TABLE "members" ("id" BIGINT NOT NULL GENERATED ALWAYS AS IDENTITY, "name
 ```
 
 ```sql
--- 001_create_members.down.sql
-DROP TABLE "members";
-```
-
-```sql
 -- 002_create_projects.up.sql
 CREATE TABLE "projects" ("id" BIGINT NOT NULL GENERATED ALWAYS AS IDENTITY, "name" TEXT NOT NULL, PRIMARY KEY ("id"));
-```
-
-```sql
--- 002_create_projects.down.sql
-DROP TABLE "projects";
 ```
 
 ```sql
@@ -83,19 +70,9 @@ CREATE TABLE "tasks" ("id" BIGINT NOT NULL GENERATED ALWAYS AS IDENTITY, "projec
 ```
 
 ```sql
--- 003_create_tasks.down.sql
-DROP TABLE "tasks";
-```
-
-```sql
 -- 004_create_index_tasks_open_by_project.up.sql
 CREATE INDEX "tasks_open_by_project" ON "tasks" ("project_id", "id") WHERE is_open;
 ```
-
-A partial index has no reverse statement of its own; dropping `tasks` in the
-matching down migration takes it with the table. Down files reverse one
-migration step and help local development, but they never feed generation:
-chapter 4's `rasql.json` names only `up.sql` files, in application order.
 
 ## Add a migrate helper
 
@@ -162,7 +139,11 @@ The migration history records each applied directory and its checksum:
 
 ```text
 applied	001_initial
+  irreversible
 ```
+
+`001_initial` holds no `.down.sql` sources, so `status` marks it
+irreversible. `apply` and `verify` treat it the same as any other migration.
 
 ```sh
 ./scripts/migrate.sh verify

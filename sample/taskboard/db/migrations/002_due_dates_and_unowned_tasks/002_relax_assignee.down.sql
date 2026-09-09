@@ -1,1 +1,0 @@
-ALTER TABLE "tasks" ALTER COLUMN "assignee_id" SET NOT NULL;
