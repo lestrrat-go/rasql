@@ -329,16 +329,6 @@ type relationshipSpec struct {
 	keyName                string
 	keyFields              []string
 	keyColumns             []schema.ColumnDef
-	through                schema.TableDef
-	throughSource          []schema.ColumnDef
-	throughTarget          []schema.ColumnDef
-	throughRow             string
-	throughTableAccessor   string
-	childTableAccessor     string
-	throughSourceAccessors []string
-	throughTargetAccessors []string
-	childColumnAccessors   []string
-	childAllAccessors      []string
 	targetPrimaryKeyTypes  []string
 	targetPrimaryKeyFields []string
 	parentColumnTypes      []string
@@ -371,43 +361,11 @@ func relationshipSpecs(table schema.TableDef, allTables []schema.TableDef, names
 			continue
 		}
 		if relationship.Kind == schema.RelationshipManyToMany {
-			through, sourceColumns, targetColumns, ok := manyToManyColumnsSupported(table, parent, relationship, allTables)
-			if !ok {
-				continue
-			}
-			method := goName(relationship.Name)
-			if !token.IsIdentifier(method) || reservedRelationshipMethod(method) {
-				continue
-			}
-			if _, exists := usedMethods[method]; exists {
-				method = nextRelationshipMethod(method, usedMethods)
-			}
-			usedMethods[method] = struct{}{}
-			keyType := ""
-			var keyRef BindingRef
-			if len(sourceColumns) == 1 {
-				if bindings != nil {
-					keyRef, ok = bindings.ref(table, sourceColumns[0])
-					if !ok {
-						continue
-					}
-				} else {
-					resolved, err := ResolveGoBinding(sourceColumns[0])
-					if err != nil {
-						continue
-					}
-					keyRef = BindingRef{key: resolved.For(false), nullable: resolved.For(true), resolved: resolved}
-				}
-				keyType = keyRef.resolved.For(false)
-			}
-			parentObject := resolvedObjectName(names, table)
-			childObject := resolvedObjectName(names, parent)
-			throughObject := resolvedObjectName(names, through)
-			parentColumn := resolvedColumnName(names, table, sourceColumns[0].Name)
-			childColumn := resolvedColumnName(names, parent, targetColumns[0].Name)
-			throughSource := relationshipThroughColumns(through, relationship.Through.SourceColumns)
-			throughTarget := relationshipThroughColumns(through, relationship.Through.TargetColumns)
-			result = append(result, relationshipSpec{kind: relationship.Kind, method: method, identity: relationshipIdentity(table, relationship), typeName: parentObject.TableType + method + "Relation", parent: table, child: parent, parentColumn: sourceColumns[0], childColumn: targetColumns[0], parentField: parentColumn.Field, childField: childColumn.Field, parentAccessor: parentColumn.Accessor, childAccessor: childColumn.Accessor, parentKeyType: keyType, parentColumns: sourceColumns, childColumns: targetColumns, parentFields: resolvedColumnFields(names, table, sourceColumns), childFields: resolvedColumnFields(names, parent, targetColumns), keyName: parentObject.TableType + method + "Key", keyFields: resolvedColumnFields(names, table, sourceColumns), keyColumns: sourceColumns, through: through, throughSource: throughSource, throughTarget: throughTarget, parentType: parentObject.TableType, childType: childObject.TableType, parentRow: parentObject.RowType, childRow: childObject.RowType, parentKeyRef: keyRef, throughRow: throughObject.RowType, throughTableAccessor: throughObject.Accessor, childTableAccessor: childObject.Accessor, throughSourceAccessors: resolvedColumnAccessors(names, through, throughSource), throughTargetAccessors: resolvedColumnAccessors(names, through, throughTarget), childColumnAccessors: resolvedColumnAccessors(names, parent, targetColumns), childAllAccessors: resolvedColumnAccessors(names, parent, parent.Columns)})
+			// The generator emits no loader for a many-to-many relationship;
+			// only the schema descriptor (schema.RelationshipManyToMany,
+			// validated in schema/table.go) and the "compact" graph builder's
+			// separate many_through path (internal/schemagen/compact.go)
+			// still understand this relationship kind.
 			continue
 		}
 		childColumns, parentColumns, keyType, keyRef, ok := relationshipColumnsSupported(table, parent, relationship, bindings)
@@ -647,40 +605,6 @@ func relationshipColumnTypes(bindings *generatedBindings, table schema.TableDef,
 	return types
 }
 
-func relationshipThroughColumns(table schema.TableDef, names []string) []schema.ColumnDef {
-	result := make([]schema.ColumnDef, len(names))
-	for index, name := range names {
-		result[index], _ = table.Column(name)
-	}
-	return result
-}
-
-func manyToManyColumnsSupported(source, target schema.TableDef, relationship schema.RelationshipDef, allTables []schema.TableDef) (schema.TableDef, []schema.ColumnDef, []schema.ColumnDef, bool) {
-	if relationship.Through == nil || len(relationship.Columns) == 0 || len(relationship.Columns) != len(relationship.ReferencedColumns) || len(relationship.Columns) != len(relationship.Through.SourceColumns) || len(relationship.ReferencedColumns) != len(relationship.Through.TargetColumns) {
-		return schema.TableDef{}, nil, nil, false
-	}
-	through, ok := relationshipTable(allTables, relationship.Through.Table.Schema, relationship.Through.Table.Name)
-	if !ok {
-		return schema.TableDef{}, nil, nil, false
-	}
-	sourceColumns, targetColumns := relationshipThroughColumns(source, relationship.Columns), relationshipThroughColumns(target, relationship.ReferencedColumns)
-	for index, name := range relationship.Through.SourceColumns {
-		throughColumn, found := through.Column(name)
-		_, compatible := sameColumnBindingType(throughColumn, sourceColumns[index])
-		if !found || !compatible {
-			return schema.TableDef{}, nil, nil, false
-		}
-	}
-	for index, name := range relationship.Through.TargetColumns {
-		throughColumn, found := through.Column(name)
-		_, compatible := sameColumnBindingType(throughColumn, targetColumns[index])
-		if !found || !compatible {
-			return schema.TableDef{}, nil, nil, false
-		}
-	}
-	return through, sourceColumns, targetColumns, true
-}
-
 func inverseRelationshipSortKey(candidate inverseRelationshipCandidate) string {
 	return relationshipIdentity(candidate.child, candidate.relationship)
 }
@@ -783,15 +707,6 @@ func resolvedColumnFields(names *ResolvedNames, table schema.TableDef, columns [
 		fields[index] = resolved.Field
 	}
 	return fields
-}
-
-func resolvedColumnAccessors(names *ResolvedNames, table schema.TableDef, columns []schema.ColumnDef) []string {
-	accessors := make([]string, len(columns))
-	for index, column := range columns {
-		resolved := resolvedColumnName(names, table, column.Name)
-		accessors[index] = resolved.Accessor
-	}
-	return accessors
 }
 
 func resolvedObjectName(names *ResolvedNames, table schema.TableDef) ResolvedObjectNames {
