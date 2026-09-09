@@ -197,7 +197,6 @@ source: [sample/taskboard/cmd/taskboard/main.go](https://github.com/lestrrat-go/
 Apply migrations before starting the binary:
 
 ```sh
-./scripts/rasql.sh migrate apply -dir db/migrations \
-  -dialect postgresql -dsn "$TASKBOARD_DSN"
+./scripts/migrate.sh apply
 go run ./cmd/taskboard
 ```

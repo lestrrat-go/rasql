@@ -78,17 +78,15 @@ func main() {
 }
 ```
 
-Run the unit and integration checks from the repository root:
+Run the unit and integration checks from the project root:
 
 ```sh
 go test ./...
 go test -race ./...
-go test ./examples
-go -C sample/taskboard test ./...
 env -u TASKBOARD_SCHEMA_DSN -u TASKBOARD_DSN -u TASKBOARD_TEST_DSN \
-  go -C sample/taskboard run github.com/lestrrat-go/rasql/cmd/rasql generate
+  ./scripts/generate.sh
 env -u TASKBOARD_SCHEMA_DSN -u TASKBOARD_DSN -u TASKBOARD_TEST_DSN \
-  go -C sample/taskboard run github.com/lestrrat-go/rasql/cmd/rasql check
+  ./scripts/generate.sh -check
 ```
 
 The live PostgreSQL command is opt-in through `TASKBOARD_TEST_DSN`; it must

@@ -10,11 +10,14 @@ Write the next `up.sql` and `down.sql` pair under a new migration ID. Apply
 it to a disposable database and verify the history:
 
 ```sh
-./scripts/rasql.sh migrate apply -dir db/migrations \
+rasql migrate apply -dir db/migrations \
   -dialect postgresql -dsn "$TASKBOARD_SCHEMA_DSN"
-./scripts/rasql.sh migrate verify -dir db/migrations \
+rasql migrate verify -dir db/migrations \
   -dialect postgresql -dsn "$TASKBOARD_SCHEMA_DSN"
 ```
+
+`./scripts/migrate.sh` always targets `$TASKBOARD_DSN`, so a dry run against a
+disposable database uses `rasql` directly instead.
 
 The explicit `schema.paths` list in `rasql.json` must receive the new up
 file at its terminal position. Down files stay out of that list.
@@ -35,7 +38,7 @@ removed:
 env -u TASKBOARD_SCHEMA_DSN -u TASKBOARD_DSN -u TASKBOARD_TEST_DSN \
   ./scripts/generate.sh
 env -u TASKBOARD_SCHEMA_DSN -u TASKBOARD_DSN -u TASKBOARD_TEST_DSN \
-  ./scripts/rasql.sh check
+  ./scripts/generate.sh -check
 ```
 
 The application code changes only after the generated package has the needed
