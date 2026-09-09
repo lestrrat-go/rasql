@@ -2,6 +2,7 @@ package changeplan
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -305,36 +306,20 @@ func EvaluateFact(c Catalog, fact Fact) error {
 	return nil
 }
 
+// factValueIsStruct reports whether value is a JSON object, the one shape FactOperatorEqual
+// refuses to compare against (equality is defined leaf by leaf, or for the whole root object).
 func factValueIsStruct(value any) bool {
-	switch value := value.(type) {
-	case catalogObjectWire, catalogColumnWire, catalogNativeWire, catalogOptionalIntWire,
-		catalogIntegerWire, catalogTextWire, catalogDecimalWire, catalogReferenceWire,
-		catalogIndexPartWire, catalogPairWire, catalogConstraintWire, catalogIndexWire,
-		catalogExclusionWire, catalogExclusionElementWire:
-		return true
-	case *catalogNativeWire:
-		return value != nil
-	case *catalogIntegerWire:
-		return value != nil
-	case *catalogTextWire:
-		return value != nil
-	case *catalogDecimalWire:
-		return value != nil
-	case *catalogReferenceWire:
-		return value != nil
-	case *catalogConstraintWire:
-		return value != nil
-	case *catalogIndexWire:
-		return value != nil
-	case *catalogExclusionWire:
-		return value != nil
-	case *catalogExclusionElementWire:
-		return value != nil
-	default:
-		return false
-	}
+	_, ok := value.(map[string]any)
+	return ok
 }
+
 func mustJSON(value any) []byte { b, _ := marshalNoHTML(value); return b }
+
+// walkFactPath resolves a fact's JSON Pointer path against root. It walks root's own JSON
+// representation rather than its Go fields, so the path vocabulary is exactly the wire format's
+// field names, and every field in that format is reachable without a case for each wire type. A
+// json.Number preserves the field's original digits, and a JSON null decodes to an untyped nil,
+// distinguishable from a field that never existed.
 func walkFactPath(root catalogObjectWire, path string) (bool, any, error) {
 	if path == "$" {
 		return true, root, nil
@@ -342,8 +327,14 @@ func walkFactPath(root catalogObjectWire, path string) (bool, any, error) {
 	if !strings.HasPrefix(path, "/") {
 		return false, nil, fmt.Errorf("%w: path must begin with /", ErrInvalidFact)
 	}
+	decoder := json.NewDecoder(bytes.NewReader(mustJSON(root)))
+	decoder.UseNumber()
+	var decoded any
+	if err := decoder.Decode(&decoded); err != nil {
+		return false, nil, err
+	}
 	segments := strings.Split(path[1:], "/")
-	return walkFactValue(root, segments)
+	return walkFactValue(decoded, segments)
 }
 
 func walkFactValue(current any, segments []string) (bool, any, error) {
@@ -364,396 +355,30 @@ func walkFactValue(current any, segments []string) (bool, any, error) {
 
 func factField(current any, segment string) (any, error) {
 	switch value := current.(type) {
-	case catalogObjectWire:
-		switch segment {
-		case "id":
-			return value.ID, nil
-		case "kind":
-			return value.Kind, nil
-		case "schema":
-			return value.Schema, nil
-		case "name":
-			return value.Name, nil
-		case "columns":
-			return value.Columns, nil
-		case "constraints":
-			return value.Constraints, nil
-		case "indexes":
-			return value.Indexes, nil
-		case "exclusion_constraints":
-			return value.ExclusionConstraints, nil
-		case "strict":
-			return value.Strict, nil
-		case "without_rowid":
-			return value.WithoutRowID, nil
-		case "primary_key_autoincrement":
-			return value.PrimaryKeyAutoincrement, nil
-		case "primary_key_on_conflict":
-			return value.PrimaryKeyOnConflict, nil
-		case "virtual_table_module":
-			return value.VirtualTableModule, nil
-		case "virtual_table_module_arguments":
-			return value.VirtualTableModuleArguments, nil
-		default:
+	case map[string]any:
+		next, ok := value[segment]
+		if !ok {
 			return nil, unknownFactField(segment)
 		}
-	case catalogColumnWire:
-		switch segment {
-		case "name":
-			return value.Name, nil
-		case "ordinal":
-			return value.Ordinal, nil
-		case "logical_kind":
-			return value.LogicalKind, nil
-		case "native":
-			return value.Native, nil
-		case "nullable":
-			return value.Nullable, nil
-		case "default_sql":
-			return value.DefaultSQL, nil
-		case "generated_sql":
-			return value.GeneratedSQL, nil
-		case "generated_storage":
-			return value.GeneratedStorage, nil
-		case "identity":
-			return value.Identity, nil
-		case "collation":
-			return value.Collation, nil
-		case "hidden":
-			return value.Hidden, nil
-		case "integer":
-			return value.Integer, nil
-		case "text":
-			return value.Text, nil
-		case "decimal":
-			return value.Decimal, nil
-		default:
-			return nil, unknownFactField(segment)
-		}
-	case catalogNativeWire:
-		switch segment {
-		case "dialect":
-			return value.Dialect, nil
-		case "schema":
-			return value.Schema, nil
-		case "name":
-			return value.Name, nil
-		case "kind":
-			return value.Kind, nil
-		case "arguments":
-			return value.Arguments, nil
-		case "element":
-			return value.Element, nil
-		default:
-			return nil, unknownFactField(segment)
-		}
-	case *catalogNativeWire:
-		if value == nil {
-			return nil, fmt.Errorf("%w: path crosses null", ErrInvalidFact)
-		}
-		return factField(*value, segment)
-	case catalogOptionalIntWire:
-		switch segment {
-		case "value":
-			return value.Value, nil
-		case "set":
-			return value.Set, nil
-		default:
-			return nil, unknownFactField(segment)
-		}
-	case catalogIntegerWire:
-		switch segment {
-		case "unsigned":
-			return value.Unsigned, nil
-		case "display_width":
-			return value.DisplayWidth, nil
-		case "zero_fill":
-			return value.ZeroFill, nil
-		default:
-			return nil, unknownFactField(segment)
-		}
-	case *catalogIntegerWire:
-		if value == nil {
-			return nil, fmt.Errorf("%w: path crosses null", ErrInvalidFact)
-		}
-		return factField(*value, segment)
-	case catalogTextWire:
-		switch segment {
-		case "width":
-			return value.Width, nil
-		case "fixed":
-			return value.Fixed, nil
-		default:
-			return nil, unknownFactField(segment)
-		}
-	case *catalogTextWire:
-		if value == nil {
-			return nil, fmt.Errorf("%w: path crosses null", ErrInvalidFact)
-		}
-		return factField(*value, segment)
-	case catalogDecimalWire:
-		switch segment {
-		case "precision":
-			return value.Precision, nil
-		case "scale":
-			return value.Scale, nil
-		case "unsigned":
-			return value.Unsigned, nil
-		case "zero_fill":
-			return value.ZeroFill, nil
-		default:
-			return nil, unknownFactField(segment)
-		}
-	case *catalogDecimalWire:
-		if value == nil {
-			return nil, fmt.Errorf("%w: path crosses null", ErrInvalidFact)
-		}
-		return factField(*value, segment)
-	case catalogReferenceWire:
-		switch segment {
-		case "schema":
-			return value.Schema, nil
-		case "object":
-			return value.Object, nil
-		case "columns":
-			return value.Columns, nil
-		default:
-			return nil, unknownFactField(segment)
-		}
-	case *catalogReferenceWire:
-		if value == nil {
-			return nil, fmt.Errorf("%w: path crosses null", ErrInvalidFact)
-		}
-		return factField(*value, segment)
-	case catalogIndexPartWire:
-		switch segment {
-		case "column":
-			return value.Column, nil
-		case "expression_sql":
-			return value.ExpressionSQL, nil
-		case "direction":
-			return value.Direction, nil
-		case "nulls":
-			return value.Nulls, nil
-		case "collation":
-			return value.Collation, nil
-		case "operator_class":
-			return value.OperatorClass, nil
-		case "prefix_length":
-			return value.PrefixLength, nil
-		default:
-			return nil, unknownFactField(segment)
-		}
-	case catalogPairWire:
-		switch segment {
-		case "key":
-			return value.Key, nil
-		case "value":
-			return value.Value, nil
-		default:
-			return nil, unknownFactField(segment)
-		}
-	case catalogConstraintWire:
-		switch segment {
-		case "name":
-			return value.Name, nil
-		case "kind":
-			return value.Kind, nil
-		case "columns":
-			return value.Columns, nil
-		case "reference":
-			return value.Reference, nil
-		case "expression_sql":
-			return value.ExpressionSQL, nil
-		case "deferrable":
-			return value.Deferrable, nil
-		case "initially_deferred":
-			return value.InitiallyDeferred, nil
-		case "on_update":
-			return value.OnUpdate, nil
-		case "on_delete":
-			return value.OnDelete, nil
-		case "deferrability":
-			return value.Deferrability, nil
-		case "match":
-			return value.Match, nil
-		case "nulls_not_distinct":
-			return value.NullsNotDistinct, nil
-		case "include_columns":
-			return value.IncludeColumns, nil
-		case "on_conflict":
-			return value.OnConflict, nil
-		case "keys":
-			return value.Keys, nil
-		case "temporal":
-			return value.Temporal, nil
-		case "storage_parameters":
-			return value.StorageParameters, nil
-		case "tablespace":
-			return value.Tablespace, nil
-		case "replica_identity":
-			return value.ReplicaIdentity, nil
-		case "collations":
-			return value.Collations, nil
-		case "no_inherit":
-			return value.NoInherit, nil
-		case "not_valid":
-			return value.NotValid, nil
-		case "not_enforced":
-			return value.NotEnforced, nil
-		case "delete_set_columns":
-			return value.DeleteSetColumns, nil
-		default:
-			return nil, unknownFactField(segment)
-		}
-	case *catalogConstraintWire:
-		if value == nil {
-			return nil, fmt.Errorf("%w: path crosses null", ErrInvalidFact)
-		}
-		return factField(*value, segment)
-	case catalogIndexWire:
-		switch segment {
-		case "name":
-			return value.Name, nil
-		case "unique":
-			return value.Unique, nil
-		case "method":
-			return value.Method, nil
-		case "key_form":
-			return value.KeyForm, nil
-		case "parts":
-			return value.Parts, nil
-		case "predicate_sql":
-			return value.PredicateSQL, nil
-		case "include_columns":
-			return value.IncludeColumns, nil
-		case "invisible":
-			return value.Invisible, nil
-		case "not_valid":
-			return value.NotValid, nil
-		case "nulls_not_distinct":
-			return value.NullsNotDistinct, nil
-		case "storage_parameters":
-			return value.StorageParameters, nil
-		case "tablespace":
-			return value.Tablespace, nil
-		case "replica_identity":
-			return value.ReplicaIdentity, nil
-		default:
-			return nil, unknownFactField(segment)
-		}
-	case *catalogIndexWire:
-		if value == nil {
-			return nil, fmt.Errorf("%w: path crosses null", ErrInvalidFact)
-		}
-		return factField(*value, segment)
-	case catalogExclusionWire:
-		switch segment {
-		case "name":
-			return value.Name, nil
-		case "method":
-			return value.Method, nil
-		case "elements":
-			return value.Elements, nil
-		case "predicate_sql":
-			return value.PredicateSQL, nil
-		case "deferrability":
-			return value.Deferrability, nil
-		default:
-			return nil, unknownFactField(segment)
-		}
-	case catalogExclusionElementWire:
-		switch segment {
-		case "expression_sql":
-			return value.ExpressionSQL, nil
-		case "operator":
-			return value.Operator, nil
-		default:
-			return nil, unknownFactField(segment)
-		}
-	case *catalogExclusionWire:
-		if value == nil {
-			return nil, fmt.Errorf("%w: path crosses null", ErrInvalidFact)
-		}
-		return factField(*value, segment)
-	case *catalogExclusionElementWire:
-		if value == nil {
-			return nil, fmt.Errorf("%w: path crosses null", ErrInvalidFact)
-		}
-		return factField(*value, segment)
-	case []catalogColumnWire:
+		return next, nil
+	case []any:
 		return factArrayIndex(value, segment)
-	case []catalogConstraintWire:
-		return factArrayIndex(value, segment)
-	case []catalogIndexWire:
-		return factArrayIndex(value, segment)
-	case []catalogExclusionWire:
-		return factArrayIndex(value, segment)
-	case []catalogExclusionElementWire:
-		return factArrayIndex(value, segment)
-	case []catalogIndexPartWire:
-		return factArrayIndex(value, segment)
-	case []catalogPairWire:
-		return factArrayIndex(value, segment)
-	case []string:
-		return factArrayIndex(value, segment)
+	case nil:
+		return nil, fmt.Errorf("%w: path crosses null", ErrInvalidFact)
 	default:
 		return nil, fmt.Errorf("%w: path crosses scalar", ErrInvalidFact)
 	}
 }
 
-func factArrayIndex(value any, segment string) (any, error) {
+func factArrayIndex(values []any, segment string) (any, error) {
 	if segment == "" || (len(segment) > 1 && segment[0] == '0') {
 		return nil, fmt.Errorf("%w: array index %q is non-canonical", ErrInvalidFact, segment)
 	}
 	index, err := strconv.Atoi(segment)
-	if err != nil || index < 0 {
+	if err != nil || index < 0 || index >= len(values) {
 		return nil, fmt.Errorf("%w: array index %q is invalid", ErrFactMismatch, segment)
 	}
-	switch values := value.(type) {
-	case []catalogColumnWire:
-		if index >= len(values) {
-			return nil, fmt.Errorf("%w: array index %q is invalid", ErrFactMismatch, segment)
-		}
-		return values[index], nil
-	case []catalogConstraintWire:
-		if index >= len(values) {
-			return nil, fmt.Errorf("%w: array index %q is invalid", ErrFactMismatch, segment)
-		}
-		return values[index], nil
-	case []catalogIndexWire:
-		if index >= len(values) {
-			return nil, fmt.Errorf("%w: array index %q is invalid", ErrFactMismatch, segment)
-		}
-		return values[index], nil
-	case []catalogExclusionWire:
-		if index >= len(values) {
-			return nil, fmt.Errorf("%w: array index %q is invalid", ErrFactMismatch, segment)
-		}
-		return values[index], nil
-	case []catalogExclusionElementWire:
-		if index >= len(values) {
-			return nil, fmt.Errorf("%w: array index %q is invalid", ErrFactMismatch, segment)
-		}
-		return values[index], nil
-	case []catalogIndexPartWire:
-		if index >= len(values) {
-			return nil, fmt.Errorf("%w: array index %q is invalid", ErrFactMismatch, segment)
-		}
-		return values[index], nil
-	case []catalogPairWire:
-		if index >= len(values) {
-			return nil, fmt.Errorf("%w: array index %q is invalid", ErrFactMismatch, segment)
-		}
-		return values[index], nil
-	case []string:
-		if index >= len(values) {
-			return nil, fmt.Errorf("%w: array index %q is invalid", ErrFactMismatch, segment)
-		}
-		return values[index], nil
-	default:
-		return nil, fmt.Errorf("%w: path crosses scalar", ErrInvalidFact)
-	}
+	return values[index], nil
 }
 
 func unknownFactField(segment string) error {
