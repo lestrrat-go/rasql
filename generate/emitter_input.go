@@ -3,13 +3,8 @@ package generate
 import (
 	"fmt"
 	"reflect"
-	"slices"
-	"strings"
 
-	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
-	"github.com/lestrrat-go/rasql/internal/schemagen"
-	"github.com/lestrrat-go/rasql/schema"
 )
 
 // EmitterInput is the complete, sidecar-free input to a generated store.
@@ -17,11 +12,19 @@ type EmitterInput struct {
 	Catalog    compilerir.PhysicalCatalog
 	Semantic   compilerir.SemanticModel
 	Go         compilerir.GoModel
+	Mappings   compilerir.MappingConfig
 	Generation compilerir.GoConfig
 }
 
-func NewEmitterInput(catalog compilerir.PhysicalCatalog, semantic compilerir.SemanticModel, goModel compilerir.GoModel, generation compilerir.GoConfig) (EmitterInput, error) {
-	in := EmitterInput{Catalog: catalog.Clone(), Semantic: semantic.Clone(), Go: goModel.Clone(), Generation: generation.Clone()}
+func NewEmitterInput(catalog compilerir.PhysicalCatalog, semantic compilerir.SemanticModel, goModel compilerir.GoModel, generation compilerir.GoConfig, mapping ...compilerir.MappingConfig) (EmitterInput, error) {
+	if len(mapping) > 1 {
+		return EmitterInput{}, fmt.Errorf("generate: emitter mappings may be supplied only once")
+	}
+	var mappings compilerir.MappingConfig
+	if len(mapping) == 1 {
+		mappings = mapping[0]
+	}
+	in := EmitterInput{Catalog: catalog.Clone(), Semantic: semantic.Clone(), Go: goModel.Clone(), Mappings: mappings.Clone(), Generation: generation.Clone()}
 	if err := in.Validate(); err != nil {
 		return EmitterInput{}, err
 	}
@@ -29,7 +32,7 @@ func NewEmitterInput(catalog compilerir.PhysicalCatalog, semantic compilerir.Sem
 }
 
 func (in EmitterInput) Clone() EmitterInput {
-	return EmitterInput{Catalog: in.Catalog.Clone(), Semantic: in.Semantic.Clone(), Go: in.Go.Clone(), Generation: in.Generation.Clone()}
+	return EmitterInput{Catalog: in.Catalog.Clone(), Semantic: in.Semantic.Clone(), Go: in.Go.Clone(), Mappings: in.Mappings.Clone(), Generation: in.Generation.Clone()}
 }
 
 // Validate checks each compiler layer and their canonical agreement.
@@ -43,23 +46,26 @@ func (in EmitterInput) Validate() error {
 	if err := validateGoModel(in.Go, in.Catalog); err != nil {
 		return fmt.Errorf("generate: emitter Go model: %w", err)
 	}
-	if in.Generation.Emitter != "legacy" {
-		return fmt.Errorf("generate: emitter generation.emitter must be legacy")
+	if in.Generation.Emitter != "legacy" && in.Generation.Emitter != "compact" {
+		return fmt.Errorf("generate: emitter generation.emitter must be compact or legacy")
 	}
 	if in.Generation.Package == "" || in.Generation.Output == "" {
 		return fmt.Errorf("generate: emitter generation package and output are required")
 	}
-	if err := compilerir.ValidateMappingConfig(compilerir.MappingConfig{Scalars: in.Generation.Scalars}, in.Generation.Package); err != nil {
+	if err := compilerir.ValidateMappingConfig(in.Mappings, in.Generation.Package); err != nil {
 		return fmt.Errorf("generate: emitter generation mappings: %w", err)
+	}
+	if !reflect.DeepEqual(in.Generation.Scalars, in.Mappings.Scalars) {
+		return fmt.Errorf("generate: emitter generation scalar mappings disagree with canonical mappings")
 	}
 	if in.Go.Package != in.Generation.Package {
 		return fmt.Errorf("generate: emitter Go package %q disagrees with generation package %q", in.Go.Package, in.Generation.Package)
 	}
-	canonicalSemantic, diagnostics := compilerir.BuildSemantic(in.Catalog, compilerir.MappingConfig{Scalars: in.Generation.Scalars}, nil)
+	canonicalSemantic, diagnostics := compilerir.BuildSemantic(in.Catalog, in.Mappings, nil)
 	if len(diagnostics) != 0 {
 		return fmt.Errorf("generate: emitter canonical semantic diagnostics: %v", diagnostics)
 	}
-	if !reflect.DeepEqual(canonicalSemantic.Objects, in.Semantic.Objects) {
+	if !canonicalSemanticMatches(in.Semantic, canonicalSemantic) {
 		return fmt.Errorf("generate: emitter semantic model disagrees with catalog-derived policy")
 	}
 
@@ -117,7 +123,7 @@ func (in EmitterInput) Validate() error {
 		if _, ok := goObjects[object.ID]; ok {
 			return fmt.Errorf("generate: emitter Go object %q is duplicated", object.ID)
 		}
-		if err := validateGoObject(object, p, s, configured[object.ID], in.Generation.Scalars); err != nil {
+		if err := validateGoObject(object, p, s, configured[object.ID], in.Mappings.Scalars, in.Generation.ColumnBindings); err != nil {
 			return err
 		}
 		goObjects[object.ID] = struct{}{}
@@ -128,7 +134,41 @@ func (in EmitterInput) Validate() error {
 	if err := validateQueryModel(in.Semantic.Queries, in.Go.Queries, in.Generation.Queries); err != nil {
 		return err
 	}
+	canonicalGo, diagnostics := compilerir.BuildGo(in.Semantic, in.Generation)
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Level == compilerir.DiagnosticError {
+			return fmt.Errorf("generate: emitter canonical Go diagnostics: %s", diagnostic.Message)
+		}
+	}
+	if !reflect.DeepEqual(normalizeViewShapes(in.Go, in.Catalog), normalizeViewShapes(canonicalGo, in.Catalog)) {
+		return fmt.Errorf("generate: emitter Go model disagrees with canonical semantic and generation policy")
+	}
 	return validateGenerationFiles(in.Go, in.Generation, physical)
+}
+
+func canonicalSemanticMatches(got, want compilerir.SemanticModel) bool {
+	if len(got.Objects) != len(want.Objects) {
+		return false
+	}
+	for index, object := range got.Objects {
+		canonical := want.Objects[index]
+		if object.ID != canonical.ID || object.Kind != canonical.Kind || object.PhysicalName != canonical.PhysicalName || len(object.Columns) != len(canonical.Columns) || len(object.Relations) != len(canonical.Relations) {
+			return false
+		}
+		for columnIndex, column := range object.Columns {
+			other := canonical.Columns[columnIndex]
+			if column != other {
+				return false
+			}
+		}
+		for relationIndex, relation := range object.Relations {
+			other := canonical.Relations[relationIndex]
+			if relation.Name != other.Name || relation.Kind != other.Kind || relation.Target != other.Target || relation.Nullable != other.Nullable || !reflect.DeepEqual(relation.From, other.From) || !reflect.DeepEqual(relation.To, other.To) || !reflect.DeepEqual(relation.Through, other.Through) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func validateQueryModel(semantic []compilerir.SemanticQuery, model []compilerir.GoQuery, configured []compilerir.QueryGoName) error {
@@ -160,7 +200,7 @@ func validateQueryModel(semantic []compilerir.SemanticQuery, model []compilerir.
 	return nil
 }
 
-func validateGoObject(object compilerir.GoObject, physical compilerir.PhysicalObject, semantic compilerir.SemanticObject, cfg compilerir.ObjectGoName, mappings []compilerir.ScalarMapping) error {
+func validateGoObject(object compilerir.GoObject, physical compilerir.PhysicalObject, semantic compilerir.SemanticObject, cfg compilerir.ObjectGoName, mappings []compilerir.ScalarMapping, columnBindings []compilerir.ColumnGoBinding) error {
 	if object.SourceName == "" || object.Row.Name == "" {
 		return fmt.Errorf("generate: emitter Go object %q has incomplete names", object.ID)
 	}
@@ -179,6 +219,12 @@ func validateGoObject(object compilerir.GoObject, physical compilerir.PhysicalOb
 			return fmt.Errorf("generate: emitter Go object %q column %d disagrees with canonical models", object.ID, i)
 		}
 		wantType, wantCodec, ok := expectedBinding(column.Scalar, column.Nullable, mappings)
+		if override, found := compilerir.ColumnGoBindingFor(object.ID, column.Name, columnBindings); found {
+			wantType, ok = override.Type, true
+			if column.Nullable {
+				wantType = override.NullableType
+			}
+		}
 		if !ok || column.GoType != wantType || column.Codec != wantCodec {
 			return fmt.Errorf("generate: emitter Go object %q column %q binding disagrees with mapping", object.ID, column.Name)
 		}
@@ -190,6 +236,9 @@ func validateGoObject(object compilerir.GoObject, physical compilerir.PhysicalOb
 		want := semantic.Relations[i]
 		if relation.Name != want.Name || relation.Target != want.Target || relation.Kind != want.Kind || relation.Nullable != want.Nullable {
 			return fmt.Errorf("generate: emitter Go object %q relation %d disagrees with semantic model", object.ID, i)
+		}
+		if !reflect.DeepEqual(relation.From, want.From) || !reflect.DeepEqual(relation.To, want.To) || !goThroughMatchesSemantic(relation.Through, want.Through) {
+			return fmt.Errorf("generate: emitter Go object %q relation %d path disagrees with semantic model", object.ID, i)
 		}
 	}
 	if err := validateShapeFields(object, &object.Row, semantic.Columns, func(column compilerir.SemanticColumn) bool { return column.Readable }); err != nil {
@@ -210,7 +259,19 @@ func validateGoObject(object compilerir.GoObject, physical compilerir.PhysicalOb
 	return nil
 }
 
+func goThroughMatchesSemantic(got *compilerir.GoThrough, want *compilerir.SemanticThrough) bool {
+	if got == nil || want == nil {
+		return got == nil && want == nil
+	}
+	return got.Object == want.Object && reflect.DeepEqual(got.SourceFrom, want.SourceFrom) && reflect.DeepEqual(got.SourceTo, want.SourceTo) && reflect.DeepEqual(got.TargetFrom, want.TargetFrom) && reflect.DeepEqual(got.TargetTo, want.TargetTo)
+}
+
 func validateGoModel(model compilerir.GoModel, catalog compilerir.PhysicalCatalog) error {
+	copy := normalizeViewShapes(model, catalog)
+	return compilerir.ValidateGo(copy)
+}
+
+func normalizeViewShapes(model compilerir.GoModel, catalog compilerir.PhysicalCatalog) compilerir.GoModel {
 	copy := model.Clone()
 	byID := make(map[compilerir.ObjectID]compilerir.PhysicalObject, len(catalog.Objects))
 	for _, object := range catalog.Objects {
@@ -227,7 +288,7 @@ func validateGoModel(model compilerir.GoModel, catalog compilerir.PhysicalCatalo
 			copy.Objects[i].Patch = &compilerir.GoShape{Name: copy.Objects[i].SourceName + "Patch"}
 		}
 	}
-	return compilerir.ValidateGo(copy)
+	return copy
 }
 
 func validateShapeFields(object compilerir.GoObject, shape *compilerir.GoShape, columns []compilerir.SemanticColumn, include func(compilerir.SemanticColumn) bool) error {
@@ -310,109 +371,6 @@ func validateGenerationFiles(goModel compilerir.GoModel, generation compilerir.G
 	return nil
 }
 
-// LegacyStore adapts canonical facts to the existing legacy renderer.
-func LegacyStore(in EmitterInput) (Store, error) {
-	if err := in.Validate(); err != nil {
-		return Store{}, err
-	}
-	tables, diagnostics := compilerir.TableDefsFromPhysical(in.Catalog)
-	for _, diagnostic := range diagnostics {
-		if diagnostic.Level == compilerir.DiagnosticError {
-			return Store{}, fmt.Errorf("generate: emitter: %s", diagnostic.Message)
-		}
-	}
-	for _, mapping := range in.Generation.Scalars {
-		if mapping.Codec == "" {
-			continue
-		}
-		for _, object := range in.Semantic.Objects {
-			for _, column := range object.Columns {
-				if column.Scalar == mapping.Name {
-					return Store{}, fmt.Errorf("generate: emitter legacy route cannot represent codec %q for %s.%s", mapping.Codec, object.PhysicalName.Name, column.Name)
-				}
-			}
-		}
-	}
-	goByID := make(map[compilerir.ObjectID]compilerir.GoObject, len(in.Go.Objects))
-	semanticByID := make(map[compilerir.ObjectID]compilerir.SemanticObject, len(in.Semantic.Objects))
-	physicalByID := make(map[compilerir.ObjectID]compilerir.PhysicalObject, len(in.Catalog.Objects))
-	for _, object := range in.Go.Objects {
-		goByID[object.ID] = object
-	}
-	for _, object := range in.Semantic.Objects {
-		semanticByID[object.ID] = object
-	}
-	for _, object := range in.Catalog.Objects {
-		physicalByID[object.ID] = object
-	}
-	names := make(map[schema.ObjectName]ObjectNames, len(tables))
-	configByID := make(map[compilerir.ObjectID]compilerir.ObjectGoName, len(in.Generation.Objects))
-	for _, cfg := range in.Generation.Objects {
-		configByID[cfg.ID] = cfg
-	}
-	for i := range tables {
-		id := in.Catalog.Objects[i].ID
-		goObject := goByID[id]
-		cfg := configByID[id]
-		names[tables[i].ObjectName()] = ObjectNames{Accessor: cfg.Source, RowType: cfg.Row}
-		if cfg.File != "" {
-			names[tables[i].ObjectName()] = ObjectNames{Accessor: cfg.Source, RowType: cfg.Row, FileBase: strings.TrimSuffix(cfg.File, "_gen.go")}
-		}
-		for j := range tables[i].Columns {
-			column := goObject.Columns[j]
-			if mapping, ok := mappingFor(column.Scalar, in.Generation.Scalars); ok {
-				nullableType := mapping.NullableGoType
-				if nullableType == "" {
-					nullableType = "rasql.Nullable[" + mapping.GoType + "]"
-				}
-				tables[i].Columns[j].GoBinding = &schema.GoBinding{Type: mapping.GoType, NullableType: nullableType, Imports: importsFor(mapping.Imports)}
-			}
-		}
-		for _, relation := range semanticByID[id].Relations {
-			target := physicalByID[relation.Target]
-			optionality := schema.RelationshipRequired
-			if relation.Nullable {
-				optionality = schema.RelationshipOptional
-			}
-			tables[i].Relationships = append(tables[i].Relationships, schema.RelationshipDef{Name: relation.Name, Kind: schema.RelationshipKind(relation.Kind), Optionality: optionality, Columns: slices.Clone(relation.From), ReferencedSchema: target.Schema, ReferencedTable: target.Name, ReferencedColumns: slices.Clone(relation.To)})
-		}
-	}
-	resolved, err := schemagen.ResolveNames(in.Generation.Package, tables, toNameOverrides(names))
-	if err != nil {
-		return Store{}, err
-	}
-	for _, cfg := range in.Generation.Objects {
-		physical := in.Catalog.Objects[0]
-		for _, candidate := range in.Catalog.Objects {
-			if candidate.ID == cfg.ID {
-				physical = candidate
-				break
-			}
-		}
-		var table schema.TableDef
-		for _, candidate := range tables {
-			if candidate.Name == physical.Name && candidate.Schema == physical.Schema {
-				table = candidate
-				break
-			}
-		}
-		object, ok := resolved.Object(table)
-		if !ok {
-			return Store{}, fmt.Errorf("generate: emitter object %q has no resolved names", cfg.ID)
-		}
-		if cfg.Source != "" && cfg.Source != object.Accessor || cfg.Row != "" && cfg.Row != object.RowType || cfg.File != "" && cfg.File != resolved.Filename(table) {
-			return Store{}, fmt.Errorf("generate: unrepresentable legacy generation name for %q", cfg.ID)
-		}
-		if cfg.Create != "" || cfg.Patch != "" {
-			wantCreate, wantPatch := resolved.MutationTypeNames(table)
-			if cfg.Create != wantCreate || cfg.Patch != wantPatch {
-				return Store{}, fmt.Errorf("generate: unrepresentable legacy mutation names for %q", cfg.ID)
-			}
-		}
-	}
-	return Store{Package: in.Generation.Package, Root: "", Dir: in.Generation.Output, Tables: tables, Names: names, Prune: in.Generation.Prune, Dialect: generationDialect(in.Catalog.Engine.Dialect)}, nil
-}
-
 func mappingFor(scalar string, mappings []compilerir.ScalarMapping) (compilerir.ScalarMapping, bool) {
 	for _, mapping := range mappings {
 		if mapping.Name == scalar {
@@ -420,21 +378,4 @@ func mappingFor(scalar string, mappings []compilerir.ScalarMapping) (compilerir.
 		}
 	}
 	return compilerir.ScalarMapping{}, false
-}
-func importsFor(imports []compilerir.GoImport) []schema.GoImport {
-	out := make([]schema.GoImport, len(imports))
-	for i, imp := range imports {
-		out[i] = schema.GoImport{Path: imp.Path, Name: imp.Alias}
-	}
-	return out
-}
-func generationDialect(name string) dialect.Dialect {
-	switch name {
-	case "postgresql":
-		return dialect.PostgreSQL()
-	case "mysql":
-		return dialect.MySQL()
-	default:
-		return dialect.SQLite()
-	}
 }

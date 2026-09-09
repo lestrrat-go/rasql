@@ -234,6 +234,7 @@ func graphInvocationFingerprint(stage graphFingerprintStage, profile engineProfi
 		key.writeBool(value)
 	}
 	key.writeU8(uint8(capabilities.PerParentLimit))
+	key.writeU8(uint8(capabilities.UpdateDefault))
 	key.writeString(stage.name)
 	key.writeString(stage.source)
 	key.writeString(stage.compiled.statement.SQL())

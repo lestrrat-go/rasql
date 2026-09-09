@@ -1,6 +1,7 @@
 package compilerlock_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"math/rand"
 	"os"
@@ -58,7 +59,7 @@ func TestPhysicalWireRoundTripFixtures(t *testing.T) {
 }
 
 func TestDecodeRejectsMalformedPathsHashesAndDuplicateIDs(t *testing.T) {
-	b, err := os.ReadFile(filepath.Join("testdata", "v1", "sqlite.json"))
+	b, err := os.ReadFile(filepath.Join("testdata", "v2", "sqlite.json"))
 	require.NoError(t, err)
 	cases := map[string]string{
 		"path":    `"path": "queries/find.sql"`,
@@ -214,6 +215,47 @@ func TestDecodeRejectsUnknownAndTrailingJSON(t *testing.T) {
 	if _, err := compilerlock.Decode([]byte(`{"format":1,"compiler":"x","unknown":1}`)); err == nil {
 		t.Fatal("accepted unknown field")
 	}
+}
+
+func TestDecodeFormatTwoRequiresMappingsObject(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("testdata", "v2", "sqlite.json"))
+	require.NoError(t, err)
+	without := bytes.Replace(b, []byte(",\n  \"mappings\": {}\n"), []byte("\n"), 1)
+	if _, err := compilerlock.Decode(without); err == nil {
+		t.Fatal("format 2 accepted a lock without mappings")
+	}
+	null := bytes.Replace(b, []byte(`"mappings": {}`), []byte(`"mappings": null`), 1)
+	if _, err := compilerlock.Decode(null); err == nil {
+		t.Fatal("format 2 accepted null mappings")
+	}
+	decoded, err := compilerlock.Decode(b)
+	require.NoError(t, err)
+	reencoded, err := compilerlock.Encode(decoded)
+	require.NoError(t, err)
+	require.Equal(t, b, reencoded)
+}
+
+func TestDecodeAndUpgradeV1CanonicalEmptyMappings(t *testing.T) {
+	source := compilerlock.SourceRecord{Kind: "external", Identity: "fixture"}
+	engine := compilerlock.EngineRecord{Dialect: "sqlite", Profile: "sqlite-3"}
+	generation := compilerir.GoConfig{Package: "store", Output: "generated", Emitter: "compact"}
+	digests, err := compilerlock.BuildDigests(compilerlock.DigestInputs{Source: compilerlock.SourceDigestInput{Record: source, Engine: engine}, Generation: generation})
+	require.NoError(t, err)
+	file := compilerlock.File{Format: 1, Compiler: "test", Source: source, Engine: engine, Digests: digests, Generation: compilerlock.GenerationRecord{Package: generation.Package, Output: generation.Output, Emitter: generation.Emitter}}
+	encoded, err := json.Marshal(file)
+	require.NoError(t, err)
+	encoded = bytes.Replace(encoded, []byte(`,"mappings":{}`), nil, 1)
+	decoded, err := compilerlock.Decode(encoded)
+	require.NoError(t, err)
+	require.Equal(t, compilerlock.FormatVersion, decoded.Format)
+	require.NotNil(t, decoded.Mappings.Scalars)
+	require.NotNil(t, decoded.Mappings.Relations)
+	upgraded, err := compilerlock.Upgrade(encoded)
+	require.NoError(t, err)
+	decodedUpgrade, err := compilerlock.Decode(upgraded)
+	require.NoError(t, err)
+	require.Equal(t, compilerlock.FormatVersion, decodedUpgrade.Format)
+	require.Contains(t, string(upgraded), `"mappings": {}`)
 }
 
 func TestBuildDigestsStable(t *testing.T) {

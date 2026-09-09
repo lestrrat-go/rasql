@@ -47,13 +47,21 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("create the rasql db: %w", err)
 	}
+	profile, err := rasql.DiscoverEngineProfile(context.Background(), db, "postgresql-17")
+	if err != nil {
+		return fmt.Errorf("discover PostgreSQL engine profile: %w", err)
+	}
+	executor, err := rasql.AsExecutor(db, profile)
+	if err != nil {
+		return fmt.Errorf("create the rasql executor: %w", err)
+	}
 	// END(open_database)
 
 	address := os.Getenv("TASKBOARD_ADDR")
 	if address == "" {
 		address = "127.0.0.1:8080"
 	}
-	repository := store.New(db)
+	repository := store.New(executor)
 	handler := web.NewHandler(repository, repository, logger)
 	server := &http.Server{
 		Addr:              address,

@@ -65,7 +65,7 @@ func TestLiveMySQLAtomicMutationBatch(t *testing.T) {
 	require.NoError(t, err)
 	second, err := rasql.NewCreatePlan(table, rasql.SetField(value, "two"))
 	require.NoError(t, err)
-	outcome, err := rasql.ExecMutationBatch(t.Context(), executor, []rasql.MutationPlan{first, second}, rasql.MutationBatchOptions{Atomic: true})
+	outcome, err := rasql.ExecMutationBatch(t.Context(), executor, []rasql.MutationPlan{first, second}, rasql.BulkOptions{Atomic: true})
 	require.NoError(t, err)
 	require.Equal(t, []rasql.InputOutcome{rasql.InputApplied, rasql.InputApplied}, outcome.Inputs)
 }

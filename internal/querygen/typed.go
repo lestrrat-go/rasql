@@ -44,6 +44,9 @@ func TypedGoSource(in TypedInput) ([]byte, error) {
 	if len(in.Results) == 0 {
 		return nil, fmt.Errorf("querygen: typed query %q has no results", in.Function)
 	}
+	if err := validateTypedResultFields(in.Function, in.Results); err != nil {
+		return nil, err
+	}
 	if in.Result == "" {
 		in.Result = in.Function + "Result"
 	}
@@ -63,6 +66,7 @@ func TypedGoSource(in TypedInput) ([]byte, error) {
 		b.WriteString("\t").WriteString(exported(field.Name)).Byte(' ').WriteString(field.Type).WriteString("\n")
 	}
 	b.WriteString("}\n\n")
+	writeResultBindings(&b, in)
 	b.WriteString("type ").WriteString(in.Decoder).WriteString(" struct{}\n")
 	b.WriteString("func (").WriteString(in.Decoder).WriteString(") ResultSchema() rasql.ResultSchema { return ").WriteString(in.Decoder).WriteString("Schema() }\n")
 	b.WriteString("func (").WriteString(in.Decoder).WriteString(") Presence() []rasql.Presence { return nil }\n")
@@ -96,6 +100,51 @@ func TypedGoSource(in TypedInput) ([]byte, error) {
 	writeArgs(&b, in.Parameters, in.ArgumentNames)
 	b.WriteString("}, projection, rasql.").WriteString(cardinality(in.Cardinality)).WriteString(")\n}\n")
 	return format.Source(b.Bytes())
+}
+
+func validateTypedResultFields(function string, values []TypedValue) error {
+	seen := make(map[string]string, len(values))
+	for _, value := range values {
+		field := exported(value.Go.Name)
+		if previous, exists := seen[field]; exists {
+			return fmt.Errorf("querygen: typed query %q result fields %q and %q normalize to %q", function, previous, value.Go.Name, field)
+		}
+		seen[field] = value.Go.Name
+	}
+	return nil
+}
+
+func writeResultBindings(b *sourceBuilder, in TypedInput) {
+	b.WriteString("type ").WriteString(in.Function).WriteString("Bindings struct{}\n")
+	b.WriteString("type ").WriteString(in.Function).WriteString("Expressions struct {\n")
+	for _, value := range in.Results {
+		field := value.Go
+		b.WriteString("\t").WriteString(exported(field.Name)).Byte(' ')
+		if field.Nullable {
+			b.WriteString("rasql.NullColumn[").WriteString(in.Result).Byte(',').WriteString(nullableBase(field.Type)).Byte(']')
+		} else {
+			b.WriteString("rasql.Column[").WriteString(in.Result).Byte(',').WriteString(field.Type).Byte(']')
+		}
+		b.Byte('\n')
+	}
+	b.WriteString("}\nfunc (").WriteString(in.Function).WriteString("Bindings) Bind(source rasql.TypedSource[").WriteString(in.Result).WriteString("]) (").WriteString(in.Function).WriteString("Expressions, error) {\n")
+	for _, value := range in.Results {
+		field := value.Go
+		b.WriteString("\tvalue").WriteString(exported(field.Name)).WriteString(", err := rasql.")
+		if field.Nullable {
+			b.WriteString("BindNullResultColumn[")
+		} else {
+			b.WriteString("BindResultColumn[")
+		}
+		b.WriteString(in.Result).Byte(',').WriteString(nullableBase(field.Type)).WriteString("](source, ").WriteString(strconv.Quote(field.Name)).WriteString(")\n")
+		b.WriteString("\tif err != nil { return ").WriteString(in.Function).WriteString("Expressions{}, err }\n")
+	}
+	b.WriteString("\treturn ").WriteString(in.Function).WriteString("Expressions{")
+	for _, value := range in.Results {
+		field := value.Go
+		b.WriteString(exported(field.Name)).WriteString(": value").WriteString(exported(field.Name)).Byte(',')
+	}
+	b.WriteString("}, nil\n}\n\n")
 }
 
 func typedMutationSource(in TypedInput) ([]byte, error) {
@@ -156,6 +205,12 @@ func cardinality(value string) string {
 	default:
 		return "Many"
 	}
+}
+func nullableBase(value string) string {
+	if strings.HasPrefix(value, "rasql.Nullable[") {
+		return strings.TrimSuffix(strings.TrimPrefix(value, "rasql.Nullable["), "]")
+	}
+	return value
 }
 func exported(value string) string {
 	var b strings.Builder

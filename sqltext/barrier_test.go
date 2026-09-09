@@ -19,9 +19,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
+	"github.com/lestrrat-go/rasql/internal/scratchmod"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/stmt"
 	"github.com/stretchr/testify/require"
@@ -43,17 +43,9 @@ var (
 func TestTextRejectsARuntimeStringWithoutConversion(t *testing.T) {
 	moduleDir := t.TempDir()
 
-	repoGoMod, err := os.ReadFile(filepath.Join("..", "go.mod"))
-	require.NoError(t, err)
 	repository, err := filepath.Abs("..")
 	require.NoError(t, err)
-	module := strings.Replace(string(repoGoMod), "module github.com/lestrrat-go/rasql\n", "module example.com/barrier\n", 1)
-	module += "\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => " + filepath.ToSlash(repository) + "\n"
-	require.NoError(t, os.WriteFile(filepath.Join(moduleDir, "go.mod"), []byte(module), 0o600))
-
-	repoGoSum, err := os.ReadFile(filepath.Join("..", "go.sum"))
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(moduleDir, "go.sum"), repoGoSum, 0o600))
+	require.NoError(t, scratchmod.Write(moduleDir, repository, "example.com/barrier"))
 
 	const mainSource = `package main
 

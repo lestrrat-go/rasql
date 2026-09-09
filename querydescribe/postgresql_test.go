@@ -3,10 +3,12 @@ package querydescribe
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/queryevidence"
 )
 
@@ -86,13 +88,23 @@ func TestPostgreSQLDescribeConnectFailure(t *testing.T) {
 func TestPostgreSQLDescribeMapsKnownAndUnknownOID(t *testing.T) {
 	typemap := pgtype.NewMap()
 	typemap.RegisterType(&pgtype.Type{Name: "int4", OID: 23, Codec: pgtype.Int4Codec{}})
-	conn := &fakePGConn{typemap: typemap, description: &pgconn.StatementDescription{ParamOIDs: []uint32{23, 999999}, Fields: []pgconn.FieldDescription{{Name: "value", DataTypeOID: 23}}}}
+	typemap.RegisterType(&pgtype.Type{Name: "bool", OID: 16, Codec: pgtype.BoolCodec{}})
+	conn := &fakePGConn{typemap: typemap, description: &pgconn.StatementDescription{ParamOIDs: []uint32{23, 16, 999999}, Fields: []pgconn.FieldDescription{{Name: "flag", DataTypeOID: 16}, {Name: "value", DataTypeOID: 23}}}}
 	d := PostgreSQLDescriber{connector: func(context.Context, string) (postgresDescribeConn, error) { return conn, nil }}
 	got, err := d.Describe(t.Context(), queryevidence.DescribeRequest{DSN: "owned", Name: "q", SQL: "SELECT 1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Parameters[0].Type.LogicalKind != "integer" || got.Parameters[1].Type.Certainty != "unknown" || got.Results[0].Type.LogicalKind != "integer" {
+	wantBoolNative := &compilerir.NativeType{Dialect: "postgresql", Name: "bool", Kind: "builtin"}
+	parameterBool := got.Parameters[1].Type
+	resultBool := got.Results[0].Type
+	if parameterBool.LogicalKind != "boolean" || parameterBool.Certainty != compilerir.CertaintyKnown || !reflect.DeepEqual(parameterBool.Native, wantBoolNative) {
+		t.Fatalf("boolean parameter evidence=%#v", parameterBool)
+	}
+	if resultBool.LogicalKind != "boolean" || resultBool.Certainty != compilerir.CertaintyKnown || !reflect.DeepEqual(resultBool.Native, wantBoolNative) {
+		t.Fatalf("boolean result evidence=%#v", resultBool)
+	}
+	if got.Parameters[0].Type.LogicalKind != "integer" || got.Parameters[2].Type.Certainty != compilerir.CertaintyUnknown || got.Results[1].Type.LogicalKind != "integer" {
 		t.Fatalf("description=%#v", got)
 	}
 }

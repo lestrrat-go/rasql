@@ -22,6 +22,17 @@ import (
 	"github.com/lestrrat-go/rasql/internal/genfile"
 )
 
+// schemaDescriptorFilename and schemaDescriptorTestFilename are the two files
+// a generated package holds once rather than once per table: the runtime
+// descriptor for every table, and the generated test that checks it. Commit
+// writes them last, after every per-table and query file, so a package is
+// never left declaring a descriptor for a table whose own file is not there
+// yet.
+const (
+	schemaDescriptorFilename     = "schema_gen.go"
+	schemaDescriptorTestFilename = "schema_gen_test.go"
+)
+
 // writeGeneratedFile and removeGeneratedFile are the seam Plan.Commit writes
 // and deletes through. They exist so a test can swap them for a recording
 // stand-in and observe the order Commit calls them in, without handing a

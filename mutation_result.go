@@ -25,13 +25,13 @@ const (
 	InputUnknown
 )
 
-type MutationBatchOutcome struct {
+type BulkOutcome struct {
 	Inputs      []InputOutcome
 	Durability  Durability
 	FailedBatch []int
 }
 
-type MutationBatchOptions struct {
+type BulkOptions struct {
 	MaxRows           int
 	MaxBindParameters int
 	Atomic            bool

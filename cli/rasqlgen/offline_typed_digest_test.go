@@ -16,6 +16,7 @@ import (
 	"github.com/lestrrat-go/rasql/internal/compilerquery"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/internal/schemasource"
+	"github.com/lestrrat-go/rasql/internal/scratchmod"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 
@@ -43,7 +44,7 @@ func TestOfflineDigestRetainsKnownQueryEvidence(t *testing.T) {
 		Parameters: []compilerlock.ValueRecord{parameter}, Results: []compilerlock.ValueRecord{result}, Evidence: compilerlock.EngineEvidence{Dialect: "postgresql", Profile: "postgresql-16"},
 	}
 	source := compilerlock.SourceDigestInput{Record: compilerlock.SourceRecord{Kind: "migrations", Identity: "known-evidence"}, Engine: compilerlock.EngineRecord{Dialect: "postgresql", Profile: "postgresql-16"}}
-	generation := compilerir.GoConfig{Package: "store", Output: "internal/store", Emitter: "legacy", Prune: true, Queries: []compilerir.QueryGoName{{ID: "report", Function: "Report", Result: "ReportResult", Projection: "ReportProjection", Decoder: "ReportDecoder", File: "report_gen.go"}}}
+	generation := compilerir.GoConfig{Package: "store", Output: "internal/store", Emitter: "compact", Prune: true, Queries: []compilerir.QueryGoName{{ID: "report", Function: "Report", Result: "ReportResult", Projection: "ReportProjection", Decoder: "ReportDecoder", File: "report_gen.go"}}}
 	digests, err := compilerlock.BuildDigests(compilerlock.DigestInputs{Source: source, Mappings: compilerir.MappingConfig{}, Queries: []compilerlock.QueryDigestInput{{ID: string(queryRecord.ID), SQL: queryRecord.SQL, Operation: queryRecord.Operation, Parameters: queryRecord.Parameters, Results: queryRecord.Results, Cardinality: queryRecord.Cardinality}}, Generation: generation})
 	require.NoError(t, err)
 	lock := compilerlock.File{Format: compilerlock.FormatVersion, Compiler: "rasql", Source: source.Record, Engine: source.Engine, Queries: []compilerlock.QueryRecord{queryRecord}, Generation: compilerlock.GenerationRecord{Package: generation.Package, Output: generation.Output, Emitter: generation.Emitter, Prune: generation.Prune, Queries: []compilerlock.QueryNameRecord{{ID: "report", Function: "Report", Result: "ReportResult", Projection: "ReportProjection", Decoder: "ReportDecoder", File: "report_gen.go"}}}, Digests: digests}
@@ -212,7 +213,7 @@ func newKnownPostgreSQLFixture(t *testing.T) knownPostgreSQLFixture {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "migrations"), 0o700))
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "queries"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.test/known\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => "+filepath.ToSlash(repoRoot(t))+"\n"), 0o600))
+	require.NoError(t, scratchmod.Write(root, repoRoot(t), "example.test/known"))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "migrations", "001.sql"), []byte("-- known evidence fixture\n"), 0o600))
 	queryPath := filepath.Join(root, "queries", "report.sql")
 	require.NoError(t, os.WriteFile(queryPath, []byte("SELECT id, created_at FROM reports WHERE id = {{bind \"id\"}}\n"), 0o600))
@@ -225,7 +226,7 @@ func newKnownPostgreSQLFixture(t *testing.T) knownPostgreSQLFixture {
 	config := map[string]any{
 		"engine":  map[string]string{"dialect": "postgresql", "profile": "postgresql-16"},
 		"schema":  map[string]any{"kind": "migrations", "identity": "known-postgresql", "paths": []string{"migrations/*.sql"}},
-		"package": "store", "output": "internal/store", "emitter": "legacy",
+		"package": "store", "output": "internal/store", "emitter": "compact",
 		"queries": []any{map[string]any{
 			"id": "report", "input": "queries/report.sql", "engine": "postgresql", "function": "Report", "output": "report_gen.go",
 			"operation": "select", "cardinality": "many",

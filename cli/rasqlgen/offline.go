@@ -53,6 +53,12 @@ func (c command) runOfflineGenerate(settings config, configPath string, check bo
 	if err != nil {
 		return err
 	}
+	if len(settings.Mappings) == 0 {
+		mappings, err = lock.Mappings.MappingConfig()
+		if err != nil {
+			return fmt.Errorf("generate: reconstruct mappings from lock: %w", err)
+		}
+	}
 	queries := make([]compilerir.QueryAnalysis, 0, len(lock.Queries))
 	for _, query := range lock.Queries {
 		queries = append(queries, compilerlock.AnalysisFromQuery(query))
@@ -71,9 +77,13 @@ func (c command) runOfflineGenerate(settings config, configPath string, check bo
 	if settings.Output == "" {
 		settings.Output = lock.Generation.Output
 	}
-	generation := compilerir.GoConfig{Package: settings.Package, Output: settings.Output, Emitter: lock.Generation.Emitter, Prune: prune, Scalars: mappings.Scalars}
+	emitter := lock.Generation.Emitter
+	if settings.Emitter != "" {
+		emitter = settings.Emitter
+	}
+	generation := compilerir.GoConfig{Package: settings.Package, Output: settings.Output, Emitter: emitter, Prune: prune, Scalars: mappings.Scalars}
 	if generation.Emitter == "" {
-		generation.Emitter = "legacy"
+		generation.Emitter = "compact"
 	}
 	for _, object := range lock.Generation.Objects {
 		generation.Objects = append(generation.Objects, compilerir.ObjectGoName{ID: compilerir.ObjectID(object.ID), Source: object.Source, Row: object.Row, Create: object.Create, Patch: object.Patch, File: object.File})
@@ -85,11 +95,11 @@ func (c command) runOfflineGenerate(settings config, configPath string, check bo
 	if hasErrors(diagnostics) {
 		return fmt.Errorf("generate: Go model failed")
 	}
-	input, err := generate.NewEmitterInput(catalog, semantic, goModel, generation)
+	input, err := generate.NewEmitterInput(catalog, semantic, goModel, generation, mappings)
 	if err != nil {
 		return err
 	}
-	store, err := generate.LegacyStore(input)
+	store, err := renderEmitter(input)
 	if err != nil {
 		return err
 	}
@@ -215,6 +225,12 @@ func offlineDigestGroups(root string, settings config, lock compilerlock.File) (
 	if err != nil {
 		return nil, err
 	}
+	if len(settings.Mappings) == 0 {
+		mappings, err = lock.Mappings.MappingConfig()
+		if err != nil {
+			return nil, fmt.Errorf("generate: reconstruct mappings from lock: %w", err)
+		}
+	}
 	source := compilerlock.SourceDigestInput{Record: lock.Source, Engine: lock.Engine}
 	source.Record.Files = nil
 	sourceChanged := false
@@ -264,7 +280,11 @@ func offlineDigestGroups(root string, settings config, lock compilerlock.File) (
 		}
 		queries = append(queries, compilerlock.QueryDigestInput{ID: string(query.ID), SQL: input, Operation: query.Operation, Parameters: query.Parameters, Results: query.Results, Cardinality: query.Cardinality})
 	}
-	generation := compilerir.GoConfig{Package: lock.Generation.Package, Output: lock.Generation.Output, Emitter: lock.Generation.Emitter, Prune: lock.Generation.Prune}
+	emitter := lock.Generation.Emitter
+	if settings.Emitter != "" {
+		emitter = settings.Emitter
+	}
+	generation := compilerir.GoConfig{Package: lock.Generation.Package, Output: lock.Generation.Output, Emitter: emitter, Prune: lock.Generation.Prune, Scalars: mappings.Scalars}
 	if settings.Package != "" {
 		generation.Package = settings.Package
 	}

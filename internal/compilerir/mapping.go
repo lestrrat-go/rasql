@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/parser"
+	"go/token"
 	"regexp"
 	"strings"
 )
@@ -92,7 +93,60 @@ func ValidateMappingConfig(config MappingConfig, packageName string) error {
 			return fmt.Errorf("%s.match.schema: requires name", path)
 		}
 	}
+	relationNames := make(map[string]struct{}, len(config.Relations))
+	for i, relation := range config.Relations {
+		path := fmt.Sprintf("relations[%d]", i)
+		if relation.Name == "" {
+			return fmt.Errorf("%s.name: must not be empty", path)
+		}
+		if !validGeneratedIdentifier(relation.Name) {
+			return fmt.Errorf("%s.name: must be a valid Go identifier", path)
+		}
+		nameKey := string(relation.Source) + "\x00" + relation.Name
+		if _, ok := relationNames[nameKey]; ok {
+			return fmt.Errorf("%s.name: duplicate relation %q", path, relation.Name)
+		}
+		relationNames[nameKey] = struct{}{}
+		if relation.Source == "" || relation.Target == "" || relation.Through.Object == "" {
+			return fmt.Errorf("%s: source, target, and through object are required", path)
+		}
+		if len(relation.From) == 0 || len(relation.To) == 0 {
+			return fmt.Errorf("%s: from and to paths are required", path)
+		}
+		if len(relation.From) != len(relation.Through.SourceFrom) || len(relation.From) != len(relation.Through.SourceTo) {
+			return fmt.Errorf("%s: source paths must have equal widths", path)
+		}
+		if len(relation.To) != len(relation.Through.TargetFrom) || len(relation.To) != len(relation.Through.TargetTo) {
+			return fmt.Errorf("%s: target paths must have equal widths", path)
+		}
+		for j := range relation.From {
+			if relation.From[j] != relation.Through.SourceTo[j] {
+				return fmt.Errorf("%s: source path must equal through source_to", path)
+			}
+		}
+		for j := range relation.To {
+			if relation.To[j] != relation.Through.TargetTo[j] {
+				return fmt.Errorf("%s: target path must equal through target_to", path)
+			}
+		}
+		for _, columns := range [][]string{relation.From, relation.To, relation.Through.SourceFrom, relation.Through.SourceTo, relation.Through.TargetFrom, relation.Through.TargetTo} {
+			seen := map[string]struct{}{}
+			for _, column := range columns {
+				if column == "" {
+					return fmt.Errorf("%s: relation paths must not contain empty columns", path)
+				}
+				if _, ok := seen[column]; ok {
+					return fmt.Errorf("%s: relation paths must not repeat columns", path)
+				}
+				seen[column] = struct{}{}
+			}
+		}
+	}
 	return nil
+}
+
+func validGeneratedIdentifier(name string) bool {
+	return name != "_" && token.IsIdentifier(name)
 }
 
 type mappingSelection struct {

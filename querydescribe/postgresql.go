@@ -105,7 +105,7 @@ func certainty(kind string) compilerir.Certainty {
 func pgLogicalKind(name string) string {
 	switch strings.ToLower(name) {
 	case "bool":
-		return "bool"
+		return "boolean"
 	case "int2", "int4", "int8":
 		return "integer"
 	case "float4", "float8":

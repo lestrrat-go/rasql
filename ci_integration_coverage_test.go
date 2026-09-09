@@ -20,10 +20,13 @@ const (
 	modulePath       = "github.com/lestrrat-go/rasql"
 	dbtestImportPath = modulePath + "/internal/dbtest"
 	workflowPath     = ".github/workflows/ci.yml"
+	checkJob         = "check"
+	checkStep        = "Run the full suite"
 	integrationJob   = "integration"
 	integrationStep  = "Run the suite against live databases"
 	verboseFlag      = "-v"
 	countFlag        = "-count"
+	parallelFlag     = "-p"
 )
 
 // TestIntegrationJobListsEveryDBTestGuardedPackage protects the invariant
@@ -56,11 +59,96 @@ func TestIntegrationJobListsEveryDBTestGuardedPackage(t *testing.T) {
 	guarded := guardedPackages(t, root)
 	listed := integrationJobPackages(t, filepath.Join(root, workflowPath))
 
+	workflow, err := os.ReadFile(filepath.Join(root, workflowPath))
+	require.NoError(t, err, "read %s", workflowPath)
 	for _, pkg := range guarded {
+		if pkg == modulePath+"/internal/conformance" && dedicatedConformanceStep(string(workflow)) {
+			continue
+		}
 		if !anyListedCovers(listed, pkg) {
 			t.Errorf("package %q has a test file importing %q, but the integration job's `go test -v` package list in %s does not cover it; add it to that list so the guarded test runs against a live database instead of nowhere at all", pkg, dbtestImportPath, workflowPath)
 		}
 	}
+}
+
+func dedicatedConformanceStep(workflow string) bool {
+	lines := strings.Split(workflow, "\n")
+	jobs := blockUnder(lines, "jobs:")
+	job := blockUnder(jobs, integrationJob+":")
+	steps := blockUnder(job, "steps:")
+	var conformance []workflowStep
+	var evidence []workflowStep
+	for _, step := range splitSteps(steps) {
+		switch step.name {
+		case "Run D4 conformance matrix":
+			conformance = append(conformance, step)
+		case "Upload D4 conformance evidence":
+			evidence = append(evidence, step)
+		}
+	}
+	if len(conformance) != 1 || len(evidence) != 1 {
+		return false
+	}
+	if conformance[0].run != "mkdir -p .tmp && ./scripts/conformance.sh live" {
+		return false
+	}
+	if conformance[0].envInvalid {
+		return false
+	}
+	for key, expected := range map[string]string{
+		"RASQL_TEST_POSTGRES_DSN":  "postgres://rasql:rasql@127.0.0.1:5432/rasql?sslmode=disable",
+		"RASQL_TEST_MYSQL_DSN":     "root:root@tcp(127.0.0.1:3306)/rasql?parseTime=true",
+		"RASQL_CONFORMANCE_OUTPUT": "${{ github.workspace }}/.tmp/d4-conformance.json",
+		"RASQL_CONFORMANCE_LOG":    "${{ github.workspace }}/.tmp/d4-conformance.log",
+	} {
+		if conformance[0].env[key] != expected {
+			return false
+		}
+	}
+	evidenceText := strings.Join(stepBlock(steps, "Upload D4 conformance evidence"), "\n")
+	return strings.Contains(evidenceText, ".tmp/d4-conformance.log") &&
+		strings.Contains(evidenceText, ".tmp/d4-conformance.json") &&
+		strings.Contains(evidenceText, "if-no-files-found: error")
+}
+
+func DedicatedConformanceStep(workflow string) bool { return dedicatedConformanceStep(workflow) }
+
+func stepBlock(block []string, name string) []string {
+	for _, step := range splitSteps(block) {
+		if step.name != name {
+			continue
+		}
+		// splitSteps already limits a step to its own item. Returning the raw
+		// block is useful here because environment and upload keys are not
+		// needed by integrationRunPackages and must still be checked.
+		itemIndent := -1
+		for _, line := range block {
+			if strings.Contains(line, "- name: "+name) {
+				itemIndent = leadingSpaces(line)
+				break
+			}
+		}
+		if itemIndent < 0 {
+			return nil
+		}
+		var result []string
+		started := false
+		for _, line := range block {
+			trimmed := strings.TrimSpace(line)
+			if leadingSpaces(line) == itemIndent && strings.HasPrefix(trimmed, "- ") {
+				if started {
+					break
+				}
+				started = strings.TrimSpace(strings.TrimPrefix(trimmed, "- ")) == "name: "+name
+
+			}
+			if started {
+				result = append(result, line)
+			}
+		}
+		return result
+	}
+	return nil
 }
 
 // goAlwaysSkipsDirName reports whether the go tool passes over a directory of
@@ -243,6 +331,78 @@ func integrationJobPackages(t *testing.T, path string) []string {
 	return pkgs
 }
 
+// workflowGoTestCommand locates one uniquely named workflow step and parses
+// its single-line go test command. Callers validate the command's effective
+// flags and package list for the job-specific invariant they own.
+func workflowGoTestCommand(workflow, jobName, stepName string) (string, *goTestCommand, error) {
+	lines := strings.Split(workflow, "\n")
+
+	jobs := blockUnder(lines, "jobs:")
+	if len(jobs) == 0 {
+		return "", nil, fmt.Errorf("the workflow has no top-level jobs: key, so its %q job cannot be located", jobName)
+	}
+	job := blockUnder(jobs, jobName+":")
+	if len(job) == 0 {
+		return "", nil, fmt.Errorf("no %q job under jobs:", jobName)
+	}
+	steps := blockUnder(job, "steps:")
+	if len(steps) == 0 {
+		return "", nil, fmt.Errorf("the %q job has no steps: key", jobName)
+	}
+
+	var matched []workflowStep
+	for _, step := range splitSteps(steps) {
+		if step.name == stepName {
+			matched = append(matched, step)
+		}
+	}
+	if len(matched) != 1 {
+		return "", nil, fmt.Errorf("the %q job has %d steps named %q, want exactly 1; update this test to match the workflow", jobName, len(matched), stepName)
+	}
+
+	run := matched[0].run
+	if run == "" {
+		return "", nil, fmt.Errorf("the %q step has no run: key of its own", stepName)
+	}
+	if strings.HasPrefix(run, "|") || strings.HasPrefix(run, ">") {
+		return "", nil, fmt.Errorf("the %q step's run: is a multi-line block (%q), which this test cannot parse; keep it a single `go test` command or update this test", stepName, run)
+	}
+
+	fields := strings.Fields(run)
+	if len(fields) < 2 || fields[0] != "go" || fields[1] != "test" {
+		return "", nil, fmt.Errorf("expected the %q step to run a `go test` command, got %q", stepName, run)
+	}
+
+	cmd, err := goTestArgs(fields[2:])
+	if err != nil {
+		return "", nil, err
+	}
+	return run, cmd, nil
+}
+
+// checkRunCommand reads the check job's uniquely named broad suite step and
+// requires the exact uncached, verbose, serialized command that preserves all
+// performance evidence.
+func checkRunCommand(workflow string) (*goTestCommand, error) {
+	run, cmd, err := workflowGoTestCommand(workflow, checkJob, checkStep)
+	if err != nil {
+		return nil, err
+	}
+	if !cmd.verbose {
+		return nil, fmt.Errorf("the %q step's command %q does not run its tests verbosely; the effective value of %s must be true", checkStep, run, verboseFlag)
+	}
+	if !cmd.countSet || cmd.count != 1 {
+		return nil, fmt.Errorf("the %q step's command %q has an effective %s value of %d; it must use %s 1 to prevent cached performance results", checkStep, run, countFlag, cmd.count, countFlag)
+	}
+	if cmd.parallel != 1 {
+		return nil, fmt.Errorf("the %q step's command %q has an effective %s value of %d; it must use %s 1 so package test binaries cannot run alongside one another", checkStep, run, parallelFlag, cmd.parallel, parallelFlag)
+	}
+	if !slices.Equal(cmd.pkgs, []string{"./..."}) {
+		return nil, fmt.Errorf("the %q step's command %q must run exactly the ./... package, got %v", checkStep, run, cmd.pkgs)
+	}
+	return cmd, nil
+}
+
 // integrationRunPackages returns the package specs the integrationStep of
 // the integrationJob passes to `go test` in the given ci.yml document.
 //
@@ -257,49 +417,7 @@ func integrationJobPackages(t *testing.T, path string) []string {
 // package. And a run: search that keeps walking past the end of its step
 // picks up a neighbouring step's command for the same reason.
 func integrationRunPackages(workflow string) ([]string, error) {
-	lines := strings.Split(workflow, "\n")
-
-	jobs := blockUnder(lines, "jobs:")
-	if len(jobs) == 0 {
-		return nil, fmt.Errorf("the workflow has no top-level jobs: key, so its %q job cannot be located", integrationJob)
-	}
-	job := blockUnder(jobs, integrationJob+":")
-	if len(job) == 0 {
-		return nil, fmt.Errorf("no %q job under jobs:", integrationJob)
-	}
-	steps := blockUnder(job, "steps:")
-	if len(steps) == 0 {
-		return nil, fmt.Errorf("the %q job has no steps: key", integrationJob)
-	}
-
-	var matched []workflowStep
-	for _, step := range splitSteps(steps) {
-		if step.name == integrationStep {
-			matched = append(matched, step)
-		}
-	}
-	if len(matched) != 1 {
-		return nil, fmt.Errorf("the %q job has %d steps named %q, want exactly 1; update this test to match the workflow", integrationJob, len(matched), integrationStep)
-	}
-
-	run := matched[0].run
-	if run == "" {
-		return nil, fmt.Errorf("the %q step has no run: key of its own", integrationStep)
-	}
-	// A block scalar ("run: |") carries its command on the following
-	// lines, which this parser deliberately does not read: the step it
-	// guards is one command long, and accepting a multi-line body would
-	// mean deciding which of its lines is the `go test` invocation.
-	if strings.HasPrefix(run, "|") || strings.HasPrefix(run, ">") {
-		return nil, fmt.Errorf("the %q step's run: is a multi-line block (%q), which this test cannot parse; keep it a single `go test` command or update this test", integrationStep, run)
-	}
-
-	fields := strings.Fields(run)
-	if len(fields) < 2 || fields[0] != "go" || fields[1] != "test" {
-		return nil, fmt.Errorf("expected the %q step to run a `go test` command, got %q", integrationStep, run)
-	}
-
-	cmd, err := goTestArgs(fields[2:])
+	run, cmd, err := workflowGoTestCommand(workflow, integrationJob, integrationStep)
 	if err != nil {
 		return nil, err
 	}
@@ -308,6 +426,9 @@ func integrationRunPackages(workflow string) ([]string, error) {
 	}
 	if cmd.count < 1 {
 		return nil, fmt.Errorf("the %q step's command %q runs each test %d times, so go test executes no test at all in the packages it lists and still exits 0; the job would end green, with %s and every package still in place, having touched no database at all", integrationStep, run, cmd.count, verboseFlag)
+	}
+	if cmd.parallel != 1 {
+		return nil, fmt.Errorf("the %q step's command %q has an effective %s value of %d; it must use %s 1 so package test binaries cannot run alongside one another", integrationStep, run, parallelFlag, cmd.parallel, parallelFlag)
 	}
 	if len(cmd.pkgs) == 0 {
 		return nil, fmt.Errorf("found no package arguments in the %q step's command %q", integrationStep, run)
@@ -322,10 +443,10 @@ func integrationRunPackages(workflow string) ([]string, error) {
 // for a boolean one donates its value to the package list, and this guard
 // then reports a coverage it cannot actually see.
 //
-// -v and -count are absent from both tables because goTestArgs gives each an
-// arm of its own: their values, not merely their presence, decide whether the
-// listed packages' tests run and are named, so this guard reads the value
-// instead of only stepping over it.
+// -v, -count, and -p are absent from both tables because goTestArgs gives each
+// an arm of its own: their values, not merely their presence, decide whether
+// the listed packages' tests run, are named, and are isolated, so this guard
+// reads each value instead of only stepping over it.
 var goTestBoolFlags = map[string]bool{
 	"-a":          true,
 	"-asan":       true,
@@ -421,8 +542,9 @@ func goTestFlagName(name string) string {
 }
 
 // goTestCommand is what an accepted `go test` command line would actually do:
-// the packages it names, and the effective values of the two flags that decide
-// whether the tests in those packages run at all and are named in the log.
+// the packages it names, and the effective values of the flags that decide
+// whether the tests in those packages run at all, are named in the log, and
+// run without sibling package test binaries.
 //
 // Effective, not as written, is the whole point of the type. go's flag parsing
 // lets a later assignment overturn an earlier one, so a command carrying a
@@ -431,9 +553,11 @@ func goTestFlagName(name string) string {
 // nothing (`go test -count=0 ./...` exits 0 saying "no tests to run"). A guard
 // that looked for the tokens would accept both.
 type goTestCommand struct {
-	pkgs    []string
-	verbose bool
-	count   int
+	pkgs     []string
+	verbose  bool
+	count    int
+	countSet bool
+	parallel int
 }
 
 // goTestArgs reads the arguments following `go test` into the effect the
@@ -443,17 +567,16 @@ type goTestCommand struct {
 //
 // Anything this parser cannot classify is an error rather than a guess:
 // a bare flag of unknown arity, a value-taking flag with no value left to
-// take, a -v or -count whose value it cannot read, -args (after which go stops
+// take, a -v, -count, or -p whose value it cannot read, -args (after which go stops
 // reading packages at all), and an operand written in neither ./dir/... nor
 // . form.
 //
 // The flags that would leave the job green without running the tests it
 // lists packages for -- a selection filter, a listing flag -- are refused
 // before arity is consulted at all, so neither the joined form nor the
-// separate one can slip past on the shape of its value. -v and -count are the
-// two whose value is read instead, since neither can be refused outright: the
-// step is required to pass -v, and it passes -count=1 on purpose to defeat the
-// test cache.
+// separate one can slip past on the shape of its value. -v, -count, and -p are
+// the values read instead: the step is required to pass -v, passes -count=1 to
+// defeat the test cache, and passes -p 1 to serialize package test binaries.
 func goTestArgs(args []string) (*goTestCommand, error) {
 	// go's own defaults for the flags read here: tests are not named in the
 	// log, and each test runs once.
@@ -511,6 +634,21 @@ func goTestArgs(args []string) (*goTestCommand, error) {
 				return nil, fmt.Errorf("the %q step's command passes %s with the value %q, which this test cannot read as a number of runs (%s)", integrationStep, arg, raw, err)
 			}
 			cmd.count = parsed
+			cmd.countSet = true
+		case flag == parallelFlag:
+			raw := value
+			if !joined {
+				if i+1 == len(args) {
+					return nil, fmt.Errorf("the %q step's command ends with %s, which takes a value", integrationStep, arg)
+				}
+				i++
+				raw = args[i]
+			}
+			parsed, err := strconv.Atoi(raw)
+			if err != nil {
+				return nil, fmt.Errorf("the %q step's command passes %s with the value %q, which this test cannot read as a package parallelism value (%s)", integrationStep, arg, raw, err)
+			}
+			cmd.parallel = parsed
 		case joined, goTestBoolFlags[flag]:
 			// A flag with no bearing on whether the listed packages' tests run
 			// or are named; it needs no value taken from the argument list.
@@ -531,8 +669,10 @@ func goTestArgs(args []string) (*goTestCommand, error) {
 // workflowStep is one step of a workflow job: the value of its name: key
 // and the value of its run: key, each empty when the step has no such key.
 type workflowStep struct {
-	name string
-	run  string
+	name       string
+	run        string
+	env        map[string]string
+	envInvalid bool
 }
 
 // leadingSpaces counts the run of literal space characters at the start of
@@ -642,20 +782,50 @@ func parseStep(item []string, itemIndent int) workflowStep {
 	const marker = "- "
 	keyIndent := itemIndent + len(marker)
 
-	var step workflowStep
+	step := workflowStep{env: make(map[string]string)}
+	envIndent := keyIndent + 2
+	inEnv := false
 	for i, line := range item {
 		key := strings.TrimSpace(line)
 		if i == 0 {
 			key = strings.TrimPrefix(key, marker)
-		} else if leadingSpaces(line) != keyIndent {
-			continue
+		} else {
+			depth := leadingSpaces(line)
+			if inEnv && depth == envIndent {
+				name, value, ok := strings.Cut(key, ":")
+				if !ok || strings.TrimSpace(name) == "" || strings.TrimSpace(value) == "" {
+					step.envInvalid = true
+					continue
+				}
+				value = strings.TrimSpace(value)
+				if value == "|" || value == ">" || strings.HasPrefix(value, "*") || strings.HasPrefix(value, "&") {
+					step.envInvalid = true
+					continue
+				}
+				if _, exists := step.env[name]; exists {
+					step.envInvalid = true
+				}
+				step.env[name] = unquoteScalar(value)
+				continue
+			}
+			if depth != keyIndent {
+				continue
+			}
 		}
 		if after, ok := strings.CutPrefix(key, "name:"); ok && step.name == "" {
 			step.name = unquoteScalar(strings.TrimSpace(after))
 			continue
 		}
+		if after, ok := strings.CutPrefix(key, "env:"); ok {
+			if strings.TrimSpace(after) != "" {
+				step.envInvalid = true
+			}
+			inEnv = true
+			continue
+		}
 		if after, ok := strings.CutPrefix(key, "run:"); ok && step.run == "" {
 			step.run = strings.TrimSpace(after)
+			inEnv = false
 		}
 	}
 	return step
@@ -713,15 +883,63 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "reads the step's package list",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -count=1 -v ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 -v ./alpha/... ."),
 			),
 			want: []string{"./alpha/...", "."},
+		},
+		{
+			name: "reads a joined package parallelism value",
+			workflow: fixtureWorkflow(
+				fixtureStep("Unit tests", "go test ./..."),
+				fixtureStep(integrationStep, "go test -p=1 -count=1 -v ./alpha/... ."),
+			),
+			want: []string{"./alpha/...", "."},
+		},
+		{
+			name: "rejects missing package parallelism",
+			workflow: fixtureWorkflow(
+				fixtureStep("Unit tests", "go test ./..."),
+				fixtureStep(integrationStep, "go test -count=1 -v ./alpha/... ."),
+			),
+			wantErr: "effective -p value of 0",
+		},
+		{
+			name: "rejects zero package parallelism",
+			workflow: fixtureWorkflow(
+				fixtureStep("Unit tests", "go test ./..."),
+				fixtureStep(integrationStep, "go test -p 0 -count=1 -v ./alpha/... ."),
+			),
+			wantErr: "effective -p value of 0",
+		},
+		{
+			name: "rejects a later package parallelism override",
+			workflow: fixtureWorkflow(
+				fixtureStep("Unit tests", "go test ./..."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 -v -p 2 ./alpha/... ."),
+			),
+			wantErr: "effective -p value of 2",
+		},
+		{
+			name: "rejects package parallelism with no value",
+			workflow: fixtureWorkflow(
+				fixtureStep("Unit tests", "go test ./..."),
+				fixtureStep(integrationStep, "go test -p"),
+			),
+			wantErr: "ends with -p",
+		},
+		{
+			name: "rejects a command without package arguments",
+			workflow: fixtureWorkflow(
+				fixtureStep("Unit tests", "go test ./..."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 -v"),
+			),
+			wantErr: "found no package arguments",
 		},
 		{
 			name: "rejects a command that dropped -v",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -count=1 ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 ./alpha/... ."),
 			),
 			wantErr: "does not run its tests verbosely",
 		},
@@ -734,7 +952,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects verbosity turned off in joined form",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -count=1 -v=false ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 -v=false ./alpha/... ."),
 			),
 			wantErr: "does not run its tests verbosely",
 		},
@@ -742,7 +960,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects verbosity a later test-binary flag turns off",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -count=1 -v -test.v=false ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 -v -test.v=false ./alpha/... ."),
 			),
 			wantErr: "does not run its tests verbosely",
 		},
@@ -750,7 +968,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects verbosity turned off in the -- spelling",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -count=1 -v --test.v=false ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 -v --test.v=false ./alpha/... ."),
 			),
 			wantErr: "does not run its tests verbosely",
 		},
@@ -760,7 +978,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "accepts a -v that follows a turned-off spelling",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -count=1 -test.v=false -v ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 -test.v=false -v ./alpha/... ."),
 			),
 			want: []string{"./alpha/...", "."},
 		},
@@ -768,7 +986,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects a -v whose value is not a boolean",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -count=1 -v=sometimes ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 -v=sometimes ./alpha/... ."),
 			),
 			wantErr: "cannot read as a boolean",
 		},
@@ -779,7 +997,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects a count that runs each test zero times",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -v -count=0 ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -v -count=0 ./alpha/... ."),
 			),
 			wantErr: "runs each test 0 times",
 		},
@@ -787,7 +1005,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects a zero count written apart from its flag",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -v -count 0 ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -v -count 0 ./alpha/... ."),
 			),
 			wantErr: "runs each test 0 times",
 		},
@@ -795,7 +1013,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects the test-binary spelling of a zero count",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -v -test.count=0 ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -v -test.count=0 ./alpha/... ."),
 			),
 			wantErr: "runs each test 0 times",
 		},
@@ -803,7 +1021,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects a count that is not a number",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -v -count=once ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -v -count=once ./alpha/... ."),
 			),
 			wantErr: "cannot read as a number of runs",
 		},
@@ -811,15 +1029,15 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "does not read a separate count value as a package",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -v -count 2 ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -v -count 2 ./alpha/... ."),
 			),
 			want: []string{"./alpha/...", "."},
 		},
 		{
 			name: "reads past a same-named step in another job",
 			workflow: fixtureWorkflow(
-				fixtureStep(integrationStep, "go test -v ./alpha/... ./beta/... ."),
-				fixtureStep(integrationStep, "go test -v ./alpha/..."),
+				fixtureStep(integrationStep, "go test -p 1 -v ./alpha/... ./beta/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -v ./alpha/..."),
 			),
 			want: []string{"./alpha/..."},
 		},
@@ -827,8 +1045,8 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects the same step name twice in the integration job",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -v ./alpha/...")+
-					fixtureStep(integrationStep, "go test -v ./beta/..."),
+				fixtureStep(integrationStep, "go test -p 1 -v ./alpha/...")+
+					fixtureStep(integrationStep, "go test -p 1 -v ./beta/..."),
 			),
 			wantErr: "has 2 steps named",
 		},
@@ -853,7 +1071,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects an argument that is neither a flag nor a package",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -v ./alpha/... TestSomething"),
+				fixtureStep(integrationStep, "go test -p 1 -v ./alpha/... TestSomething"),
 			),
 			wantErr: `argument "TestSomething"`,
 		},
@@ -861,7 +1079,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "does not read a flag's separate value as a package",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -count=1 -v -coverpkg ./alpha/... -timeout 20m ./beta/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 -v -coverpkg ./alpha/... -timeout 20m ./beta/... ."),
 			),
 			want: []string{"./beta/...", "."},
 		},
@@ -869,7 +1087,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects a test filter whose value looks like a package list",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -count=1 -v -run ./alpha/... ./beta/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 -v -run ./alpha/... ./beta/... ."),
 			),
 			wantErr: `passes -run`,
 		},
@@ -877,7 +1095,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects a test filter written in joined form",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -v -skip=TestSomething ./alpha/..."),
+				fixtureStep(integrationStep, "go test -p 1 -v -skip=TestSomething ./alpha/..."),
 			),
 			wantErr: `passes -skip=TestSomething`,
 		},
@@ -889,7 +1107,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects the test-binary spelling of a filter in joined form",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -count=1 -v -test.run=^$ ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 -v -test.run=^$ ./alpha/... ."),
 			),
 			wantErr: `passes -test.run=^$`,
 		},
@@ -897,7 +1115,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects the test-binary spelling of a filter in separate form",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -count=1 -v -test.skip .* ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 -v -test.skip .* ./alpha/... ."),
 			),
 			wantErr: `passes -test.skip`,
 		},
@@ -906,7 +1124,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects a listing command in joined form",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -count=1 -v -list=.* ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 -v -list=.* ./alpha/... ."),
 			),
 			wantErr: `passes -list=.*`,
 		},
@@ -914,7 +1132,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects a listing command in separate form",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -count=1 -v -list .* ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 -v -list .* ./alpha/... ."),
 			),
 			wantErr: `passes -list`,
 		},
@@ -922,7 +1140,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects the test-binary spelling of a listing command",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -count=1 -v -test.list=.* ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -count=1 -v -test.list=.* ./alpha/... ."),
 			),
 			wantErr: `passes -test.list=.*`,
 		},
@@ -932,7 +1150,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "does not read a test-binary flag's separate value as a package",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -v -test.timeout 20m ./alpha/... ."),
+				fixtureStep(integrationStep, "go test -p 1 -v -test.timeout 20m ./alpha/... ."),
 			),
 			want: []string{"./alpha/...", "."},
 		},
@@ -940,7 +1158,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects a bare flag of unknown arity",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -v -notaflagthisknows ./alpha/..."),
+				fixtureStep(integrationStep, "go test -p 1 -v -notaflagthisknows ./alpha/..."),
 			),
 			wantErr: "does not know whether that flag takes a separate value",
 		},
@@ -948,7 +1166,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects a value-taking flag with no value",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -v ./alpha/... -timeout"),
+				fixtureStep(integrationStep, "go test -p 1 -v ./alpha/... -timeout"),
 			),
 			wantErr: "ends with -timeout",
 		},
@@ -956,7 +1174,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects a count with no value",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -v ./alpha/... -count"),
+				fixtureStep(integrationStep, "go test -p 1 -v ./alpha/... -count"),
 			),
 			wantErr: "ends with -count",
 		},
@@ -964,7 +1182,7 @@ func TestIntegrationRunPackagesReadsTheIntegrationStepsOwnCommand(t *testing.T) 
 			name: "rejects packages listed after -args",
 			workflow: fixtureWorkflow(
 				fixtureStep("Unit tests", "go test ./..."),
-				fixtureStep(integrationStep, "go test -v ./alpha/... -args ./beta/..."),
+				fixtureStep(integrationStep, "go test -p 1 -v ./alpha/... -args ./beta/..."),
 			),
 			wantErr: "passes -args",
 		},
@@ -976,7 +1194,7 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-%s`, fixtureStep(integrationStep, "go test -v ./alpha/...")),
+%s`, fixtureStep(integrationStep, "go test -p 1 -v ./alpha/...")),
 			wantErr: fmt.Sprintf("no %q job", integrationJob),
 		},
 	} {
@@ -991,6 +1209,177 @@ jobs:
 			require.Equal(t, tc.want, got)
 		})
 	}
+}
+
+// TestCheckJobRunsFullSuiteSerially pins the check job's broad command to one
+// uncached, verbose, serialized invocation of every root-module package. The
+// effective values matter because later flag assignments override earlier
+// ones, and a package list that merely resembles ./... can silently omit the
+// performance gate.
+func TestCheckJobRunsFullSuiteSerially(t *testing.T) {
+	data, err := os.ReadFile(workflowPath)
+	require.NoError(t, err, "read %s", workflowPath)
+	_, err = checkRunCommand(string(data))
+	require.NoError(t, err, "%s: could not read the %q job's %q step", workflowPath, checkJob, checkStep)
+
+	validIntegration := fixtureStep(integrationStep, "go test -p 1 -count=1 -v ./alpha/... .")
+	workflowFor := func(checkSteps string) string {
+		return fixtureWorkflow(checkSteps, validIntegration)
+	}
+	for _, tc := range []struct {
+		name    string
+		check   string
+		wantErr string
+	}{
+		{
+			name:  "accepts the exact separate flag command",
+			check: fixtureStep(checkStep, "go test -p 1 -count=1 -v ./..."),
+		},
+		{
+			name:  "accepts joined flag values",
+			check: fixtureStep(checkStep, "go test -p=1 -count=1 -v=true ./..."),
+		},
+		{
+			name:    "rejects missing package parallelism",
+			check:   fixtureStep(checkStep, "go test -count=1 -v ./..."),
+			wantErr: "effective -p value of 0",
+		},
+		{
+			name:    "rejects zero package parallelism",
+			check:   fixtureStep(checkStep, "go test -p 0 -count=1 -v ./..."),
+			wantErr: "effective -p value of 0",
+		},
+		{
+			name:    "rejects malformed package parallelism",
+			check:   fixtureStep(checkStep, "go test -p nope -count=1 -v ./..."),
+			wantErr: "package parallelism value",
+		},
+		{
+			name:    "rejects later package parallelism override",
+			check:   fixtureStep(checkStep, "go test -p 1 -count=1 -v -p 2 ./..."),
+			wantErr: "effective -p value of 2",
+		},
+		{
+			name:    "rejects missing count",
+			check:   fixtureStep(checkStep, "go test -p 1 -v ./..."),
+			wantErr: "must use -count 1",
+		},
+		{
+			name:    "rejects zero count",
+			check:   fixtureStep(checkStep, "go test -p 1 -count=0 -v ./..."),
+			wantErr: "effective -count value of 0",
+		},
+		{
+			name:    "rejects malformed count",
+			check:   fixtureStep(checkStep, "go test -p 1 -count=once -v ./..."),
+			wantErr: "number of runs",
+		},
+		{
+			name:    "rejects later count override",
+			check:   fixtureStep(checkStep, "go test -p 1 -count=1 -v -count 2 ./..."),
+			wantErr: "effective -count value of 2",
+		},
+		{
+			name:    "rejects missing verbosity",
+			check:   fixtureStep(checkStep, "go test -p 1 -count=1 ./..."),
+			wantErr: "does not run its tests verbosely",
+		},
+		{
+			name:    "rejects later disabled verbosity",
+			check:   fixtureStep(checkStep, "go test -p 1 -count=1 -v -test.v=false ./..."),
+			wantErr: "does not run its tests verbosely",
+		},
+		{
+			name:    "rejects a test filter",
+			check:   fixtureStep(checkStep, "go test -p 1 -count=1 -v -run TestSomething ./..."),
+			wantErr: "passes -run",
+		},
+		{
+			name:    "rejects a package omission",
+			check:   fixtureStep(checkStep, "go test -p 1 -count=1 -v ./generate/..."),
+			wantErr: "must run exactly the ./... package",
+		},
+		{
+			name:    "rejects a package replacement",
+			check:   fixtureStep(checkStep, "go test -p 1 -count=1 -v ."),
+			wantErr: "must run exactly the ./... package",
+		},
+		{
+			name: "rejects duplicate named steps",
+			check: fixtureStep(checkStep, "go test -p 1 -count=1 -v ./...") +
+				fixtureStep(checkStep, "go test -p 1 -count=1 -v ./..."),
+			wantErr: "has 2 steps named",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd, err := checkRunCommand(workflowFor(tc.check))
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+				require.Nil(t, cmd)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, []string{"./..."}, cmd.pkgs)
+		})
+	}
+}
+
+func TestDedicatedConformanceStepRejectsEnvironmentMutations(t *testing.T) {
+	workflow, err := os.ReadFile(workflowPath)
+	require.NoError(t, err)
+	text := string(workflow)
+	require.True(t, DedicatedConformanceStep(text))
+	values := map[string]string{
+		"RASQL_TEST_POSTGRES_DSN":  "postgres://rasql:rasql@127.0.0.1:5432/rasql?sslmode=disable",
+		"RASQL_TEST_MYSQL_DSN":     "root:root@tcp(127.0.0.1:3306)/rasql?parseTime=true",
+		"RASQL_CONFORMANCE_OUTPUT": "${{ github.workspace }}/.tmp/d4-conformance.json",
+		"RASQL_CONFORMANCE_LOG":    "${{ github.workspace }}/.tmp/d4-conformance.log",
+	}
+	for key, value := range values {
+		t.Run("blank/"+key, func(t *testing.T) {
+			mutated := mutateD4Env(text, key, value, "")
+			require.False(t, DedicatedConformanceStep(mutated))
+		})
+		t.Run("changed/"+key, func(t *testing.T) {
+			mutated := mutateD4Env(text, key, value, "unrelated")
+			require.False(t, DedicatedConformanceStep(mutated))
+		})
+		t.Run("moved/"+key, func(t *testing.T) {
+			line := "          " + key + ": " + value + "\n"
+			mutated := mutateD4Env(text, key, value, "")
+			mutated = strings.Replace(mutated, "          name: d4-conformance-evidence\n", "          name: d4-conformance-evidence\n"+line, 1)
+			require.False(t, DedicatedConformanceStep(mutated))
+		})
+		t.Run("duplicate/"+key, func(t *testing.T) {
+			line := key + ": " + value
+			mutated := duplicateD4Env(text, line, "          "+key+": wrong")
+			require.False(t, DedicatedConformanceStep(mutated))
+		})
+	}
+}
+
+func duplicateD4Env(workflow, line, duplicate string) string {
+	marker := "      - name: Run D4 conformance matrix"
+	position := strings.Index(workflow, marker)
+	if position < 0 {
+		return workflow
+	}
+	prefix, tail := workflow[:position], workflow[position:]
+	tail = strings.Replace(tail, line, line+"\n"+duplicate, 1)
+	return prefix + tail
+}
+
+func mutateD4Env(workflow, key, oldValue, newValue string) string {
+	marker := "      - name: Run D4 conformance matrix"
+	position := strings.Index(workflow, marker)
+	if position < 0 {
+		return workflow
+	}
+	prefix, tail := workflow[:position], workflow[position:]
+	oldLine := key + ": " + oldValue
+	newLine := key + ": " + newValue
+	tail = strings.Replace(tail, oldLine, newLine, 1)
+	return prefix + tail
 }
 
 // TestGuardedPackageDiscoveryFollowsGoPackagePatternRules pins the rules

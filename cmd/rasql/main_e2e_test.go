@@ -35,7 +35,7 @@ func TestGoRunSeparatesDiagnosticsFromOutput(t *testing.T) {
 		{name: "command help", args: []string{"-h"}, succeeds: true, expected: "Usage: rasql <context> <command> [flags]"},
 		// A "-h" a flag value consumed is not a help request, so the failure
 		// that follows it stays on standard error like any other failure.
-		{name: "codegen help token as flag value", args: []string{"codegen", "generate", "-dialect", "-h", "-unknown"}, expected: "flag provided but not defined: -unknown"},
+		{name: "codegen help token as flag value", args: []string{"codegen", "generate", "-config", "-h", "-unknown"}, expected: "flag provided but not defined: -unknown"},
 		{name: "migrate help token as flag value", args: []string{"migrate", "plan", "-dir", "-h", "-unknown"}, expected: "flag provided but not defined: -unknown"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {

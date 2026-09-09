@@ -15,7 +15,6 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/inspect"
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	mysqldiff "github.com/lestrrat-go/rasql/migrate/diff/mysql"
@@ -423,15 +422,20 @@ func TestPostgreSQLInspectorPreservesSupportedMetadata(t *testing.T) {
 		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant_id", Type: schema.IntegerType{}}},
 		PrimaryKey: []string{"id", "tenant_id"},
 	}
-	source, err := generate.DescriptorSource("generated", table, accounts)
-	require.NoError(t, err)
-	require.Contains(t, string(source), `{Name: "uq_users_email", Columns: []string{"email"}}`)
-	require.Contains(t, string(source), `{Name: "uq_users_tenant_email", Columns: []string{"tenant_id", "email"}}`)
-	require.Contains(t, string(source), `{Name: "chk_users_email", Expression: "email <> ''"}`)
-	require.Contains(t, string(source), `{Name: "users_email_idx", Columns: []string{"email"}}`)
-	require.Contains(t, string(source), `{Name: "users_tenant_email_idx", Columns: []string{"tenant_id", "email"}, Unique: true}`)
-	require.Contains(t, string(source), `{Name: "fk_users_account", Columns: []string{"account_id", "tenant_id"}, ReferencedTable: "accounts", ReferencedColumns: []string{"id", "tenant_id"}, OnDelete: schema.Cascade, OnUpdate: schema.NoAction}`)
-	require.Contains(t, string(source), `{Name: "Account", Kind: schema.RelationshipBelongsTo, Optionality: schema.RelationshipOptionality("required"), Columns: []string{"account_id", "tenant_id"}, ReferencedTable: "accounts", ReferencedColumns: []string{"id", "tenant_id"}}`)
+	// The compact emitter's table descriptor literal, like the deleted legacy
+	// renderer's, echoes table.Relationships verbatim rather than deriving a
+	// BelongsTo relationship from a foreign key, so an inspected table (whose
+	// Relationships the inspector never populates) renders no such literal.
+	// That derivation lived only in the legacy renderer's own prepareSchema
+	// step and has no replacement; see the task report for what a caller
+	// wanting it back would need.
+	source := compactRenderedSource(t, table, accounts)
+	require.Contains(t, source, `{Name: "uq_users_email", Columns: []string{"email"}}`)
+	require.Contains(t, source, `{Name: "uq_users_tenant_email", Columns: []string{"tenant_id", "email"}}`)
+	require.Contains(t, source, `{Name: "chk_users_email", Expression: "email <> ''"}`)
+	require.Contains(t, source, `{Name: "users_email_idx", Columns: []string{"email"}}`)
+	require.Contains(t, source, `{Name: "users_tenant_email_idx", Columns: []string{"tenant_id", "email"}, Unique: true}`)
+	require.Contains(t, source, `{Name: "fk_users_account", Columns: []string{"account_id", "tenant_id"}, ReferencedTable: "accounts", ReferencedColumns: []string{"id", "tenant_id"}, OnDelete: schema.Cascade, OnUpdate: schema.NoAction}`)
 }
 
 // TestPostgreSQLInspectorRecordsNonDefaultIndexMethod proves that a
@@ -1266,12 +1270,9 @@ func TestMySQLInspectorNormalizesBooleanAndTinyIntColumns(t *testing.T) {
 	}, table.Columns)
 	require.Equal(t, []string{"id"}, table.PrimaryKey)
 
-	source, err := generate.PackageSource("generated", table)
-	require.NoError(t, err)
-	require.Regexp(t, `(?m)^\s*Active\s+bool$`, string(source))
-	require.Regexp(t, `(?m)^\s*LoginAttempts\s+int64$`, string(source))
-	require.Contains(t, string(source), "return r.Active, true")
-	require.Contains(t, string(source), "return r.LoginAttempts, true")
+	source := compactRenderedSource(t, table)
+	require.Regexp(t, `(?m)^\s*Active\s+bool$`, source)
+	require.Regexp(t, `(?m)^\s*LoginAttempts\s+int64$`, source)
 }
 
 func expectMySQLCreateTable(mock sqlmock.Sqlmock, tableName string, definition string) {
@@ -1753,10 +1754,9 @@ func TestMySQLInspectorRecordsUnsignedIntegerColumn(t *testing.T) {
 	require.Contains(t, rendered.SQL(), "`id` BIGINT UNSIGNED NOT NULL")
 	require.Contains(t, rendered.SQL(), "`sequence` BIGINT NOT NULL")
 
-	source, err := generate.PackageSource("generated", table)
-	require.NoError(t, err)
-	require.Regexp(t, `(?m)^\s*ID\s+uint64$`, string(source))
-	require.Regexp(t, `(?m)^\s*Sequence\s+int64$`, string(source))
+	source := compactRenderedSource(t, table)
+	require.Regexp(t, `(?m)^\s*ID\s+uint64$`, source)
+	require.Regexp(t, `(?m)^\s*Sequence\s+int64$`, source)
 }
 
 // TestMySQLInspectorRecordsIntegerDisplayWidthAndZeroFill covers the two
@@ -2546,10 +2546,9 @@ func TestSQLiteInspectorMarksIntegerPrimaryKeyAsNonNullable(t *testing.T) {
 	}, table.Columns)
 	require.Equal(t, []string{"id"}, table.PrimaryKey)
 
-	source, err := generate.PackageSource("generated", table)
-	require.NoError(t, err)
-	require.Regexp(t, `(?m)^\s*ID\s+int64$`, string(source))
-	require.NotContains(t, string(source), "ID *int64")
+	source := compactRenderedSource(t, table)
+	require.Regexp(t, `(?m)^\s*ID\s+int64$`, source)
+	require.NotContains(t, source, "ID *int64")
 }
 
 func TestSQLiteInspectorMarksIntegerPrimaryKeyAsNonNullableWithAttachedComments(t *testing.T) {

@@ -104,6 +104,10 @@ func TestDynamicProjectionConstructionAndReturnedColumnBinding(t *testing.T) {
 	projection, err := DynamicProjection[dynamicProjectionRow](schemaValue)
 	require.NoError(t, err)
 	require.NoError(t, projection.Validate())
+	columns := projection.Schema().Columns()
+	require.Equal(t, schemaValue.Columns(), columns)
+	columns[0].Name = "changed"
+	require.Equal(t, "id", projection.Schema().Columns()[0].Name)
 
 	for _, tc := range []struct {
 		name    string
@@ -152,6 +156,44 @@ func TestDynamicProjectionConstructionAndReturnedColumnBinding(t *testing.T) {
 		require.Equal(t, "A-1", values[0].Code.Value)
 		require.True(t, values[0].Code.Valid)
 	})
+}
+
+func TestDynamicProjectionEmptyRowsRetainSchemaAndFinish(t *testing.T) {
+	schemaValue := dynamicProjectionSchema(t)
+	projection, err := DynamicProjection[dynamicProjectionRow](schemaValue)
+	require.NoError(t, err)
+	rows := &dynamicProjectionRows{columns: []string{"id", "name", "nickname", "total", "code"}}
+
+	query := dynamicProjectionNativeQuery(t, projection, "SELECT 1")
+	values, err := All(t.Context(), dynamicProjectionExecutorFor(t, rows), query)
+	require.NoError(t, err)
+	require.Empty(t, values)
+	require.Equal(t, schemaValue.Columns(), projection.Schema().Columns())
+	require.Equal(t, 1, rows.closeCalls)
+	require.Equal(t, 1, rows.finishCalls)
+}
+
+func TestDynamicProjectionColumnsErrorFinishesRows(t *testing.T) {
+	schemaValue := dynamicProjectionSchema(t)
+	projection, err := DynamicProjection[dynamicProjectionRow](schemaValue)
+	require.NoError(t, err)
+	columnErr := errors.New("columns unavailable")
+	rows := &dynamicProjectionRows{
+		columns:    []string{"id", "name", "nickname", "total", "code"},
+		columnsErr: columnErr,
+	}
+
+	query := dynamicProjectionNativeQuery(t, projection, "SELECT 1")
+	sequence, err := Rows(t.Context(), dynamicProjectionExecutorFor(t, rows), query)
+	require.NoError(t, err)
+	var yielded []error
+	for _, err := range sequence {
+		yielded = append(yielded, err)
+	}
+	require.Len(t, yielded, 1)
+	require.ErrorIs(t, yielded[0], columnErr)
+	require.Equal(t, 1, rows.closeCalls)
+	require.Equal(t, 1, rows.finishCalls)
 }
 
 func TestDynamicProjectionSQLiteMatchesHandwrittenDecoder(t *testing.T) {
@@ -391,6 +433,7 @@ func (*dynamicProjectionExecutor) Exec(context.Context, stmt.Statement) (sql.Res
 
 type dynamicProjectionRows struct {
 	columns     []string
+	columnsErr  error
 	values      [][]any
 	index       int
 	nextCalls   int
@@ -404,6 +447,9 @@ type dynamicProjectionRows struct {
 }
 
 func (r *dynamicProjectionRows) Columns() ([]string, error) {
+	if r.columnsErr != nil {
+		return nil, r.columnsErr
+	}
 	return append([]string(nil), r.columns...), nil
 }
 func (r *dynamicProjectionRows) Next() bool {

@@ -93,7 +93,7 @@ func (c command) runSchemaUpdate(args []string) error {
 	}
 	emitter := cfg.Emitter
 	if emitter == "" {
-		emitter = "legacy"
+		emitter = "compact"
 	}
 	generation := compilerir.GoConfig{Package: cfg.Package, Output: cfg.Output, Emitter: emitter, Prune: prune, Scalars: mappings.Scalars}
 	rowNames := cfg.Tables.RowNames
@@ -135,11 +135,11 @@ func (c command) runSchemaUpdate(args []string) error {
 			generation.Objects[i].Patch = exportGoName(object.Patch.Name)
 		}
 	}
-	input, err := generate.NewEmitterInput(result.Catalog, semantic, goModel, generation)
+	input, err := generate.NewEmitterInput(result.Catalog, semantic, goModel, generation, mappings)
 	if err != nil {
 		return err
 	}
-	store, err := generate.LegacyStore(input)
+	store, err := renderEmitter(input)
 	if err != nil {
 		return err
 	}
@@ -174,7 +174,7 @@ func (c command) runSchemaUpdate(args []string) error {
 	if err != nil {
 		return err
 	}
-	lock := compilerlock.File{Format: compilerlock.FormatVersion, Compiler: "rasql", Source: result.Source.Record, Engine: result.Source.Engine, Catalog: compilerlock.CatalogFromPhysical(result.Catalog), Generation: compilerlock.GenerationRecord{Package: generation.Package, Output: generation.Output, Emitter: generation.Emitter, Prune: generation.Prune}}
+	lock := compilerlock.File{Format: compilerlock.FormatVersion, Compiler: "rasql", Source: result.Source.Record, Engine: result.Source.Engine, Catalog: compilerlock.CatalogFromPhysical(result.Catalog), Mappings: compilerlock.FromMappings(mappings), Generation: compilerlock.GenerationRecord{Package: generation.Package, Output: generation.Output, Emitter: generation.Emitter, Prune: generation.Prune}}
 	for _, query := range result.Queries {
 		lock.Queries = append(lock.Queries, compilerlock.QueryFromAnalysis(query))
 	}
