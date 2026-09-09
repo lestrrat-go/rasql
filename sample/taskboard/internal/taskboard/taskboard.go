@@ -3,16 +3,14 @@
 package taskboard
 
 import (
+	"fmt"
 	"time"
 
 	"example.com/taskboard/internal/store"
+	"github.com/lestrrat-go/rasql"
 )
 
-// BEGIN(task_text)
-
-// Task is one open task as the page prints it. Both Assignee and DueOn are
-// already the text the page shows, so the template never asks whether a
-// task has an owner or a due date; this package answers that once.
+// Task is one open task as the page prints it.
 type Task struct {
 	ID       int64
 	Title    string
@@ -23,21 +21,22 @@ type Task struct {
 // Unassigned is what the page prints where an owner's name would go.
 const Unassigned = "unassigned"
 
-func assigneeText(name *string) string {
-	if name == nil {
-		return Unassigned
+func assigneeText(loaded rasql.LoadedOne[store.MembersRow]) (string, error) {
+	if !loaded.Loaded {
+		return "", fmt.Errorf("assignee state is unloaded")
 	}
-	return *name
+	if !loaded.Present || loaded.Value == nil {
+		return Unassigned, nil
+	}
+	return loaded.Value.Name, nil
 }
 
-func dueText(due *time.Time) string {
-	if due == nil {
+func dueText(due rasql.Nullable[time.Time]) string {
+	if !due.Valid {
 		return ""
 	}
-	return due.Format(time.DateOnly)
+	return due.Value.Format(time.DateOnly)
 }
-
-// END(task_text)
 
 // Group is one project's block of open tasks.
 type Group struct {
@@ -60,29 +59,37 @@ type Page struct {
 	Overdue  int64
 	Projects []Choice
 	Members  []Choice
+	Limit    int
+	Next     string
+	HasMore  bool
 }
 
 // END(page)
 
-// GroupByProject folds rows into one Group per project. It relies on the
-// rows arriving in project order, which is the order
-// store.Repository.OpenTasks returns them in, so it starts a new group
-// every time the project changes and never revisits a finished one.
-func GroupByProject(rows []store.OpenTask) []Group {
-	groups := make([]Group, 0, len(rows))
-	for _, row := range rows {
-		if len(groups) == 0 || groups[len(groups)-1].ProjectID != row.ProjectID {
-			groups = append(groups, Group{ProjectID: row.ProjectID, ProjectName: row.ProjectName})
+// OpenProjectGroups converts loaded graph values into the page's project blocks.
+func OpenProjectGroups(projects []store.OpenProject) ([]Group, error) {
+	groups := make([]Group, 0, len(projects))
+	for _, project := range projects {
+		if !project.Tasks.Loaded {
+			return nil, fmt.Errorf("project %d task state is unloaded", project.Row.ID)
 		}
-		group := &groups[len(groups)-1]
-		group.Tasks = append(group.Tasks, Task{
-			ID:       row.TaskID,
-			Title:    row.Title,
-			Assignee: assigneeText(row.AssigneeName),
-			DueOn:    dueText(row.DueOn),
-		})
+		group := Group{ProjectID: project.Row.ID, ProjectName: project.Row.Name}
+		group.Tasks = make([]Task, 0, len(project.Tasks.Values))
+		for _, task := range project.Tasks.Values {
+			assignee, err := assigneeText(task.Assignee)
+			if err != nil {
+				return nil, fmt.Errorf("project %d task %d: %w", project.Row.ID, task.Row.ID, err)
+			}
+			group.Tasks = append(group.Tasks, Task{
+				ID:       task.Row.ID,
+				Title:    task.Row.Title,
+				Assignee: assignee,
+				DueOn:    dueText(task.Row.DueOn),
+			})
+		}
+		groups = append(groups, group)
 	}
-	return groups
+	return groups, nil
 }
 
 // ProjectChoices turns project rows into the form's project list.

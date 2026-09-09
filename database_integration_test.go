@@ -9,10 +9,11 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/dynamic"
+	"github.com/lestrrat-go/rasql/exec"
 	"github.com/lestrrat-go/rasql/inspect"
 	"github.com/lestrrat-go/rasql/internal/dbtest"
 	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
@@ -27,6 +28,26 @@ import (
 type coalescedAmounts struct {
 	first  string
 	second string
+}
+
+type integrationRecord struct {
+	ID     int64  `rasql:"id"`
+	Active bool   `rasql:"active"`
+	Email  string `rasql:"email"`
+	Amount string `rasql:"amount"`
+}
+
+type integrationRecordDecoder struct{ schema rasql.ResultSchema }
+
+func (d integrationRecordDecoder) ResultSchema() rasql.ResultSchema { return d.schema }
+func (integrationRecordDecoder) Presence() []rasql.Presence         { return nil }
+func (integrationRecordDecoder) DecodeRow(source rasql.ScanSource, row *integrationRecord) error {
+	return source.Scan(&row.ID, &row.Active, &row.Email, &row.Amount)
+}
+
+type integrationAmountRow struct {
+	ID     int64  `rasql:"id"`
+	Amount string `rasql:"amount"`
 }
 
 func TestDatabaseIntegration(t *testing.T) {
@@ -58,12 +79,7 @@ func TestDatabaseIntegration(t *testing.T) {
 func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, coalesced coalescedAmounts) {
 	db, err := rasql.New(database, d)
 	require.NoError(t, err)
-	type record struct {
-		ID     int64  `rasql:"id"`
-		Active bool   `rasql:"active"`
-		Email  string `rasql:"email"`
-		Amount string `rasql:"amount"`
-	}
+	executor := integrationExecutor(t, db, d)
 	// A fixed table name here would be inherited into every fresh PostgreSQL
 	// database this test runs against: CREATE DATABASE copies template1 by
 	// default, and an object added to template1 is copied into every
@@ -73,9 +89,32 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	// containment rule internal/dbtest's package doc states for the
 	// database and role names a live test creates directly.
 	tableName := dbtest.UniqueName(t, "rasql_integration_records")
-	records, err := rasql.TableOf[record](integrationTable(tableName))
+	records, err := rasql.TableOf[integrationRecord](integrationTable(tableName))
 	require.NoError(t, err)
-	recordID := records.Column("id")
+	relation, err := rasql.SourceOf(records, "")
+	require.NoError(t, err)
+	recordID, err := rasql.BindColumn[integrationRecord, int64](relation, "id", "")
+	require.NoError(t, err)
+	recordActive, err := rasql.BindColumn[integrationRecord, bool](relation, "active", "")
+	require.NoError(t, err)
+	recordEmail, err := rasql.BindColumn[integrationRecord, string](relation, "email", "")
+	require.NoError(t, err)
+	recordAmount, err := rasql.BindColumn[integrationRecord, string](relation, "amount", "")
+	require.NoError(t, err)
+	recordSchema, err := rasql.NewResultSchema(
+		rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}},
+		rasql.ResultColumn{Name: "active", Type: schema.BooleanType{}},
+		rasql.ResultColumn{Name: "email", Type: schema.TextType{}},
+		rasql.ResultColumn{Name: "amount", Type: schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}},
+	)
+	require.NoError(t, err)
+	recordProjection, err := rasql.NewProjection([]rasql.ProjectionItem{
+		rasql.Item("id", recordID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("active", recordActive.Expr(), schema.BooleanType{}, ""),
+		rasql.Item("email", recordEmail.Expr(), schema.TextType{}, ""),
+		rasql.Item("amount", recordAmount.Expr(), schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}, ""),
+	}, integrationRecordDecoder{schema: recordSchema})
+	require.NoError(t, err)
 
 	_, err = database.ExecContext(t.Context(), "DROP TABLE IF EXISTS "+tableName)
 	require.NoError(t, err)
@@ -85,15 +124,27 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	}()
 	require.NoError(t, rasql.CreateTable(t.Context(), db, records))
 
-	first := record{ID: 1, Active: true, Email: "ada@example.com", Amount: "19.99"}
-	second := record{ID: 2, Active: false, Email: "grace@example.com", Amount: "5.00"}
-	_, err = rasql.Insert(t.Context(), db, records, first)
+	first := integrationRecord{ID: 1, Active: true, Email: "ada@example.com", Amount: "19.99"}
+	second := integrationRecord{ID: 2, Active: false, Email: "grace@example.com", Amount: "5.00"}
+	firstCreate, err := rasql.NewCreatePlan(records,
+		rasql.SetField(recordID, first.ID), rasql.SetField(recordActive, first.Active),
+		rasql.SetField(recordEmail, first.Email), rasql.SetField(recordAmount, first.Amount))
 	require.NoError(t, err)
-	_, err = rasql.Insert(t.Context(), db, records, second)
+	_, err = rasql.ExecMutation(t.Context(), executor, firstCreate)
+	require.NoError(t, err)
+	secondCreate, err := rasql.NewCreatePlan(records,
+		rasql.SetField(recordID, second.ID), rasql.SetField(recordActive, second.Active),
+		rasql.SetField(recordEmail, second.Email), rasql.SetField(recordAmount, second.Amount))
+	require.NoError(t, err)
+	_, err = rasql.ExecMutation(t.Context(), executor, secondCreate)
 	require.NoError(t, err)
 
 	first.Email = "ada.lovelace@example.com"
-	_, err = rasql.Update(t.Context(), db, records, first)
+	firstPatch, err := rasql.NewPatchPlan(records, rasql.EqualValue(recordID.Expr(), first.ID),
+		rasql.SetField(recordActive, first.Active), rasql.SetField(recordEmail, first.Email),
+		rasql.SetField(recordAmount, first.Amount))
+	require.NoError(t, err)
+	_, err = rasql.ExecMutation(t.Context(), executor, firstPatch)
 	require.NoError(t, err)
 
 	// PostgreSQL and MySQL both return an exact decimal in the scale its
@@ -114,13 +165,14 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	secondStored := second
 	secondStored.Amount = "5.0000"
 
-	actual, err := rasql.SelectFrom(records).WhereEqual(recordID, first.ID).One(t.Context(), db)
+	selectRecords := rasql.Select(relation.Source(), recordProjection)
+	actual, err := rasql.One(t.Context(), executor, selectRecords.Where(rasql.EqualValue(recordID.Expr(), first.ID)))
 	require.NoError(t, err)
 	require.Equal(t, firstStored, actual)
 
-	all, err := rasql.SelectFrom(records).OrderAsc(recordID).All(t.Context(), db)
+	all, err := rasql.All(t.Context(), executor, selectRecords.OrderBy(rasql.AscExpr(recordID.Expr())))
 	require.NoError(t, err)
-	require.Equal(t, []record{firstStored, secondStored}, all)
+	require.Equal(t, []integrationRecord{firstStored, secondStored}, all)
 
 	// An InSelect predicate exercises IN (SELECT …) against a real server,
 	// which is what proves the MySQL rendering path this change adds actually
@@ -128,17 +180,22 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	// change had to fit without a capability gap. The row it reads back comes
 	// from the server, so it carries the padded amount for the same reason the
 	// two expectations above do -- expect firstStored, never first.
-	recordActive := records.Column("active")
-	activeIDs, err := query.NewSelect(records.Ref(), recordID)
+	recordIDRef := records.Column("id")
+	recordActiveRef := records.Column("active")
+	recordEmailRef := records.Column("email")
+	recordAmountRef := records.Column("amount")
+	activeIDs, err := query.NewSelect(records.Ref(), recordIDRef)
 	require.NoError(t, err)
-	activeIDs, err = activeIDs.WithWhere(query.Equal(recordActive, query.Bind(true)))
+	activeIDs, err = activeIDs.WithWhere(query.Equal(recordActiveRef, query.Bind(true)))
 	require.NoError(t, err)
-	viaSubquery, err := rasql.SelectFrom(records).
-		Where(query.InSelect(recordID, activeIDs)).
-		OrderAsc(recordID).
-		All(t.Context(), db)
+	viaSubqueryQuery, err := query.NewSelect(records.Ref(), recordIDRef, recordActiveRef, recordEmailRef, recordAmountRef)
 	require.NoError(t, err)
-	require.Equal(t, []record{firstStored}, viaSubquery)
+	viaSubqueryQuery, err = viaSubqueryQuery.WithWhere(query.InSelect(recordIDRef, activeIDs))
+	require.NoError(t, err)
+	viaSubqueryQuery, err = viaSubqueryQuery.WithOrder(query.Asc(recordIDRef))
+	require.NoError(t, err)
+	viaSubquery := integrationRecordRows(t, db, d, viaSubqueryQuery)
+	require.Equal(t, []integrationRecord{firstStored}, viaSubquery)
 
 	// A scalar-function predicate and projection prove COALESCE and LOWER
 	// render and execute against a real server on both live dialects: the
@@ -146,18 +203,13 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	// because all three engines spell these functions identically, and this
 	// is what proves that argument against MySQL and PostgreSQL rather than
 	// only against the SQLite-backed tests elsewhere in this repository.
-	scalarEmail := records.Column("email")
-	scalarAmount := records.Column("amount")
-	viaLower, err := rasql.SelectFrom(records).
-		Where(query.Equal(query.Lower(scalarEmail), query.Bind(firstStored.Email))).
-		All(t.Context(), db)
+	viaLowerQuery, err := query.NewSelect(records.Ref(), recordIDRef, recordActiveRef, recordEmailRef, recordAmountRef)
 	require.NoError(t, err)
-	require.Equal(t, []record{firstStored}, viaLower)
+	viaLowerQuery, err = viaLowerQuery.WithWhere(query.Equal(query.Lower(recordEmailRef), query.Bind(firstStored.Email)))
+	require.NoError(t, err)
+	viaLower := integrationRecordRows(t, db, d, viaLowerQuery)
+	require.Equal(t, []integrationRecord{firstStored}, viaLower)
 
-	type amountRow struct {
-		ID     int64  `rasql:"id"`
-		Amount string `rasql:"amount"`
-	}
 	// The coalesced amount is not the plain-column amount on both dialects.
 	// MySQL fixes the type of COALESCE while it prepares the statement, and
 	// the placeholder query.Bind produces carries no scale of its own at that
@@ -170,12 +222,13 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	// another decimal expression rather than a bound value would dodge the
 	// widening, but this projection exists to exercise a bound fallback, so it
 	// states both exact strings instead.
-	viaCoalesce, err := rasql.DecodeFrom[amountRow](records).
-		Project(recordID, query.Coalesce(scalarAmount, query.Bind("0.0000")).As("amount")).
-		OrderAsc(recordID).
-		All(t.Context(), db)
+	viaCoalesceQuery, err := query.NewSelect(records.Ref(), recordIDRef,
+		query.Project(query.Coalesce(recordAmountRef, query.Bind("0.0000"))).As("amount"))
 	require.NoError(t, err)
-	require.Equal(t, []amountRow{
+	viaCoalesceQuery, err = viaCoalesceQuery.WithOrder(query.Asc(recordIDRef))
+	require.NoError(t, err)
+	viaCoalesce := integrationAmountRows(t, db, d, viaCoalesceQuery)
+	require.Equal(t, []integrationAmountRow{
 		{ID: first.ID, Amount: coalesced.first},
 		{ID: second.ID, Amount: coalesced.second},
 	}, viaCoalesce)
@@ -197,26 +250,25 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	// expectations above already state, and this projection needs no
 	// per-dialect pair of its own. Neither amount equals the bound "0.0000",
 	// so NULLIF returns the column value on every row.
-	viaNullIf, err := rasql.DecodeFrom[amountRow](records).
-		Project(recordID, query.Func("NULLIF", scalarAmount, query.Bind("0.0000")).As("amount")).
-		OrderAsc(recordID).
-		All(t.Context(), db)
+	viaNullIfQuery, err := query.NewSelect(records.Ref(), recordIDRef,
+		query.Project(query.Func("NULLIF", recordAmountRef, query.Bind("0.0000"))).As("amount"))
 	require.NoError(t, err)
-	require.Equal(t, []amountRow{
+	viaNullIfQuery, err = viaNullIfQuery.WithOrder(query.Asc(recordIDRef))
+	require.NoError(t, err)
+	viaNullIf := integrationAmountRows(t, db, d, viaNullIfQuery)
+	require.Equal(t, []integrationAmountRow{
 		{ID: first.ID, Amount: firstStored.Amount},
 		{ID: second.ID, Amount: secondStored.Amount},
 	}, viaNullIf)
 
-	total, err := rasql.SelectFrom(records).Count(t.Context(), db)
+	total, err := rasql.One(t.Context(), executor, rasql.CountQuery(selectRecords, false))
 	require.NoError(t, err)
 	require.Equal(t, int64(2), total)
 
 	// RETURNING is PostgreSQL-only among the two live dialects this test runs
 	// against, so QueryWrite is exercised over the real pgx driver on
 	// PostgreSQL and pinned as a build-time rejection on MySQL.
-	recordEmail := records.Column("email")
-	recordAmount := records.Column("amount")
-	third := record{ID: 3, Active: true, Email: "grace@example.com", Amount: "42.50"}
+	third := integrationRecord{ID: 3, Active: true, Email: "grace@example.com", Amount: "42.50"}
 	// RETURNING reads the row back from the server, so the decimal arrives in
 	// the column's declared scale for the same reason the two expectations
 	// above do.
@@ -224,20 +276,24 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	thirdStored.Amount = "42.5000"
 	insert, err := query.NewInsert(
 		records.Ref(),
-		query.Set(recordID, third.ID),
-		query.Set(recordActive, third.Active),
-		query.Set(recordEmail, third.Email),
-		query.Set(recordAmount, third.Amount),
+		query.Set(recordIDRef, third.ID),
+		query.Set(recordActiveRef, third.Active),
+		query.Set(recordEmailRef, third.Email),
+		query.Set(recordAmountRef, third.Amount),
 	)
 	require.NoError(t, err)
-	insert, err = insert.WithReturning(recordID, recordActive, recordEmail, recordAmount)
-	require.NoError(t, err)
 	if d.Supports(dialect.CapabilityReturning) {
-		inserted, err := rasql.QueryWriteOne[record](t.Context(), db, insert)
-		require.NoError(t, err)
+		insertPlan, planErr := rasql.NewStatementPlan(insert)
+		require.NoError(t, planErr)
+		returned, returningErr := rasql.Returning(insertPlan, recordProjection)
+		require.NoError(t, returningErr)
+		inserted, queryErr := rasql.One(t.Context(), executor, returned)
+		require.NoError(t, queryErr)
 		require.Equal(t, thirdStored, inserted)
 	} else {
-		_, err := dynamic.QueryWrite(t.Context(), db, insert)
+		returningInsert, returningErr := insert.WithReturning(recordIDRef, recordActiveRef, recordEmailRef, recordAmountRef)
+		require.NoError(t, returningErr)
+		_, err := exec.RenderWrite(db, returningInsert)
 		require.ErrorContains(t, err, "RETURNING is not supported")
 	}
 
@@ -246,6 +302,58 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	inspected, err := inspector.Table(t.Context(), tableName)
 	require.NoError(t, err)
 	require.Equal(t, integrationTable(tableName), inspected)
+}
+
+func integrationExecutor(t *testing.T, db rasql.DB, d dialect.Dialect) rasql.Executor {
+	t.Helper()
+	profileID := ""
+	switch d.Name() {
+	case "postgresql":
+		profileID = "postgresql-17"
+	case "mysql":
+		profileID = "mysql-8.4"
+	default:
+		t.Fatalf("unsupported integration dialect %q", d.Name())
+	}
+	profile, err := rasql.DiscoverEngineProfile(t.Context(), db, profileID)
+	require.NoError(t, err)
+	executor, err := rasql.AsExecutor(db, profile)
+	require.NoError(t, err)
+	return executor
+}
+
+func integrationRecordRows(t *testing.T, db rasql.DB, d dialect.Dialect, statement query.Select) []integrationRecord {
+	t.Helper()
+	rendered, err := render.Select(d, statement)
+	require.NoError(t, err)
+	rows, err := db.QueryRendered(t.Context(), rendered)
+	require.NoError(t, err)
+	var result []integrationRecord
+	for rows.Next() {
+		var row integrationRecord
+		require.NoError(t, rows.Scan(&row.ID, &row.Active, &row.Email, &row.Amount))
+		result = append(result, row)
+	}
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+	return result
+}
+
+func integrationAmountRows(t *testing.T, db rasql.DB, d dialect.Dialect, statement query.Select) []integrationAmountRow {
+	t.Helper()
+	rendered, err := render.Select(d, statement)
+	require.NoError(t, err)
+	rows, err := db.QueryRendered(t.Context(), rendered)
+	require.NoError(t, err)
+	var result []integrationAmountRow
+	for rows.Next() {
+		var row integrationAmountRow
+		require.NoError(t, rows.Scan(&row.ID, &row.Amount))
+		result = append(result, row)
+	}
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+	return result
 }
 
 // requireSameDecimal fails unless two decimal strings denote the same number.
@@ -300,6 +408,7 @@ func testQualifiedDDLPostgreSQL(t *testing.T) {
 	database := dbtest.PostgreSQLDB(t)
 	db, err := rasql.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)
+	executor := integrationExecutor(t, db, dialect.PostgreSQL())
 
 	type customerRow struct {
 		ID   int64  `rasql:"id"`
@@ -314,6 +423,12 @@ func testQualifiedDDLPostgreSQL(t *testing.T) {
 		},
 		PrimaryKey: []string{"id"},
 	})
+	require.NoError(t, err)
+	customersSource, err := rasql.SourceOf(customers, "")
+	require.NoError(t, err)
+	customersID, err := rasql.BindColumn[customerRow, int64](customersSource, "id", "")
+	require.NoError(t, err)
+	customersNameColumn, err := rasql.BindColumn[customerRow, string](customersSource, "name", "")
 	require.NoError(t, err)
 	// customersName lives in the connection's default schema, "public",
 	// which rasql.CreateTable never states explicitly: an unqualified Schema
@@ -359,15 +474,40 @@ func testQualifiedDDLPostgreSQL(t *testing.T) {
 		}},
 	})
 	require.NoError(t, err)
+	ordersSource, err := rasql.SourceOf(orders, "")
+	require.NoError(t, err)
+	ordersID, err := rasql.BindColumn[orderRow, int64](ordersSource, "id", "")
+	require.NoError(t, err)
+	ordersCustomerID, err := rasql.BindColumn[orderRow, int64](ordersSource, "customer_id", "")
+	require.NoError(t, err)
 	require.NoError(t, rasql.CreateTable(t.Context(), db, orders))
 
-	_, err = rasql.Insert(t.Context(), db, customers, customerRow{ID: 1, Name: "ada"})
+	customerCreate, err := rasql.NewCreatePlan(customers,
+		rasql.SetField(customersID, int64(1)), rasql.SetField(customersNameColumn, "ada"))
 	require.NoError(t, err)
-	_, err = rasql.Insert(t.Context(), db, orders, orderRow{ID: 1, CustomerID: 1})
+	_, err = rasql.ExecMutation(t.Context(), executor, customerCreate)
+	require.NoError(t, err)
+	orderCreate, err := rasql.NewCreatePlan(orders,
+		rasql.SetField(ordersID, int64(1)), rasql.SetField(ordersCustomerID, int64(1)))
+	require.NoError(t, err)
+	_, err = rasql.ExecMutation(t.Context(), executor, orderCreate)
 	require.NoError(t, err)
 
-	ordersID := orders.Column("id")
-	order, err := rasql.SelectFrom(orders).WhereEqual(ordersID, int64(1)).One(t.Context(), db)
+	orderSchema, err := rasql.NewResultSchema(
+		rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}},
+		rasql.ResultColumn{Name: "customer_id", Type: schema.IntegerType{}},
+	)
+	require.NoError(t, err)
+	orderDecoder, err := rasql.DynamicProjection[orderRow](orderSchema)
+	require.NoError(t, err)
+	orderProjection, err := rasql.NewProjection([]rasql.ProjectionItem{
+		rasql.Item("id", ordersID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("customer_id", ordersCustomerID.Expr(), schema.IntegerType{}, ""),
+	}, orderDecoder.Decoder())
+	require.NoError(t, err)
+	orderQuery := rasql.Select(ordersSource.Source(), orderProjection).
+		Where(rasql.EqualValue(ordersID.Expr(), int64(1)))
+	order, err := rasql.One(t.Context(), executor, orderQuery)
 	require.NoError(t, err)
 	require.Equal(t, orderRow{ID: 1, CustomerID: 1}, order)
 }
@@ -382,6 +522,7 @@ func testQualifiedDDLMySQL(t *testing.T) {
 	database := dbtest.MySQLDB(t)
 	db, err := rasql.New(database, dialect.MySQL())
 	require.NoError(t, err)
+	executor := integrationExecutor(t, db, dialect.MySQL())
 
 	schemaName := dbtest.UniqueName(t, "rasql_qualified_schema")
 	_, err = database.ExecContext(t.Context(), "CREATE DATABASE "+schemaName)
@@ -419,6 +560,14 @@ func testQualifiedDDLMySQL(t *testing.T) {
 		}},
 	})
 	require.NoError(t, err)
+	eventsSource, err := rasql.SourceOf(events, "")
+	require.NoError(t, err)
+	eventID, err := rasql.BindColumn[eventRow, int64](eventsSource, "id", "")
+	require.NoError(t, err)
+	eventActorID, err := rasql.BindColumn[eventRow, int64](eventsSource, "actor_id", "")
+	require.NoError(t, err)
+	eventAction, err := rasql.BindColumn[eventRow, string](eventsSource, "action", "")
+	require.NoError(t, err)
 	require.NoError(t, rasql.CreateTable(t.Context(), db, events))
 
 	// Both objects must live in schemaName rather than in the connection's
@@ -434,11 +583,30 @@ func testQualifiedDDLMySQL(t *testing.T) {
 	require.Equal(t, schemaName, indexSchema)
 	require.Equal(t, eventsName, indexTable)
 
-	_, err = rasql.Insert(t.Context(), db, events, eventRow{ID: 1, ActorID: 7, Action: "created"})
+	eventCreate, err := rasql.NewCreatePlan(events,
+		rasql.SetField(eventID, int64(1)), rasql.SetField(eventActorID, int64(7)),
+		rasql.SetField(eventAction, "created"))
+	require.NoError(t, err)
+	_, err = rasql.ExecMutation(t.Context(), executor, eventCreate)
 	require.NoError(t, err)
 
-	eventID := events.Column("id")
-	event, err := rasql.SelectFrom(events).WhereEqual(eventID, int64(1)).One(t.Context(), db)
+	eventSchema, err := rasql.NewResultSchema(
+		rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}},
+		rasql.ResultColumn{Name: "actor_id", Type: schema.IntegerType{}},
+		rasql.ResultColumn{Name: "action", Type: schema.TextType{}},
+	)
+	require.NoError(t, err)
+	eventDecoder, err := rasql.DynamicProjection[eventRow](eventSchema)
+	require.NoError(t, err)
+	eventProjection, err := rasql.NewProjection([]rasql.ProjectionItem{
+		rasql.Item("id", eventID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("actor_id", eventActorID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("action", eventAction.Expr(), schema.TextType{}, ""),
+	}, eventDecoder.Decoder())
+	require.NoError(t, err)
+	eventQuery := rasql.Select(eventsSource.Source(), eventProjection).
+		Where(rasql.EqualValue(eventID.Expr(), int64(1)))
+	event, err := rasql.One(t.Context(), executor, eventQuery)
 	require.NoError(t, err)
 	require.Equal(t, eventRow{ID: 1, ActorID: 7, Action: "created"}, event)
 }

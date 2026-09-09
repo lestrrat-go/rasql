@@ -15,7 +15,7 @@ func Example_rasqlgen_binding() {
 			Type: "UserID", NullableType: "NullableUserID",
 		}, Nullable: true,
 	}}}
-	source, err := generate.PackageSource("store", users)
+	source, err := generate.DescriptorSource("store", []schema.TableDef{users})
 	if err != nil {
 		fmt.Println(err)
 		return

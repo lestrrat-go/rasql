@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -77,8 +78,11 @@ func TestGetDecodesSQLiteValues(t *testing.T) {
 	require.Equal(t, createdAt, gotWhen)
 }
 
+// The source here is a string that names no number. A string that does name a
+// whole number decodes into an integer instead, which
+// TestAssignDecodesWholeTextNumbersIntoIntegers covers.
 func TestGetRejectsWrongType(t *testing.T) {
-	result, err := rowvalue.NewRow([]string{"id"}, []any{"42"})
+	result, err := rowvalue.NewRow([]string{"id"}, []any{"identifier"})
 	require.NoError(t, err)
 
 	_, err = rowvalue.Get[int64](result, "id")
@@ -461,27 +465,99 @@ func TestAssignDecodesIntegersAcrossSignedness(t *testing.T) {
 	})
 }
 
-// TestAssignRejectsExactDecimalSourcesForFloat64 records why rasql maps NUMERIC
-// and DECIMAL columns to a rejected inspection rather than schema.FloatType: the
-// drivers hand back the exact decimal as a string or []byte, and a float64
-// destination accepts neither, so the generated field could never decode it.
-func TestAssignRejectsExactDecimalSourcesForFloat64(t *testing.T) {
+// TestAssignDecodesWholeTextNumbersIntoIntegers covers the shape MySQL returns
+// for SUM() over an integer column: a DECIMAL with no fraction, delivered as
+// text. An integer destination reads it, and rejects anything it cannot hold
+// exactly, so a fraction is never truncated on the way in.
+func TestAssignDecodesWholeTextNumbersIntoIntegers(t *testing.T) {
+	result, err := rowvalue.NewRow(
+		[]string{"mysql_sum", "pg_sum", "fractional", "above_int64", "not_a_number"},
+		[]any{[]byte("350"), "350", []byte("12.50"), []byte("18446744073709551615"), []byte("total")},
+	)
+	require.NoError(t, err)
+
+	t.Run("int64 field takes a byte-encoded whole number", func(t *testing.T) {
+		var destination int64
+		require.NoError(t, rowvalue.Assign(result, "mysql_sum", &destination))
+		require.Equal(t, int64(350), destination)
+	})
+
+	t.Run("int64 field takes a string-encoded whole number", func(t *testing.T) {
+		var destination int64
+		require.NoError(t, rowvalue.Assign(result, "pg_sum", &destination))
+		require.Equal(t, int64(350), destination)
+	})
+
+	t.Run("uint32 field takes a byte-encoded whole number", func(t *testing.T) {
+		var destination uint32
+		require.NoError(t, rowvalue.Assign(result, "mysql_sum", &destination))
+		require.Equal(t, uint32(350), destination)
+	})
+
+	t.Run("int64 field rejects a fraction rather than truncating it", func(t *testing.T) {
+		var destination int64
+		err := rowvalue.Assign(result, "fractional", &destination)
+		require.ErrorContains(t, err, `expected int64, got "12.50"`)
+	})
+
+	t.Run("int64 field rejects a value above its range", func(t *testing.T) {
+		var destination int64
+		err := rowvalue.Assign(result, "above_int64", &destination)
+		require.ErrorContains(t, err, "18446744073709551615 overflows int64")
+	})
+
+	t.Run("uint64 field rejects text that is not a number", func(t *testing.T) {
+		var destination uint64
+		err := rowvalue.Assign(result, "not_a_number", &destination)
+		require.ErrorContains(t, err, `expected uint64, got "total"`)
+	})
+}
+
+// TestAssignDecodesTextNumbersIntoFloatsInexactly records why rasql still maps
+// NUMERIC and DECIMAL columns to a rejected inspection rather than to
+// schema.FloatType, now that a float64 destination does read the text form the
+// drivers hand back. The reason is the loss shown here and not a refusal by
+// the decoder: 1234.5678901234567890 does not survive the trip, so a generated
+// float64 field would report a number the column does not hold. AVG() is why
+// the conversion exists at all, because MySQL returns it as DECIMAL text and
+// an average is approximate by nature.
+func TestAssignDecodesTextNumbersIntoFloatsInexactly(t *testing.T) {
 	t.Run("string source", func(t *testing.T) {
 		result, err := rowvalue.NewRow([]string{"pg_numeric"}, []any{"12.50"})
 		require.NoError(t, err)
 
 		var destination float64
-		err = rowvalue.Assign(result, "pg_numeric", &destination)
-		require.ErrorContains(t, err, `row: decode column "pg_numeric": expected float64, got string`)
+		require.NoError(t, rowvalue.Assign(result, "pg_numeric", &destination))
+		require.InDelta(t, 12.5, destination, 0)
 	})
 
 	t.Run("byte slice source", func(t *testing.T) {
-		result, err := rowvalue.NewRow([]string{"mysql_decimal"}, []any{[]byte("12.50")})
+		result, err := rowvalue.NewRow([]string{"mysql_decimal"}, []any{[]byte("175.5000")})
 		require.NoError(t, err)
 
 		var destination float64
-		err = rowvalue.Assign(result, "mysql_decimal", &destination)
-		require.ErrorContains(t, err, `row: decode column "mysql_decimal": expected float64, got []uint8`)
+		require.NoError(t, rowvalue.Assign(result, "mysql_decimal", &destination))
+		require.InDelta(t, 175.5, destination, 0)
+	})
+
+	// This is the loss the column mapping exists to avoid. The digits go in
+	// and a different number comes back out.
+	t.Run("exact decimal loses digits", func(t *testing.T) {
+		result, err := rowvalue.NewRow([]string{"pg_numeric"}, []any{"1234.5678901234567890"})
+		require.NoError(t, err)
+
+		var destination float64
+		require.NoError(t, rowvalue.Assign(result, "pg_numeric", &destination))
+		require.NotEqual(t, "1234.5678901234567890", strconv.FormatFloat(destination, 'f', -1, 64))
+	})
+
+	t.Run("text that names no number is still rejected", func(t *testing.T) {
+		result, err := rowvalue.NewRow([]string{"label"}, []any{"twelve"})
+		require.NoError(t, err)
+
+		var destination float64
+		err = rowvalue.Assign(result, "label", &destination)
+		require.ErrorContains(t, err, `row: decode column "label": expected float64, got "twelve"`)
 	})
 }
 

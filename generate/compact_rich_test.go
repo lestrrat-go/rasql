@@ -9,6 +9,7 @@ import (
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/querygen"
+	"github.com/lestrrat-go/rasql/internal/scratchmod"
 	"github.com/stretchr/testify/require"
 )
 
@@ -45,7 +46,15 @@ func TestCompactRichExternalConsumer(t *testing.T) {
 	require.NotContains(t, viewSource, "ActiveUsersCreate")
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "generated"), 0o755))
 	require.NoError(t, plan.Commit())
-	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/rich\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire modernc.org/sqlite v1.55.0\nrequire example.com/domain v1.0.0\nreplace github.com/lestrrat-go/rasql => "+repoRoot(t)+"\nreplace example.com/domain => ./domain\n"), 0o600))
+	file, err := scratchmod.ForModule(repoRoot(t), "example.com/rich")
+	require.NoError(t, err)
+	require.NoError(t, file.AddRequire("modernc.org/sqlite", pinnedVersion(t, "modernc.org/sqlite")))
+	require.NoError(t, file.AddRequire("example.com/domain", "v1.0.0"))
+	require.NoError(t, file.AddReplace("example.com/domain", "", "./domain", ""))
+	data, err := scratchmod.Format(file)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), data, 0o600))
+	require.NoError(t, scratchmod.WriteGoSum(root, repoRoot(t)))
 	domainDir := filepath.Join(root, "domain")
 	require.NoError(t, os.MkdirAll(domainDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(domainDir, "go.mod"), []byte("module example.com/domain\n\ngo 1.26\n"), 0o600))
@@ -53,7 +62,11 @@ func TestCompactRichExternalConsumer(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "generated", "consumer_test.go"), []byte(richConsumerSource), 0o600))
 	command := exec.Command("go", "test", "-mod=mod", "./generated")
 	command.Dir = root
-	command.Env = append(os.Environ(), "GOCACHE="+filepath.Join(root, "cache"))
+	// GOCACHE is deliberately not overridden here: the ambient build cache
+	// already holds modernc.org/sqlite and rasql from the surrounding `go
+	// test ./...` run, and a fresh per-call GOCACHE bought no isolation this
+	// correctness check needs -- it only forced that (slow to compile)
+	// dependency from scratch on every call.
 	output, err := command.CombinedOutput()
 	require.NoError(t, err, "%s", output)
 }

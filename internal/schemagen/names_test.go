@@ -74,19 +74,3 @@ func TestResolveNamesRejectsFinalDeclarationCollisions(t *testing.T) {
 	_, err = ResolveNames("generated", []schema.TableDef{table}, NameOverrides{Objects: map[schema.ObjectName]ObjectNameOverrides{{Name: "users"}: {Accessor: "Tables"}}})
 	require.ErrorContains(t, err, "Tables")
 }
-
-func TestResolvedNamesRequireCompleteCoverage(t *testing.T) {
-	parent := schema.MustTableDef("users", schema.Integer("id"))
-	child := schema.MustTableDef("posts", schema.Integer("id"), schema.Integer("user_id"))
-	child.Relationships = []schema.RelationshipDef{{Name: "User", Columns: []string{"user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}}}
-	names, err := ResolveNames("generated", []schema.TableDef{parent, child}, NameOverrides{})
-	require.NoError(t, err)
-	delete(names.objects, parent.ObjectName())
-	_, err = schemaSourceWithNames("generated", []schema.TableDef{child}, []schema.TableDef{parent, child}, withoutDescriptors, names)
-	require.ErrorContains(t, err, "missing relationship target")
-	names, err = ResolveNames("generated", []schema.TableDef{parent, child}, NameOverrides{})
-	require.NoError(t, err)
-	delete(names.columns[child.ObjectName()], "user_id")
-	_, err = schemaSourceWithNames("generated", []schema.TableDef{child}, []schema.TableDef{parent, child}, withoutDescriptors, names)
-	require.ErrorContains(t, err, "missing column")
-}

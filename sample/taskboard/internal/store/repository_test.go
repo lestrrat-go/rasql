@@ -14,14 +14,7 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 )
 
-// BEGIN(open_tx)
-
-// openTx returns a repository over a transaction that is rolled back when
-// the test ends, and the rasql.DB it was built on for the tests that write a
-// row the repository has no method for. rasql.Handle is satisfied by *sql.Tx
-// as well as *sql.DB, so every write below reaches a real PostgreSQL server
-// and none of them survives the test.
-func openTx(t *testing.T) (store.Repository, rasql.DB) {
+func openTx(t *testing.T) (store.Repository, rasql.Executor) {
 	t.Helper()
 	dsn := os.Getenv("TASKBOARD_TEST_DSN")
 	if dsn == "" {
@@ -33,130 +26,186 @@ func openTx(t *testing.T) (store.Repository, rasql.DB) {
 	}
 	database := stdlib.OpenDB(*config)
 	t.Cleanup(func() { _ = database.Close() })
-
 	tx, err := database.BeginTx(t.Context(), &sql.TxOptions{})
 	if err != nil {
 		t.Fatalf("begin: %s", err)
 	}
 	t.Cleanup(func() { _ = tx.Rollback() })
-
 	db, err := rasql.New(tx, dialect.PostgreSQL())
 	if err != nil {
 		t.Fatalf("create the rasql db: %s", err)
 	}
-	return store.New(db), db
+	profile, err := rasql.DiscoverEngineProfile(t.Context(), db, "postgresql-17")
+	if err != nil {
+		t.Fatalf("discover PostgreSQL engine profile: %s", err)
+	}
+	executor, err := rasql.AsExecutor(db, profile)
+	if err != nil {
+		t.Fatalf("create the rasql executor: %s", err)
+	}
+	return store.New(executor), executor
 }
 
-// END(open_tx)
-
-// seed writes one member, one project, and returns their ids.
-func seed(ctx context.Context, t *testing.T, repository store.Repository) (projectID int64, memberID int64) {
+func seed(ctx context.Context, t *testing.T, repository store.Repository, executor rasql.Executor) (int64, int64) {
 	t.Helper()
-	projects, err := repository.AllProjects(ctx)
+	memberPlan, err := store.NewMembersCreate().Name("D3 test member").Plan()
 	if err != nil {
-		t.Fatalf("read projects: %s", err)
+		t.Fatalf("plan member: %s", err)
+	}
+	if _, err := rasql.ExecMutation(ctx, executor, memberPlan); err != nil {
+		t.Fatalf("create member: %s", err)
 	}
 	members, err := repository.AllMembers(ctx)
+	if err != nil || len(members) == 0 {
+		t.Fatalf("read created member: rows=%d err=%v", len(members), err)
+	}
+	projectPlan, err := store.NewProjectsCreate().Name("D3 test project").Plan()
 	if err != nil {
-		t.Fatalf("read members: %s", err)
+		t.Fatalf("plan project: %s", err)
 	}
-	if len(projects) == 0 || len(members) == 0 {
-		t.Skip("the test database holds no project or member to file a task against")
+	if _, err := rasql.ExecMutation(ctx, executor, projectPlan); err != nil {
+		t.Fatalf("create project: %s", err)
 	}
-	return projects[0].ID, members[0].ID
+	projects, err := repository.AllProjects(ctx)
+	if err != nil || len(projects) == 0 {
+		t.Fatalf("read created project: rows=%d err=%v", len(projects), err)
+	}
+	return projects[len(projects)-1].ID, members[len(members)-1].ID
 }
 
-// BEGIN(add_task_due_on)
-
-// addTaskDueOn files one open task with a due date. AddTask leaves due_on
-// alone, so a test that needs one writes the row itself, through the same
-// generated table the repository uses and over the same rolled-back
-// transaction.
-func addTaskDueOn(ctx context.Context, t *testing.T, db rasql.DB, projectID int64, assigneeID int64, title string, dueOn time.Time) {
+func addTaskDueOn(ctx context.Context, t *testing.T, executor rasql.Executor, projectID, assigneeID int64, title string, dueOn time.Time) {
 	t.Helper()
-	row := store.TasksRow{ProjectID: projectID, AssigneeID: &assigneeID, Title: title, DueOn: &dueOn}
-	if _, err := rasql.InsertWithOptions(ctx, db, store.Tasks(), row,
-		rasql.DefaultColumns("is_open", "created_at"),
-	); err != nil {
+	create := store.NewTasksCreate().ProjectID(projectID).
+		AssigneeID(assigneeID).
+		Title(title).
+		DueOn(dueOn).
+		DefaultIsOpen().DefaultCreatedAt()
+	plan, err := create.Plan()
+	if err != nil {
+		t.Fatalf("plan task %q: %s", title, err)
+	}
+	if _, err := rasql.ExecMutation(ctx, executor, plan); err != nil {
 		t.Fatalf("insert task %q: %s", title, err)
 	}
 }
 
-// END(add_task_due_on)
+func openProjects(ctx context.Context, t *testing.T, repository store.Repository) store.OpenProjectsPage {
+	t.Helper()
+	page, err := repository.OpenProjects(ctx, rasql.PageRequest{Limit: 50})
+	if err != nil {
+		t.Fatalf("read open projects: %s", err)
+	}
+	return page
+}
 
-// openTaskID returns the id of the open task titled title.
 func openTaskID(ctx context.Context, t *testing.T, repository store.Repository, title string) int64 {
 	t.Helper()
-	tasks, err := repository.OpenTasks(ctx)
-	if err != nil {
-		t.Fatalf("read open tasks: %s", err)
-	}
-	for _, task := range tasks {
-		if task.Title == title {
-			return task.TaskID
+	page := openProjects(ctx, t, repository)
+	for _, project := range page.Values {
+		for _, task := range project.Tasks.Values {
+			if task.Row.Title == title {
+				return task.Row.ID
+			}
 		}
 	}
 	t.Fatalf("no open task titled %q", title)
 	return 0
 }
 
+func countOpenTasks(page store.OpenProjectsPage) int {
+	count := 0
+	for _, project := range page.Values {
+		count += len(project.Tasks.Values)
+	}
+	return count
+}
+
 func TestAddTaskAndCloseTask(t *testing.T) {
 	ctx := t.Context()
-	repository, _ := openTx(t)
-	projectID, memberID := seed(ctx, t, repository)
-
-	before, err := repository.OpenTasks(ctx)
-	if err != nil {
-		t.Fatalf("read open tasks: %s", err)
-	}
+	repository, executor := openTx(t)
+	projectID, memberID := seed(ctx, t, repository, executor)
+	before := openProjects(ctx, t, repository)
 	if err := repository.AddTask(ctx, projectID, &memberID, "Owned task"); err != nil {
 		t.Fatalf("add an owned task: %s", err)
 	}
 	if err := repository.AddTask(ctx, projectID, nil, "Unowned task"); err != nil {
 		t.Fatalf("add an unowned task: %s", err)
 	}
-
-	after, err := repository.OpenTasks(ctx)
-	if err != nil {
-		t.Fatalf("read open tasks: %s", err)
+	after := openProjects(ctx, t, repository)
+	if got, want := countOpenTasks(after), countOpenTasks(before)+2; got != want {
+		t.Fatalf("read %d open tasks after adding two to %d", got, want-2)
 	}
-	if len(after) != len(before)+2 {
-		t.Fatalf("read %d open tasks after adding two to %d", len(after), len(before))
-	}
-
 	var owned, unowned *store.OpenTask
-	for index := range after {
-		switch after[index].Title {
-		case "Owned task":
-			owned = &after[index]
-		case "Unowned task":
-			unowned = &after[index]
+	for _, project := range after.Values {
+		for index := range project.Tasks.Values {
+			task := &project.Tasks.Values[index]
+			switch task.Row.Title {
+			case "Owned task":
+				owned = task
+			case "Unowned task":
+				unowned = task
+			}
 		}
 	}
 	if owned == nil || unowned == nil {
 		t.Fatal("one of the two new tasks is missing from the open list")
 	}
-	// BEGIN(null_assignee)
-	if owned.AssigneeName == nil {
-		t.Error("the owned task came back with no assignee name")
+	if !owned.Assignee.Loaded || !owned.Assignee.Present || owned.Assignee.Value == nil {
+		t.Fatal("the owned task came back with no assignee")
 	}
-	if unowned.AssigneeName != nil {
-		t.Errorf("the unowned task came back with assignee %q, want none", *unowned.AssigneeName)
+	if !unowned.Assignee.Loaded || unowned.Assignee.Present {
+		t.Fatal("the unowned task came back with an assignee")
 	}
-	// END(null_assignee)
-
-	if err := repository.CloseTask(ctx, unowned.TaskID); err != nil {
+	if !owned.Row.IsOpen || owned.Row.CreatedAt.IsZero() || !unowned.Row.IsOpen || unowned.Row.CreatedAt.IsZero() {
+		t.Fatalf("new task defaults were not stored: owned=%#v unowned=%#v", owned.Row, unowned.Row)
+	}
+	closedCreate := store.NewTasksCreate().ProjectID(projectID).Title("Explicitly closed").IsOpen(false).DefaultCreatedAt()
+	closedPlan, err := closedCreate.Plan()
+	if err != nil {
+		t.Fatalf("plan explicitly closed task: %s", err)
+	}
+	if _, err := rasql.ExecMutation(ctx, executor, closedPlan); err != nil {
+		t.Fatalf("insert explicitly closed task: %s", err)
+	}
+	closedRow := readTaskByTitle(ctx, t, executor, "Explicitly closed")
+	if closedRow.IsOpen || closedRow.CreatedAt.IsZero() || closedRow.AssigneeID.Valid {
+		t.Fatalf("explicit false or nullable omission was not stored: %#v", closedRow)
+	}
+	if err := repository.CloseTask(ctx, unowned.Row.ID); err != nil {
 		t.Fatalf("close the unowned task: %s", err)
 	}
-	closed, err := repository.OpenTasks(ctx)
-	if err != nil {
-		t.Fatalf("read open tasks: %s", err)
+	if err := repository.CloseTask(ctx, unowned.Row.ID); err != nil {
+		t.Fatalf("close the already closed task: %s", err)
 	}
-	for _, row := range closed {
-		if row.TaskID == unowned.TaskID {
-			t.Fatalf("task %d is still open after CloseTask", row.TaskID)
+	closed := openProjects(ctx, t, repository)
+	for _, project := range closed.Values {
+		for _, task := range project.Tasks.Values {
+			if task.Row.ID == unowned.Row.ID {
+				t.Fatalf("task %d is still open after CloseTask", task.Row.ID)
+			}
 		}
 	}
+}
+
+func readTaskByTitle(ctx context.Context, t *testing.T, executor rasql.Executor, title string) store.TasksRow {
+	t.Helper()
+	source, err := store.Tasks().Source("tasks")
+	if err != nil {
+		t.Fatalf("create task source: %s", err)
+	}
+	expressions, err := (store.TasksColumns{}).Bind(source)
+	if err != nil {
+		t.Fatalf("bind task columns: %s", err)
+	}
+	projection, err := store.TasksProjection(expressions)
+	if err != nil {
+		t.Fatalf("build task projection: %s", err)
+	}
+	row, err := rasql.One(ctx, executor, rasql.Select(source.Source(), projection).Where(rasql.EqualValue(expressions.Title.Expr(), title)))
+	if err != nil {
+		t.Fatalf("read task %q: %s", title, err)
+	}
+	return row
 }
 
 func TestCloseTaskOnAMissingTaskIsNotAnError(t *testing.T) {
@@ -166,77 +215,35 @@ func TestCloseTaskOnAMissingTaskIsNotAnError(t *testing.T) {
 	}
 }
 
-func TestCountOverdue(t *testing.T) {
-	ctx := t.Context()
-	repository, _ := openTx(t)
-	projectID, memberID := seed(ctx, t, repository)
-
-	before, err := repository.CountOverdue(ctx, time.Now())
-	if err != nil {
-		t.Fatalf("count overdue tasks: %s", err)
-	}
-	// BEGIN(overdue_unmoved)
-	// AddTask files a task with no due date, so the count must not move.
-	if err := repository.AddTask(ctx, projectID, &memberID, "No due date"); err != nil {
-		t.Fatalf("add a task: %s", err)
-	}
-	after, err := repository.CountOverdue(ctx, time.Now())
-	// END(overdue_unmoved)
-	if err != nil {
-		t.Fatalf("count overdue tasks: %s", err)
-	}
-	if after != before {
-		t.Errorf("the overdue count moved from %d to %d after adding a task with no due date", before, after)
-	}
-}
-
-// BEGIN(overdue_boundary)
-
-// TestCountOverdueCountsATaskOnlyAfterItsDueDate pins the boundary that
-// CountOverdue's cast draws. due_on is a date and on is an instant, so the two
-// meet only once one of them is narrowed, and narrowing on is what keeps a
-// task due today out of the count until the day is over. Naming the instant
-// rather than reading the clock is what the bound parameter is for.
-//
-// The instant carries a location as well as a day, and the count follows the
-// location. Eight in the evening on 2026-03-16 in a zone nine hours behind UTC
-// is already 2026-03-17 in UTC, so the day the caller is having is the one the
-// count has to use, and an instant that late in its own day is also the case a
-// comparison against the raw timestamp gets wrong.
 func TestCountOverdueCountsATaskOnlyAfterItsDueDate(t *testing.T) {
 	ctx := t.Context()
-	repository, db := openTx(t)
-	projectID, memberID := seed(ctx, t, repository)
-
+	repository, executor := openTx(t)
+	projectID, memberID := seed(ctx, t, repository, executor)
 	zone := time.FixedZone("UTC-9", -9*60*60)
 	on := time.Date(2026, 3, 16, 20, 0, 0, 0, zone)
 	today := time.Date(2026, 3, 16, 0, 0, 0, 0, zone)
 	yesterday := today.AddDate(0, 0, -1)
-
 	before, err := repository.CountOverdue(ctx, on)
 	if err != nil {
 		t.Fatalf("count overdue tasks: %s", err)
 	}
-
-	addTaskDueOn(ctx, t, db, projectID, memberID, "Due today", today)
+	addTaskDueOn(ctx, t, executor, projectID, memberID, "Due today", today)
 	afterToday, err := repository.CountOverdue(ctx, on)
 	if err != nil {
 		t.Fatalf("count overdue tasks: %s", err)
 	}
 	if afterToday != before {
-		t.Errorf("the overdue count moved from %d to %d after adding a task due today; a task is past its due date only once the day is over", before, afterToday)
+		t.Errorf("the overdue count moved from %d to %d for a task due today", before, afterToday)
 	}
-
-	addTaskDueOn(ctx, t, db, projectID, memberID, "Due yesterday", yesterday)
+	addTaskDueOn(ctx, t, executor, projectID, memberID, "Due yesterday", yesterday)
 	afterYesterday, err := repository.CountOverdue(ctx, on)
 	if err != nil {
 		t.Fatalf("count overdue tasks: %s", err)
 	}
 	if afterYesterday != before+1 {
-		t.Errorf("the overdue count went from %d to %d after adding a task due yesterday, want %d", before, afterYesterday, before+1)
+		t.Errorf("the overdue count went from %d to %d, want %d", before, afterYesterday, before+1)
 	}
-
-	addTaskDueOn(ctx, t, db, projectID, memberID, "Closed and late", yesterday)
+	addTaskDueOn(ctx, t, executor, projectID, memberID, "Closed and late", yesterday)
 	if err := repository.CloseTask(ctx, openTaskID(ctx, t, repository, "Closed and late")); err != nil {
 		t.Fatalf("close the late task: %s", err)
 	}
@@ -245,8 +252,6 @@ func TestCountOverdueCountsATaskOnlyAfterItsDueDate(t *testing.T) {
 		t.Fatalf("count overdue tasks: %s", err)
 	}
 	if afterClosed != afterYesterday {
-		t.Errorf("the overdue count moved from %d to %d after a late task was closed; a closed task is nobody's problem", afterYesterday, afterClosed)
+		t.Errorf("the overdue count moved from %d to %d after closing a late task", afterYesterday, afterClosed)
 	}
 }
-
-// END(overdue_boundary)

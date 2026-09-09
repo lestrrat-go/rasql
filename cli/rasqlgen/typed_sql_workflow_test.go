@@ -18,6 +18,7 @@ import (
 	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/compilerlock"
 	"github.com/lestrrat-go/rasql/internal/schemasource"
+	"github.com/lestrrat-go/rasql/internal/scratchmod"
 	"github.com/stretchr/testify/require"
 )
 
@@ -134,7 +135,7 @@ func newTypedSQLFixture(t *testing.T) typedSQLFixture {
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "migrations"), 0o700))
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "queries"), 0o700))
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "money"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.test/fixture\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => "+filepath.ToSlash(repoRoot(t))+"\n"), 0o600))
+	require.NoError(t, scratchmod.Write(root, repoRoot(t), "example.test/fixture"))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "money", "money.go"), []byte("package money\n\ntype Money int64\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "migrations", "001.sql"), []byte("CREATE TABLE events (id INTEGER PRIMARY KEY, amount INTEGER NOT NULL, occurred_at DATETIME NOT NULL, note TEXT NULL);\nINSERT INTO events VALUES (1, 4, '2024-01-01T00:00:00Z', NULL);\nINSERT INTO events VALUES (2, 9, '2024-01-02T00:00:00Z', 'ready');\n"), 0o600))
 	query := "SELECT id, amount, occurred_at, note FROM events WHERE amount > {{bind \"amount\" events.amount}} OR amount = {{bind \"amount\" events.amount}} AND occurred_at >= {{bind \"since\" events.occurred_at}}\n"
@@ -146,7 +147,7 @@ func newTypedSQLFixture(t *testing.T) typedSQLFixture {
 	config := map[string]any{
 		"engine":  map[string]string{"dialect": "sqlite", "profile": "sqlite-3.35"},
 		"schema":  map[string]any{"kind": "migrations", "identity": "typed-workflow", "paths": []string{"migrations/*.sql"}},
-		"package": "store", "output": "internal/store", "emitter": "legacy",
+		"package": "store", "output": "internal/store", "emitter": "compact",
 		"mappings": map[string]any{"scalars": []any{map[string]any{
 			"name": "money", "match": map[string]string{"dialect": "sqlite", "name": "MONEY", "logical_kind": "integer"}, "go_type": "money.Money",
 			"imports": []any{map[string]string{"path": "example.test/fixture/money", "alias": "money"}}, "codec": "money.codec",
@@ -241,7 +242,7 @@ func assertTypedSQLLock(t *testing.T, fixture typedSQLFixture, lockBytes []byte)
 	require.Equal(t, []string{"integer", "integer", "time", "text"}, valueLogicalKinds(query.Results))
 	require.Equal(t, []bool{false, false, false, true}, valueNullability(query.Results))
 	require.Equal(t, []string{"EventsSince", "events_since_gen.go"}, []string{lock.Generation.Queries[0].Function, lock.Generation.Queries[0].File})
-	require.Equal(t, []string{"store", "internal/store", "legacy"}, []string{lock.Generation.Package, lock.Generation.Output, lock.Generation.Emitter})
+	require.Equal(t, []string{"store", "internal/store", "compact"}, []string{lock.Generation.Package, lock.Generation.Output, lock.Generation.Emitter})
 }
 
 func assertTypedSQLSource(t *testing.T, source []byte) {

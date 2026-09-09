@@ -183,6 +183,10 @@ func (c GoConfig) Clone() GoConfig {
 	for i := range out.Scalars {
 		out.Scalars[i].Imports = append([]GoImport(nil), c.Scalars[i].Imports...)
 	}
+	out.ColumnBindings = slices.Clone(c.ColumnBindings)
+	for i := range out.ColumnBindings {
+		out.ColumnBindings[i].Imports = append([]GoImport(nil), c.ColumnBindings[i].Imports...)
+	}
 	return out
 }
 func (q QueryAnalysis) Clone() QueryAnalysis {

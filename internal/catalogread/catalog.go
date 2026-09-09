@@ -35,11 +35,8 @@ type Result struct {
 var ErrUnresolvedFact = engineprofile.ErrUnresolvedFact
 
 func Read(ctx context.Context, db DB, p engineprofile.Profile, scope Scope) (Result, error) {
-	if err := engineprofile.Validate(p); err != nil {
+	if err := validateReadProfile(p); err != nil {
 		return Result{}, err
-	}
-	if p.Engine == engineprofile.Custom {
-		return Result{}, fmt.Errorf("%w: custom catalog inspection is unavailable", engineprofile.ErrUnsupportedFeature)
 	}
 	if isNil(db) {
 		return Result{}, fmt.Errorf("catalog database must not be nil")
@@ -60,14 +57,68 @@ func Read(ctx context.Context, db DB, p engineprofile.Profile, scope Scope) (Res
 		_ = tx.Rollback()
 		return Result{}, fmt.Errorf("unsupported engine")
 	}
-	ins, err := inspect.New(tx, d)
+	result, err := readQueryer(ctx, tx, p, scope)
 	if err != nil {
 		_ = tx.Rollback()
 		return Result{}, err
 	}
+	if err := tx.Commit(); err != nil {
+		return Result{}, err
+	}
+	return result, nil
+}
+
+// ReadTx inspects the catalog through the caller-owned transaction. It never
+// begins, commits, or rolls back tx.
+func ReadTx(ctx context.Context, tx *sql.Tx, p engineprofile.Profile, scope Scope) (Result, error) {
+	if err := validateReadProfile(p); err != nil {
+		return Result{}, err
+	}
+	if tx == nil {
+		return Result{}, fmt.Errorf("catalog transaction must not be nil")
+	}
+	if err := validateScope(scope, p.Engine == engineprofile.SQLite); err != nil {
+		return Result{}, err
+	}
+	return readQueryer(ctx, tx, p, scope)
+}
+
+// ReadConn inspects the catalog through the caller-owned connection. It never
+// begins, commits, or rolls back the transaction represented by conn.
+func ReadConn(ctx context.Context, conn *sql.Conn, p engineprofile.Profile, scope Scope) (Result, error) {
+	if err := validateReadProfile(p); err != nil {
+		return Result{}, err
+	}
+	if conn == nil {
+		return Result{}, fmt.Errorf("catalog connection must not be nil")
+	}
+	if err := validateScope(scope, p.Engine == engineprofile.SQLite); err != nil {
+		return Result{}, err
+	}
+	return readQueryer(ctx, conn, p, scope)
+}
+
+func validateReadProfile(p engineprofile.Profile) error {
+	if err := engineprofile.Validate(p); err != nil {
+		return err
+	}
+	if p.Engine == engineprofile.Custom {
+		return fmt.Errorf("%w: custom catalog inspection is unavailable", engineprofile.ErrUnsupportedFeature)
+	}
+	return nil
+}
+
+func readQueryer(ctx context.Context, queryer inspect.Queryer, p engineprofile.Profile, scope Scope) (Result, error) {
+	d := profileDialect(p)
+	if d == nil {
+		return Result{}, fmt.Errorf("unsupported engine")
+	}
+	ins, err := inspect.New(queryer, d)
+	if err != nil {
+		return Result{}, err
+	}
 	names, err := catalogNames(ctx, ins, scope)
 	if err != nil {
-		_ = tx.Rollback()
 		return Result{}, err
 	}
 	selected := selectNames(names, scope, p.Engine == engineprofile.SQLite)
@@ -82,7 +133,6 @@ func Read(ctx context.Context, db DB, p engineprofile.Profile, scope Scope) (Res
 				key = "main\x00" + want.Name
 			}
 			if !seen[key] {
-				_ = tx.Rollback()
 				cause := &inspect.TableNotFoundError{Table: want.Name, Scope: "the requested catalog scope"}
 				return Result{}, errors.Join(engineprofile.ErrUnresolvedFact, cause)
 			}
@@ -100,21 +150,16 @@ func Read(ctx context.Context, db DB, p engineprofile.Profile, scope Scope) (Res
 		if err != nil {
 			if fact, ok := unresolvedFact(n, err); ok {
 				if len(scope.Include) > 0 {
-					_ = tx.Rollback()
 					return Result{}, errors.Join(engineprofile.ErrUnresolvedFact, err)
 				}
 				unresolved = append(unresolved, fact)
 				continue
 			}
-			_ = tx.Rollback()
 			return Result{}, err
 		}
 		tables = append(tables, t)
 	}
 	sort.Slice(tables, func(i, j int) bool { return objectKey(tables[i].ObjectName()) < objectKey(tables[j].ObjectName()) })
-	if err := tx.Commit(); err != nil {
-		return Result{}, err
-	}
 	sort.Slice(unresolved, func(i, j int) bool {
 		ki := objectKey(unresolved[i].Object) + "\x00" + unresolved[i].Path + "\x00" + unresolved[i].Code
 		kj := objectKey(unresolved[j].Object) + "\x00" + unresolved[j].Path + "\x00" + unresolved[j].Code

@@ -59,11 +59,96 @@ func TestIntegrationJobListsEveryDBTestGuardedPackage(t *testing.T) {
 	guarded := guardedPackages(t, root)
 	listed := integrationJobPackages(t, filepath.Join(root, workflowPath))
 
+	workflow, err := os.ReadFile(filepath.Join(root, workflowPath))
+	require.NoError(t, err, "read %s", workflowPath)
 	for _, pkg := range guarded {
+		if pkg == modulePath+"/internal/conformance" && dedicatedConformanceStep(string(workflow)) {
+			continue
+		}
 		if !anyListedCovers(listed, pkg) {
 			t.Errorf("package %q has a test file importing %q, but the integration job's `go test -v` package list in %s does not cover it; add it to that list so the guarded test runs against a live database instead of nowhere at all", pkg, dbtestImportPath, workflowPath)
 		}
 	}
+}
+
+func dedicatedConformanceStep(workflow string) bool {
+	lines := strings.Split(workflow, "\n")
+	jobs := blockUnder(lines, "jobs:")
+	job := blockUnder(jobs, integrationJob+":")
+	steps := blockUnder(job, "steps:")
+	var conformance []workflowStep
+	var evidence []workflowStep
+	for _, step := range splitSteps(steps) {
+		switch step.name {
+		case "Run D4 conformance matrix":
+			conformance = append(conformance, step)
+		case "Upload D4 conformance evidence":
+			evidence = append(evidence, step)
+		}
+	}
+	if len(conformance) != 1 || len(evidence) != 1 {
+		return false
+	}
+	if conformance[0].run != "mkdir -p .tmp && ./scripts/conformance.sh live" {
+		return false
+	}
+	if conformance[0].envInvalid {
+		return false
+	}
+	for key, expected := range map[string]string{
+		"RASQL_TEST_POSTGRES_DSN":  "postgres://rasql:rasql@127.0.0.1:5432/rasql?sslmode=disable",
+		"RASQL_TEST_MYSQL_DSN":     "root:root@tcp(127.0.0.1:3306)/rasql?parseTime=true",
+		"RASQL_CONFORMANCE_OUTPUT": "${{ github.workspace }}/.tmp/d4-conformance.json",
+		"RASQL_CONFORMANCE_LOG":    "${{ github.workspace }}/.tmp/d4-conformance.log",
+	} {
+		if conformance[0].env[key] != expected {
+			return false
+		}
+	}
+	evidenceText := strings.Join(stepBlock(steps, "Upload D4 conformance evidence"), "\n")
+	return strings.Contains(evidenceText, ".tmp/d4-conformance.log") &&
+		strings.Contains(evidenceText, ".tmp/d4-conformance.json") &&
+		strings.Contains(evidenceText, "if-no-files-found: error")
+}
+
+func DedicatedConformanceStep(workflow string) bool { return dedicatedConformanceStep(workflow) }
+
+func stepBlock(block []string, name string) []string {
+	for _, step := range splitSteps(block) {
+		if step.name != name {
+			continue
+		}
+		// splitSteps already limits a step to its own item. Returning the raw
+		// block is useful here because environment and upload keys are not
+		// needed by integrationRunPackages and must still be checked.
+		itemIndent := -1
+		for _, line := range block {
+			if strings.Contains(line, "- name: "+name) {
+				itemIndent = leadingSpaces(line)
+				break
+			}
+		}
+		if itemIndent < 0 {
+			return nil
+		}
+		var result []string
+		started := false
+		for _, line := range block {
+			trimmed := strings.TrimSpace(line)
+			if leadingSpaces(line) == itemIndent && strings.HasPrefix(trimmed, "- ") {
+				if started {
+					break
+				}
+				started = strings.TrimSpace(strings.TrimPrefix(trimmed, "- ")) == "name: "+name
+
+			}
+			if started {
+				result = append(result, line)
+			}
+		}
+		return result
+	}
+	return nil
 }
 
 // goAlwaysSkipsDirName reports whether the go tool passes over a directory of
@@ -584,8 +669,10 @@ func goTestArgs(args []string) (*goTestCommand, error) {
 // workflowStep is one step of a workflow job: the value of its name: key
 // and the value of its run: key, each empty when the step has no such key.
 type workflowStep struct {
-	name string
-	run  string
+	name       string
+	run        string
+	env        map[string]string
+	envInvalid bool
 }
 
 // leadingSpaces counts the run of literal space characters at the start of
@@ -695,20 +782,50 @@ func parseStep(item []string, itemIndent int) workflowStep {
 	const marker = "- "
 	keyIndent := itemIndent + len(marker)
 
-	var step workflowStep
+	step := workflowStep{env: make(map[string]string)}
+	envIndent := keyIndent + 2
+	inEnv := false
 	for i, line := range item {
 		key := strings.TrimSpace(line)
 		if i == 0 {
 			key = strings.TrimPrefix(key, marker)
-		} else if leadingSpaces(line) != keyIndent {
-			continue
+		} else {
+			depth := leadingSpaces(line)
+			if inEnv && depth == envIndent {
+				name, value, ok := strings.Cut(key, ":")
+				if !ok || strings.TrimSpace(name) == "" || strings.TrimSpace(value) == "" {
+					step.envInvalid = true
+					continue
+				}
+				value = strings.TrimSpace(value)
+				if value == "|" || value == ">" || strings.HasPrefix(value, "*") || strings.HasPrefix(value, "&") {
+					step.envInvalid = true
+					continue
+				}
+				if _, exists := step.env[name]; exists {
+					step.envInvalid = true
+				}
+				step.env[name] = unquoteScalar(value)
+				continue
+			}
+			if depth != keyIndent {
+				continue
+			}
 		}
 		if after, ok := strings.CutPrefix(key, "name:"); ok && step.name == "" {
 			step.name = unquoteScalar(strings.TrimSpace(after))
 			continue
 		}
+		if after, ok := strings.CutPrefix(key, "env:"); ok {
+			if strings.TrimSpace(after) != "" {
+				step.envInvalid = true
+			}
+			inEnv = true
+			continue
+		}
 		if after, ok := strings.CutPrefix(key, "run:"); ok && step.run == "" {
 			step.run = strings.TrimSpace(after)
+			inEnv = false
 		}
 	}
 	return step
@@ -1205,6 +1322,64 @@ func TestCheckJobRunsFullSuiteSerially(t *testing.T) {
 			require.Equal(t, []string{"./..."}, cmd.pkgs)
 		})
 	}
+}
+
+func TestDedicatedConformanceStepRejectsEnvironmentMutations(t *testing.T) {
+	workflow, err := os.ReadFile(workflowPath)
+	require.NoError(t, err)
+	text := string(workflow)
+	require.True(t, DedicatedConformanceStep(text))
+	values := map[string]string{
+		"RASQL_TEST_POSTGRES_DSN":  "postgres://rasql:rasql@127.0.0.1:5432/rasql?sslmode=disable",
+		"RASQL_TEST_MYSQL_DSN":     "root:root@tcp(127.0.0.1:3306)/rasql?parseTime=true",
+		"RASQL_CONFORMANCE_OUTPUT": "${{ github.workspace }}/.tmp/d4-conformance.json",
+		"RASQL_CONFORMANCE_LOG":    "${{ github.workspace }}/.tmp/d4-conformance.log",
+	}
+	for key, value := range values {
+		t.Run("blank/"+key, func(t *testing.T) {
+			mutated := mutateD4Env(text, key, value, "")
+			require.False(t, DedicatedConformanceStep(mutated))
+		})
+		t.Run("changed/"+key, func(t *testing.T) {
+			mutated := mutateD4Env(text, key, value, "unrelated")
+			require.False(t, DedicatedConformanceStep(mutated))
+		})
+		t.Run("moved/"+key, func(t *testing.T) {
+			line := "          " + key + ": " + value + "\n"
+			mutated := mutateD4Env(text, key, value, "")
+			mutated = strings.Replace(mutated, "          name: d4-conformance-evidence\n", "          name: d4-conformance-evidence\n"+line, 1)
+			require.False(t, DedicatedConformanceStep(mutated))
+		})
+		t.Run("duplicate/"+key, func(t *testing.T) {
+			line := key + ": " + value
+			mutated := duplicateD4Env(text, line, "          "+key+": wrong")
+			require.False(t, DedicatedConformanceStep(mutated))
+		})
+	}
+}
+
+func duplicateD4Env(workflow, line, duplicate string) string {
+	marker := "      - name: Run D4 conformance matrix"
+	position := strings.Index(workflow, marker)
+	if position < 0 {
+		return workflow
+	}
+	prefix, tail := workflow[:position], workflow[position:]
+	tail = strings.Replace(tail, line, line+"\n"+duplicate, 1)
+	return prefix + tail
+}
+
+func mutateD4Env(workflow, key, oldValue, newValue string) string {
+	marker := "      - name: Run D4 conformance matrix"
+	position := strings.Index(workflow, marker)
+	if position < 0 {
+		return workflow
+	}
+	prefix, tail := workflow[:position], workflow[position:]
+	oldLine := key + ": " + oldValue
+	newLine := key + ": " + newValue
+	tail = strings.Replace(tail, oldLine, newLine, 1)
+	return prefix + tail
 }
 
 // TestGuardedPackageDiscoveryFollowsGoPackagePatternRules pins the rules

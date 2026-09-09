@@ -43,7 +43,7 @@ func TestNativeMutationBatchRejectsValidNeighborsWithoutExecution(t *testing.T) 
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			executor, raw := nativeMutationExecutorForTest(t)
-			_, err := ExecMutationBatch(t.Context(), executor, tc.plans(t), MutationBatchOptions{Atomic: true})
+			_, err := ExecMutationBatch(t.Context(), executor, tc.plans(t), BulkOptions{Atomic: true})
 			var planErr *PlanError
 			require.ErrorAs(t, err, &planErr)
 			require.Equal(t, "unsupported_feature", planErr.Code)

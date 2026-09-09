@@ -9,8 +9,8 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/dynamic"
 	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/lestrrat-go/rasql/stmt"
@@ -52,39 +52,52 @@ func Example_dynamicCSV() {
 		fmt.Printf("failed to build query: %s\n", err)
 		return
 	}
-	result, err := dynamic.QueryResult(ctx, db, statement)
+	rendered, err := render.Select(dialect.SQLite(), statement)
 	if err != nil {
-		fmt.Printf("failed to prepare query: %s\n", err)
+		fmt.Printf("failed to render query: %s\n", err)
 		return
 	}
-	defer func() { _ = result.Close() }()
-	header, err := result.Header()
+	sqlRows, err := db.QueryRendered(ctx, rendered)
+	if err != nil {
+		fmt.Printf("failed to query rows: %s\n", err)
+		return
+	}
+	defer func() { _ = sqlRows.Close() }()
+	header, err := sqlRows.Columns()
 	if err != nil {
 		fmt.Printf("failed to read header: %s\n", err)
 		return
 	}
 	var output bytes.Buffer
 	writer := csv.NewWriter(&output)
-	if err := writer.Write(header.Names()); err != nil {
+	if err := writer.Write(header); err != nil {
 		fmt.Printf("failed to write header: %s\n", err)
 		return
 	}
-	for row, err := range result.Rows() {
-		if err != nil {
+	for sqlRows.Next() {
+		values := make([]any, len(header))
+		destinations := make([]any, len(values))
+		for index := range destinations {
+			destinations[index] = &values[index]
+		}
+		if err := sqlRows.Scan(destinations...); err != nil {
 			fmt.Printf("failed to read row: %s\n", err)
 			return
 		}
-		values := make([]string, header.Len())
-		for index := range values {
-			value, ok := row.Value(index)
-			if ok && value != nil {
-				values[index] = fmt.Sprint(value)
+		row := make([]string, len(header))
+		for index, value := range values {
+			if value != nil {
+				row[index] = fmt.Sprint(value)
 			}
 		}
-		if err := writer.Write(values); err != nil {
+		if err := writer.Write(row); err != nil {
 			fmt.Printf("failed to write row: %s\n", err)
 			return
 		}
+	}
+	if err := sqlRows.Err(); err != nil {
+		fmt.Printf("failed to read rows: %s\n", err)
+		return
 	}
 	writer.Flush()
 	if err := writer.Error(); err != nil {

@@ -56,7 +56,7 @@ func (db DB) BeginScope(ctx context.Context, opts *sql.TxOptions) (DB, ScopeFina
 	if err != nil {
 		return DB{}, nil, err
 	}
-	return child, scopeFinalizer{commit: func(context.Context) error { return child.Commit() }, rollback: func(context.Context) error { return child.Rollback() }}, nil
+	return child, scopeFinalizer{commit: child.commitContext, rollback: child.rollbackContext}, nil
 }
 
 // BeginSavepoint starts an owned savepoint on a transaction DB.
@@ -308,6 +308,10 @@ func (db DB) Begin(ctx context.Context, opts *sql.TxOptions, hooks ...Hook) (DB,
 // transaction is finished. Every later Commit or Rollback finds it finished: a
 // later Commit reports that, and a later Rollback reports nothing.
 func (db DB) Commit() error {
+	return db.commitContext(context.Background())
+}
+
+func (db DB) commitContext(ctx context.Context) error {
 	if db.savepointScoped {
 		return fmt.Errorf("rasql: atomic savepoint DB cannot commit its outer transaction")
 	}
@@ -315,7 +319,7 @@ func (db DB) Commit() error {
 		return fmt.Errorf("rasql: this DB is not a transaction: Commit needs one from Begin")
 	}
 	operation := Operation{kind: CommitOperation}
-	callContext, invocation := db.startInvocation(context.Background(), operation)
+	callContext, invocation := db.startInvocation(ctx, operation)
 	if err := db.tx.Commit(); err != nil {
 		err = fmt.Errorf("rasql: commit transaction: %w", err)
 		db.completeInvocation(invocation, operation, TransactionPhase, callContext, err, 0, false)
@@ -334,6 +338,10 @@ func (db DB) Commit() error {
 // It reports an error when db is not a transaction, which is every DB except
 // one from Begin and one built by New from a *sql.Tx.
 func (db DB) Rollback() error {
+	return db.rollbackContext(context.Background())
+}
+
+func (db DB) rollbackContext(ctx context.Context) error {
 	if db.savepointScoped {
 		return fmt.Errorf("rasql: atomic savepoint DB cannot roll back its outer transaction")
 	}
@@ -341,7 +349,7 @@ func (db DB) Rollback() error {
 		return fmt.Errorf("rasql: this DB is not a transaction: Rollback needs one from Begin")
 	}
 	operation := Operation{kind: RollbackOperation}
-	callContext, invocation := db.startInvocation(context.Background(), operation)
+	callContext, invocation := db.startInvocation(ctx, operation)
 	if err := db.tx.Rollback(); err != nil {
 		if errors.Is(err, sql.ErrTxDone) {
 			db.completeInvocation(invocation, operation, TransactionPhase, callContext, nil, 0, false)
