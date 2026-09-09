@@ -53,7 +53,7 @@ func runChangePlanCreate(args []string) error {
 	lockFile := addUniqueStringFlag(flags, "lock", "compiler lock file describing the plan's baseline catalog")
 	directory := addUniqueStringFlag(flags, "dir", "directory that holds pending migration directories")
 	dialectName := flags.String("dialect", "", "postgresql, mysql, or sqlite")
-	dsn := flags.String("dsn", "", "connection string for a database that already matches -lock")
+	dsn := flags.String("dsn", "", "connection string for a scratch database matching -lock; unrecorded migrations are applied to it for real and not rolled back")
 	historyTable := flags.String("history-table", "", "migration history table name")
 	output := addUniqueStringFlag(flags, "output", "destination migration plan file")
 	if err := flags.Parse(args); err != nil {
