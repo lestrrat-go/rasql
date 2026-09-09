@@ -63,6 +63,10 @@ func DecodeCheckpoint(data []byte) (Checkpoint, error) {
 	}
 	return NewCheckpoint(PlanID(p), w.NextIndex, c)
 }
+// validateCheckpointShape rejects what the struct decode right after it would otherwise accept
+// silently: a missing key or an explicit JSON null, both of which decode to a zero value with no
+// error. Everything else - wrong JSON type, an empty or malformed plan_id/catalog_digest - is
+// already reported by that struct decode and by parseDigest, so it is not repeated here.
 func validateCheckpointShape(data []byte) error {
 	var raw map[string]json.RawMessage
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -73,21 +77,9 @@ func validateCheckpointShape(data []byte) error {
 		return err
 	}
 	for _, key := range []string{"plan_id", "next_index", "catalog_digest"} {
-		value := bytes.TrimSpace(raw[key])
-		if bytes.Equal(value, []byte("null")) {
+		if bytes.Equal(bytes.TrimSpace(raw[key]), []byte("null")) {
 			return fmt.Errorf("%w: checkpoint field %s is null", ErrInvalidWire, key)
 		}
-	}
-	var planID, catalogDigest string
-	if err := json.Unmarshal(raw["plan_id"], &planID); err != nil || planID == "" {
-		return fmt.Errorf("%w: checkpoint plan_id type", ErrInvalidWire)
-	}
-	if err := json.Unmarshal(raw["catalog_digest"], &catalogDigest); err != nil || catalogDigest == "" {
-		return fmt.Errorf("%w: checkpoint catalog_digest type", ErrInvalidWire)
-	}
-	var next int
-	if err := json.Unmarshal(raw["next_index"], &next); err != nil {
-		return fmt.Errorf("%w: checkpoint next_index type", ErrInvalidWire)
 	}
 	return nil
 }
