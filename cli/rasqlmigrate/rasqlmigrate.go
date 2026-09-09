@@ -20,6 +20,7 @@ import (
 	"github.com/lestrrat-go/rasql/internal/dsnredact"
 	"github.com/lestrrat-go/rasql/internal/migrationdir"
 	"github.com/lestrrat-go/rasql/migrate"
+	"github.com/lestrrat-go/rasql/migrate/changeplan"
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/migrate/diff/mysql"
 	"github.com/lestrrat-go/rasql/migrate/diff/postgresql"
@@ -110,8 +111,8 @@ func printUsage(output io.Writer, program string) {
 	_, _ = fmt.Fprintln(output, "  diff     Generate a reviewed migration from desired schemas")
 	_, _ = fmt.Fprintln(output, "  diff-live Compare one live table with a desired schema")
 	_, _ = fmt.Fprintln(output, "  dump     Write rasql's own schema descriptor for a live database")
-	_, _ = fmt.Fprintln(output, "  plan     Print ordered SQL sources without connecting to a database")
-	_, _ = fmt.Fprintln(output, "  apply    Apply pending migrations, oldest first")
+	_, _ = fmt.Fprintln(output, "  plan     Print directory sources, inspect a saved plan, check live state, or create one")
+	_, _ = fmt.Fprintln(output, "  apply    Apply directory migrations or a reviewed plan")
 	_, _ = fmt.Fprintln(output, "  revert   Revert applied migrations, newest first")
 	_, _ = fmt.Fprintln(output, "  status   Show applied, pending, changed, unknown, and incomplete migrations")
 	_, _ = fmt.Fprintln(output, "  verify   Require every supplied migration to be applied unchanged")
@@ -372,15 +373,43 @@ func schemaAnalyzer(name string) (diff.Analyzer, error) {
 }
 
 func runPlan(args []string) error {
+	if len(args) > 0 && args[0] == "check" {
+		return runChangePlanCheck(args[1:])
+	}
+	if len(args) > 0 && args[0] == "create" {
+		return runChangePlanCreate(args[1:])
+	}
 	flags := newFlagSet("plan")
-	directory := flags.String("dir", "", "directory that holds migration directories")
+	directory := addUniqueStringFlag(flags, "dir", "directory that holds migration directories")
+	file := addUniqueStringFlag(flags, "file", "serialized migration plan file")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if *directory == "" {
-		return errors.New("plan requires -dir")
+	if len(flags.Args()) != 0 {
+		return errors.New("plan accepts no positional arguments")
 	}
-	migrations, err := migrationdir.Load(*directory)
+	if directory.set == file.set {
+		return errors.New("plan requires exactly one of -dir and -file")
+	}
+	if directory.set && directory.value == "" {
+		return errors.New("plan -dir must not be empty")
+	}
+	if file.set && file.value == "" {
+		return errors.New("plan -file must not be empty")
+	}
+	if file.set {
+		plan, err := changeplan.Read(file.value)
+		if err != nil {
+			return fmt.Errorf("read migration plan: %w", err)
+		}
+		output, err := formatChangePlan(plan)
+		if err != nil {
+			return err
+		}
+		_, _ = commandOutput.Write(output)
+		return nil
+	}
+	migrations, err := migrationdir.Load(directory.value)
 	if err != nil {
 		return err
 	}
@@ -390,7 +419,8 @@ func runPlan(args []string) error {
 
 func runApply(args []string) error {
 	flags := newFlagSet("apply")
-	directory := flags.String("dir", "", "directory that holds migration directories")
+	directory := addUniqueStringFlag(flags, "dir", "directory that holds migration directories")
+	planFile := addUniqueStringFlag(flags, "plan", "serialized migration plan file")
 	dialectName := flags.String("dialect", "", "postgresql, mysql, or sqlite")
 	dsn := flags.String("dsn", "", "database connection string")
 	historyTable := flags.String("history-table", "", "migration history table name")
@@ -399,11 +429,35 @@ func runApply(args []string) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
+	if len(flags.Args()) != 0 {
+		return errors.New("apply accepts no positional arguments")
+	}
+	if directory.set == planFile.set {
+		return errors.New("apply requires exactly one of -dir and -plan")
+	}
+	if directory.set && directory.value == "" {
+		return errors.New("apply -dir must not be empty")
+	}
+	if planFile.set && planFile.value == "" {
+		return errors.New("apply -plan must not be empty")
+	}
+	if planFile.set {
+		var directoryOnly string
+		flags.Visit(func(flagValue *flag.Flag) {
+			if flagValue.Name == "to" || flagValue.Name == "dry-run" {
+				directoryOnly = flagValue.Name
+			}
+		})
+		if directoryOnly != "" {
+			return fmt.Errorf("apply -%s is valid only with -dir", directoryOnly)
+		}
+		return runChangePlanApply(planFile.value, *dialectName, *dsn, *historyTable)
+	}
 	target := migrate.AllPending()
 	if *through != "" {
 		target = migrate.ApplyThrough(*through)
 	}
-	runner, migrations, closeDatabase, err := openRunner(context.Background(), *directory, *dialectName, *dsn, *historyTable)
+	runner, migrations, closeDatabase, err := openRunner(context.Background(), directory.value, *dialectName, *dsn, *historyTable)
 	if err != nil {
 		return err
 	}
