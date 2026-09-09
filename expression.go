@@ -2,11 +2,14 @@ package rasql
 
 import (
 	"database/sql"
+	"database/sql/driver"
 	"errors"
+	"fmt"
 	"reflect"
 	"sync/atomic"
 	"time"
 
+	"github.com/lestrrat-go/rasql/internal/mutationcolumn"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 )
@@ -38,6 +41,17 @@ type NullColumn[Row, T any] struct {
 	ref   query.ColumnRef
 	codec string
 }
+
+func (c Column[Row, T]) RasqlMutationColumn() mutationcolumn.NonNull[Row, T] {
+	return mutationcolumn.NonNull[Row, T]{}
+}
+func (c Column[Row, T]) mutationColumnRef() query.ColumnRef { return c.ref }
+func (c Column[Row, T]) mutationColumnCodec() string        { return c.codec }
+func (c NullColumn[Row, T]) RasqlMutationNullColumn() mutationcolumn.Nullable[Row, T] {
+	return mutationcolumn.Nullable[Row, T]{}
+}
+func (c NullColumn[Row, T]) mutationColumnRef() query.ColumnRef { return c.ref }
+func (c NullColumn[Row, T]) mutationColumnCodec() string        { return c.codec }
 
 // BindResultColumn binds a non-null column exposed by a typed derived source.
 func BindResultColumn[R, T any](source TypedSource[R], name string) (Column[R, T], error) {
@@ -108,6 +122,57 @@ func bindColumn[Row, T any](relation Source, name, codec string, nullable bool) 
 	}
 	return Column[Row, T]{}, planError("invalid_source", "column", "column is not a member of source")
 }
+
+// BindTypedColumn bridges a generated store accessor's query.TypedColumn
+// into the typed Expr/Column layer. BindColumn names the same column as a
+// string, which lets a renamed column pass silently instead of failing the
+// build; a generated accessor already carries a ColumnRef the compiler
+// checks at every call site, and this is the entry point that lets it be
+// used as-is instead of falling back to that weaker string form.
+func BindTypedColumn[Row, T any](column query.TypedColumn[Row, T]) (Column[Row, T], error) {
+	ref := column.Ref()
+	definition, err := lookupBoundColumn(ref)
+	if err != nil {
+		return Column[Row, T]{}, err
+	}
+	if definition.Nullable {
+		return Column[Row, T]{}, planError("invalid_source", "column", "nullability does not match handle")
+	}
+	return Column[Row, T]{ref: ref, codec: definition.Codec}, nil
+}
+
+// BindNullTypedColumn is BindTypedColumn for a nullable column, bridging the
+// query.NullableColumn a generated accessor returns for one.
+func BindNullTypedColumn[Row, T any](column query.NullableColumn[Row, T]) (NullColumn[Row, T], error) {
+	ref := column.Ref()
+	definition, err := lookupBoundColumn(ref)
+	if err != nil {
+		return NullColumn[Row, T]{}, err
+	}
+	if !definition.Nullable {
+		return NullColumn[Row, T]{}, planError("invalid_source", "column", "nullability does not match handle")
+	}
+	return NullColumn[Row, T]{ref: ref, codec: definition.Codec}, nil
+}
+
+// lookupBoundColumn finds ref's column definition in the schema its source
+// carries, the same lookup validateBoundColumn does for a column named by
+// string. BindTypedColumn and BindNullTypedColumn use it to recover the
+// codec a query.TypedColumn does not carry itself, since that type exists to
+// be checked by the compiler rather than to describe how its value is
+// encoded.
+func lookupBoundColumn(ref query.ColumnRef) (ResultColumn, error) {
+	if ref.Source().QualifiedName() == "" {
+		return ResultColumn{}, planError("invalid_source", "relation", "source is zero")
+	}
+	for _, column := range ref.Source().Columns() {
+		if column.Name == ref.Name() {
+			return column, nil
+		}
+	}
+	return ResultColumn{}, planError("invalid_source", "column", "column is not a member of source")
+}
+
 func validateBoundColumn(relation Source, name, codec string) error {
 	if relation.ref.QualifiedName() == "" {
 		return planError("invalid_source", "relation", "source is zero")
@@ -134,11 +199,34 @@ var nextBindID uint64
 type bindID uint64
 type bindValueCopy func() (any, error)
 type bindToken struct {
-	id    bindID
-	value any
-	codec string
-	err   error
-	copy  bindValueCopy
+	id         bindID
+	value      any
+	codec      string
+	err        error
+	copy       bindValueCopy
+	preEncoded bool
+}
+
+func graphEncodedBind(value driver.Value, codec string) (query.Expression, error) {
+	if codec != "" && !codecPattern.MatchString(codec) {
+		return nil, planError("internal_plan", "bind", "malformed codec identifier")
+	}
+	if err := validateDriverValue(value); err != nil {
+		return nil, planError("internal_plan", "bind", err.Error())
+	}
+	id := bindID(atomic.AddUint64(&nextBindID, 1))
+	snapshot, copier, err := adoptBind(value, false)
+	if err != nil {
+		return nil, err
+	}
+	return query.Bind(bindToken{id: id, value: snapshot, codec: codec, copy: copier, preEncoded: true}), nil
+}
+
+func validateDriverValue(value driver.Value) error {
+	if value == nil || driver.IsValue(value) {
+		return nil
+	}
+	return fmt.Errorf("value %T is not a legal driver value", value)
 }
 
 func Value[T any](value T) Expr[T] {
@@ -223,6 +311,11 @@ type OrderTerm struct {
 	source     string
 	descending bool
 	nulls      NullOrder
+	// result is set by AscResult and DescResult, and names a projection of
+	// this query rather than an expression to recompute. A term carrying one
+	// has no node, which is what the keyset and partition-limit paths already
+	// refuse: paging needs the expression itself to build its comparison.
+	result *ProjectionItem
 }
 
 func AscExpr[T any](value Expr[T]) OrderTerm {

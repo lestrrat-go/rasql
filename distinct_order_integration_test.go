@@ -72,12 +72,30 @@ func testDistinctOrder(t *testing.T, database *sql.DB, test distinctOrderCase) {
 		require.NoError(t, err)
 	}()
 	require.NoError(t, rasql.CreateTable(t.Context(), db, records))
+
+	profileID := "postgresql-17"
+	if test.dialect.Name() == "mysql" {
+		profileID = "mysql-8.4"
+	}
+	profile, err := rasql.DiscoverEngineProfile(t.Context(), db, profileID)
+	require.NoError(t, err)
+	executor, err := rasql.AsExecutor(db, profile)
+	require.NoError(t, err)
+	recordID := query.TypedColumnOf[record, int64](records.Column("id"))
+	recordCity := query.TypedColumnOf[record, string](records.Column("city"))
+	recordAge := query.TypedColumnOf[record, int64](records.Column("age"))
 	for _, fixture := range []record{
 		{ID: 1, City: "tokyo", Age: 30},
 		{ID: 2, City: "osaka", Age: 20},
 		{ID: 3, City: "tokyo", Age: 10},
 	} {
-		_, err = rasql.Insert(t.Context(), db, records, fixture)
+		plan, err := rasql.NewCreatePlan(records,
+			rasql.SetField(recordID, fixture.ID),
+			rasql.SetField(recordCity, fixture.City),
+			rasql.SetField(recordAge, fixture.Age),
+		)
+		require.NoError(t, err)
+		_, err = rasql.ExecMutation(t.Context(), executor, plan)
 		require.NoError(t, err)
 	}
 

@@ -11,8 +11,9 @@ import (
 	"github.com/lestrrat-go/rasql/catalog"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/inspect"
-	"github.com/lestrrat-go/rasql/internal/schemagen"
+	"github.com/lestrrat-go/rasql/internal/scratchmod"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/mod/modfile"
 	_ "modernc.org/sqlite"
 )
 
@@ -33,18 +34,50 @@ func TestGeneratedSQLiteViewCanBeRead(t *testing.T) {
 	users, err := inspector.Object(t.Context(), "users")
 	require.NoError(t, err)
 	require.Len(t, tables, 2)
-	view.RowName = "ActiveUserRow"
-	users.RowName = "UserRow"
 	_, filename, _, ok := runtime.Caller(0)
 	require.True(t, ok)
-	source, err := schemagen.PackageSource("generated", users, view)
-	require.NoError(t, err)
 	directory := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(directory, "schema.go"), source, 0o600))
-	usage := []byte("package generated_test\n\nimport (\n\t\"context\"\n\t\"database/sql\"\n\t\"fmt\"\n\t\"testing\"\n\t\"github.com/lestrrat-go/rasql\"\n\t\"github.com/lestrrat-go/rasql/dialect\"\n\t\"example.com/generated\"\n\t_ \"modernc.org/sqlite\"\n)\nfunc TestRead(t *testing.T) {\n db, err := sql.Open(\"sqlite\", `" + databasePath + "`); if err != nil { t.Fatal(err) }; defer db.Close(); rdb, _ := rasql.New(db, dialect.SQLite()); if _, err := rasql.Insert(context.Background(), rdb, generated.Users(), generated.UserRow{ID: 1, Email: \"ada@example.com\"}); err != nil { t.Fatal(err) }; rows, err := rasql.SelectFrom(generated.ActiveUsers()).All(context.Background(), rdb); if err != nil { t.Fatal(err) }; fmt.Println(rows[0].Email)\n}\n")
+	require.NoError(t, compactStore(t, filepath.Join(directory, "generated"), users, view).Write())
+	usage := []byte("package generated_test\n\n" +
+		"import (\n" +
+		"\t\"context\"\n\t\"database/sql\"\n\t\"fmt\"\n\t\"testing\"\n\n" +
+		"\t\"github.com/lestrrat-go/rasql\"\n\t\"github.com/lestrrat-go/rasql/dialect\"\n\t\"example.com/generated/generated\"\n\t_ \"modernc.org/sqlite\"\n" +
+		")\n\n" +
+		"func TestRead(t *testing.T) {\n" +
+		"\tctx := context.Background()\n" +
+		"\tdb, err := sql.Open(\"sqlite\", `" + databasePath + "`)\n" +
+		"\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
+		"\tdefer db.Close()\n" +
+		"\traw, err := rasql.New(db, dialect.SQLite())\n" +
+		"\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
+		"\tprofile, err := rasql.DiscoverEngineProfile(ctx, raw, \"sqlite-3.35\")\n" +
+		"\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
+		"\texecutor, err := rasql.AsExecutor(raw, profile)\n" +
+		"\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
+		"\tcreatePlan, err := generated.NewUsersCreate().ID(1).Email(\"ada@example.com\").Plan()\n" +
+		"\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
+		"\tif _, err := rasql.ExecMutation(ctx, executor, createPlan); err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
+		"\tviewSource, err := generated.ActiveUsers().Source(\"\")\n" +
+		"\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
+		"\tviewColumns, err := (generated.ActiveUsersColumns{}).Bind(viewSource)\n" +
+		"\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
+		"\tviewProjection, err := generated.ActiveUsersProjection(viewColumns)\n" +
+		"\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
+		"\trows, err := rasql.All(ctx, executor, rasql.Select(viewSource.Source(), viewProjection))\n" +
+		"\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
+		"\tif len(rows) != 1 {\n\t\tt.Fatalf(\"got %d rows\", len(rows))\n\t}\n" +
+		"\tfmt.Println(rows[0].Email)\n" +
+		"}\n")
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "usage_test.go"), usage, 0o600))
-	module := "module example.com/generated\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire modernc.org/sqlite v1.55.0\n\nreplace github.com/lestrrat-go/rasql => " + filepath.ToSlash(filepath.Join(filepath.Dir(filename), "../..")) + "\n"
-	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte(module), 0o600))
+	repoRoot := filepath.Join(filepath.Dir(filename), "../..")
+	file, err := scratchmod.ForModule(repoRoot, "example.com/generated")
+	require.NoError(t, err)
+	require.NoError(t, file.AddRequire("modernc.org/sqlite", pinnedVersion(t, repoRoot, "modernc.org/sqlite")))
+	data, err := scratchmod.Format(file)
+	require.NoError(t, err)
+	// No go.sum copied alongside: the `go mod tidy` below needs the network
+	// regardless, so a copy would buy this fixture nothing.
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), data, 0o600))
 	command := exec.Command("go", "mod", "tidy")
 	command.Dir = directory
 	output, err := command.CombinedOutput()
@@ -53,4 +86,24 @@ func TestGeneratedSQLiteViewCanBeRead(t *testing.T) {
 	command.Dir = directory
 	output, err = command.CombinedOutput()
 	require.NoError(t, err, "generated SQLite view consumer failed:\n%s", output)
+}
+
+// pinnedVersion reads the version the repository's own go.mod pins for
+// module, so a scratch fixture's go.mod names a version rasql actually
+// depends on rather than one written down by hand that can drift out of
+// sync with go.mod.
+func pinnedVersion(t *testing.T, repoRoot, module string) string {
+	t.Helper()
+	goModPath := filepath.Join(repoRoot, "go.mod")
+	data, err := os.ReadFile(goModPath)
+	require.NoError(t, err)
+	file, err := modfile.Parse(goModPath, data, nil)
+	require.NoError(t, err)
+	for _, r := range file.Require {
+		if r.Mod.Path == module {
+			return r.Mod.Version
+		}
+	}
+	t.Fatalf("go.mod has no requirement for %s", module)
+	return ""
 }

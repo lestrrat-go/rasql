@@ -2,6 +2,27 @@ package compilerlock
 
 import "github.com/lestrrat-go/rasql/internal/compilerir"
 
+func FromMappings(m compilerir.MappingConfig) MappingRecord {
+	r := MappingRecord{}
+	for _, s := range m.Scalars {
+		r.Scalars = append(r.Scalars, ScalarMappingRecord{Name: s.Name, Match: s.Match, GoType: s.GoType, NullableGoType: s.NullableGoType, Imports: append([]compilerir.GoImport(nil), s.Imports...), Codec: s.Codec})
+	}
+	for _, x := range m.Relations {
+		r.Relations = append(r.Relations, RelationMappingRecord{Name: x.Name, Source: string(x.Source), From: append([]string(nil), x.From...), Target: string(x.Target), To: append([]string(nil), x.To...), Through: ThroughMappingRecord{Object: string(x.Through.Object), SourceFrom: append([]string(nil), x.Through.SourceFrom...), SourceTo: append([]string(nil), x.Through.SourceTo...), TargetFrom: append([]string(nil), x.Through.TargetFrom...), TargetTo: append([]string(nil), x.Through.TargetTo...)}})
+	}
+	return r
+}
+func (r MappingRecord) MappingConfig() (compilerir.MappingConfig, error) {
+	m := compilerir.MappingConfig{}
+	for _, s := range r.Scalars {
+		m.Scalars = append(m.Scalars, compilerir.ScalarMapping{Name: s.Name, Match: s.Match, GoType: s.GoType, NullableGoType: s.NullableGoType, Imports: append([]compilerir.GoImport(nil), s.Imports...), Codec: s.Codec})
+	}
+	for _, x := range r.Relations {
+		m.Relations = append(m.Relations, compilerir.RelationMapping{Name: x.Name, Source: compilerir.ObjectID(x.Source), From: append([]string(nil), x.From...), Target: compilerir.ObjectID(x.Target), To: append([]string(nil), x.To...), Through: compilerir.ThroughMapping{Object: compilerir.ObjectID(x.Through.Object), SourceFrom: append([]string(nil), x.Through.SourceFrom...), SourceTo: append([]string(nil), x.Through.SourceTo...), TargetFrom: append([]string(nil), x.Through.TargetFrom...), TargetTo: append([]string(nil), x.Through.TargetTo...)}})
+	}
+	return m, compilerir.ValidateMappingConfig(m, "mapping")
+}
+
 func CatalogFromPhysical(c compilerir.PhysicalCatalog) CatalogRecord { return FromPhysical(c) }
 func PhysicalFromCatalog(f File) compilerir.PhysicalCatalog          { return ToPhysical(f) }
 
@@ -50,10 +71,24 @@ func AnalysisFromQuery(q QueryRecord) compilerir.QueryAnalysis {
 }
 
 func value(v compilerir.SemanticValue) ValueRecord {
-	return ValueRecord{Name: v.Name, Scalar: v.Scalar, Nullable: v.Nullable, TypeCertainty: v.TypeCertainty, NullabilityCertainty: v.NullabilityCertainty}
+	r := ValueRecord{Name: v.Name, Scalar: v.Scalar, Nullable: v.Nullable, TypeCertainty: v.TypeCertainty, NullabilityCertainty: v.NullabilityCertainty, LogicalKind: v.LogicalKind}
+	if v.Native != nil {
+		r.Native = native(v.Native)
+	}
+	if v.Integer != nil {
+		r.Integer = &IntegerTypeFactsRecord{Unsigned: v.Integer.Unsigned, DisplayWidth: oi(v.Integer.DisplayWidth), ZeroFill: v.Integer.ZeroFill}
+	}
+	return r
 }
 func toValue(v ValueRecord) compilerir.SemanticValue {
-	return compilerir.SemanticValue{Name: v.Name, Scalar: v.Scalar, Nullable: v.Nullable, TypeCertainty: v.TypeCertainty, NullabilityCertainty: v.NullabilityCertainty}
+	r := compilerir.SemanticValue{Name: v.Name, Scalar: v.Scalar, Nullable: v.Nullable, TypeCertainty: v.TypeCertainty, NullabilityCertainty: v.NullabilityCertainty, LogicalKind: v.LogicalKind}
+	if v.Native != nil {
+		r.Native = toNative(v.Native)
+	}
+	if v.Integer != nil {
+		r.Integer = &compilerir.IntegerTypeFacts{Unsigned: v.Integer.Unsigned, DisplayWidth: toOI(v.Integer.DisplayWidth), ZeroFill: v.Integer.ZeroFill}
+	}
+	return r
 }
 
 func FromPhysical(c compilerir.PhysicalCatalog) CatalogRecord {

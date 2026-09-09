@@ -2,7 +2,7 @@
 # Run one rasql command, and pass every argument straight through:
 #
 #   ./scripts/rasql.sh migrate status
-#   ./scripts/rasql.sh codegen generate -dsn "$TASKBOARD_DSN"
+#   ./scripts/rasql.sh generate
 #
 # The walkthrough installs the command with `go install` and calls it by name.
 # This copy of the project is checked into the rasql repository itself, two
@@ -12,9 +12,8 @@
 # module's go.sum, and putting them there would give the sample a dependency
 # it never imports.
 set -eu
-# Run from the module root, so a relative path in the arguments means the same
-# thing however the script was reached. `go generate ./...` runs the directive
-# in internal/store from that package's own directory.
+# Run from the module root, so relative paths mean the same thing however the
+# script was reached.
 cd "$(dirname "$0")/.."
 workdir=$(mktemp -d)
 trap 'rm -rf "$workdir"' EXIT

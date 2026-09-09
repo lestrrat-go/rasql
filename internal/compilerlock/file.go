@@ -9,12 +9,14 @@ import (
 	"go/token"
 	"io"
 	"os"
+	"reflect"
 	"sort"
 
 	"github.com/lestrrat-go/rasql/internal/compilerir"
 )
 
-const FormatVersion = 1
+const FormatVersion = 2
+const legacyFormatVersion = 1
 const MaxSourceFileBytes int64 = 64 << 20
 
 type File struct {
@@ -26,7 +28,36 @@ type File struct {
 	Queries    []QueryRecord    `json:"queries"`
 	Generation GenerationRecord `json:"generation"`
 	Digests    Digests          `json:"digests"`
+	Mappings   MappingRecord    `json:"mappings"`
 }
+type MappingRecord struct {
+	Scalars   []ScalarMappingRecord   `json:"scalars,omitempty"`
+	Relations []RelationMappingRecord `json:"relations,omitempty"`
+}
+type ScalarMappingRecord struct {
+	Name           string                 `json:"name"`
+	Match          compilerir.NativeMatch `json:"match"`
+	GoType         string                 `json:"go_type"`
+	NullableGoType string                 `json:"nullable_go_type,omitempty"`
+	Imports        []compilerir.GoImport  `json:"imports,omitempty"`
+	Codec          string                 `json:"codec"`
+}
+type RelationMappingRecord struct {
+	Name    string               `json:"name"`
+	Source  string               `json:"source"`
+	From    []string             `json:"from"`
+	Target  string               `json:"target"`
+	To      []string             `json:"to"`
+	Through ThroughMappingRecord `json:"through"`
+}
+type ThroughMappingRecord struct {
+	Object     string   `json:"object"`
+	SourceFrom []string `json:"source_from"`
+	SourceTo   []string `json:"source_to"`
+	TargetFrom []string `json:"target_from"`
+	TargetTo   []string `json:"target_to"`
+}
+
 type GenerationRecord struct {
 	Package string             `json:"package"`
 	Output  string             `json:"output"`
@@ -209,11 +240,14 @@ type QueryRecord struct {
 	Evidence    EngineEvidence     `json:"evidence"`
 }
 type ValueRecord struct {
-	Name                 string               `json:"name"`
-	Scalar               string               `json:"scalar"`
-	Nullable             bool                 `json:"nullable"`
-	TypeCertainty        compilerir.Certainty `json:"type_certainty"`
-	NullabilityCertainty compilerir.Certainty `json:"nullability_certainty"`
+	Name                 string                  `json:"name"`
+	Scalar               string                  `json:"scalar"`
+	Nullable             bool                    `json:"nullable"`
+	TypeCertainty        compilerir.Certainty    `json:"type_certainty"`
+	NullabilityCertainty compilerir.Certainty    `json:"nullability_certainty"`
+	LogicalKind          string                  `json:"logical_kind,omitempty"`
+	Native               *NativeTypeRecord       `json:"native,omitempty"`
+	Integer              *IntegerTypeFactsRecord `json:"integer,omitempty"`
 }
 type EngineEvidence struct {
 	Dialect     string        `json:"dialect"`
@@ -260,8 +294,20 @@ func Decode(b []byte) (File, error) {
 	if err := d.Decode(&extra); err != io.EOF {
 		return f, errors.New("compilerlock: trailing JSON")
 	}
+	if f.Format == legacyFormatVersion {
+		return upgradeLegacyV1(f)
+	}
 	if f.Format != FormatVersion {
 		return f, fmt.Errorf("compilerlock: unsupported format %d", f.Format)
+	}
+	var envelope struct {
+		Mappings json.RawMessage `json:"mappings"`
+	}
+	if err := json.Unmarshal(b, &envelope); err != nil {
+		return f, err
+	}
+	if len(bytes.TrimSpace(envelope.Mappings)) == 0 || bytes.Equal(bytes.TrimSpace(envelope.Mappings), []byte("null")) {
+		return f, errors.New("compilerlock: format 2 requires a mappings object")
 	}
 	if err := validateFile(f); err != nil {
 		return f, err
@@ -296,7 +342,7 @@ func Upgrade(b []byte) ([]byte, error) {
 	if h.Format > FormatVersion {
 		return nil, fmt.Errorf("compilerlock: newer format %d", h.Format)
 	}
-	if h.Format < FormatVersion {
+	if h.Format < legacyFormatVersion {
 		return nil, fmt.Errorf("compilerlock: no upgrade from format %d", h.Format)
 	}
 	f, err := Decode(b)
@@ -304,6 +350,33 @@ func Upgrade(b []byte) ([]byte, error) {
 		return nil, err
 	}
 	return Encode(f)
+}
+
+func upgradeLegacyV1(f File) (File, error) {
+	if f.Mappings.Scalars != nil || f.Mappings.Relations != nil {
+		return f, errors.New("compilerlock: invalid v1 mapping records")
+	}
+	queries := make([]QueryDigestInput, 0, len(f.Queries))
+	for _, query := range f.Queries {
+		queries = append(queries, QueryDigestInput{ID: string(query.ID), SQL: query.SQL, Operation: query.Operation, Parameters: query.Parameters, Results: query.Results, Cardinality: query.Cardinality})
+	}
+	generation := compilerir.GoConfig{Package: f.Generation.Package, Output: f.Generation.Output, Emitter: f.Generation.Emitter, Prune: f.Generation.Prune}
+	for _, object := range f.Generation.Objects {
+		generation.Objects = append(generation.Objects, compilerir.ObjectGoName{ID: compilerir.ObjectID(object.ID), Source: object.Source, Row: object.Row, Create: object.Create, Patch: object.Patch, File: object.File})
+	}
+	for _, query := range f.Generation.Queries {
+		generation.Queries = append(generation.Queries, compilerir.QueryGoName{ID: compilerir.QueryID(query.ID), Function: query.Function, Result: query.Result, Projection: query.Projection, Decoder: query.Decoder, File: query.File})
+	}
+	digests, err := BuildDigests(DigestInputs{Source: SourceDigestInput{Record: f.Source, Engine: f.Engine}, Queries: queries, Generation: generation})
+	if err != nil {
+		return f, fmt.Errorf("compilerlock: cannot validate v1 mapping digest: %w", err)
+	}
+	if digests.Mappings != f.Digests.Mappings {
+		return f, errors.New("compilerlock: v1 lock lacks mapping records for a non-empty mapping digest")
+	}
+	f.Format = FormatVersion
+	f.Mappings = MappingRecord{Scalars: []ScalarMappingRecord{}, Relations: []RelationMappingRecord{}}
+	return f, nil
 }
 
 func validateFile(f File) error {
@@ -322,6 +395,11 @@ func validateFile(f File) error {
 	for name, value := range map[string]string{"source": f.Digests.Source, "mappings": f.Digests.Mappings, "queries": f.Digests.Queries, "generation": f.Digests.Generation} {
 		if err := ValidateDigest(value); err != nil {
 			return fmt.Errorf("compilerlock: invalid %s digest: %w", name, err)
+		}
+	}
+	if len(f.Mappings.Scalars) != 0 || len(f.Mappings.Relations) != 0 {
+		if _, err := f.Mappings.MappingConfig(); err != nil {
+			return fmt.Errorf("compilerlock: invalid mappings: %w", err)
 		}
 	}
 	if len(f.Catalog.Objects) > 0 {
@@ -388,6 +466,35 @@ func validateValues(v []ValueRecord) error {
 		if x.NullabilityCertainty != "known" && x.NullabilityCertainty != "declared" && x.NullabilityCertainty != "unknown" {
 			return fmt.Errorf("compilerlock: unknown certainty %q", x.NullabilityCertainty)
 		}
+		if x.Native != nil {
+			if err := validateNativeRecord(x.Native); err != nil {
+				return fmt.Errorf("compilerlock: query value %q native: %w", x.Name, err)
+			}
+		}
+		if x.Integer != nil && x.LogicalKind != "integer" {
+			return fmt.Errorf("compilerlock: query value %q has integer facts for %q", x.Name, x.LogicalKind)
+		}
+		if x.Integer != nil && x.Integer.DisplayWidth.Set && x.Integer.DisplayWidth.Value < 0 {
+			return fmt.Errorf("compilerlock: query value %q integer display width must not be negative", x.Name)
+		}
+	}
+	return nil
+}
+func validateNativeRecord(n *NativeTypeRecord) error {
+	if n.Dialect != "postgresql" && n.Dialect != "mysql" && n.Dialect != "sqlite" {
+		return errors.New("unsupported dialect")
+	}
+	if n.Name == "" {
+		return errors.New("name is required")
+	}
+	if n.Kind != "builtin" && n.Kind != "domain" && n.Kind != "enum" && n.Kind != "set" && n.Kind != "array" && n.Kind != "other" {
+		return errors.New("unsupported kind")
+	}
+	if n.Kind == "array" && n.Element == nil {
+		return errors.New("array requires element")
+	}
+	if n.Element != nil {
+		return validateNativeRecord(n.Element)
 	}
 	return nil
 }
@@ -396,12 +503,12 @@ func validateEvidence(q QueryRecord) error {
 		return fmt.Errorf("compilerlock: query %s evidence differs", q.ID)
 	}
 	for i, v := range q.Parameters {
-		if v != q.Evidence.Parameters[i] {
+		if !reflect.DeepEqual(v, q.Evidence.Parameters[i]) {
 			return fmt.Errorf("compilerlock: query %s parameter evidence differs", q.ID)
 		}
 	}
 	for i, v := range q.Results {
-		if v != q.Evidence.Results[i] {
+		if !reflect.DeepEqual(v, q.Evidence.Results[i]) {
 			return fmt.Errorf("compilerlock: query %s result evidence differs", q.ID)
 		}
 	}
@@ -579,12 +686,47 @@ func cloneFile(f File) File {
 	for i := range o.Queries {
 		o.Queries[i].Parameters = cloneSlice(f.Queries[i].Parameters)
 		o.Queries[i].Results = cloneSlice(f.Queries[i].Results)
+		for j := range o.Queries[i].Parameters {
+			o.Queries[i].Parameters[j] = cloneValueRecord(f.Queries[i].Parameters[j])
+		}
+		for j := range o.Queries[i].Results {
+			o.Queries[i].Results[j] = cloneValueRecord(f.Queries[i].Results[j])
+		}
 		o.Queries[i].Evidence.Parameters = cloneSlice(f.Queries[i].Evidence.Parameters)
 		o.Queries[i].Evidence.Results = cloneSlice(f.Queries[i].Evidence.Results)
+		for j := range o.Queries[i].Evidence.Parameters {
+			o.Queries[i].Evidence.Parameters[j] = cloneValueRecord(f.Queries[i].Evidence.Parameters[j])
+		}
+		for j := range o.Queries[i].Evidence.Results {
+			o.Queries[i].Evidence.Results[j] = cloneValueRecord(f.Queries[i].Evidence.Results[j])
+		}
 		o.Queries[i].Evidence.Diagnostics = cloneSlice(f.Queries[i].Evidence.Diagnostics)
 	}
 	o.Generation.Objects = cloneSlice(f.Generation.Objects)
 	o.Generation.Queries = cloneSlice(f.Generation.Queries)
+	o.Mappings.Scalars = cloneSlice(f.Mappings.Scalars)
+	for i := range o.Mappings.Scalars {
+		o.Mappings.Scalars[i].Imports = cloneSlice(f.Mappings.Scalars[i].Imports)
+	}
+	o.Mappings.Relations = cloneSlice(f.Mappings.Relations)
+	for i := range o.Mappings.Relations {
+		x := &o.Mappings.Relations[i]
+		x.From = cloneSlice(f.Mappings.Relations[i].From)
+		x.To = cloneSlice(f.Mappings.Relations[i].To)
+		x.Through.SourceFrom = cloneSlice(f.Mappings.Relations[i].Through.SourceFrom)
+		x.Through.SourceTo = cloneSlice(f.Mappings.Relations[i].Through.SourceTo)
+		x.Through.TargetFrom = cloneSlice(f.Mappings.Relations[i].Through.TargetFrom)
+		x.Through.TargetTo = cloneSlice(f.Mappings.Relations[i].Through.TargetTo)
+	}
+	return o
+}
+func cloneValueRecord(v ValueRecord) ValueRecord {
+	o := v
+	o.Native = cloneNativeRecord(v.Native)
+	if v.Integer != nil {
+		x := *v.Integer
+		o.Integer = &x
+	}
 	return o
 }
 func cloneSlice[T any](v []T) []T {

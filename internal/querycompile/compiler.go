@@ -16,6 +16,8 @@ type Compiler struct {
 	dialect dialect.Dialect
 }
 
+func (c Compiler) EngineProfile() engineprofile.Profile { return c.profile }
+
 func New(p engineprofile.Profile) (Compiler, error) {
 	if err := engineprofile.Validate(p); err != nil {
 		return Compiler{}, err

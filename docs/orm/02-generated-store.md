@@ -339,7 +339,8 @@ var usersDef = schema.TableDef{
 		{Name: "first_name", Type: schema.TextType{}},
 		{Name: "last_name", Type: schema.TextType{}},
 	},
-	PrimaryKey: []string{"id"},
+	PrimaryKey:              []string{"id"},
+	PrimaryKeyAutoincrement: true,
 }
 
 var usersTable = UsersTable{rasql.TableFrom[UsersRow](usersDef)}
@@ -378,8 +379,17 @@ two lines are indistinguishable until then:
 
 <!-- INCLUDE(examples/rasqlgen_column_fields_example_test.go#string_column) -->
 ```go
-correct := dynamic.SelectFrom(store.Users().Ref()).Select("id").WhereEqual("id", 42)
-typo := dynamic.SelectFrom(store.Users().Ref()).Select("id").WhereEqual("emial", 42)
+correct, err := query.NewSelect(users.Ref(), users.Column("id"))
+if err != nil {
+	fmt.Printf("failed to create the correct select: %s\n", err)
+	return
+}
+correct, err = correct.WithWhere(query.Equal(users.Column("id"), query.Bind(42)))
+if err != nil {
+	fmt.Printf("failed to add the correct predicate: %s\n", err)
+	return
+}
+typo := users.Column("emial")
 ```
 source: [examples/rasqlgen_column_fields_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasqlgen_column_fields_example_test.go)
 <!-- END INCLUDE -->
@@ -389,8 +399,19 @@ the compiler:
 
 <!-- INCLUDE(examples/rasqlgen_column_fields_example_test.go#typed_column) -->
 ```go
-users := store.Users()
-built, err := rasql.SelectFrom(users).WhereEqual(users.ID().Ref(), 42).Build(dialect.PostgreSQL())
+typed, err := query.NewSelect(users.Ref(),
+	users.ID().Ref(), users.Email().Ref(), users.Nickname().Ref(),
+	users.Status().Ref(), users.FirstName().Ref(), users.LastName().Ref())
+if err != nil {
+	fmt.Printf("failed to create the typed select: %s\n", err)
+	return
+}
+typed, err = typed.WithWhere(query.Equal(users.ID().Ref(), query.Bind(42)))
+if err != nil {
+	fmt.Printf("failed to add the typed predicate: %s\n", err)
+	return
+}
+built, err := render.Select(dialect.PostgreSQL(), typed)
 ```
 source: [examples/rasqlgen_column_fields_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasqlgen_column_fields_example_test.go)
 <!-- END INCLUDE -->
@@ -415,7 +436,7 @@ is checked when the statement is built too, or on demand through
 
 <!-- INCLUDE(examples/rasqlgen_column_fields_example_test.go#column_lookup) -->
 ```go
-column := users.Column("emial")
+column := typo
 ```
 source: [examples/rasqlgen_column_fields_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasqlgen_column_fields_example_test.go)
 <!-- END INCLUDE -->
@@ -496,64 +517,6 @@ func UserByID(id int64) stmt.Statement {
 source: [examples/store/user_by_id_gen.go](https://github.com/lestrrat-go/rasql/blob/main/examples/store/user_by_id_gen.go)
 <!-- END INCLUDE -->
 
-## A package of queries alone
-
-`generate.QueryPackage` generates a package from static SQL templates and
-nothing else. It opens no database, so `Tables` is optional and the usual
-case leaves it empty; a bind that names a column resolves against `Tables`
-instead. It suits a project that keeps its queries somewhere other than the
-generated store, or one that has no generated store at all. Its lifecycle
-matches `generate.Store`:
-`Plan` validates and renders without writing, `Write` plans and commits, and
-`Check` reports whether the files on disk are current.
-
-<!-- INCLUDE(examples/generate_query_package_example_test.go#query_package) -->
-```go
-queries := generate.QueryPackage{
-	Package: "queries",
-	Dir:     dir,
-	Dialect: dialect.PostgreSQL(),
-	Queries: []generate.Query{
-		{Input: template, Function: "UserByEmail", Output: "user_by_email_gen.go"},
-		{SQL: `SELECT count(*) FROM users LIMIT {{bind "limit"}}`, Function: "CountUsers", Output: "count_users_gen.go", Bindings: map[string]namedsql.ParameterBinding{"limit": {Go: schema.GoBinding{Type: "int"}}}},
-	},
-}
-
-plan, err := queries.Plan()
-if err != nil {
-	fmt.Printf("failed to plan query package: %s\n", err)
-	return
-}
-for _, f := range plan.Files() {
-	fmt.Println(filepath.Base(f.Path))
-}
-
-if err := queries.Write(); err != nil {
-	fmt.Printf("failed to write query package: %s\n", err)
-	return
-}
-
-if err := queries.Check(); err != nil {
-	fmt.Printf("check: %s\n", err)
-	return
-}
-fmt.Println("check: ok")
-```
-source: [examples/generate_query_package_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/generate_query_package_example_test.go)
-<!-- END INCLUDE -->
-
-`Package`, `Dir`, and at least one `Query` are required, and `Dialect` is
-required whenever a query leaves its own `Dialect` nil. Each `Query` states
-its template in exactly one of `Input` and `SQL`, the same choice the settings
-file's `input` and `sql` offer. `Root` resolves a relative `Dir` or
-`Query.Input`, defaulting to the module root, exactly as it does for `Store`. Queries are rendered in output-name order, so their order in
-the slice does not reach the generated package.
-
-A query package shares its package block with hand-written files in the same
-directory, so a generated function whose name an existing declaration already
-takes is refused before any file is written. The marker rule and the orphan
-report described below apply to it as well.
-
 ## Keeping generated files current
 
 Generated files begin with `// Code generated by rasqlgen; DO NOT EDIT.`.
@@ -569,29 +532,29 @@ source is stale.
 Generated tables also expose immutable typed create and patch builders. Create
 setters distinguish omitted defaulted columns, explicit zero values, and NULL
 through `Clear` methods on nullable columns. Patch builders require a typed
-predicate, omit primary-key setters, and can execute through `ExecPatch` or
-read saved rows with `QueryPatchOne` and `QueryPatchAll` when the dialect
-supports `RETURNING`.
+predicate and omit primary-key setters. Execute their plans with `ExecMutation`,
+or attach a projection with `Returning` and read saved rows through the normal
+`Rows`, `All`, `One`, or `Maybe` terminals when the dialect supports `RETURNING`.
 
-Multiple generated create plans can be submitted through `NewBulkPlan` and
-`ExecBulkCreate`. The executor groups only consecutive plans with the same
-inserted-column mask, respects row and actual bind limits, and reports
-completed input ranges separately from a failed batch. Use `Atomic: true` when
-the bulk operation must own rollback or savepoint cleanup.
+Multiple generated create plans can be submitted through `ExecMutationBatch`.
+The executor groups only consecutive plans with the same inserted-column mask,
+respects row and actual bind limits, and reports each input as applied,
+rejected, rolled back, unknown, or unattempted. Use `Atomic: true` when the
+batch must own rollback or savepoint cleanup.
 
-<!-- INCLUDE(examples/typed_bulk_example_test.go#typedBulk) -->
+<!-- INCLUDE(examples/mutation_batch_example_test.go#mutationBatch) -->
 ```go
 first := store.NewUsersCreate().Email("ada@example.com").FirstName("Ada").LastName("Lovelace").Plan()
 second := store.NewUsersCreate().Email("grace@example.com").FirstName("Grace").LastName("Hopper").Plan()
-bulk, _ := rasql.NewBulkPlan(first, second)
-outcome, err := rasql.ExecBulkCreate(context.Background(), db, bulk, rasql.BulkOptions{MaxRows: 100})
+outcome, err := rasql.ExecMutationBatch(context.Background(), executor,
+	[]rasql.MutationPlan{first, second}, rasql.BulkOptions{MaxRows: 100})
 if err != nil {
 	fmt.Println(err)
 	return
 }
-fmt.Println(outcome.Completed)
+fmt.Printf("%v\n", outcome.Inputs)
 ```
-source: [examples/typed_bulk_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/typed_bulk_example_test.go)
+source: [examples/mutation_batch_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/mutation_batch_example_test.go)
 <!-- END INCLUDE -->
 
 ## Next

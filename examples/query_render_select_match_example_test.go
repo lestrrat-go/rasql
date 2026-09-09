@@ -9,8 +9,6 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 )
 
-// BEGIN(render_select_match)
-
 func Example_query_render_select_match() {
 	// query.TableRef carries no Go row type here, exactly as in
 	// query_render_select_example_test.go, so every column is still named
@@ -69,5 +67,3 @@ func Example_query_render_select_match() {
 	// 2 1 dinosaur 2 1
 	// render postgresql: the postgresql dialect cannot express MATCH: it has no full-text search operator
 }
-
-// END(render_select_match)

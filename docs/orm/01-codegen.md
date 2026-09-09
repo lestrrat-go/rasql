@@ -175,7 +175,7 @@ users := schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{
 		Type: "UserID", NullableType: "NullableUserID",
 	}, Nullable: true,
 }}}
-source, err := generate.PackageSource("store", users)
+source, err := generate.DescriptorSource("store", []schema.TableDef{users})
 if err != nil {
 	fmt.Println(err)
 	return
@@ -189,3 +189,40 @@ source: [examples/rasqlgen_binding_example_test.go](https://github.com/lestrrat-
 [The generated store](02-generated-store.md) says what the command writes and
 what each generated member is for. [Typed queries](03-typed-queries.md) reads
 rows through the generated table.
+
+## Offline generation
+
+Declare one engine and one schema source in `rasql.json`, then run
+`rasql schema update --dsn <bootstrap>` to materialize the source and write
+`rasql.lock.json` plus generated Go. The lock is derived evidence; migration
+files or the declared external or live source remains authoritative.
+
+After the lock is checked in, `rasql generate` and `rasql check` read the lock
+and config without opening a database or running a materializer. `check` reports
+drift without changing files. Use `rasql schema verify --dsn <dsn>` when live
+engine evidence must be checked again.
+
+### Typed SQL declarations
+
+Schema lock mode accepts query entries with an `id`, `input`, `engine`,
+`function`, `operation`, and `cardinality`. Parameters and results are ordered
+declarations; each value states `name`, `scalar`, and `nullable`.
+
+```json
+"queries": [{
+  "id": "user_by_id",
+  "input": "queries/user_by_id.sql",
+  "engine": "postgresql",
+  "function": "UserByID",
+  "operation": "select",
+  "cardinality": "maybe",
+  "parameters": [{"name": "id", "scalar": "integer", "nullable": false}],
+  "results": [{"name": "id", "scalar": "integer", "nullable": false}]
+}]
+```
+
+`select` queries generate constructors returning `rasql.Query[R]`; use
+`rasql.All`, `rasql.Maybe`, or `rasql.One` according to the declared
+cardinality. DML with `exec` generates a `(rasql.MutationPlan, error)`
+constructor for `rasql.ExecMutation`. The analyzer records SQL snapshots and
+engine evidence in the lock, and offline generation uses only those records.
