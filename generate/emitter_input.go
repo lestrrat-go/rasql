@@ -3,13 +3,8 @@ package generate
 import (
 	"fmt"
 	"reflect"
-	"slices"
-	"strings"
 
-	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
-	"github.com/lestrrat-go/rasql/internal/schemagen"
-	"github.com/lestrrat-go/rasql/schema"
 )
 
 // EmitterInput is the complete, sidecar-free input to a generated store.
@@ -370,115 +365,6 @@ func validateGenerationFiles(goModel compilerir.GoModel, generation compilerir.G
 	return nil
 }
 
-// legacyStore adapts canonical facts for retained internal comparisons.
-func legacyStore(in EmitterInput) (Store, error) {
-	if err := in.Validate(); err != nil {
-		return Store{}, err
-	}
-	if in.Generation.Emitter != "legacy" {
-		return Store{}, fmt.Errorf("generate: legacy renderer requires generation.emitter legacy")
-	}
-	tables, diagnostics := compilerir.TableDefsFromPhysical(in.Catalog)
-	for _, diagnostic := range diagnostics {
-		if diagnostic.Level == compilerir.DiagnosticError {
-			return Store{}, fmt.Errorf("generate: emitter: %s", diagnostic.Message)
-		}
-	}
-	for _, mapping := range in.Mappings.Scalars {
-		if mapping.Codec == "" {
-			continue
-		}
-		for _, object := range in.Semantic.Objects {
-			for _, column := range object.Columns {
-				if column.Scalar == mapping.Name {
-					return Store{}, fmt.Errorf("generate: emitter legacy route cannot represent codec %q for %s.%s", mapping.Codec, object.PhysicalName.Name, column.Name)
-				}
-			}
-		}
-	}
-	goByID := make(map[compilerir.ObjectID]compilerir.GoObject, len(in.Go.Objects))
-	semanticByID := make(map[compilerir.ObjectID]compilerir.SemanticObject, len(in.Semantic.Objects))
-	physicalByID := make(map[compilerir.ObjectID]compilerir.PhysicalObject, len(in.Catalog.Objects))
-	for _, object := range in.Go.Objects {
-		goByID[object.ID] = object
-	}
-	for _, object := range in.Semantic.Objects {
-		semanticByID[object.ID] = object
-	}
-	for _, object := range in.Catalog.Objects {
-		physicalByID[object.ID] = object
-	}
-	names := make(map[schema.ObjectName]legacyObjectNames, len(tables))
-	configByID := make(map[compilerir.ObjectID]compilerir.ObjectGoName, len(in.Generation.Objects))
-	for _, cfg := range in.Generation.Objects {
-		configByID[cfg.ID] = cfg
-	}
-	for i := range tables {
-		id := in.Catalog.Objects[i].ID
-		goObject := goByID[id]
-		cfg := configByID[id]
-		names[tables[i].ObjectName()] = legacyObjectNames{Accessor: cfg.Source, RowType: cfg.Row}
-		if cfg.File != "" {
-			names[tables[i].ObjectName()] = legacyObjectNames{Accessor: cfg.Source, RowType: cfg.Row, FileBase: strings.TrimSuffix(cfg.File, "_gen.go")}
-		}
-		for j := range tables[i].Columns {
-			column := goObject.Columns[j]
-			if mapping, ok := mappingFor(column.Scalar, in.Generation.Scalars); ok {
-				nullableType := mapping.NullableGoType
-				if nullableType == "" {
-					nullableType = "rasql.Nullable[" + mapping.GoType + "]"
-				}
-				tables[i].Columns[j].GoBinding = &schema.GoBinding{Type: mapping.GoType, NullableType: nullableType, Imports: importsFor(mapping.Imports)}
-			}
-		}
-		for _, relation := range semanticByID[id].Relations {
-			target := physicalByID[relation.Target]
-			optionality := schema.RelationshipRequired
-			if relation.Nullable {
-				optionality = schema.RelationshipOptional
-			}
-			tables[i].Relationships = append(tables[i].Relationships, schema.RelationshipDef{Name: relation.Name, Kind: schema.RelationshipKind(relation.Kind), Optionality: optionality, Columns: slices.Clone(relation.From), ReferencedSchema: target.Schema, ReferencedTable: target.Name, ReferencedColumns: slices.Clone(relation.To)})
-		}
-	}
-	resolved, err := schemagen.ResolveNames(in.Generation.Package, tables, toNameOverrides(names))
-	if err != nil {
-		return Store{}, err
-	}
-	for _, cfg := range in.Generation.Objects {
-		physical := in.Catalog.Objects[0]
-		for _, candidate := range in.Catalog.Objects {
-			if candidate.ID == cfg.ID {
-				physical = candidate
-				break
-			}
-		}
-		var table schema.TableDef
-		for _, candidate := range tables {
-			if candidate.Name == physical.Name && candidate.Schema == physical.Schema {
-				table = candidate
-				break
-			}
-		}
-		object, ok := resolved.Object(table)
-		if !ok {
-			return Store{}, fmt.Errorf("generate: emitter object %q has no resolved names", cfg.ID)
-		}
-		if cfg.Source != "" && cfg.Source != object.Accessor || cfg.Row != "" && cfg.Row != object.RowType || cfg.File != "" && cfg.File != resolved.Filename(table) {
-			return Store{}, fmt.Errorf("generate: unrepresentable legacy generation name for %q", cfg.ID)
-		}
-		if cfg.Create != "" || cfg.Patch != "" {
-			wantCreate, wantPatch := resolved.MutationTypeNames(table)
-			if cfg.Create != wantCreate || cfg.Patch != wantPatch {
-				return Store{}, fmt.Errorf("generate: unrepresentable legacy mutation names for %q", cfg.ID)
-			}
-		}
-	}
-	return Store{
-		Package: in.Generation.Package, Root: "", Dir: in.Generation.Output, Prune: in.Generation.Prune,
-		legacyTables: tables, legacyNames: names, legacyDialect: generationDialect(in.Catalog.Engine.Dialect),
-	}, nil
-}
-
 func mappingFor(scalar string, mappings []compilerir.ScalarMapping) (compilerir.ScalarMapping, bool) {
 	for _, mapping := range mappings {
 		if mapping.Name == scalar {
@@ -486,21 +372,4 @@ func mappingFor(scalar string, mappings []compilerir.ScalarMapping) (compilerir.
 		}
 	}
 	return compilerir.ScalarMapping{}, false
-}
-func importsFor(imports []compilerir.GoImport) []schema.GoImport {
-	out := make([]schema.GoImport, len(imports))
-	for i, imp := range imports {
-		out[i] = schema.GoImport{Path: imp.Path, Name: imp.Alias}
-	}
-	return out
-}
-func generationDialect(name string) dialect.Dialect {
-	switch name {
-	case "postgresql":
-		return dialect.PostgreSQL()
-	case "mysql":
-		return dialect.MySQL()
-	default:
-		return dialect.SQLite()
-	}
 }
