@@ -158,8 +158,8 @@ func Example_rasql_subquery() {
 		return
 	}
 	// AVG is NULL over an empty group; COALESCE turns it into a plain,
-	// never-NULL Expr, which is what GreaterOrEqualExpr requires. The orders
-	// table is never empty here, so the fallback is never actually read.
+	// never-NULL Expr, which is what averageProjection needs. The orders
+	// table is never empty here, so this fallback is never actually read.
 	averageValue := rasql.CoalesceExpr(rasql.AvgExpr(allOrdersTotal.Expr()), rasql.Value(0.0))
 	averageProjection, err := rasql.Scalar("average", averageValue, schema.FloatType{}, "")
 	if err != nil {
@@ -167,11 +167,17 @@ func Example_rasql_subquery() {
 		return
 	}
 	averageQuery := rasql.Select(allOrdersSource.Source(), averageProjection)
-	averageExpr, err := rasql.SubqueryExpr(averageQuery)
+	averageSubquery, err := rasql.SubqueryExpr(averageQuery)
 	if err != nil {
 		fmt.Printf("failed to build the average subquery expression: %s\n", err)
 		return
 	}
+	// SubqueryExpr's own return is NullExpr regardless, since it can never
+	// promise averageQuery returns a row; a second COALESCE turns that into
+	// the plain Expr GreaterOrEqualExpr requires. This fallback is also
+	// never actually read: an aggregate query without GROUP BY always
+	// returns exactly one row.
+	averageExpr := rasql.CoalesceExpr(averageSubquery, rasql.Value(0.0))
 
 	// domainUsers selects the id of every user whose email ends in the chosen
 	// domain. It reads no table of the enclosing statement, so it validates and
@@ -231,6 +237,6 @@ func Example_rasql_subquery() {
 	}
 
 	// Output:
-	// SELECT "orders"."user_id" AS "user_id", "orders"."total" AS "total" FROM "orders" WHERE (("orders"."user_id" IN (SELECT "users"."id" AS "id" FROM "users" WHERE ("users"."email" LIKE ?))) AND ("orders"."total" >= (SELECT COALESCE(AVG("all_orders"."total"), ?) AS "average" FROM "orders" AS "all_orders"))) ORDER BY "orders"."total"
+	// SELECT "orders"."user_id" AS "user_id", "orders"."total" AS "total" FROM "orders" WHERE (("orders"."user_id" IN (SELECT "users"."id" AS "id" FROM "users" WHERE ("users"."email" LIKE ?))) AND ("orders"."total" >= COALESCE((SELECT COALESCE(AVG("all_orders"."total"), ?) AS "average" FROM "orders" AS "all_orders"), ?))) ORDER BY "orders"."total"
 	// 1 80
 }
