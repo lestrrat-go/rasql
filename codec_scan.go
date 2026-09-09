@@ -40,6 +40,15 @@ func (s codecScanSource) Scan(destinations ...any) error {
 					return &DecodeError{Column: s.columns[i].Name, Codec: CodecID(s.columns[i].Codec), Err: err}
 				}
 			}
+			v := reflect.ValueOf(destination)
+			if v.IsValid() && v.Kind() == reflect.Pointer && !v.IsNil() && v.Elem().Kind() == reflect.Pointer {
+				v.Elem().SetZero()
+				continue
+			}
+			if v.IsValid() && v.Kind() == reflect.Pointer && !v.IsNil() && v.Elem().Kind() == reflect.Interface {
+				v.Elem().SetZero()
+				continue
+			}
 			return &DecodeError{Column: s.columns[i].Name, Codec: CodecID(s.columns[i].Codec), Err: ErrUnexpectedNull}
 		}
 		decodeDestination := destination
@@ -58,7 +67,7 @@ func (s codecScanSource) Scan(destinations ...any) error {
 			continue
 		}
 		if err := scanValueAny(decodeDestination, value); err != nil {
-			return fmt.Errorf("decode column %q: %w", s.columns[i].Name, err)
+			return &DecodeError{Column: s.columns[i].Name, Codec: CodecID(s.columns[i].Codec), Err: err}
 		}
 		if nullable != nil {
 			nullable.nullableValid()

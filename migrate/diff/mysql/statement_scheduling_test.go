@@ -85,9 +85,8 @@ func TestSchemaEvolutionMySQLSchedulesOpaqueBackfillSeparately(t *testing.T) {
 	entries, err := migrationdir.Load(filepath.Dir(directory))
 	require.NoError(t, err)
 	require.Empty(t, entries[0].Down)
-	marker, err := os.ReadFile(filepath.Join(directory, ".rasql-irreversible"))
-	require.NoError(t, err)
-	require.Equal(t, []byte("caller-supplied MySQL backfill has no inferred reverse\n"), marker)
+	_, err = os.Stat(filepath.Join(directory, ".rasql-irreversible"))
+	require.ErrorIs(t, err, os.ErrNotExist, "an irreversible plan writes no marker file")
 	for i, statement := range want {
 		require.Equal(t, statement.Source[:len(statement.Source)-4]+".up.sql", entries[0].Statements[i].Source)
 		require.Equal(t, statement.SQL, string(entries[0].Statements[i].SQL))

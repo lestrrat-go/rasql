@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/internal/querycompile"
+	"github.com/lestrrat-go/rasql/internal/sqlscan"
 	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/lestrrat-go/rasql/stmt"
@@ -24,7 +27,7 @@ func Derive[R any](q Query[R], alias string) (TypedSource[R], error) {
 	if err := schema.ValidateSimpleIdentifier(alias); err != nil {
 		return TypedSource[R]{}, planError("invalid_source", "alias", err.Error())
 	}
-	result, err := resultQuery(q)
+	result, err := compositionResultQuery(q)
 	if err != nil {
 		return TypedSource[R]{}, err
 	}
@@ -52,7 +55,7 @@ func CTEOf[R any](name string, q Query[R]) (TypedCTE[R], error) {
 	if err := q.Validate(); err != nil {
 		return TypedCTE[R]{}, err
 	}
-	result, err := resultQuery(q)
+	result, err := compositionResultQuery(q)
 	if err != nil {
 		return TypedCTE[R]{}, err
 	}
@@ -77,6 +80,12 @@ func (c TypedCTE[R]) Source(alias string) (TypedSource[R], error) {
 }
 
 func Combine[R any](left Query[R], op CompoundOperator, right Query[R]) (Query[R], error) {
+	if err := rejectNativeComposition(left); err != nil {
+		return Query[R]{}, err
+	}
+	if err := rejectNativeComposition(right); err != nil {
+		return Query[R]{}, err
+	}
 	if err := left.Validate(); err != nil {
 		return Query[R]{}, err
 	}
@@ -123,6 +132,9 @@ func compoundOperand[R any](q Query[R]) (query.ResultQuery, error) {
 }
 
 func With[R any](q Query[R], ctes ...CTEPlan) (Query[R], error) {
+	if err := rejectNativeComposition(q); err != nil {
+		return Query[R]{}, err
+	}
 	if err := q.Validate(); err != nil {
 		return Query[R]{}, err
 	}
@@ -159,6 +171,9 @@ func With[R any](q Query[R], ctes ...CTEPlan) (Query[R], error) {
 }
 
 func CountQuery[R any](q Query[R], includePaging bool) Query[int64] {
+	if err := rejectNativeComposition(q); err != nil {
+		return Query[int64]{plan: QueryPlan{err: err}, projection: Projection[int64]{}}
+	}
 	result, err := resultQuery(q)
 	if err != nil {
 		return Query[int64]{plan: QueryPlan{err: err}, projection: Projection[int64]{}}
@@ -189,6 +204,63 @@ func CountQuery[R any](q Query[R], includePaging bool) Query[int64] {
 		plan.sources[0] = Source{ref: ref}
 	}
 	return Query[int64]{plan: plan, projection: projection}
+}
+
+// Render lowers q to SQL text for dialect d without executing it against a
+// database, the typed counterpart of the removed TypedSelectBuilder.Build.
+// A reader composing a query wants to see the SQL it produces, and a test
+// wants to assert that text; neither needs the live connection or the
+// discovered engine profile Executor otherwise requires, so Render goes
+// straight through the render package the way exec.RenderWrite does for a
+// write statement.
+//
+// It rejects a native query and a mutation rather than guessing which SQL a
+// reader meant to see: Render exists for the SELECT a typed Query composes,
+// a native query is already rendered SQL text by construction, and
+// RenderWrite already covers a write statement carrying its own RETURNING
+// clause.
+func Render[R any](q Query[R], d dialect.Dialect) (stmt.Statement, error) {
+	if err := rejectNativeComposition(q); err != nil {
+		return stmt.Statement{}, err
+	}
+	if q.plan.mutation != nil {
+		return stmt.Statement{}, planError("unsupported_feature", "render", "a mutation query has no SELECT to render")
+	}
+	result, err := resultQuery(q)
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	rendered, err := render.Result(d, result)
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	compiled, err := unwrapBindTokens(rendered)
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	return compiled.Statement()
+}
+
+func rejectNativeComposition[R any](q Query[R]) error {
+	if q.plan.native != nil {
+		return planError("unsupported_feature", "native", "native plans cannot be composed")
+	}
+	return nil
+}
+
+func compositionResultQuery[R any](q Query[R]) (query.ResultQuery, error) {
+	if q.plan.native == nil {
+		return resultQuery(q)
+	}
+	native := q.plan.native
+	body, err := query.NativeResultOf(native.engine, sqltext.Text(native.statement.SQL()), native.statement.BoundArgs())
+	if err != nil {
+		if errors.Is(err, sqlscan.ErrNotSelect) {
+			return query.ResultQuery{}, planError("unsupported_feature", "native", err.Error())
+		}
+		return query.ResultQuery{}, &PlanError{Code: "invalid_query", Path: "native.sql", Detail: err.Error(), cause: err}
+	}
+	return query.ResultOf(body, q.Schema().Columns()...)
 }
 
 func sameResultSchema(left, right ResultSchema) bool {
@@ -274,7 +346,11 @@ func queryBody(plan QueryPlan) (query.QueryBody, error) {
 	for i, group := range plan.group {
 		groups[i] = group.node
 	}
-	selectBody, err := query.NewCorrelatedJoinedSelect(plan.sources[0].ref, nil, plan.joins, groups, projections...)
+	correlations := make([]query.RelationSource, len(plan.correlations))
+	for i, source := range plan.correlations {
+		correlations[i] = source.ref
+	}
+	selectBody, err := query.NewCorrelatedJoinedSelect(plan.sources[0].ref, correlations, plan.joins, groups, projections...)
 	if err != nil {
 		return nil, err
 	}
@@ -289,7 +365,7 @@ func queryBody(plan QueryPlan) (query.QueryBody, error) {
 		for i, predicate := range plan.where {
 			nodes[i] = predicate.node
 		}
-		selectBody, err = selectBody.WithWhere(query.And(nodes...))
+		selectBody, err = selectBody.WithWhere(graphCombinePredicates(nodes))
 		if err != nil {
 			return nil, err
 		}
@@ -299,13 +375,17 @@ func queryBody(plan QueryPlan) (query.QueryBody, error) {
 		for i, predicate := range plan.having {
 			nodes[i] = predicate.node
 		}
-		selectBody, err = selectBody.WithHaving(query.And(nodes...))
+		selectBody, err = selectBody.WithHaving(graphCombinePredicates(nodes))
 		if err != nil {
 			return nil, err
 		}
 	}
 	orders := make([]query.Order, len(plan.order))
 	for i, order := range plan.order {
+		if order.result != nil {
+			orders[i] = lowerResultOrder(*order.result, order.descending)
+			continue
+		}
 		orders[i] = lowerOrder(order.node, order.descending, order.nulls)
 	}
 	if len(orders) > 0 {
@@ -354,13 +434,20 @@ func queryBody(plan QueryPlan) (query.QueryBody, error) {
 		if err != nil {
 			return nil, err
 		}
-		outer, err = outer.WithWhere(query.LessThanOrEqual(ref.Column(partitionAlias), plan.partitionLimit))
+		outer, err = outer.WithWhere(query.LessThanOrEqual(ref.Column(partitionAlias), plan.partitionLimitValue.node))
 		if err != nil {
 			return nil, err
 		}
 		return outer, nil
 	}
 	return selectBody, nil
+}
+
+func graphCombinePredicates(expressions []query.Expression) query.Expression {
+	if len(expressions) == 1 {
+		return expressions[0]
+	}
+	return query.And(expressions...)
 }
 
 func lowerOrder(expression query.Expression, descending bool, nulls NullOrder) query.Order {
@@ -383,6 +470,17 @@ func lowerOrder(expression query.Expression, descending bool, nulls NullOrder) q
 	return query.Asc(expression)
 }
 
+// lowerResultOrder rebuilds the same query.Projection the projection lowering
+// above builds for this item, so the statement's own validation resolves the
+// ordering to a result the statement really reports.
+func lowerResultOrder(item ProjectionItem, descending bool) query.Order {
+	projection := query.Project(item.expression).As(item.column.Name)
+	if descending {
+		return query.DescResult(projection)
+	}
+	return query.AscResult(projection)
+}
+
 func resultColumns(items []ProjectionItem) []ResultColumn {
 	columns := make([]ResultColumn, len(items))
 	for i, item := range items {
@@ -392,8 +490,9 @@ func resultColumns(items []ProjectionItem) []ResultColumn {
 }
 
 type bindSlot struct {
-	id    bindID
-	codec string
+	id         bindID
+	codec      string
+	preEncoded bool
 }
 type compiledQuery struct {
 	statement stmt.Statement
@@ -425,11 +524,23 @@ func compileQuery[R any](compiler *querycompile.Compiler, q Query[R]) (compiledQ
 	if compiler == nil {
 		return compiledQuery{}, planError("invalid_compiler", "compiler", "must not be nil")
 	}
-	result, err := resultQuery(q)
-	if err != nil {
+	if err := q.Validate(); err != nil {
 		return compiledQuery{}, mapCompileError(err)
 	}
-	statement, err := compiler.Select(result)
+	var statement stmt.Statement
+	var err error
+	switch {
+	case q.plan.mutation != nil:
+		statement, err = compiler.Write(q.plan.mutation)
+	case q.plan.native != nil:
+		statement, err = compiler.Native(q.plan.native.statement)
+	default:
+		result, resultErr := resultQuery(q)
+		if resultErr != nil {
+			return compiledQuery{}, resultErr
+		}
+		statement, err = compiler.Select(result)
+	}
 	if err != nil {
 		return compiledQuery{}, mapCompileError(err)
 	}
@@ -440,6 +551,12 @@ func mapCompileError(err error) error {
 	var planErr *PlanError
 	if errors.As(err, &planErr) {
 		return err
+	}
+	if errors.Is(err, sqlscan.ErrInvalidPlaceholder) {
+		return &PlanError{Code: "invalid_query", Path: "native.sql", Detail: err.Error(), cause: err}
+	}
+	if errors.Is(err, render.ErrNativeEngineMismatch) {
+		return &PlanError{Code: "engine_mismatch", Path: "native.engine", Detail: err.Error(), cause: err}
 	}
 	var validationErr *query.ValidationError
 	if errors.As(err, &validationErr) {
@@ -480,7 +597,10 @@ func unwrapBindTokens(statement stmt.Statement) (compiledQuery, error) {
 			if token.copy == nil {
 				return compiledQuery{}, planError("unsnapshotable_bind", fmt.Sprintf("args[%d]", i), "missing bind copier")
 			}
-			slots[i] = bindSlot{id: token.id, codec: token.codec}
+			if token.id == 0 || token.copy == nil || (token.codec != "" && !codecPattern.MatchString(token.codec)) || !token.preEncoded && token.value == nil && token.copy == nil {
+				return compiledQuery{}, planError("internal_plan", fmt.Sprintf("binds[%d]", i), "invalid bind token")
+			}
+			slots[i] = bindSlot{id: token.id, codec: token.codec, preEncoded: token.preEncoded}
 			copyArgs[i] = token.copy
 			value, err := token.copy()
 			if err != nil {
@@ -497,7 +617,10 @@ func unwrapBindTokens(statement stmt.Statement) (compiledQuery, error) {
 				if token.copy == nil {
 					return compiledQuery{}, planError("unsnapshotable_bind", fmt.Sprintf("args[%d]", i), "missing bind copier")
 				}
-				slots[i] = bindSlot{id: token.id, codec: token.codec}
+				if token.id == 0 || token.copy == nil || (token.codec != "" && !codecPattern.MatchString(token.codec)) {
+					return compiledQuery{}, planError("internal_plan", fmt.Sprintf("binds[%d]", i), "invalid bind token")
+				}
+				slots[i] = bindSlot{id: token.id, codec: token.codec, preEncoded: token.preEncoded}
 				name, tokenCopy := named.Name, token.copy
 				copyArgs[i] = func() (any, error) {
 					value, err := tokenCopy()

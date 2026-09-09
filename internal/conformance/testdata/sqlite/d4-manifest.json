@@ -1,0 +1,122 @@
+{
+  "format": "rasql.d4.engine-manifest.v1",
+  "portable_signature_digest": "84323fa2347731b0388181443d158e8f333649177acd057a2c828e42d6f24fbb",
+  "migration_digest": "530a9c8e3a069b18c59640e3d49a0f3d84085f598e3134a878ca4b6cbb1862a6",
+  "seed_digest": "fefa40b6a93ad8ad121314b89400da4fb316f572f70c27a3afb5594675c9cef1",
+  "typed_query_digest": "0a507bf5c425d0736035505a3537c0d476ef795b320381f908cae08010fea25e",
+  "rendered_sql_digest": "0a507bf5c425d0736035505a3537c0d476ef795b320381f908cae08010fea25e",
+  "engine": "sqlite",
+  "profile": "sqlite-3.35",
+  "observed_server_version": "3.53.3",
+  "lock_sha256": "be6012c434aa146f28099d29d7532ed7c3bcf690fc9871c0099998720cf51240",
+  "generated_files": 9,
+  "generated_bytes": 56043,
+  "compile_render": {
+    "sqlite-3.35": {
+      "digest": "cafae98e619b3c638092d38602be3250c662b5bc416893fe7948c3a0e7352c73",
+      "statements": [
+        {
+          "operation": "single_row_read",
+          "kind": "query",
+          "sql": "SELECT \"p\".\"id\" AS \"id\", \"p\".\"name\" AS \"name\" FROM \"main\".\"projects\" AS \"p\" WHERE (\"p\".\"id\" = ?) ORDER BY \"p\".\"id\"",
+          "args": [
+            {
+              "type": "int64",
+              "value": "1"
+            }
+          ]
+        },
+        {
+          "operation": "overdue_read",
+          "kind": "query",
+          "sql": "SELECT id, project_id, assignee_id, title, is_open, due_on, created_at\nFROM tasks\nWHERE project_id = ?\n  AND is_open = ?\n  AND due_on IS NOT NULL\n  AND due_on < ?\nORDER BY id\n",
+          "args": [
+            {
+              "type": "int64",
+              "value": "1"
+            },
+            {
+              "type": "bool",
+              "value": "true"
+            },
+            {
+              "type": "time.Time",
+              "value": "2024-01-04T00:00:00Z"
+            }
+          ]
+        },
+        {
+          "operation": "graph_root",
+          "kind": "query",
+          "sql": "SELECT \"p\".\"id\" AS \"id\", \"p\".\"name\" AS \"name\" FROM \"main\".\"projects\" AS \"p\" WHERE (\"p\".\"id\" = ?) ORDER BY \"p\".\"id\"",
+          "args": [
+            {
+              "type": "int64",
+              "value": "1"
+            }
+          ]
+        },
+        {
+          "operation": "graph_tasks",
+          "kind": "query",
+          "sql": "SELECT \"partition_source\".\"id\" AS \"id\", \"partition_source\".\"project_id\" AS \"project_id\", \"partition_source\".\"assignee_id\" AS \"assignee_id\", \"partition_source\".\"title\" AS \"title\", \"partition_source\".\"is_open\" AS \"is_open\", \"partition_source\".\"due_on\" AS \"due_on\", \"partition_source\".\"created_at\" AS \"created_at\" FROM (SELECT \"t\".\"id\" AS \"id\", \"t\".\"project_id\" AS \"project_id\", \"t\".\"assignee_id\" AS \"assignee_id\", \"t\".\"title\" AS \"title\", \"t\".\"is_open\" AS \"is_open\", \"t\".\"due_on\" AS \"due_on\", \"t\".\"created_at\" AS \"created_at\", row_number() OVER (PARTITION BY \"t\".\"project_id\" ORDER BY \"t\".\"id\") AS \"__rasql_partition_row\" FROM \"main\".\"tasks\" AS \"t\" WHERE (\"t\".\"project_id\" = ?) ORDER BY \"t\".\"id\", \"t\".\"id\") AS \"partition_source\" WHERE (\"partition_source\".\"__rasql_partition_row\" <= ?)",
+          "args": [
+            {
+              "type": "int64",
+              "value": "1"
+            },
+            {
+              "type": "int64",
+              "value": "5"
+            }
+          ]
+        },
+        {
+          "operation": "graph_assignees",
+          "kind": "query",
+          "sql": "SELECT \"partition_source\".\"id\" AS \"id\", \"partition_source\".\"name\" AS \"name\" FROM (SELECT \"m\".\"id\" AS \"id\", \"m\".\"name\" AS \"name\", row_number() OVER (PARTITION BY \"m\".\"id\" ORDER BY \"m\".\"id\") AS \"__rasql_partition_row\" FROM \"main\".\"members\" AS \"m\" WHERE (\"m\".\"id\" = ?) ORDER BY \"m\".\"id\", \"m\".\"id\") AS \"partition_source\" WHERE (\"partition_source\".\"__rasql_partition_row\" <= ?)",
+          "args": [
+            {
+              "type": "int64",
+              "value": "20"
+            },
+            {
+              "type": "int64",
+              "value": "2"
+            }
+          ]
+        },
+        {
+          "operation": "create",
+          "kind": "query",
+          "sql": "INSERT INTO \"main\".\"members\" (\"id\", \"name\") VALUES (?, ?) RETURNING \"id\" AS \"id\", \"name\" AS \"name\"",
+          "args": [
+            {
+              "type": "int64",
+              "value": "4001"
+            },
+            {
+              "type": "string",
+              "value": "created"
+            }
+          ]
+        },
+        {
+          "operation": "patch",
+          "kind": "query",
+          "sql": "UPDATE \"main\".\"members\" SET \"name\" = ? WHERE (\"main\".\"members\".\"id\" = ?) RETURNING \"id\" AS \"id\", \"name\" AS \"name\"",
+          "args": [
+            {
+              "type": "string",
+              "value": "patched"
+            },
+            {
+              "type": "int64",
+              "value": "4001"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

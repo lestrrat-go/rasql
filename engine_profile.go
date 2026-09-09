@@ -18,6 +18,7 @@ type EngineLimits = engineprofile.Limits
 type EngineReturningForms = engineprofile.ReturningForms
 type EngineUpsertForm = engineprofile.UpsertForm
 type EnginePerParentLimitStrategy = engineprofile.PerParentLimitStrategy
+type EngineUpdateDefaultSupport = engineprofile.UpdateDefaultSupport
 
 const (
 	PostgreSQLEngine                = engineprofile.PostgreSQL
@@ -33,6 +34,8 @@ const (
 	EnginePerParentLimitUnsupported = engineprofile.PerParentLimitUnsupported
 	EnginePerParentLimitWindow      = engineprofile.PerParentLimitWindow
 	EnginePerParentLimitLateral     = engineprofile.PerParentLimitLateral
+	EngineUpdateDefaultUnsupported  = engineprofile.UpdateDefaultUnsupported
+	EngineUpdateDefaultExpression   = engineprofile.UpdateDefaultExpression
 )
 
 type EngineProfile struct{ profile engineprofile.Profile }

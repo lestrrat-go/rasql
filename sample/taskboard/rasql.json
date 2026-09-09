@@ -1,8 +1,30 @@
 {
+  "engine": {"dialect": "postgresql", "profile": "postgresql-17"},
+  "schema": {
+    "kind": "migrations",
+    "identity": "taskboard-migrations-v1",
+    "paths": [
+      "db/migrations/001_initial/001_create_members.up.sql",
+      "db/migrations/001_initial/002_create_projects.up.sql",
+      "db/migrations/001_initial/003_create_tasks.up.sql",
+      "db/migrations/001_initial/004_create_index_tasks_open_by_project.up.sql",
+      "db/migrations/002_due_dates_and_unowned_tasks/001_add_due_on.up.sql",
+      "db/migrations/002_due_dates_and_unowned_tasks/002_relax_assignee.up.sql",
+      "db/migrations/002_due_dates_and_unowned_tasks/003_assignee_on_delete_set_null.up.sql"
+    ]
+  },
   "package": "store",
   "output": "internal/store",
-  "dialect": "postgresql",
-  "queries": [
-    {"input": "queries/overdue_count.sql", "function": "OverdueCount", "bindings": {"on": {"Go": {"Type": "time.Time", "Imports": [{"Path": "time"}]}}}}
-  ]
+  "emitter": "compact",
+  "queries": [{
+    "id": "overdue_count",
+    "input": "queries/overdue_count.sql",
+    "engine": "postgresql",
+    "function": "OverdueCount",
+    "output": "overdue_count_gen.go",
+    "operation": "select",
+    "cardinality": "one",
+    "parameters": [{"name": "on", "scalar": "time", "nullable": false}],
+    "results": [{"name": "overdue", "scalar": "integer", "nullable": false}]
+  }]
 }

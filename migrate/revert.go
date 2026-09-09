@@ -47,6 +47,9 @@ func Steps(n int) RevertTarget {
 // history record deleted after them, so an interrupted run leaves a history
 // that describes what actually happened. Nothing runs at all unless every
 // selected migration can be reverted; see RevertPlan for what is checked.
+// An irreversible migration among the selected ones refuses the whole call
+// before any SQL runs, naming that migration, rather than reverting as far
+// as it can and stopping there.
 // A target that selects nothing, such as Through naming the newest applied
 // migration, is not an error and returns no migrations.
 //
@@ -388,7 +391,10 @@ func (r Runner) revertPrepared(ctx context.Context, queries queryer, executions 
 // selected migration's recorded checksum must still match its sources, and
 // every selected migration must carry reverse sources. A run that would
 // stop halfway at an unreachable migration leaves a database no one can
-// describe, which is worse than a run that does nothing.
+// describe, which is worse than a run that does nothing. An irreversible
+// migration among the selected ones is refused the same way, before any SQL
+// runs, naming the migration that cannot be undone rather than reverting
+// down to it and stopping there silently.
 func selectReverts(applied map[string]string, migrations []preparedMigration, target RevertTarget) ([]preparedMigration, error) {
 	byID := make(map[string]preparedMigration, len(migrations))
 	for _, migration := range migrations {

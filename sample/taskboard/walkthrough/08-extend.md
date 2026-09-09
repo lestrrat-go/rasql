@@ -1,101 +1,8 @@
-# 8. Build on the generated code
+# 8. Add a typed report
 
-`internal/store` is rewritten from the database every time the schema moves. Anything added to the application has to survive that, which rules out editing a generated file and rules out forking one.
-
-There are three places to put an addition instead, and this chapter uses each of them for something the page shows. They differ in how close they sit to the generated code: the first sits inside the same package, the second goes through the generator, and the third stays outside and wraps what the generator produced.
-
-## 1. A method on the generated table type
-
-Go permits a method on a type only from inside the package that declares it. `TasksTable` is declared in `internal/store/tasks_gen.go`, so a method on it has to live in `internal/store` too, in a file the generator does not write.
-
-`OpenTasks` filters with `query.Equal(tasks.IsOpen(), query.Bind(true))`. That expression is the definition of what this application means by "open", and it belongs with the table rather than with any one query. Put it in `internal/store/tasks_extra.go`:
-
-<!-- INCLUDE(sample/taskboard/internal/store/tasks_extra.go) -->
-```go
-package store
-
-import "github.com/lestrrat-go/rasql/query"
-
-// Open is the predicate that selects the tasks the page shows. It is a
-// method on the generated table type, which Go permits only from inside the
-// package that declares that type, so this file has to live beside the
-// generated ones. A regenerating run leaves it alone: the generator writes
-// the files it names and nothing else.
-func (t TasksTable) Open() query.Expression {
-	return query.Equal(t.IsOpen(), query.Bind(true))
-}
-```
-source: [sample/taskboard/internal/store/tasks_extra.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/tasks_extra.go)
-<!-- END INCLUDE -->
-
-The read in `OpenTasks` then says what it means:
-
-```text
-		Where(tasks.Open()).
-```
-
-`rasql codegen generate` writes `members_gen.go`, `projects_gen.go`, `tasks_gen.go`, `schema_gen.go`, and `schema_gen_test.go`. `tasks_extra.go` is not one of them, so a regenerating run walks past it, exactly as it walks past `repository.go`.
-
-Two things do not survive here. A method whose name collides with a generated one is a compile error the next time the generator runs, so keep away from the column names and from `As`, `Def`, and the relationship names. And a method that reads a column the schema later drops stops compiling, which is the same protection chapter 7 relied on and is the reason this is a good place to put the definition rather than a risky one.
-
-Use this for anything that is a property of the table: a named predicate, a standard ordering, a column set the application keeps reaching for.
-
-```sh
-git add internal/store/tasks_extra.go
-git commit -m 'add an open predicate to the generated table type'
-```
-
-## 2. A declared query in `rasql.json`
-
-Some statements are easier to read as SQL than as a builder chain, and some cannot be built at all. Rather than write them as string literals scattered through the application, declare them in `rasql.json` and let the generator compile them into typed functions. The extension then goes through the generator instead of around it.
-
-The page should say how many open tasks are past their due date. Counting them is a single aggregate over a nullable column, and it reads better as SQL. Create the directory the project has not needed until now:
-
-```sh
-mkdir -p queries
-```
-
-Write `queries/overdue_count.sql` in it:
-
-```sql
-SELECT COUNT(*) AS overdue
-FROM tasks
-WHERE is_open AND due_on IS NOT NULL AND due_on < CAST({{bind "on" tasks.due_on}} AS date)
-```
-
-`{{bind "on" tasks.due_on}}` marks a value the caller supplies. It is not string interpolation: the generator turns it into the dialect's own placeholder and gives the function a parameter, so the value stays an argument and never becomes SQL text.
-
-Naming `tasks.due_on` after the bind's own name is what decides the parameter's Go type. `{{bind "on"}}` alone would still compile, but the generator would have nothing to type the parameter with and would fall back to `any`, pushing the type check on the caller's argument out to runtime. Naming the column tells the generator to look it up among the tables it already read and reuse the same mapping that gives a generated row's own fields their types, so the parameter comes out as `time.Time` instead.
-
-The cast around it settles which day the count is about. `due_on` is a `date` and the caller has an instant, so one of the two has to give way, and `CAST(... AS date)` narrows the instant to the day it fell on. A task due that day then sits on the boundary rather than under it, which is what "past their due date" says: the day has to be over first. Write the cast even where the database would have reached the same answer on its own, because a reader of the query can see a cast and cannot see an inference rule.
-
-Name the query in `rasql.json`:
-
-```json
-{
-  "package": "store",
-  "output": "internal/store",
-  "dialect": "postgresql",
-  "queries": [
-    {"input": "queries/overdue_count.sql", "function": "OverdueCount", "bindings": {"on": {"Go": {"Type": "time.Time", "Imports": [{"Path": "time"}]}}}}
-  ]
-}
-```
-
-`input` is the template file, resolved against the module root. `function` is the generated function's name, which must be exported. Two settings are optional. `sql` states the template inline instead of naming a file, which suits a one-liner at the cost of escaping every quote. `output` names the file to generate into; left out, it is derived from the input's base name, which is why `queries/overdue_count.sql` becomes `overdue_count_gen.go`.
-
-Regenerate:
-
-```sh
-./scripts/generate.sh
-```
-
-```text
-migration apply completed: 0 applied
-wrote internal/store from 3 tables
-```
-
-`internal/store/overdue_count_gen.go` is new:
+The overdue count is application SQL, so its input and result are checked in
+beside the schema manifest. The query declares one named bind and one row of
+result metadata. The generator creates its typed constructor and decoder.
 
 <!-- INCLUDE(sample/taskboard/internal/store/overdue_count_gen.go) -->
 ```go
@@ -104,52 +11,78 @@ wrote internal/store from 3 tables
 package store
 
 import (
-	time2 "time"
-
-	"github.com/lestrrat-go/rasql/stmt"
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/schema"
+	"time"
 )
 
-func OverdueCount(on time2.Time) stmt.Statement {
-	return stmt.New("SELECT COUNT(*) AS overdue\nFROM tasks\nWHERE is_open AND due_on IS NOT NULL AND due_on < CAST($1 AS date)\n", on)
+type overdue_countResult struct {
+	Overdue int64
+}
+
+type OverdueCountBindings struct{}
+type OverdueCountExpressions struct {
+	Overdue rasql.Column[overdue_countResult, int64]
+}
+
+func (OverdueCountBindings) Bind(source rasql.TypedSource[overdue_countResult]) (OverdueCountExpressions, error) {
+	valueOverdue, err := rasql.BindResultColumn[overdue_countResult, int64](source, "overdue")
+	if err != nil {
+		return OverdueCountExpressions{}, err
+	}
+	return OverdueCountExpressions{Overdue: valueOverdue}, nil
+}
+
+type overdue_countDecoder struct{}
+
+func (overdue_countDecoder) ResultSchema() rasql.ResultSchema { return overdue_countDecoderSchema() }
+func (overdue_countDecoder) Presence() []rasql.Presence       { return nil }
+func (overdue_countDecoder) DecodeRow(s rasql.ScanSource, r *overdue_countResult) error {
+	if err := s.Scan(&r.Overdue); err != nil {
+		return err
+	}
+	return nil
+}
+
+func overdue_countDecoderSchema() rasql.ResultSchema {
+	s, _ := rasql.NewResultSchema(
+		rasql.ResultColumn{Name: "overdue", Type: schema.IntegerType{Unsigned: false, ZeroFill: false}, Nullable: false, Codec: ""},
+	)
+	return s
+}
+
+func OverdueCount(on time.Time) (rasql.Query[overdue_countResult], error) {
+	projection, err := rasql.NativeProjection[overdue_countResult](overdue_countDecoder{})
+	if err != nil {
+		return rasql.Query[overdue_countResult]{}, err
+	}
+	return rasql.Native[overdue_countResult](rasql.NativeStatement{Engine: "postgresql", SQL: "SELECT COUNT(*) AS overdue\nFROM tasks\nWHERE is_open AND due_on IS NOT NULL AND due_on < CAST($1 AS date)\n", Args: []rasql.NativeArgument{{Value: on, Codec: ""}}}, projection, rasql.ExactlyOne)
 }
 ```
 source: [sample/taskboard/internal/store/overdue_count_gen.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/overdue_count_gen.go)
 <!-- END INCLUDE -->
 
-The template became `$1`, PostgreSQL's placeholder, and the bind name became the parameter, typed as `time.Time` because the bind named `tasks.due_on`. The function hands back a `stmt.Statement` rather than running anything, so choosing the handle, the context, and the row type is still the caller's business.
+## Keep the date boundary in SQL
 
-The template is checked when the generator runs, so a malformed one fails there rather than at the first request. Writing `{{bind}}` with no name, for instance:
-
-```text
-generate: query[0]: namedsql "OverdueCount": actions must use bind with one quoted parameter name
-```
-
-What is not checked is the SQL against the schema. `stmt.New` holds the statement as text and hands it to PostgreSQL unread, so a column a later migration renames leaves this query referring to something that no longer exists, and the database is what says so. That is the trade for writing SQL: the compiler cannot help the way it helped in chapter 7. [Chapter 9](09-operate.md#the-tests-that-need-a-database) is where a live test covers it instead.
-
-Use this for aggregates, window functions, recursive CTEs, and anything else where the SQL is the clearest statement of what is wanted.
-
-## 3. A hand-written repository over the generated types
-
-The third place is the one the application has been using since [chapter 5](05-queries.md). `store.Repository` is hand-written, it wraps the generated tables, and it hands back values the rest of the application understands.
-
-Running the declared query is a repository method like any other:
+`queries/overdue_count.sql` counts open tasks whose non-NULL due date is before
+the caller's calendar day. It excludes a task due today and includes one due
+yesterday. The caller's `time.Time` carries the location used to choose the
+day; PostgreSQL receives the explicit date cast.
 
 <!-- INCLUDE(sample/taskboard/internal/store/repository.go#countoverdue) -->
 ```go
-// overdueRow decodes the single column OverdueCount selects.
-type overdueRow struct {
-	Overdue int64
-}
-
 // CountOverdue returns how many open tasks fell due before the calendar day
-// on names. A task due on that day is not counted, because a task is past its
+// on date. A task due on that day is not counted, because a task is past its
 // due date only once the day is over. The query casts the bound value to a
 // date, and the driver reads that date off on in on's own location, so the
 // caller decides which day it is and the database session's time zone does
 // not.
 func (repository Repository) CountOverdue(ctx context.Context, on time.Time) (int64, error) {
-	statement := OverdueCount(on)
-	row, err := rasql.QueryRenderedOne[overdueRow](ctx, repository.db, statement)
+	q, err := OverdueCount(on)
+	if err != nil {
+		return 0, fmt.Errorf("build overdue query: %w", err)
+	}
+	row, err := rasql.One(ctx, repository.executor, q)
 	if err != nil {
 		return 0, fmt.Errorf("count overdue tasks: %w", err)
 	}
@@ -159,19 +92,8 @@ func (repository Repository) CountOverdue(ctx context.Context, on time.Time) (in
 source: [sample/taskboard/internal/store/repository.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/repository.go)
 <!-- END INCLUDE -->
 
-The method takes an instant and the query narrows it, so the caller is the one who says which day the count is about. The driver reads that day off the value's own location, which leaves the decision with the process holding the clock instead of with whatever time zone the database session happens to be in.
-
-`rasql.QueryRenderedOne` runs a rendered statement and decodes exactly one row, reporting `rasql.ErrNoRows` for none and `rasql.ErrMultipleRows` for more. `QueryRenderedAll` and `QueryRendered` are the same call for a slice and for an iterator.
-
-What the repository adds over calling `OverdueCount` from the handler is the boundary. `overdueRow` and `stmt.Statement` stop here, the method returns an `int64`, and the one error it can produce is wrapped with what was being attempted. [Chapter 5's `OpenTasks`](05-queries.md#read-the-open-tasks) does the same for the joined read: it returns `[]OpenTask`, and nothing above it has ever seen a `rasql.ColumnRef`.
-
-That boundary is what let chapter 7 change the schema without the HTTP layer learning about foreign keys. When `assignee_id` became nullable, the handler changed because the *meaning* changed, and not because a join had.
-
-Use this for everything else, which in practice is most of an application.
-
-## Put the count on the page
-
-The page needs the number, so the view model carries it:
+The repository calls the generated constructor and `rasql.One`. It does not
+repair result metadata, render a statement, or decode a private row type.
 
 <!-- INCLUDE(sample/taskboard/internal/taskboard/taskboard.go#page) -->
 ```go
@@ -181,12 +103,15 @@ type Page struct {
 	Overdue  int64
 	Projects []Choice
 	Members  []Choice
+	Limit    int
+	Next     string
+	HasMore  bool
 }
 ```
 source: [sample/taskboard/internal/taskboard/taskboard.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/taskboard/taskboard.go)
 <!-- END INCLUDE -->
 
-The handler reads it alongside the other three:
+The handler reads the count as one of the values needed by the page:
 
 <!-- INCLUDE(sample/taskboard/internal/web/taskboard.go#overdue_read) -->
 ```go
@@ -199,83 +124,6 @@ if err != nil {
 source: [sample/taskboard/internal/web/taskboard.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/web/taskboard.go)
 <!-- END INCLUDE -->
 
-and the template prints it when it is not zero:
-
-```html
-{{if .Overdue}}<p>Past their due date: {{.Overdue}}</p>{{end}}
-```
-
-Add a task that is already late, and ask for the page:
-
-```sh
-./scripts/psql.sh -c "INSERT INTO tasks (project_id, assignee_id, title, due_on) VALUES (2, 2, 'Send the July statements', DATE '2026-08-01');"
-```
-
-```sh
-curl -s http://127.0.0.1:18080/ | sed -n '/Taskboard<\/h1>/,/Add a task/p'
-```
-
-```text
-<h1>Taskboard</h1>
-<p>Past their due date: 1</p>
-
-
-<h2>Website refresh</h2>
-<ul>
-
-  <li>
-    Draft the rollout plan &mdash; unassigned (due 2026-09-01)
-    <form method="post" action="/tasks/1/close"><button type="submit">close</button></form>
-  </li>
-
-  <li>
-    Pick a heading typeface &mdash; unassigned
-    <form method="post" action="/tasks/2/close"><button type="submit">close</button></form>
-  </li>
-
-</ul>
-
-<h2>Billing cleanup</h2>
-<ul>
-
-  <li>
-    Reconcile March invoices &mdash; Grace Hopper (due 2026-08-25)
-    <form method="post" action="/tasks/3/close"><button type="submit">close</button></form>
-  </li>
-
-  <li>
-    Find an owner for the audit &mdash; unassigned
-    <form method="post" action="/tasks/4/close"><button type="submit">close</button></form>
-  </li>
-
-  <li>
-    Send the July statements &mdash; Grace Hopper (due 2026-08-01)
-    <form method="post" action="/tasks/5/close"><button type="submit">close</button></form>
-  </li>
-
-</ul>
-
-
-<h2>Add a task</h2>
-```
-
-One task is past its due date, and all three extensions are on that page. `tasks.Open()` chose the rows, `OverdueCount` produced the number, and `Repository` is what the handler talked to.
-
-```sh
-git add queries rasql.json internal/store/overdue_count_gen.go internal/store/repository.go
-git commit -m 'declare the overdue count as a compiled query'
-git add -A
-git commit -m 'show the overdue count on the page'
-```
-
-## Which one to reach for
-
-Put it on the generated table type when it is a property of the table and the query builder can express it, and accept that it lives in the generated package.
-
-Declare it in `rasql.json` when SQL says it more clearly than a builder chain would, or when the builder cannot say it at all, and accept that the compiler stops checking it against the schema.
-
-Wrap it in the repository in every other case, which is where the domain types, the error wrapping, and the boundary the rest of the application depends on all belong.
-
-## Next
-
-[Operate it](09-operate.md).
+Adding another typed query follows this same path: check in SQL and its
+manifest entry, refresh the lock once, generate offline, and keep the generated
+result at the repository boundary.

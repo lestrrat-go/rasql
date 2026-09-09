@@ -1,331 +1,94 @@
-package rasqlgen_test
+package rasqlgen
 
 import (
 	"bytes"
-	"database/sql"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
-	"github.com/lestrrat-go/rasql/cli/rasqlgen"
 	"github.com/stretchr/testify/require"
-
-	_ "modernc.org/sqlite"
 )
 
-// configModule writes a scratch module holding a go.mod, a SQLite database
-// with one table, and whatever settings file the case needs. It returns the
-// module directory and the database path.
-//
-// A go.mod is what makes the module root findable, which is where the
-// default settings file is looked for and what a relative output resolves
-// against.
-func configModule(t *testing.T, settings string) (string, string) {
+func writeConfig(t *testing.T, data []byte) string {
 	t.Helper()
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/consumer\n\ngo 1.26.0\n"), 0o600))
-	if settings != "" {
-		require.NoError(t, os.WriteFile(filepath.Join(dir, "rasql.json"), []byte(settings), 0o600))
-	}
-
-	databasePath := filepath.Join(dir, "schema.db")
-	database, err := sql.Open("sqlite", databasePath)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = database.Close() })
-	_, err = database.ExecContext(t.Context(), "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL)")
-	require.NoError(t, err)
-	_, err = database.ExecContext(t.Context(), "CREATE TABLE audit_log (id INTEGER PRIMARY KEY)")
-	require.NoError(t, err)
-	return dir, databasePath
+	path := filepath.Join(t.TempDir(), "rasql.json")
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+	return path
 }
 
-// runConfigured runs generate from inside dir, so the default settings file
-// is found the way a real run finds it.
-func runConfigured(t *testing.T, dir string, args ...string) (string, error) {
-	t.Helper()
-	t.Chdir(dir)
-	var output, diagnostics bytes.Buffer
-	err := rasqlgen.Run(append([]string{"generate"}, args...), &output, &diagnostics)
-	return output.String() + diagnostics.String(), err
-}
-
-// TestConfigSuppliesEverySetting requires the settings file alone, with only
-// a DSN on the command line, to drive a complete run.
-func TestConfigSuppliesEverySetting(t *testing.T) {
-	dir, databasePath := configModule(t, `{
+func TestLoadConfigCanonicalSettings(t *testing.T) {
+	path := writeConfig(t, []byte(`{
+  "engine": {"dialect": "sqlite", "profile": "sqlite-3.35"},
+  "schema": {"kind": "migrations", "identity": "app", "paths": ["migrations/*.sql"]},
   "package": "store",
   "output": "internal/store",
-  "dialect": "sqlite",
+  "emitter": "compact",
+  "prune": false,
   "tables": {"exclude": ["audit_log"], "row_names": {"users": "User"}}
-}`)
+}`))
 
-	output, err := runConfigured(t, dir, "-dsn", databasePath)
-	require.NoError(t, err, output)
-
-	source, err := os.ReadFile(filepath.Join(dir, "internal", "store", "users_gen.go"))
+	settings, err := loadConfig(path)
 	require.NoError(t, err)
-	require.Contains(t, string(source), "type User struct")
-	require.NoFileExists(t, filepath.Join(dir, "internal", "store", "audit_log_gen.go"))
+	require.Equal(t, "sqlite", settings.Engine.Dialect)
+	require.Equal(t, "sqlite-3.35", settings.Engine.Profile)
+	require.Equal(t, "migrations", settings.Schema.Kind)
+	require.Equal(t, []string{"migrations/*.sql"}, settings.Schema.Paths)
+	require.Equal(t, "store", settings.Package)
+	require.Equal(t, "internal/store", settings.Output)
+	require.Equal(t, "compact", settings.Emitter)
+	require.NotNil(t, settings.Prune)
+	require.False(t, *settings.Prune)
+	require.Equal(t, []string{"audit_log"}, settings.Tables.Exclude)
+	require.Equal(t, "User", settings.Tables.RowNames["users"])
 }
 
-// TestConfigIsOptional requires a project that says everything on the
-// command line to need no settings file at all.
-func TestConfigIsOptional(t *testing.T) {
-	dir, databasePath := configModule(t, "")
-
-	output, err := runConfigured(t, dir, "-dsn", databasePath, "-dialect", "sqlite", "-package", "store", "-output", "internal/store")
-	require.NoError(t, err, output)
-	require.FileExists(t, filepath.Join(dir, "internal", "store", "users_gen.go"))
-}
-
-func TestConfigReadLimitBoundary(t *testing.T) {
+func TestLoadConfigReadLimit(t *testing.T) {
 	const limit = 1 << 20
-	for _, testCase := range []struct {
-		name       string
-		extraBytes int
-		wantSize   int
-		wantError  string
-		wantAbsent string
-	}{
-		{name: "at limit", extraBytes: limit - 2, wantSize: limit, wantError: "unsupported -dialect", wantAbsent: "byte limit"},
-		{name: "past limit", extraBytes: limit - 1, wantSize: limit + 1, wantError: "1048576-byte limit", wantAbsent: "unsupported -dialect"},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			dir := t.TempDir()
-			path := filepath.Join(dir, "config.json")
-			data := append([]byte("{}"), bytes.Repeat([]byte{' '}, testCase.extraBytes)...)
-			require.Len(t, data, testCase.wantSize)
-			require.NoError(t, os.WriteFile(path, data, 0o600))
+	atLimit := append([]byte("{}"), bytes.Repeat([]byte{' '}, limit-2)...)
+	_, err := loadConfig(writeConfig(t, atLimit))
+	require.NoError(t, err)
 
-			_, err := runConfigured(t, dir, "-config", path)
-			require.Error(t, err)
-			require.Contains(t, err.Error(), testCase.wantError)
-			require.NotContains(t, err.Error(), testCase.wantAbsent)
-		})
-	}
+	pastLimit := append(atLimit, ' ')
+	_, err = loadConfig(writeConfig(t, pastLimit))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "1048576-byte limit")
 }
 
-func TestConfigFlagOverrides(t *testing.T) {
-	t.Run("a typed flag wins", func(t *testing.T) {
-		dir, databasePath := configModule(t, `{"package": "store", "output": "internal/store", "dialect": "sqlite"}`)
-
-		output, err := runConfigured(t, dir, "-dsn", databasePath, "-package", "records", "-output", "internal/records")
-		require.NoError(t, err, output)
-		require.FileExists(t, filepath.Join(dir, "internal", "records", "users_gen.go"))
-		require.NoDirExists(t, filepath.Join(dir, "internal", "store"))
-
-		source, err := os.ReadFile(filepath.Join(dir, "internal", "records", "users_gen.go"))
-		require.NoError(t, err)
-		require.Contains(t, string(source), "package records")
-	})
-
-	// -prune is the flag whose default is true, so "the user typed false"
-	// and "the user typed nothing" have to stay distinguishable.
-	t.Run("a typed prune=false wins over the file", func(t *testing.T) {
-		dir, databasePath := configModule(t, `{"package": "store", "output": "internal/store", "dialect": "sqlite", "prune": true}`)
-
-		output, err := runConfigured(t, dir, "-dsn", databasePath)
-		require.NoError(t, err, output)
-
-		orphan := filepath.Join(dir, "internal", "store", "audit_log_gen.go")
-		require.FileExists(t, orphan)
-
-		output, err = runConfigured(t, dir, "-dsn", databasePath, "-include", "users", "-prune=false")
-		require.Error(t, err, output)
-		require.Contains(t, err.Error(), "audit_log_gen.go")
-		require.FileExists(t, orphan, "a refused run deletes nothing")
-	})
-
-	t.Run("the file supplies what no flag names", func(t *testing.T) {
-		dir, databasePath := configModule(t, `{"package": "store", "output": "internal/store", "dialect": "sqlite", "prune": false}`)
-
-		output, err := runConfigured(t, dir, "-dsn", databasePath)
-		require.NoError(t, err, output)
-		output, err = runConfigured(t, dir, "-dsn", databasePath, "-include", "users")
-		require.Error(t, err, output)
-		require.Contains(t, err.Error(), "audit_log_gen.go", "prune:false in the file must reach the run")
-	})
-}
-
-func TestConfigRefusals(t *testing.T) {
+func TestLoadConfigRefusals(t *testing.T) {
 	testCases := []struct {
 		name     string
 		settings string
-		args     []string
 		expected string
 	}{
-		{
-			// A misspelled key is the failure a settings file is worst at
-			// showing, so it is named rather than ignored.
-			name:     "unknown key",
-			settings: `{"package": "store", "output": "internal/store", "dialect": "sqlite", "rowname": {}}`,
-			expected: `unknown field "rowname"`,
-		},
-		{
-			name:     "malformed JSON",
-			settings: `{"package": "store",}`,
-			expected: "parse config",
-		},
-		{
-			name:     "trailing value",
-			settings: `{"package": "store", "output": "internal/store", "dialect": "sqlite"} {"package": "other"}`,
-			expected: "unexpected value after the settings object",
-		},
-		{
-			name:     "blank row name",
-			settings: `{"package": "store", "output": "internal/store", "dialect": "sqlite", "tables": {"row_names": {"users": ""}}}`,
-			expected: `states an empty row name for table "users"`,
-		},
-		{
-			name:     "query with no function",
-			settings: `{"package": "store", "output": "internal/store", "dialect": "sqlite", "queries": [{"input": "queries/x.sql"}]}`,
-			expected: "config query 1 states no function",
-		},
-		{
-			name:     "query with no template",
-			settings: `{"package": "store", "output": "internal/store", "dialect": "sqlite", "queries": [{"function": "X"}]}`,
-			expected: "config query 1 states neither input nor sql",
-		},
-		{
-			// Two templates for one function is a half-finished edit
-			// rather than a request for either of them, so neither is
-			// picked.
-			name:     "query with both a file and inline sql",
-			settings: `{"package": "store", "output": "internal/store", "dialect": "sqlite", "queries": [{"input": "queries/x.sql", "sql": "SELECT 1", "function": "X"}]}`,
-			expected: "config query 1 states both input and sql",
-		},
-		{
-			name:     "explicit config that does not exist",
-			settings: `{"package": "store", "output": "internal/store", "dialect": "sqlite"}`,
-			args:     []string{"-config", "absent.json"},
-			expected: "read config absent.json",
-		},
+		{name: "unknown key", settings: `{"package":"store","rowname":{}}`, expected: `unknown field "rowname"`},
+		{name: "malformed JSON", settings: `{"package":"store",}`, expected: "parse config"},
+		{name: "trailing value", settings: `{}` + " " + `{}`, expected: "unexpected value after the settings object"},
+		{name: "checked-in DSN", settings: `{"dsn":"postgres://user:secret@example.test/db"}`, expected: `unknown field "dsn"`},
+		{name: "retired emitter", settings: `{"emitter":"legacy"}`, expected: `emitter "legacy" must be compact`},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			dir, databasePath := configModule(t, testCase.settings)
-			args := append([]string{"-dsn", databasePath}, testCase.args...)
-			_, err := runConfigured(t, dir, args...)
+			_, err := loadConfig(writeConfig(t, []byte(testCase.settings)))
 			require.Error(t, err)
 			require.Contains(t, err.Error(), testCase.expected)
+			if testCase.name == "checked-in DSN" {
+				require.NotContains(t, err.Error(), "secret")
+			}
 		})
 	}
 }
 
-// TestConfigNamedByFlagIsRead requires -config to reach a file the default
-// lookup would never find.
-func TestConfigNamedByFlagIsRead(t *testing.T) {
-	dir, databasePath := configModule(t, "")
-	elsewhere := filepath.Join(dir, "build", "codegen.json")
-	require.NoError(t, os.MkdirAll(filepath.Dir(elsewhere), 0o755))
-	require.NoError(t, os.WriteFile(elsewhere, []byte(`{"package": "store", "output": "internal/store", "dialect": "sqlite"}`), 0o600))
+func TestLoadConfigExplicitPath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "build", "codegen.json")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, []byte(`{"package":"records"}`), 0o600))
 
-	output, err := runConfigured(t, dir, "-dsn", databasePath, "-config", elsewhere)
-	require.NoError(t, err, output)
-	require.FileExists(t, filepath.Join(dir, "internal", "store", "users_gen.go"))
-}
+	settings, err := loadConfig(path)
+	require.NoError(t, err)
+	require.Equal(t, "records", settings.Package)
 
-// TestConfigRejectsADSN requires the one setting that must never be checked
-// in to be refused rather than quietly accepted.
-func TestConfigRejectsADSN(t *testing.T) {
-	dir, databasePath := configModule(t, `{"package": "store", "output": "internal/store", "dialect": "sqlite", "dsn": "postgres://user:secret@example.test/db"}`)
-
-	_, err := runConfigured(t, dir, "-dsn", databasePath)
+	_, err = loadConfig(filepath.Join(dir, "absent.json"))
 	require.Error(t, err)
-	require.Contains(t, err.Error(), `unknown field "dsn"`)
-	require.NotContains(t, err.Error(), "secret")
-}
-
-// TestConfigDerivesQueryOutputNames pins the rule that lets a query state
-// only its input and its function.
-func TestConfigDerivesQueryOutputNames(t *testing.T) {
-	dir, databasePath := configModule(t, `{
-  "package": "store",
-  "output": "internal/store",
-  "dialect": "sqlite",
-  "queries": [{"input": "queries/user_by_email.sql", "function": "UserByEmail"}]
-}`)
-	require.NoError(t, os.MkdirAll(filepath.Join(dir, "queries"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "queries", "user_by_email.sql"),
-		[]byte(`SELECT id FROM users WHERE email = {{bind "email"}}`), 0o600))
-
-	output, err := runConfigured(t, dir, "-dsn", databasePath)
-	require.NoError(t, err, output)
-
-	source, err := os.ReadFile(filepath.Join(dir, "internal", "store", "user_by_email_gen.go"))
-	require.NoError(t, err)
-	require.True(t, strings.Contains(string(source), "func UserByEmail("))
-}
-
-// TestConfigCompilesInlineQueries requires a query written into the settings
-// file to reach the same generated function a query in its own file reaches,
-// and requires its output name to come from the function when the file states
-// none.
-func TestConfigCompilesInlineQueries(t *testing.T) {
-	dir, databasePath := configModule(t, `{
-  "package": "store",
-  "output": "internal/store",
-  "dialect": "sqlite",
-  "queries": [
-    {"sql": "SELECT id FROM users WHERE email = {{bind \"email\"}}", "function": "UserByEmail"},
-    {"sql": "SELECT id FROM users WHERE id = {{bind \"id\"}}", "function": "UserByID", "output": "lookup_gen.go"}
-  ]
-}`)
-
-	output, err := runConfigured(t, dir, "-dsn", databasePath)
-	require.NoError(t, err, output)
-
-	source, err := os.ReadFile(filepath.Join(dir, "internal", "store", "user_by_email_gen.go"))
-	require.NoError(t, err)
-	require.Contains(t, string(source), "func UserByEmail(email any)")
-	require.Contains(t, string(source), "SELECT id FROM users WHERE email = ?")
-
-	source, err = os.ReadFile(filepath.Join(dir, "internal", "store", "lookup_gen.go"))
-	require.NoError(t, err)
-	require.Contains(t, string(source), "func UserByID(id any)")
-}
-
-func TestConfigPropagatesStaticParameterBindings(t *testing.T) {
-	dir, databasePath := configModule(t, `{
-  "package": "store",
-  "output": "internal/store",
-  "dialect": "sqlite",
-  "queries": [{"sql": "SELECT id FROM users LIMIT {{bind \"limit\"}}", "function": "Limited", "bindings": {"limit": {"Go": {"Type": "int"}}}}]
-}`)
-	output, err := runConfigured(t, dir, "-dsn", databasePath)
-	require.NoError(t, err, output)
-	source, err := os.ReadFile(filepath.Join(dir, "internal", "store", "limited_gen.go"))
-	require.NoError(t, err)
-	require.Contains(t, string(source), "func Limited(limit int)")
-}
-
-// TestConfigInlineQueryOutputNamesUseTheFunction pins the derivation an
-// inline query depends on, including the acronym the naive rule would split
-// into u_s_e_r_by_i_d.
-func TestConfigInlineQueryOutputNamesUseTheFunction(t *testing.T) {
-	testCases := []struct {
-		function string
-		expected string
-	}{
-		{function: "UserByEmail", expected: "user_by_email_gen.go"},
-		{function: "UserByID", expected: "user_by_id_gen.go"},
-		{function: "HTTPLog", expected: "http_log_gen.go"},
-		{function: "Recent", expected: "recent_gen.go"},
-	}
-	for _, testCase := range testCases {
-		t.Run(testCase.function, func(t *testing.T) {
-			dir, databasePath := configModule(t, `{
-  "package": "store",
-  "output": "internal/store",
-  "dialect": "sqlite",
-  "tables": {"exclude": ["audit_log"]},
-  "queries": [{"sql": "SELECT 1", "function": "`+testCase.function+`"}]
-}`)
-
-			output, err := runConfigured(t, dir, "-dsn", databasePath)
-			require.NoError(t, err, output)
-			require.FileExists(t, filepath.Join(dir, "internal", "store", testCase.expected))
-		})
-	}
+	require.Contains(t, err.Error(), "read config")
 }

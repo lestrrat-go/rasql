@@ -75,6 +75,15 @@ func (m MappingConfig) Clone() MappingConfig {
 	for i := range out.Scalars {
 		out.Scalars[i].Imports = append([]GoImport(nil), m.Scalars[i].Imports...)
 	}
+	out.Relations = slices.Clone(m.Relations)
+	for i := range out.Relations {
+		out.Relations[i].From = slices.Clone(m.Relations[i].From)
+		out.Relations[i].To = slices.Clone(m.Relations[i].To)
+		out.Relations[i].Through.SourceFrom = slices.Clone(m.Relations[i].Through.SourceFrom)
+		out.Relations[i].Through.SourceTo = slices.Clone(m.Relations[i].Through.SourceTo)
+		out.Relations[i].Through.TargetFrom = slices.Clone(m.Relations[i].Through.TargetFrom)
+		out.Relations[i].Through.TargetTo = slices.Clone(m.Relations[i].Through.TargetTo)
+	}
 	return out
 }
 func (m SemanticModel) Clone() SemanticModel {
@@ -88,11 +97,33 @@ func (m SemanticModel) Clone() SemanticModel {
 		for j := range out.Objects[i].Relations {
 			out.Objects[i].Relations[j].From = append([]string(nil), m.Objects[i].Relations[j].From...)
 			out.Objects[i].Relations[j].To = append([]string(nil), m.Objects[i].Relations[j].To...)
+			if m.Objects[i].Relations[j].Through != nil {
+				x := *m.Objects[i].Relations[j].Through
+				x.SourceFrom = slices.Clone(x.SourceFrom)
+				x.SourceTo = slices.Clone(x.SourceTo)
+				x.TargetFrom = slices.Clone(x.TargetFrom)
+				x.TargetTo = slices.Clone(x.TargetTo)
+				out.Objects[i].Relations[j].Through = &x
+			}
 		}
 	}
 	for i := range out.Queries {
 		out.Queries[i].Parameters = slices.Clone(m.Queries[i].Parameters)
+		for j := range out.Queries[i].Parameters {
+			out.Queries[i].Parameters[j].Native = cloneNative(m.Queries[i].Parameters[j].Native)
+			if m.Queries[i].Parameters[j].Integer != nil {
+				integer := *m.Queries[i].Parameters[j].Integer
+				out.Queries[i].Parameters[j].Integer = &integer
+			}
+		}
 		out.Queries[i].Results = slices.Clone(m.Queries[i].Results)
+		for j := range out.Queries[i].Results {
+			out.Queries[i].Results[j].Native = cloneNative(m.Queries[i].Results[j].Native)
+			if m.Queries[i].Results[j].Integer != nil {
+				integer := *m.Queries[i].Results[j].Integer
+				out.Queries[i].Results[j].Integer = &integer
+			}
+		}
 	}
 	return out
 }
@@ -109,6 +140,18 @@ func (m GoModel) Clone() GoModel {
 		out.Objects[i].Row.Fields = slices.Clone(m.Objects[i].Row.Fields)
 		out.Objects[i].Columns = slices.Clone(m.Objects[i].Columns)
 		out.Objects[i].Relations = slices.Clone(m.Objects[i].Relations)
+		for j := range out.Objects[i].Relations {
+			out.Objects[i].Relations[j].From = slices.Clone(m.Objects[i].Relations[j].From)
+			out.Objects[i].Relations[j].To = slices.Clone(m.Objects[i].Relations[j].To)
+			if m.Objects[i].Relations[j].Through != nil {
+				x := *m.Objects[i].Relations[j].Through
+				x.SourceFrom = slices.Clone(x.SourceFrom)
+				x.SourceTo = slices.Clone(x.SourceTo)
+				x.TargetFrom = slices.Clone(x.TargetFrom)
+				x.TargetTo = slices.Clone(x.TargetTo)
+				out.Objects[i].Relations[j].Through = &x
+			}
+		}
 		if m.Objects[i].Create != nil {
 			shape := *m.Objects[i].Create
 			shape.Fields = slices.Clone(shape.Fields)
@@ -140,6 +183,10 @@ func (c GoConfig) Clone() GoConfig {
 	for i := range out.Scalars {
 		out.Scalars[i].Imports = append([]GoImport(nil), c.Scalars[i].Imports...)
 	}
+	out.ColumnBindings = slices.Clone(c.ColumnBindings)
+	for i := range out.ColumnBindings {
+		out.ColumnBindings[i].Imports = append([]GoImport(nil), c.ColumnBindings[i].Imports...)
+	}
 	return out
 }
 func (q QueryAnalysis) Clone() QueryAnalysis {
@@ -147,5 +194,19 @@ func (q QueryAnalysis) Clone() QueryAnalysis {
 	out.Parameters = slices.Clone(q.Parameters)
 	out.Results = slices.Clone(q.Results)
 	out.Diagnostics = slices.Clone(q.Diagnostics)
+	for i := range out.Parameters {
+		out.Parameters[i].Native = cloneNative(q.Parameters[i].Native)
+		if q.Parameters[i].Integer != nil {
+			x := *q.Parameters[i].Integer
+			out.Parameters[i].Integer = &x
+		}
+	}
+	for i := range out.Results {
+		out.Results[i].Native = cloneNative(q.Results[i].Native)
+		if q.Results[i].Integer != nil {
+			x := *q.Results[i].Integer
+			out.Results[i].Integer = &x
+		}
+	}
 	return out
 }

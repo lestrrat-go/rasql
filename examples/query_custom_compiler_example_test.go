@@ -3,10 +3,10 @@ package examples_test
 import (
 	"fmt"
 
-	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/examples/store"
 	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/render"
 )
 
 type compilerExampleDialect struct {
@@ -56,18 +56,29 @@ func (compilerExample) CompilePagination(emitter dialect.Emitter, pagination dia
 	return nil
 }
 
+// Example_customCompiler renders a custom expression and a custom pagination
+// clause through a dialect.Compiler extension, at the portable query-builder
+// level: a custom query.Expression carries no typed rasql.Expr counterpart,
+// so it is projected the same way the query package projects any expression.
 func Example_customCompiler() {
 	users := store.Users()
-	builder := rasql.DecodeFromRef[struct{}](users.Ref()).
-		Project(query.Project(containsExample{column: users.EmailRef(), value: "@example.com"})).
-		Limit(3)
-	statement, err := builder.Build(compilerExampleDialect{Dialect: dialect.SQLite()})
+	statement, err := query.NewSelect(users.Ref(), query.Project(containsExample{column: users.EmailRef(), value: "@example.com"}))
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
-	fmt.Println(statement.SQL())
-	fmt.Println(statement.Args())
+	statement, err = statement.WithLimit(3)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	rendered, err := render.Select(compilerExampleDialect{Dialect: dialect.SQLite()}, statement)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(rendered.SQL())
+	fmt.Println(rendered.Args())
 	// Output:
 	// SELECT CONTAINS("users"."email", ?) FROM "users" FETCH FIRST ? ROWS ONLY
 	// [@example.com 3]
