@@ -274,74 +274,11 @@ func assertResultOperation(t *testing.T, operation changeplan.Operation) {
 	require.Equal(t, []any{}, statements[1].Args())
 }
 
-func TestIncompleteChangePlanErrorInvalidValues(t *testing.T) {
-	prepared := resultPreparedPlan(t)
-	valid := mustIncomplete(t, prepared, 0, 2, 1, ChangePlanStagePostconditions, -1, 2, ChangePlanOperationUnknown)
-	rows := []struct {
-		name string
-		make func() IncompleteOperation
-	}{
-		{"unknown stage", func() IncompleteOperation {
-			value := valid
-			value.stage = ChangePlanOperationStage("bad")
-			return value
-		}},
-		{"unknown certainty", func() IncompleteOperation {
-			value := valid
-			value.certainty = ChangePlanOperationCertainty("bad")
-			return value
-		}},
-		{"negative statement", func() IncompleteOperation {
-			value := valid
-			value.stage = ChangePlanStageStatement
-			value.statementIndex = -1
-			return value
-		}},
-		{"upper statement", func() IncompleteOperation {
-			value := valid
-			value.stage = ChangePlanStageStatement
-			value.statementIndex = 2
-			return value
-		}},
-		{"duplicate affected IDs", func() IncompleteOperation {
-			value := valid
-			value.affectedOperations = []changeplan.Operation{prepared.operations[0].operation, prepared.operations[0].operation}
-			return value
-		}},
-		{"forbidden rolled back", func() IncompleteOperation {
-			value := mustIncomplete(t, prepared, 2, 3, 2, ChangePlanStagePostconditions, -1, 1, ChangePlanOperationUnknown)
-			value.certainty = ChangePlanOperationRolledBack
-			return value
-		}},
-		{"preconditions contain named", func() IncompleteOperation { value := valid; value.stage = ChangePlanStagePreconditions; return value }},
-		{"postconditions missing final", func() IncompleteOperation {
-			value := valid
-			value.affectedOperations = []changeplan.Operation{prepared.operations[0].operation}
-			return value
-		}},
-		{"checkpoint missing final", func() IncompleteOperation {
-			value := valid
-			value.stage = ChangePlanStageCheckpoint
-			value.affectedOperations = []changeplan.Operation{prepared.operations[0].operation}
-			return value
-		}},
-		{"commit missing final", func() IncompleteOperation {
-			value := valid
-			value.stage = ChangePlanStageCommit
-			value.affectedOperations = []changeplan.Operation{prepared.operations[0].operation}
-			return value
-		}},
-	}
-	for _, row := range rows {
-		t.Run(row.name, func(t *testing.T) {
-			value := row.make()
-			err := newIncompleteChangePlanError(value, errors.New("cause"))
-			require.Error(t, err)
-			var typed *IncompleteChangePlanError
-			require.NotErrorAs(t, err, &typed)
-		})
-	}
-}
+// The invariants newIncompleteChangePlanError used to re-check on every value (valid stage and
+// certainty, statement index bounds, no duplicate affected IDs, the affected-group shape per
+// stage) can only be violated by constructing an IncompleteOperation by hand, bypassing
+// newIncompleteOperation. TestIncompleteOperationScheduleMatrix above already exercises those
+// invariants through that real constructor; there is nothing left for a caller to get wrong here.
 
 func TestChangePlanReconciliationErrorFields(t *testing.T) {
 	cause := errors.New("progress mismatch")

@@ -60,12 +60,12 @@ func TestTypedFactWalkerTraversesD2CatalogFields(t *testing.T) {
 		{path: "/exclusion_constraints/0/elements/0/expression_sql", value: `"id"`},
 		{path: "/exclusion_constraints/0/elements/0/operator", value: `"="`},
 	} {
-		fact, factErr := NewFact(object.ID(), test.path, FactEqual, test.value)
+		fact, factErr := NewFact(object.ID(), test.path, FactOperatorEqual, test.value)
 		require.NoError(t, factErr)
 		require.NoError(t, EvaluateFact(catalog, fact), test.path)
 	}
 
-	structFact, err := NewFact(object.ID(), "/columns/0", FactEqual, `{"name":"id"}`)
+	structFact, err := NewFact(object.ID(), "/columns/0", FactOperatorEqual, `{"name":"id"}`)
 	require.NoError(t, err)
 	err = EvaluateFact(catalog, structFact)
 	require.ErrorIs(t, err, ErrInvalidFact)

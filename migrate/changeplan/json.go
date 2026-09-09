@@ -827,23 +827,14 @@ func requireArray(object map[string]json.RawMessage, key string) error {
 	return nil
 }
 func requireStringArray(object map[string]json.RawMessage, key string) error {
-	value, ok := object[key]
-	if !ok {
-		return fmt.Errorf("%w: missing %s", ErrInvalidWire, key)
-	}
-	if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
-		return fmt.Errorf("%w: null array %s", ErrInvalidWire, key)
+	if err := requireArray(object, key); err != nil {
+		return err
 	}
 	var raw []json.RawMessage
-	if err := json.Unmarshal(value, &raw); err != nil {
-		return fmt.Errorf("%w: array %s", ErrInvalidWire, key)
-	}
+	_ = json.Unmarshal(object[key], &raw)
 	for _, element := range raw {
-		if bytes.Equal(bytes.TrimSpace(element), []byte("null")) {
-			return fmt.Errorf("%w: %s element must be a string", ErrInvalidWire, key)
-		}
 		var value string
-		if err := json.Unmarshal(element, &value); err != nil {
+		if bytes.Equal(bytes.TrimSpace(element), []byte("null")) || json.Unmarshal(element, &value) != nil {
 			return fmt.Errorf("%w: %s element must be a string", ErrInvalidWire, key)
 		}
 	}
