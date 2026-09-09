@@ -16,8 +16,8 @@ import (
 // schema.TableDef literal the compact emitter writes into a table's own
 // generated file is a lossless serialization of the schema.TableDef it came
 // from: that a table's descriptor survives being rendered as Go source,
-// compiled, and read back through the generated package's own public
-// surface.
+// compiled, read back through the generated package's own public surface,
+// and re-rendered into byte-for-byte the same source it first came from.
 //
 // It cannot reach the descriptor the way the deleted legacy-emitter version
 // of this test did, by calling a dedicated per-table "XxxDef() schema.TableDef"
@@ -29,24 +29,25 @@ import (
 // through query.TableRef), but it is public API a real caller already
 // depends on for the same purpose, not something invented for this test.
 //
-// The check that the read-back value is fmt's "%#v" identical to what the
-// literal declares runs inside a small _test.go this test writes alongside
-// the generated package, in the same package, so it can compare against the
-// unexported literal variable directly. "%#v" rather than encoding/json: a
-// JSON struct tag can silently drop a field from the comparison -- this
-// test's own history includes exactly that -- while "%#v" is reflection over
-// every field of every struct it reaches, exported or not.
+// The first check, that the read-back value is fmt's "%#v" identical to what
+// the literal declares, runs inside a small _test.go this test writes
+// alongside the generated package, in the same package, so it can compare
+// against the unexported literal variable directly. "%#v" rather than
+// encoding/json: a JSON struct tag can silently drop a field from the
+// comparison -- this test's own history includes exactly that -- while "%#v"
+// is reflection over every field of every struct it reaches, exported or
+// not.
 //
-// What this version does not check, and the deleted version did: it does not
-// re-render the read-back descriptor and diff that rendering byte-for-byte
-// against the first rendering. That used generate.DescriptorSource, called
-// from a small program compiled into its own module that could still reach
-// only the exported API of a scratch replace-directive module. Compact
-// rendering lives in internal/compilerir and internal/schemagen, neither
-// importable outside this module, so reproducing that check would need a new
-// exported entry point in package generate that renders a descriptor from a
-// plain []schema.TableDef the way generate.DescriptorSource used to. This
-// task does not add one; see the task report for what it would need to do.
+// The second check re-renders both read-back descriptors through
+// generate.DescriptorSource -- called from inside that same small program,
+// since only it can reach generated.Widgets and generated.Owners -- and
+// diffs the result byte-for-byte against the first rendering, which this
+// test captures before compact_table_fixture_test.go's helper ever writes
+// it to disk. DescriptorSource is the entry point package generate did not
+// have until this task added it: the compact rendering pipeline it drives
+// lives in internal/compilerir and internal/schemagen, neither importable
+// outside this module, so a consumer reaching only generate's exported
+// surface could not otherwise reproduce this half of the check.
 func TestSchemaDescriptorRoundTripsThroughGeneratedSource(t *testing.T) {
 	widgets := schema.TableDef{
 		Name:       "widgets",
@@ -76,10 +77,17 @@ func TestSchemaDescriptorRoundTripsThroughGeneratedSource(t *testing.T) {
 	module := "module example.com/roundtrip\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => " + filepath.ToSlash(repository) + "\n"
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte(module), 0o600))
 	packageDir := filepath.Join(directory, "generated")
-	require.NoError(t, compactPackageStore(t, packageDir, widgets, owners).Write())
+	store := compactPackageStore(t, packageDir, widgets, owners)
+	plan, err := store.Plan()
+	require.NoError(t, err)
+	var firstRendering []byte
+	for _, file := range plan.Files() {
+		firstRendering = append(firstRendering, file.Source...)
+	}
+	require.NoError(t, plan.Commit())
 
 	check := "package generated\n\n" +
-		"import (\n\t\"fmt\"\n\t\"testing\"\n)\n\n" +
+		"import (\n\t\"fmt\"\n\t\"testing\"\n\n\t\"github.com/lestrrat-go/rasql/generate\"\n\t\"github.com/lestrrat-go/rasql/schema\"\n)\n\n" +
 		"func TestDescriptorRoundTrip(t *testing.T) {\n" +
 		"\tgot := Widgets().Ref().Definition()\n" +
 		"\tif gotFingerprint := fmt.Sprintf(\"%#v\", got); gotFingerprint != " + strconv.Quote(fingerprint) + " {\n" +
@@ -87,6 +95,14 @@ func TestSchemaDescriptorRoundTripsThroughGeneratedSource(t *testing.T) {
 		"\t}\n" +
 		"\tif fmt.Sprintf(\"%#v\", widgetsDefinition) != fmt.Sprintf(\"%#v\", got) {\n" +
 		"\t\tt.Fatalf(\"Ref().Definition() is not identical to the literal it clones:\\nliteral %#v\\nclone   %#v\", widgetsDefinition, got)\n" +
+		"\t}\n" +
+		"\ttables := []schema.TableDef{got, Owners().Ref().Definition()}\n" +
+		"\trendered, err := generate.DescriptorSource(\"generated\", tables)\n" +
+		"\tif err != nil {\n" +
+		"\t\tt.Fatalf(\"re-rendering the read-back descriptors: %s\", err)\n" +
+		"\t}\n" +
+		"\tif want := " + strconv.Quote(string(firstRendering)) + "; string(rendered) != want {\n" +
+		"\t\tt.Fatalf(\"re-rendering the read-back descriptors is not byte-for-byte identical to the first rendering:\\nwant %s\\ngot  %s\", want, rendered)\n" +
 		"\t}\n" +
 		"}\n"
 	require.NoError(t, os.WriteFile(filepath.Join(packageDir, "roundtrip_check_test.go"), []byte(check), 0o600))
