@@ -74,8 +74,12 @@ func copyTaskboardModule(t *testing.T, repoRoot string) string {
 	if err != nil {
 		t.Fatalf("read copied go.mod: %s", err)
 	}
+	oldReplace := []byte("replace github.com/lestrrat-go/rasql => ../..")
+	if !bytes.Contains(contents, oldReplace) {
+		t.Fatalf("copied go.mod does not contain %q; update this fixture to match the current replace line", oldReplace)
+	}
 	contents = bytes.Replace(contents,
-		[]byte("replace github.com/lestrrat-go/rasql => ../.."),
+		oldReplace,
 		[]byte("replace github.com/lestrrat-go/rasql => "+repoRoot),
 		1,
 	)
