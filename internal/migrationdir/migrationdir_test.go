@@ -56,6 +56,23 @@ func TestLoadAllowsFewerReverseSourcesThanForwardOnes(t *testing.T) {
 	require.Len(t, migrations[0].Down, 1)
 }
 
+// TestLoadAcceptsForwardOnlyMigration requires a migration directory holding
+// only .up.sql sources to load successfully rather than being refused, since
+// absence alone now makes a migration irreversible instead of an error.
+func TestLoadAcceptsForwardOnlyMigration(t *testing.T) {
+	root := t.TempDir()
+	writeMigration(t, root, "001_initial", map[string]string{
+		"001_users.up.sql": "CREATE TABLE users (id INTEGER);\n",
+	})
+
+	migrations, err := migrationdir.Load(root)
+	require.NoError(t, err)
+	require.Len(t, migrations, 1)
+	require.Len(t, migrations[0].Statements, 1)
+	require.Empty(t, migrations[0].Down)
+	require.Empty(t, migrations[0].IrreversibleReason)
+}
+
 func TestLoadRefusals(t *testing.T) {
 	testCases := []struct {
 		name     string
@@ -79,13 +96,6 @@ func TestLoadRefusals(t *testing.T) {
 				"001_users.dwon.sql": "DROP TABLE users;\n",
 			},
 			expected: `contains "001_users.dwon.sql", which is neither a .up.sql nor a .down.sql source`,
-		},
-		{
-			name: "no reverse source",
-			sources: map[string]string{
-				"001_users.up.sql": "CREATE TABLE users (id INTEGER);\n",
-			},
-			expected: `migration "001_initial" has no .down.sql source and no irreversibility marker`,
 		},
 		{
 			name: "no forward source",
@@ -165,6 +175,7 @@ func TestLoadAcceptsIrreversibleMarker(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, migrations, 1)
 	require.Empty(t, migrations[0].Down)
+	require.Equal(t, "data transformation cannot be reversed", migrations[0].IrreversibleReason)
 }
 
 func TestLoadRejectsMalformedIrreversibleArtifacts(t *testing.T) {

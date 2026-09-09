@@ -95,10 +95,18 @@ type Migration struct {
 	// reverse script can be added or corrected for a migration that is
 	// already applied without invalidating its history record.
 	//
-	// A migration read from disk may have no reverse sources when it carries
-	// an explicit irreversibility marker. A Migration built in Go may also
-	// leave them empty, and Revert then refuses to select it.
+	// A migration read from disk has no reverse sources when its directory
+	// holds no .down.sql files, whether or not it carries an irreversibility
+	// marker. A Migration built in Go may also leave them empty. Revert then
+	// refuses the whole run rather than selecting it partway through.
 	Down []Statement
+
+	// IrreversibleReason states why Down is empty, when the author recorded
+	// one. It is empty both for a reversible migration and for an
+	// irreversible one whose author gave no reason. Revert includes it in
+	// the error it returns when it reaches a migration with no reverse
+	// source, and Status reports it beside that migration.
+	IrreversibleReason string
 }
 
 // Statement is one native SQL source file within a Migration.
@@ -130,7 +138,24 @@ func (m Migration) validate() error {
 	// Down is checked by the same rules, and separately: a reverse source
 	// may reuse a forward source's name, since the two sets are executed by
 	// different calls and each is reported by its own file name.
-	return m.validateStatements(m.Down)
+	if err := m.validateStatements(m.Down); err != nil {
+		return err
+	}
+	return m.validateIrreversibleReason()
+}
+
+// validateIrreversibleReason checks IrreversibleReason when it is set. An
+// empty reason is always valid, whether or not Down is empty, since a
+// migration may simply carry no stated reason.
+func (m Migration) validateIrreversibleReason() error {
+	reason := m.IrreversibleReason
+	if reason == "" {
+		return nil
+	}
+	if len(reason) > 4096 || !utf8.ValidString(reason) || strings.TrimSpace(reason) == "" {
+		return fmt.Errorf("migrate: migration %q has an invalid irreversibility reason", m.ID)
+	}
+	return nil
 }
 
 // validateStatements checks one set of sources. An empty set is valid here;
