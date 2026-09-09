@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/lestrrat-go/rasql/internal/scratchmod"
 	"github.com/stretchr/testify/require"
 )
 
@@ -65,8 +66,7 @@ func TestTypedQueryCompileFailures(t *testing.T) {
 			dir := t.TempDir()
 			root, err := filepath.Abs("..")
 			require.NoError(t, err)
-			module := "module example.com/typed-fixture\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nreplace github.com/lestrrat-go/rasql => " + filepath.ToSlash(root) + "\n"
-			require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte(module), 0o600))
+			require.NoError(t, scratchmod.Write(dir, root, "example.com/typed-fixture"))
 			source := "package fixture\n\nimport (\n\t\"github.com/lestrrat-go/rasql\"\n\t\"github.com/lestrrat-go/rasql/examples/store\"\n\t\"github.com/lestrrat-go/rasql/query\"\n\t\"github.com/lestrrat-go/rasql/schema\"\n)\n\nvar _ = rasql.Equal\n\n" + usersQueryHelperSource + "\n\nfunc invalid() {\n\t" + tc.body + "\n}\n"
 			require.NoError(t, os.WriteFile(filepath.Join(dir, "invalid.go"), []byte(source), 0o600))
 			command := exec.CommandContext(t.Context(), "go", "test", "-mod=mod", "-run", "^$", "./...")
@@ -82,8 +82,7 @@ func TestTypedQueryPositiveConsumerCompiles(t *testing.T) {
 	dir := t.TempDir()
 	root, err := filepath.Abs("..")
 	require.NoError(t, err)
-	module := "module example.com/typed-positive\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nreplace github.com/lestrrat-go/rasql => " + filepath.ToSlash(root) + "\n"
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte(module), 0o600))
+	require.NoError(t, scratchmod.Write(dir, root, "example.com/typed-positive"))
 	source := `package positive
 
 import (

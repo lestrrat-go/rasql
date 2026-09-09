@@ -8,6 +8,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/querygen"
+	"github.com/lestrrat-go/rasql/internal/scratchmod"
 	"github.com/stretchr/testify/require"
 )
 
@@ -15,7 +16,7 @@ func TestTypedNativeSQLiteTwoColumnConsumer(t *testing.T) {
 	root, err := filepath.Abs("..")
 	require.NoError(t, err)
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/typedconsumer\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nreplace github.com/lestrrat-go/rasql => "+filepath.ToSlash(root)+"\n"), 0o600))
+	require.NoError(t, scratchmod.Write(dir, root, "example.com/typedconsumer"))
 	input := querygen.TypedInput{Package: "queries", Function: "Find", Engine: "sqlite", SQL: "SELECT id, name FROM users WHERE id > ? ORDER BY id", Operation: "select", Cardinality: "many", Result: "FindResult", Decoder: "FindDecoder", Parameters: []querygen.TypedValue{{Go: compilerir.GoField{Name: "id", Type: "int64"}, Semantic: compilerir.SemanticValue{Name: "id", LogicalKind: "integer"}}}, ArgumentNames: []string{"id"}, Results: []querygen.TypedValue{{Go: compilerir.GoField{Name: "id", Type: "int64"}, Semantic: compilerir.SemanticValue{Name: "id", LogicalKind: "integer"}}, {Go: compilerir.GoField{Name: "name", Type: "rasql.Nullable[string]", Nullable: true}, Semantic: compilerir.SemanticValue{Name: "name", LogicalKind: "text", Nullable: true}}}}
 	generated, err := querygen.TypedGoSource(input)
 	require.NoError(t, err)

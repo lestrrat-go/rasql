@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lestrrat-go/rasql/internal/scratchmod"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
@@ -28,8 +29,14 @@ func TestGeneratedMutationPlansRunAgainstSQLite(t *testing.T) {
 	directory := t.TempDir()
 	repository, err := filepath.Abs("..")
 	require.NoError(t, err)
-	module := "module example.com/generatedmutation\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => " + filepath.ToSlash(repository) + "\n"
-	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte(module), 0o600))
+	// This fixture runs `go mod tidy` below, which needs the network
+	// regardless, so it has no go.sum copied alongside its go.mod: see
+	// internal/schemagen/view_sqlite_test.go's matching comment.
+	file, err := scratchmod.ForModule(repository, "example.com/generatedmutation")
+	require.NoError(t, err)
+	data, err := scratchmod.Format(file)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), data, 0o600))
 	packageDir := filepath.Join(directory, "generated")
 	require.NoError(t, compactPackageStore(t, packageDir, table).Write())
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "mutation_test.go"), []byte(generatedMutationConsumerSource), 0o600))
@@ -78,8 +85,7 @@ func TestGeneratedMutationPlansRejectForbiddenCompileCallers(t *testing.T) {
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			directory := t.TempDir()
-			module := "module example.com/invalidmutation\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => " + filepath.ToSlash(repository) + "\n"
-			require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte(module), 0o600))
+			require.NoError(t, scratchmod.Write(directory, repository, "example.com/invalidmutation"))
 			packageDir := filepath.Join(directory, "generated")
 			require.NoError(t, compactPackageStore(t, packageDir, test.table).Write())
 			consumer := "package invalidmutation_test\n\nimport (\n\t\"testing\"\n\t\"example.com/invalidmutation/generated\"\n)\n\nfunc TestInvalid(t *testing.T) { _ = " + test.call + " }\n"
@@ -104,8 +110,7 @@ func TestGeneratedMutationCallerBecomesStaleAfterColumnRename(t *testing.T) {
 	repository, err := filepath.Abs("..")
 	require.NoError(t, err)
 	directory := t.TempDir()
-	module := "module example.com/renamedmutation\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => " + filepath.ToSlash(repository) + "\n"
-	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte(module), 0o600))
+	require.NoError(t, scratchmod.Write(directory, repository, "example.com/renamedmutation"))
 	packageDir := filepath.Join(directory, "generated")
 	caller := "package renamedmutation_test\n\nimport (\n\t\"testing\"\n\t\"example.com/renamedmutation/generated\"\n)\n\nfunc TestOldCaller(t *testing.T) { _ = generated.NewItemsCreate().Required(\"old\") }\n"
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "caller_test.go"), []byte(caller), 0o600))

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/lestrrat-go/rasql/internal/scratchmod"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
@@ -14,8 +15,7 @@ func TestTypedQuerySchemaChangeBreaksStaleCaller(t *testing.T) {
 	dir := t.TempDir()
 	root, err := filepath.Abs("..")
 	require.NoError(t, err)
-	module := "module example.com/schema-change\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nreplace github.com/lestrrat-go/rasql => " + filepath.ToSlash(root) + "\n"
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte(module), 0o600))
+	require.NoError(t, scratchmod.Write(dir, root, "example.com/schema-change"))
 	caller := filepath.Join(dir, "caller.go")
 	generated := filepath.Join(dir, "generated")
 	writeSchema := func(column schema.ColumnType) {
