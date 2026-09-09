@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/lestrrat-go/rasql/internal/scratchmod"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
@@ -57,8 +58,7 @@ func TestGeneratedViewRejectsEachMutationIndependently(t *testing.T) {
 			require.NoError(t, compactStore(t, filepath.Join(directory, "generated"), users, activeUsers).Write())
 			usage := []byte("package generated_test\n\nimport (\n\t\"context\"\n\t\"github.com/lestrrat-go/rasql\"\n\t\"github.com/lestrrat-go/rasql/query\"\n\t\"example.com/generated/generated\"\n)\n\nvar ctx = context.Background()\nvar db rasql.DB\nfunc proof() {\n" + proof.view + "\n" + proof.table + "\n}\n")
 			require.NoError(t, os.WriteFile(filepath.Join(directory, "usage_test.go"), usage, 0o600))
-			module := "module example.com/generated\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => " + filepath.ToSlash(repository) + "\n"
-			require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte(module), 0o600))
+			require.NoError(t, scratchmod.Write(directory, repository, "example.com/generated"))
 			command := exec.Command("go", "test", "./...")
 			command.Dir = directory
 			output, err := command.CombinedOutput()
