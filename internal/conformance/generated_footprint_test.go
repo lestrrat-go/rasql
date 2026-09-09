@@ -61,6 +61,18 @@ func TestGeneratedFootprintBuild(t *testing.T) {
 	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
 	require.NoError(t, err)
 	cli := buildRasqlCLI(t)
+	// Each iteration below gets its own GOCACHE (see offlineBuildEnv's
+	// callers, runBuild and the generate/check commands further down),
+	// which is the deliberate reason this loop pays a full cold-compile
+	// penalty three times: cmd/rasql-evidence and cmd/sql-evidence -- the
+	// two programs runBuild actually times -- are the same SQLite-only
+	// source for every value of engine (generatedConsumer and
+	// handwrittenConsumer never branch on it), so a shared cache would let
+	// the sqlite iteration warm every package the other two also import
+	// (modernc.org/sqlite, rasql, the stdlib) and turn "postgresql" and
+	// "mysql" into incremental rebuilds. That is a different, much smaller
+	// measurement than the one CachePolicy below documents, so the three
+	// caches stay separate rather than being collapsed into one.
 	for _, engine := range []string{"sqlite", "postgresql", "mysql"} {
 		t.Run(engine, func(t *testing.T) {
 			copyRoot := filepath.Join(t.TempDir(), "fixture")
