@@ -3,10 +3,10 @@ package examples_test
 import (
 	"fmt"
 
-	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/dynamic"
 	"github.com/lestrrat-go/rasql/examples/store"
+	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/render"
 )
 
 // Example_rasqlgen_column_fields contrasts the three ways to name a column,
@@ -25,10 +25,10 @@ import (
 // made:
 //
 //   - A plain string names a column when the name is data rather than source
-//     code, which is what `rasql/dynamic` is for. A table read out of a
-//     configuration file or named by an end user has no Go identifier to
-//     generate an accessor from, so the name stays a string and rasql checks
-//     it against the descriptor as the statement is built.
+//     code. A table read out of a configuration file or named by an end user
+//     has no Go identifier to generate an accessor from, so the name stays a
+//     string and rasql checks it against the descriptor as the statement is
+//     built.
 //   - `Table.Column(name)` names a column on a typed table when the name is
 //     only known while the program runs. It is the escape hatch for a caller
 //     that has generated code in hand but a name that arrives as data, and
@@ -39,23 +39,34 @@ import (
 // one where an accessor exists gives up the compile-time check and gains
 // nothing, which is why the rest of the documentation does not do it.
 func Example_rasqlgen_column_fields() {
-	// A string names the column here because dynamic.SelectFrom works without
-	// a Go row type, which is exactly the case where no accessor can exist.
+	users := store.Users()
+	// A string names the column here because query.NewSelect works without a
+	// Go row type, which is exactly the case where no accessor can exist.
 	// The cost is visible: the correct name and the typo are the same kind of
 	// value, and nothing separates them at this point.
 	// BEGIN(string_column)
-	correct := dynamic.SelectFrom(store.Users().Ref()).Select("id").WhereEqual("id", 42)
-	typo := dynamic.SelectFrom(store.Users().Ref()).Select("id").WhereEqual("emial", 42)
+	correct, err := query.NewSelect(users.Ref(), users.Column("id"))
+	if err != nil {
+		fmt.Printf("failed to create the correct select: %s\n", err)
+		return
+	}
+	correct, err = correct.WithWhere(query.Equal(users.Column("id"), query.Bind(42)))
+	if err != nil {
+		fmt.Printf("failed to add the correct predicate: %s\n", err)
+		return
+	}
+	typo := users.Column("emial")
 	// END(string_column)
 
-	// Nothing separates the two until one of them is rendered.
-	statement, err := correct.Build(dialect.PostgreSQL())
+	// The correct statement renders successfully, while the invalid runtime
+	// column reports its error when validated.
+	statement, err := render.Select(dialect.PostgreSQL(), correct)
 	if err != nil {
 		fmt.Printf("failed to build the correct select: %s\n", err)
 		return
 	}
 	fmt.Println(statement.SQL())
-	if _, err := typo.Build(dialect.PostgreSQL()); err != nil {
+	if err := typo.Validate(); err != nil {
 		fmt.Println(err)
 	}
 
@@ -63,8 +74,19 @@ func Example_rasqlgen_column_fields() {
 	// to write wherever the table is known as it is compiled, because
 	// users.Emial() is not a method and the package does not build.
 	// BEGIN(typed_column)
-	users := store.Users()
-	built, err := rasql.SelectFrom(users).WhereEqual(users.ID().Ref(), 42).Build(dialect.PostgreSQL())
+	typed, err := query.NewSelect(users.Ref(),
+		users.ID().Ref(), users.Email().Ref(), users.Nickname().Ref(),
+		users.Status().Ref(), users.FirstName().Ref(), users.LastName().Ref())
+	if err != nil {
+		fmt.Printf("failed to create the typed select: %s\n", err)
+		return
+	}
+	typed, err = typed.WithWhere(query.Equal(users.ID().Ref(), query.Bind(42)))
+	if err != nil {
+		fmt.Printf("failed to add the typed predicate: %s\n", err)
+		return
+	}
+	built, err := render.Select(dialect.PostgreSQL(), typed)
 	// END(typed_column)
 	if err != nil {
 		fmt.Printf("failed to build the typed select: %s\n", err)
@@ -79,7 +101,7 @@ func Example_rasqlgen_column_fields() {
 	// bad name at the lookup, so the caller does not have to assemble a
 	// statement to find out.
 	// BEGIN(column_lookup)
-	column := users.Column("emial")
+	column := typo
 	// END(column_lookup)
 	fmt.Println(column.Name(), column.Validate())
 

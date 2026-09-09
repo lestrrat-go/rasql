@@ -68,7 +68,7 @@ func TestGeneratedFootprintBuild(t *testing.T) {
 			expected := expectedGeneratedFiles(t, copyRoot)
 			original := snapshotGeneratedFiles(t, copyRoot, expected)
 			removeGeneratedOutput(t, copyRoot)
-			require.NoError(t, writeBuildModule(copyRoot, repoRoot))
+			require.NoError(t, writeBuildModule(t, copyRoot, repoRoot))
 			config := filepath.Join(copyRoot, "rasql.json")
 			generate := exec.Command(cli, "generate", "-config", config)
 			generate.Dir = copyRoot
@@ -281,9 +281,30 @@ func TestOfflineBuildEnvChild(t *testing.T) {
 	}
 }
 
-func writeBuildModule(root, repoRoot string) error {
-	module := fmt.Sprintf("module example.test/generated\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire modernc.org/sqlite v1.55.0\n\nreplace github.com/lestrrat-go/rasql => %s\n", filepath.ToSlash(repoRoot))
+func writeBuildModule(t *testing.T, root, repoRoot string) error {
+	t.Helper()
+	module := fmt.Sprintf("module example.test/generated\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire %s\n\nreplace github.com/lestrrat-go/rasql => %s\n", pinnedRequire(t, repoRoot, "modernc.org/sqlite"), filepath.ToSlash(repoRoot))
 	return os.WriteFile(filepath.Join(root, "go.mod"), []byte(module), 0o600)
+}
+
+// pinnedRequire reads the version the repository's own go.mod pins for
+// module, so a scratch fixture's go.mod names a version rasql actually
+// depends on rather than one written down by hand that can drift out of
+// sync with go.mod.
+func pinnedRequire(t *testing.T, repoRoot, module string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(repoRoot, "go.mod"))
+	require.NoError(t, err)
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		rest, ok := strings.CutPrefix(line, module+" ")
+		if !ok {
+			continue
+		}
+		return module + " " + strings.Fields(rest)[0]
+	}
+	t.Fatalf("go.mod has no requirement for %s", module)
+	return ""
 }
 
 func writeConsumer(root, engine string, rasqlProgram bool) error {
@@ -438,7 +459,7 @@ func runBuild(t *testing.T, root, packagePath, name string) buildSample {
 func writeBuildArtifact(t *testing.T, repoRoot string, manifest footprintManifest, files int, bytes, generationDurationNS int64, rasqlSamples, sqlSamples []buildSample) {
 	t.Helper()
 	commit := CommitFromEnvironment()
-	require.NotEmpty(t, commit)
+	require.NotEmptyf(t, commit, "%s is not set; this artifact records a performance measurement against the commit that produced it, so it cannot be written without one -- export %s=$(git rev-parse HEAD) for a local run", ConformanceCommitEnvVar, ConformanceCommitEnvVar)
 	data, err := json.MarshalIndent(buildArtifact{
 		Format: "rasql.d4.generated-footprint.v1", Engine: manifest.Engine, Profile: manifest.Profile,
 		GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,

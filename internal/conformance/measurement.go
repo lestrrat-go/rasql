@@ -27,6 +27,14 @@ import (
 
 const MeasurementSchema = "rasql.d4.measurement.v1"
 
+// ConformanceCommitEnvVar is the environment variable a measurement
+// artifact's commit is read from. CI's "check" job sets it from the commit
+// GitHub already provides; a local run has to export it itself, since
+// CommitFromEnvironment's build-info fallback below never resolves inside a
+// `go test` binary (see TestConformanceEnvironmentRequiresObservedBuildData,
+// which pins that on this repository's own test binaries).
+const ConformanceCommitEnvVar = "RASQL_CONFORMANCE_COMMIT"
+
 //go:embed testdata/measurement.schema.json
 var measurementSchemaFile []byte
 
@@ -506,8 +514,17 @@ func DigestParts(parts ...string) string {
 	}
 	return hex.EncodeToString(hash.Sum(nil))
 }
+// CommitFromEnvironment returns the commit a measurement artifact should be
+// attributed to, or "" when none is available. It prefers
+// ConformanceCommitEnvVar, and falls back to the running binary's own
+// build-info VCS stamp -- a fallback that only ever pays off for a binary
+// built with `go build`/`go install`, since `go test` does not stamp vcs.*
+// settings into the test binaries it produces. A caller that genuinely needs
+// a commit, rather than merely wanting one when convenient, must still
+// handle "" itself; it is not this function's place to decide whether a
+// blank result is fatal for that caller.
 func CommitFromEnvironment() string {
-	if commit := strings.TrimSpace(os.Getenv("RASQL_CONFORMANCE_COMMIT")); commit != "" {
+	if commit := strings.TrimSpace(os.Getenv(ConformanceCommitEnvVar)); commit != "" {
 		return commit
 	}
 	if info, ok := debug.ReadBuildInfo(); ok {

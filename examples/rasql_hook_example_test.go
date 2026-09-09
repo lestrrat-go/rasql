@@ -9,6 +9,7 @@ import (
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/examples/store"
+	"github.com/lestrrat-go/rasql/query"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
@@ -53,15 +54,45 @@ func Example_rasql_hook() {
 		fmt.Printf("failed to install the hook: %s\n", err)
 		return
 	}
+	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 40, 0)
+	if err != nil {
+		fmt.Printf("failed to describe engine profile: %s\n", err)
+		return
+	}
+	executor, err := rasql.AsExecutor(db, profile)
+	if err != nil {
+		fmt.Printf("failed to create executor: %s\n", err)
+		return
+	}
 
 	// AllowAll renders the full-table delete the hook is looking for, so the
 	// hook refuses it and the statement never reaches the database.
-	if _, err := rasql.DeleteFrom(users).AllowAll().Exec(ctx, db); err != nil {
+	statement, err := query.NewDelete(users.Ref())
+	if err != nil {
+		fmt.Printf("failed to build delete: %s\n", err)
+		return
+	}
+	statement, err = statement.AllowAll()
+	if err != nil {
+		fmt.Printf("failed to allow a full-table delete: %s\n", err)
+		return
+	}
+	unfiltered, err := rasql.NewStatementPlan(statement)
+	if err != nil {
+		fmt.Printf("failed to adapt delete: %s\n", err)
+		return
+	}
+	if _, err := rasql.ExecMutation(ctx, executor, unfiltered); err != nil {
 		fmt.Println("refused:", err)
 	}
 
 	// A delete carrying a predicate renders different SQL, so the hook lets it through.
-	if _, err := rasql.DeleteFrom(users).WhereEqual(users.ID().Ref(), 1).Exec(ctx, db); err != nil {
+	filtered, err := rasql.NewDeletePlan(users, query.EqualValue(users.ID(), int64(1)))
+	if err != nil {
+		fmt.Printf("failed to build delete: %s\n", err)
+		return
+	}
+	if _, err := rasql.ExecMutation(ctx, executor, filtered); err != nil {
 		fmt.Printf("failed to delete user: %s\n", err)
 		return
 	}

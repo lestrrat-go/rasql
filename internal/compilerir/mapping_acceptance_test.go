@@ -35,7 +35,12 @@ func TestMappingCompilePassFixture(t *testing.T) {
 	writeCompileModule(t, dir, renderCompileModel(goModel), []string{"domain", "nullable"})
 	cmd := exec.Command("go", "test", "./...")
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GOWORK=off", "GOCACHE="+filepath.Join(dir, "cache"))
+	// GOCACHE is deliberately not overridden here: the ambient build cache
+	// already holds rasql and its dependencies from the surrounding `go test
+	// ./...` run, and a fresh per-call GOCACHE bought no isolation this
+	// correctness check needs -- it only forced dependency compilation from
+	// scratch on every call.
+	cmd.Env = append(os.Environ(), "GOWORK=off")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("generated mapping fixture failed to compile: %v\n%s", err, output)
 	}
@@ -56,7 +61,7 @@ func TestMappingCompileFailFixture(t *testing.T) {
 	}
 	cmd := exec.Command("go", "test", "./...")
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GOWORK=off", "GOCACHE="+filepath.Join(dir, "cache"))
+	cmd.Env = append(os.Environ(), "GOWORK=off")
 	output, err := cmd.CombinedOutput()
 	if err == nil || !strings.Contains(string(output), "cannot use") {
 		t.Fatalf("compile-fail fixture did not fail for intended type mismatch: %v\n%s", err, output)
@@ -73,7 +78,7 @@ func TestMappingCompileCanonicalNullableFixture(t *testing.T) {
 	writeCompileModule(t, dir, renderCompileModel(goModel), nil)
 	cmd := exec.Command("go", "test", "-mod=mod", "./...")
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GOWORK=off", "GOCACHE="+filepath.Join(dir, "cache"))
+	cmd.Env = append(os.Environ(), "GOWORK=off")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("canonical nullable fixture failed to compile: %v\n%s", err, output)
 	}

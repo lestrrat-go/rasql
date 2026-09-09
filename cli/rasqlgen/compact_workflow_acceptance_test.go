@@ -196,7 +196,12 @@ func runCompactConsumer(t *testing.T, root string) {
 	t.Helper()
 	command := exec.CommandContext(t.Context(), "go", "test", "-mod=mod", "./consumer")
 	command.Dir = root
-	command.Env = append(os.Environ(), "GOFLAGS=-buildvcs=false", "GOCACHE="+filepath.Join(root, "cache"))
+	// GOCACHE is deliberately not overridden here: the ambient build cache
+	// already holds rasql and its dependencies from the surrounding `go test
+	// ./...` run, and a fresh per-call GOCACHE bought no isolation this
+	// correctness check needs -- it only forced dependency compilation from
+	// scratch on every call.
+	command.Env = append(os.Environ(), "GOFLAGS=-buildvcs=false")
 	output, err := command.CombinedOutput()
 	require.NoError(t, err, "%s", output)
 }

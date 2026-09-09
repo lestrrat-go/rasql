@@ -11,6 +11,7 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/inspect"
 	"github.com/lestrrat-go/rasql/internal/dbtest"
+	"github.com/lestrrat-go/rasql/query"
 	"github.com/stretchr/testify/require"
 )
 
@@ -49,13 +50,27 @@ func TestInsertIntoAlwaysIdentityColumnAgainstLiveDatabases(t *testing.T) {
 	members, err := rasql.TableOf[member](definition)
 	require.NoError(t, err, "build a typed table from the inspected descriptor")
 
-	// The point under test: this must succeed, and the ID supplied here
-	// (999) must never reach the server -- if it did, and the server
-	// obeyed it, the assertion below that the server itself assigned a
-	// small sequential key would still pass by accident, so it is chosen
-	// far outside the range live_write_members' own sequence would ever
-	// produce on a fresh table.
-	_, err = rasql.Insert(ctx, db, members, member{ID: 999, Name: "Ada"})
+	profile, err := rasql.DiscoverEngineProfile(ctx, db, "postgresql-17")
+	require.NoError(t, err, "discover engine profile")
+	executor, err := rasql.AsExecutor(db, profile)
+	require.NoError(t, err, "build executor")
+
+	id := query.TypedColumnOf[member, int64](members.Column("id"))
+	name := query.TypedColumnOf[member, string](members.Column("name"))
+
+	// An ALWAYS identity column cannot be assigned at all: NewCreatePlan
+	// refuses a field naming it before any statement is built, which is a
+	// stronger guarantee than the reflected write path had -- there, a
+	// supplied value (999, chosen far outside the range a fresh sequence
+	// would ever produce) was silently dropped rather than refused.
+	_, err = rasql.NewCreatePlan(members, rasql.SetField(id, int64(999)), rasql.SetField(name, "Ada"))
+	require.Error(t, err, "a field naming an ALWAYS identity column must be refused before it reaches a statement")
+
+	// The point under test: this must succeed with no field for id at all,
+	// and the server, not the caller, must assign the key.
+	plan, err := rasql.NewCreatePlan(members, rasql.SetField(name, "Ada"))
+	require.NoError(t, err, "create plan must accept a table with an ALWAYS identity column when nothing sets it")
+	_, err = rasql.ExecMutation(ctx, executor, plan)
 	require.NoError(t, err, "insert into a table with an ALWAYS identity column must succeed: the identity column must not reach the INSERT statement")
 
 	var assignedID int64
@@ -117,7 +132,20 @@ func TestInsertIntoByDefaultIdentityColumnKeepsExplicitValueAgainstLiveDatabases
 			members, err := rasql.TableOf[member](definition)
 			require.NoError(t, err, "build a typed table from the inspected descriptor")
 
-			_, err = rasql.Insert(ctx, db, members, member{ID: 7, Name: "Grace"})
+			profileID := "postgresql-17"
+			if test.dialect.Name() == "mysql" {
+				profileID = "mysql-8.4"
+			}
+			profile, err := rasql.DiscoverEngineProfile(ctx, db, profileID)
+			require.NoError(t, err, "discover engine profile")
+			executor, err := rasql.AsExecutor(db, profile)
+			require.NoError(t, err, "build executor")
+
+			id := query.TypedColumnOf[member, int64](members.Column("id"))
+			name := query.TypedColumnOf[member, string](members.Column("name"))
+			plan, err := rasql.NewCreatePlan(members, rasql.SetField(id, int64(7)), rasql.SetField(name, "Grace"))
+			require.NoError(t, err, "create plan for a BY DEFAULT identity column must accept an explicit value")
+			_, err = rasql.ExecMutation(ctx, executor, plan)
 			require.NoError(t, err, "insert an explicit value into a BY DEFAULT identity column must succeed")
 
 			var keptID int64

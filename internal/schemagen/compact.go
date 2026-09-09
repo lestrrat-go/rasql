@@ -15,23 +15,25 @@ import (
 // The renderer consumes all four compiler layers so generated declarations do
 // not have to rediscover physical facts from the Go model.
 type CompactObject struct {
-	Catalog    compilerir.PhysicalObject
-	Semantic   compilerir.SemanticObject
-	Go         compilerir.GoObject
-	Generation compilerir.ObjectGoName
-	Table      schema.TableDef
-	Mappings   []compilerir.ScalarMapping
-	Targets    map[compilerir.ObjectID]CompactObjectRef
+	Catalog        compilerir.PhysicalObject
+	Semantic       compilerir.SemanticObject
+	Go             compilerir.GoObject
+	Generation     compilerir.ObjectGoName
+	Table          schema.TableDef
+	Mappings       []compilerir.ScalarMapping
+	ColumnBindings []compilerir.ColumnGoBinding
+	Targets        map[compilerir.ObjectID]CompactObjectRef
 }
 
 // CompactObjectRef carries the canonical names and relation facts needed by
 // declarations that connect one generated object to another.
 type CompactObjectRef struct {
-	Catalog    compilerir.PhysicalObject
-	Semantic   compilerir.SemanticObject
-	Go         compilerir.GoObject
-	Generation compilerir.ObjectGoName
-	Table      schema.TableDef
+	Catalog        compilerir.PhysicalObject
+	Semantic       compilerir.SemanticObject
+	Go             compilerir.GoObject
+	Generation     compilerir.ObjectGoName
+	Table          schema.TableDef
+	ColumnBindings []compilerir.ColumnGoBinding
 }
 
 // CompactObjectSource emits the compact table or view declarations for one
@@ -263,6 +265,11 @@ func compactImports(object CompactObject) []compactImport {
 		}
 		if ok {
 			for _, imp := range mapping.Imports {
+				seen[imp.Path] = compactImport{Path: imp.Path, Alias: imp.Alias}
+			}
+		}
+		if binding, ok := compilerir.ColumnGoBindingFor(object.Catalog.ID, column.Name, object.ColumnBindings); ok {
+			for _, imp := range binding.Imports {
 				seen[imp.Path] = compactImport{Path: imp.Path, Alias: imp.Alias}
 			}
 		}
@@ -584,11 +591,35 @@ func writeCompactProjections(b *bytes.Buffer, object CompactObject, accessor, ro
 func compactPageColumns(object CompactObject) []compilerir.GoColumn {
 	result := make([]compilerir.GoColumn, 0, len(object.Go.Columns))
 	for _, column := range object.Go.Columns {
-		if columnReadable(object.Semantic, column.Name) && !compactCustomNullable(object, column) {
+		if columnReadable(object.Semantic, column.Name) && compactPlainNullableRowType(object, column) {
 			result = append(result, column)
 		}
 	}
 	return result
+}
+
+// compactPlainNullableRowType reports whether a nullable column's row field
+// is exactly rasql.Nullable[T] for its own value type T -- the shape every
+// "func(row R) rasql.Nullable[T] { return row.Field }" this file writes
+// requires, since a function literal's return statement needs an identical
+// type, not merely a convertible one. It is true unconditionally for a
+// non-nullable column, which no such closure is ever written for.
+//
+// A ScalarMapping's NullableGoType (compactCustomNullable already names this
+// case) or a column's GoBinding can each choose a different, self-contained
+// shape for a nullable column -- GoBinding's own default is a bare pointer --
+// and a column in either state fails this check.
+func compactPlainNullableRowType(object CompactObject, column compilerir.GoColumn) bool {
+	if !column.Nullable {
+		return true
+	}
+	if compactCustomNullable(object, column) {
+		return false
+	}
+	if _, ok := compilerir.ColumnGoBindingFor(object.Catalog.ID, column.Name, object.ColumnBindings); ok {
+		return column.GoType == "rasql.Nullable["+compactColumnValueType(object, column)+"]"
+	}
+	return true
 }
 
 func compactRelations(object CompactObject) []compilerir.GoRelation {
@@ -671,7 +702,14 @@ func writeCompactGraphParts(b *bytes.Buffer, object CompactObject, accessor, row
 			b.WriteString(", ")
 		}
 		column, ok := goColumnByName(object.Go, name)
-		if !ok {
+		if !ok || !compactPlainNullableRowType(object, column) {
+			// A column whose nullable row field is not itself
+			// rasql.Nullable[T] cannot be returned from the
+			// "func(row R) rasql.Nullable[T]" this function otherwise
+			// writes below, the same reason compactPageColumns excludes
+			// it from PageKey generation. There is no positional way to
+			// omit one key part, so this falls back to the same
+			// placeholder an unmatched column already uses.
 			b.WriteString("rasql.GraphKeyPart[")
 			b.WriteString(row)
 			b.WriteString("]{}")
@@ -781,17 +819,17 @@ func writeCompactRelations(b *bytes.Buffer, object CompactObject, accessor, row 
 			b.WriteString("\tjunctionParent, err := rasql.NewGraphKey[")
 			b.WriteString(throughRow)
 			b.WriteString("](")
-			writeCompactGraphParts(b, CompactObject{Go: through.Go, Mappings: object.Mappings}, throughAccessor, throughRow, relation.Through.SourceFrom, "junctionExpressions")
+			writeCompactGraphParts(b, CompactObject{Catalog: through.Catalog, Go: through.Go, Mappings: object.Mappings, ColumnBindings: through.ColumnBindings}, throughAccessor, throughRow, relation.Through.SourceFrom, "junctionExpressions")
 			b.WriteString(")\n\tif err != nil { return nil, err }\n")
 			b.WriteString("\tjunctionChild, err := rasql.NewGraphKey[")
 			b.WriteString(throughRow)
 			b.WriteString("](")
-			writeCompactGraphParts(b, CompactObject{Go: through.Go, Mappings: object.Mappings}, throughAccessor, throughRow, relation.Through.TargetFrom, "junctionExpressions")
+			writeCompactGraphParts(b, CompactObject{Catalog: through.Catalog, Go: through.Go, Mappings: object.Mappings, ColumnBindings: through.ColumnBindings}, throughAccessor, throughRow, relation.Through.TargetFrom, "junctionExpressions")
 			b.WriteString(")\n\tif err != nil { return nil, err }\n")
 			b.WriteString("\tchild, err := rasql.NewGraphKey[")
 			b.WriteString(targetRow)
 			b.WriteString("](")
-			writeCompactGraphParts(b, CompactObject{Catalog: target.Catalog, Go: target.Go, Mappings: object.Mappings}, targetAccessor, targetRow, relation.To, "childExpressions")
+			writeCompactGraphParts(b, CompactObject{Catalog: target.Catalog, Go: target.Go, Mappings: object.Mappings, ColumnBindings: target.ColumnBindings}, targetAccessor, targetRow, relation.To, "childExpressions")
 			b.WriteString(")\n\tif err != nil { return nil, err }\n")
 			b.WriteString("\treturn rasql.ManyThrough(\"")
 			b.WriteString(relation.Name)
@@ -801,7 +839,7 @@ func writeCompactRelations(b *bytes.Buffer, object CompactObject, accessor, row 
 		b.WriteString("\tchild, err := rasql.NewGraphKey[")
 		b.WriteString(targetRow)
 		b.WriteString("](")
-		writeCompactGraphParts(b, CompactObject{Catalog: target.Catalog, Go: target.Go, Mappings: object.Mappings}, targetAccessor, targetRow, relation.To, "childExpressions")
+		writeCompactGraphParts(b, CompactObject{Catalog: target.Catalog, Go: target.Go, Mappings: object.Mappings, ColumnBindings: target.ColumnBindings}, targetAccessor, targetRow, relation.To, "childExpressions")
 		b.WriteString(")\n\tif err != nil { return nil, err }\n\treturn rasql.")
 		if relation.Kind == "belongs_to" || relation.Kind == "has_one" {
 			b.WriteString("HasOne")

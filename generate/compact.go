@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/genfile"
 	"github.com/lestrrat-go/rasql/internal/schemagen"
@@ -92,6 +91,10 @@ func RenderCompact(in EmitterInput) (Store, error) {
 	for _, config := range copy.Generation.Objects {
 		configs[config.ID] = config
 	}
+	columnBindings := make(map[compilerir.ObjectID][]compilerir.ColumnGoBinding, len(copy.Generation.ColumnBindings))
+	for _, binding := range copy.Generation.ColumnBindings {
+		columnBindings[binding.Object] = append(columnBindings[binding.Object], binding)
+	}
 	tablesByID := make(map[compilerir.ObjectID]schema.TableDef, len(copy.Catalog.Objects))
 	for _, object := range copy.Catalog.Objects {
 		if table, ok := findCompactTable(tables, object); ok {
@@ -103,6 +106,7 @@ func RenderCompact(in EmitterInput) (Store, error) {
 		targets[object.ID] = schemagen.CompactObjectRef{
 			Catalog: object, Semantic: semantic[object.ID], Go: goObjects[object.ID],
 			Generation: configs[object.ID], Table: tablesByID[object.ID],
+			ColumnBindings: columnBindings[object.ID],
 		}
 	}
 	files := make([]compactFile, 0, len(copy.Catalog.Objects)+2)
@@ -119,7 +123,8 @@ func RenderCompact(in EmitterInput) (Store, error) {
 		}
 		source, err := schemagen.CompactObjectSource(copy.Generation.Package, schemagen.CompactObject{
 			Catalog: object, Semantic: semantic[object.ID], Go: goObjects[object.ID],
-			Generation: config, Table: table, Mappings: copy.Generation.Scalars, Targets: targets,
+			Generation: config, Table: table, Mappings: copy.Generation.Scalars,
+			ColumnBindings: columnBindings[object.ID], Targets: targets,
 		})
 		if err != nil {
 			return Store{}, err
@@ -164,7 +169,6 @@ func RenderCompact(in EmitterInput) (Store, error) {
 		Package: copy.Generation.Package,
 		Dir:     copy.Generation.Output,
 		Prune:   copy.Generation.Prune,
-		Dialect: compactDialect(copy.Catalog.Engine.Dialect),
 		// RenderCompact owns schema declarations from EmitterInput. PlanContext
 		// appends configured SQL from Store.TypedQueries and checks it with the
 		// same file and identifier ledgers.
@@ -254,17 +258,6 @@ func findCompactTable(tables []schema.TableDef, object compilerir.PhysicalObject
 	return schema.TableDef{}, false
 }
 
-func compactDialect(name string) dialect.Dialect {
-	switch strings.ToLower(name) {
-	case "postgres", "postgresql":
-		return dialect.PostgreSQL()
-	case "mysql":
-		return dialect.MySQL()
-	default:
-		return dialect.SQLite()
-	}
-}
-
 func cloneCompactFiles(files []compactFile) []compactFile {
 	result := make([]compactFile, len(files))
 	for i, file := range files {
@@ -303,7 +296,7 @@ func compactDeclarations(source []byte) ([]string, error) {
 }
 
 func compactManifest(in EmitterInput, tables []schema.TableDef, declarations map[string]string) ([]APIMapping, error) {
-	legacyNames := make(map[schema.ObjectName]ObjectNames, len(in.Generation.Objects))
+	legacyNames := make(map[schema.ObjectName]legacyObjectNames, len(in.Generation.Objects))
 	for _, object := range in.Catalog.Objects {
 		var table schema.TableDef
 		for _, candidate := range tables {
@@ -316,7 +309,7 @@ func compactManifest(in EmitterInput, tables []schema.TableDef, declarations map
 			if config.ID != object.ID {
 				continue
 			}
-			legacyNames[table.ObjectName()] = ObjectNames{Accessor: config.Source, RowType: config.Row, FileBase: strings.TrimSuffix(config.File, "_gen.go")}
+			legacyNames[table.ObjectName()] = legacyObjectNames{Accessor: config.Source, RowType: config.Row, FileBase: strings.TrimSuffix(config.File, "_gen.go")}
 			break
 		}
 	}

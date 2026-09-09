@@ -17,7 +17,6 @@ import (
 	"testing/iotest"
 
 	"github.com/lestrrat-go/rasql/internal/genfile"
-	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,7 +35,7 @@ func TestPlanCheckNeverReachesTheWriteSeams(t *testing.T) {
 	base := t.TempDir()
 	dir := filepath.Join(base, "store")
 	users := commitTestUsersDef()
-	store := Store{Package: "store", Dir: dir, Tables: []schema.TableDef{users}}
+	store := compactStore(t, dir, users)
 	// The setup writes run before the swap, since Write goes through the
 	// very seams the swap makes fatal.
 	require.NoError(t, store.Write())
@@ -65,7 +64,7 @@ func TestPlanCheckNeverReachesTheWriteSeams(t *testing.T) {
 
 	// A directory that does not exist: every planned file missing.
 	missing := filepath.Join(base, "missing", "store")
-	fresh := Store{Package: "store", Dir: missing, Tables: []schema.TableDef{users}}
+	fresh := compactStore(t, missing, users)
 	require.Error(t, fresh.Check())
 	require.NoDirExists(t, missing)
 

@@ -21,7 +21,7 @@ func TestSQLiteSchemaUpdateThenOfflineGenerateAndCheck(t *testing.T) {
 	config := map[string]any{
 		"engine":  map[string]string{"dialect": "sqlite", "profile": "sqlite-3.35"},
 		"schema":  map[string]any{"kind": "migrations", "identity": "fixture-v1", "paths": []string{"migrations/*.sql"}},
-		"package": "store", "output": "internal/store", "emitter": "legacy",
+		"package": "store", "output": "internal/store", "emitter": "compact",
 	}
 	configBytes, err := json.Marshal(config)
 	require.NoError(t, err)
@@ -122,7 +122,7 @@ func writeSchemaConfig(t *testing.T, path, packageName, identity string) {
 	config := map[string]any{
 		"engine":  map[string]string{"dialect": "sqlite", "profile": "sqlite-3.35"},
 		"schema":  map[string]any{"kind": "migrations", "identity": identity, "paths": []string{"migrations/*.sql"}},
-		"package": packageName, "output": "internal/store", "emitter": "legacy",
+		"package": packageName, "output": "internal/store", "emitter": "compact",
 	}
 	b, err := json.Marshal(config)
 	require.NoError(t, err)

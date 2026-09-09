@@ -146,7 +146,7 @@ func newTypedSQLFixture(t *testing.T) typedSQLFixture {
 	config := map[string]any{
 		"engine":  map[string]string{"dialect": "sqlite", "profile": "sqlite-3.35"},
 		"schema":  map[string]any{"kind": "migrations", "identity": "typed-workflow", "paths": []string{"migrations/*.sql"}},
-		"package": "store", "output": "internal/store", "emitter": "legacy",
+		"package": "store", "output": "internal/store", "emitter": "compact",
 		"mappings": map[string]any{"scalars": []any{map[string]any{
 			"name": "money", "match": map[string]string{"dialect": "sqlite", "name": "MONEY", "logical_kind": "integer"}, "go_type": "money.Money",
 			"imports": []any{map[string]string{"path": "example.test/fixture/money", "alias": "money"}}, "codec": "money.codec",
@@ -241,7 +241,7 @@ func assertTypedSQLLock(t *testing.T, fixture typedSQLFixture, lockBytes []byte)
 	require.Equal(t, []string{"integer", "integer", "time", "text"}, valueLogicalKinds(query.Results))
 	require.Equal(t, []bool{false, false, false, true}, valueNullability(query.Results))
 	require.Equal(t, []string{"EventsSince", "events_since_gen.go"}, []string{lock.Generation.Queries[0].Function, lock.Generation.Queries[0].File})
-	require.Equal(t, []string{"store", "internal/store", "legacy"}, []string{lock.Generation.Package, lock.Generation.Output, lock.Generation.Emitter})
+	require.Equal(t, []string{"store", "internal/store", "compact"}, []string{lock.Generation.Package, lock.Generation.Output, lock.Generation.Emitter})
 }
 
 func assertTypedSQLSource(t *testing.T, source []byte) {

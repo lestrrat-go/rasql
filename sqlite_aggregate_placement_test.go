@@ -279,12 +279,20 @@ func aggregatePlacementFixture(t *testing.T) (*sql.DB, schema.TableDef) {
 	users, err := rasql.TableOf[user](definition)
 	require.NoError(t, err)
 	require.NoError(t, rasql.CreateTable(t.Context(), db, users))
+	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+	require.NoError(t, err)
+	executor, err := rasql.AsExecutor(db, profile)
+	require.NoError(t, err)
+	userID := query.TypedColumnOf[user, int64](users.Column("id"))
+	userEmail := query.TypedColumnOf[user, string](users.Column("email"))
 	for _, fixture := range []user{
 		{ID: 1, Email: "ada@example.com"},
 		{ID: 2, Email: "bob@example.com"},
 		{ID: 3, Email: "cyd@example.com"},
 	} {
-		_, err = rasql.Insert(t.Context(), db, users, fixture)
+		plan, err := rasql.NewCreatePlan(users, rasql.SetField(userID, fixture.ID), rasql.SetField(userEmail, fixture.Email))
+		require.NoError(t, err)
+		_, err = rasql.ExecMutation(t.Context(), executor, plan)
 		require.NoError(t, err)
 	}
 	return database, definition

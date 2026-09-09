@@ -9,11 +9,13 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/examples/store"
 	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/render"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
-// Example_rasql_returning reads the row a RETURNING clause produces, which
-// rasql.Exec cannot do because it discards result rows.
+// Example_rasql_returning reads the row a RETURNING clause produces, which a
+// mutation plan executed through ExecMutation cannot do because ExecMutation
+// rejects a statement carrying RETURNING projections outright.
 func Example_rasql_returning() {
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
@@ -49,10 +51,8 @@ func Example_rasql_returning() {
 	}
 
 	// The RETURNING clause names all six columns rather than only the two the
-	// database filled in. QueryWriteOne decodes into store.UsersRow, which maps
-	// the whole users table, and it refuses a clause that omits a column of
-	// that table: an omitted column would decode as a zero value with nothing
-	// to say the database never sent it.
+	// database filled in, so the generated row type's ScanRow can decode the
+	// whole result in column order.
 	statement, err = statement.WithReturning(users.ID().Ref(), users.Email().Ref(), users.Nickname().Ref(),
 		users.Status().Ref(), users.FirstName().Ref(), users.LastName().Ref())
 	if err != nil {
@@ -61,8 +61,31 @@ func Example_rasql_returning() {
 	}
 
 	// SQL: INSERT INTO users (email, first_name, last_name) VALUES (?, ?, ?) RETURNING id, email, nickname, status, first_name, last_name (arguments: "ada@example.com", "Ada", "Lovelace")
-	user, err := rasql.QueryWriteOne[store.UsersRow](ctx, db, statement)
+	rendered, err := render.Insert(db.Dialect(), statement)
 	if err != nil {
+		fmt.Printf("failed to render insert: %s\n", err)
+		return
+	}
+	rows, err := db.QueryRendered(ctx, rendered)
+	if err != nil {
+		fmt.Printf("failed to query inserted user: %s\n", err)
+		return
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			fmt.Printf("failed to query inserted user: %s\n", err)
+		} else {
+			fmt.Println("failed to query inserted user: no rows")
+		}
+		return
+	}
+	var user store.UsersRow
+	if err := user.ScanRow(rows); err != nil {
+		fmt.Printf("failed to query inserted user: %s\n", err)
+		return
+	}
+	if err := rows.Err(); err != nil {
 		fmt.Printf("failed to query inserted user: %s\n", err)
 		return
 	}
