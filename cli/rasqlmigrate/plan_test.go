@@ -143,7 +143,7 @@ func emptySQLiteChangePlan(t *testing.T, database *sql.DB) changeplan.Plan {
 	t.Helper()
 	profile, err := engineprofile.Discover(t.Context(), database, engineprofile.SQLite, "sqlite-3.35")
 	require.NoError(t, err)
-	adapted := cliPlanProfile{profile}
+	adapted := changePlanProfile{profile}
 	catalog, err := changeplan.NewCatalog(adapted, "cli-empty-plan", []changeplan.CatalogObject{})
 	require.NoError(t, err)
 	profileDigest, err := changeplan.ProfileDigest(adapted)
@@ -182,7 +182,7 @@ func sqliteCreateTableChangePlan(t *testing.T, database *sql.DB, dsn string) cha
 
 	profile, err := engineprofile.Discover(t.Context(), database, engineprofile.SQLite, "sqlite-3.35")
 	require.NoError(t, err)
-	adapted := cliPlanProfile{profile}
+	adapted := changePlanProfile{profile}
 	sourceIdentity := "cli-create-table"
 	baseline, err := changeplan.CatalogFromLock(lockBytes)
 	require.NoError(t, err)
@@ -236,11 +236,3 @@ func sqliteCreateTableChangePlan(t *testing.T, database *sql.DB, dsn string) cha
 	require.NoError(t, err)
 	return plan
 }
-
-type cliPlanProfile struct{ value engineprofile.Profile }
-
-func (p cliPlanProfile) ID() string                                  { return p.value.ID }
-func (p cliPlanProfile) Engine() changeplan.EngineID                 { return p.value.Engine }
-func (p cliPlanProfile) Version() changeplan.EngineVersion           { return p.value.Version }
-func (p cliPlanProfile) Capabilities() changeplan.EngineCapabilities { return p.value.Capabilities }
-func (p cliPlanProfile) Limits() changeplan.EngineLimits             { return p.value.Limits }

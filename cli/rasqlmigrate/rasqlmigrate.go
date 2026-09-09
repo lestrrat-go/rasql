@@ -111,7 +111,7 @@ func printUsage(output io.Writer, program string) {
 	_, _ = fmt.Fprintln(output, "  diff     Generate a reviewed migration from desired schemas")
 	_, _ = fmt.Fprintln(output, "  diff-live Compare one live table with a desired schema")
 	_, _ = fmt.Fprintln(output, "  dump     Write rasql's own schema descriptor for a live database")
-	_, _ = fmt.Fprintln(output, "  plan     Print directory sources, inspect a saved plan, or check live state")
+	_, _ = fmt.Fprintln(output, "  plan     Print directory sources, inspect a saved plan, check live state, or create one")
 	_, _ = fmt.Fprintln(output, "  apply    Apply directory migrations or a reviewed plan")
 	_, _ = fmt.Fprintln(output, "  revert   Revert applied migrations, newest first")
 	_, _ = fmt.Fprintln(output, "  status   Show applied, pending, changed, unknown, and incomplete migrations")
@@ -375,6 +375,9 @@ func schemaAnalyzer(name string) (diff.Analyzer, error) {
 func runPlan(args []string) error {
 	if len(args) > 0 && args[0] == "check" {
 		return runChangePlanCheck(args[1:])
+	}
+	if len(args) > 0 && args[0] == "create" {
+		return runChangePlanCreate(args[1:])
 	}
 	flags := newFlagSet("plan")
 	directory := addUniqueStringFlag(flags, "dir", "directory that holds migration directories")
