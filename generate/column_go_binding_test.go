@@ -94,7 +94,10 @@ replace example.com/domain => ./domain
 
 	command := exec.Command("go", "build", "-mod=mod", "./generated")
 	command.Dir = root
-	command.Env = append(os.Environ(), "GOCACHE="+filepath.Join(root, "cache"))
+	// GOCACHE is deliberately not overridden here: see the matching comment
+	// in cli/rasqlgen/compact_workflow_acceptance_test.go's
+	// runCompactConsumer.
+	command.Env = os.Environ()
 	output, err := command.CombinedOutput()
 	require.NoError(t, err, "generated package with a bound column did not compile:\n%s", output)
 }

@@ -302,7 +302,9 @@ func TestGeneratedEdgeUsesExactAliasedStage(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "generated", "graph_test.go"), []byte(consumer), 0o600))
 	command := exec.Command("go", "test", "-mod=mod", "./generated")
 	command.Dir = root
-	command.Env = append(os.Environ(), "GOCACHE="+filepath.Join(root, "cache"))
+	// GOCACHE is deliberately not overridden here: see the matching comment
+	// in cli/rasqlgen/compact_workflow_acceptance_test.go's
+	// runCompactConsumer.
 	output, err := command.CombinedOutput()
 	require.NoError(t, err, "%s", output)
 }
@@ -444,7 +446,9 @@ func TestSourceMismatchMatrix(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "generated", "mismatch_test.go"), []byte(consumer), 0o600))
 	command := exec.Command("go", "test", "-mod=mod", "./generated")
 	command.Dir = root
-	command.Env = append(os.Environ(), "GOCACHE="+filepath.Join(root, "cache"))
+	// GOCACHE is deliberately not overridden here: see the matching comment
+	// in cli/rasqlgen/compact_workflow_acceptance_test.go's
+	// runCompactConsumer.
 	output, err := command.CombinedOutput()
 	require.NoError(t, err, "%s", output)
 }

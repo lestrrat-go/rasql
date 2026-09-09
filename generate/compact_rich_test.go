@@ -53,7 +53,11 @@ func TestCompactRichExternalConsumer(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "generated", "consumer_test.go"), []byte(richConsumerSource), 0o600))
 	command := exec.Command("go", "test", "-mod=mod", "./generated")
 	command.Dir = root
-	command.Env = append(os.Environ(), "GOCACHE="+filepath.Join(root, "cache"))
+	// GOCACHE is deliberately not overridden here: the ambient build cache
+	// already holds modernc.org/sqlite and rasql from the surrounding `go
+	// test ./...` run, and a fresh per-call GOCACHE bought no isolation this
+	// correctness check needs -- it only forced that (slow to compile)
+	// dependency from scratch on every call.
 	output, err := command.CombinedOutput()
 	require.NoError(t, err, "%s", output)
 }
