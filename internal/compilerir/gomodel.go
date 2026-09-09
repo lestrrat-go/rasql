@@ -68,8 +68,41 @@ type GoConfig struct {
 	Objects         []ObjectGoName
 	Queries         []QueryGoName
 	Scalars         []ScalarMapping
+	ColumnBindings  []ColumnGoBinding
 	Emitter         string
 	Prune           bool
+}
+
+// ColumnGoBinding overrides the Go type BuildGo would otherwise compute from
+// a column's scalar, for one column of one object. It sits beside
+// ScalarMapping rather than replacing it: a ScalarMapping applies to every
+// column of a given scalar, while a ColumnGoBinding targets one column by
+// name, which is what a schema.ColumnDef's GoBinding needs when only a
+// single column needs a different Go type.
+//
+// Type and NullableType must already be the literal Go expression to emit,
+// and Imports the packages that expression references with any alias
+// already assigned -- BuildGo is a pure function of its inputs and does not
+// resolve package names itself. internal/schemagen.ResolveGoBinding and the
+// BindingSet it feeds are the resolution step that produces these values
+// from a schema.ColumnDef's GoBinding.
+type ColumnGoBinding struct {
+	Object             ObjectID
+	Column             string
+	Type, NullableType string
+	Imports            []GoImport
+}
+
+// ColumnGoBindingFor returns the binding configured for object's column, if
+// any. BuildGo and generate.EmitterInput's own validation both need this
+// lookup, so it is exported rather than duplicated.
+func ColumnGoBindingFor(object ObjectID, column string, bindings []ColumnGoBinding) (ColumnGoBinding, bool) {
+	for _, binding := range bindings {
+		if binding.Object == object && binding.Column == column {
+			return binding, true
+		}
+	}
+	return ColumnGoBinding{}, false
 }
 
 func BuildGo(model SemanticModel, config GoConfig) (GoModel, []Diagnostic) {
@@ -114,6 +147,16 @@ func BuildGo(model SemanticModel, config GoConfig) (GoModel, []Diagnostic) {
 		goObject := GoObject{ID: object.ID, SourceName: sourceName, Row: GoShape{Name: name, DecoderName: name + "Decoder"}, Create: &GoShape{Name: createName}, Patch: &GoShape{Name: patchName}}
 		for _, column := range object.Columns {
 			binding, ok := scalarBinding(column.Scalar, column.Nullable, config.Scalars)
+			if override, found := ColumnGoBindingFor(object.ID, column.Name, config.ColumnBindings); found {
+				boundType := override.Type
+				if column.Nullable {
+					boundType = override.NullableType
+				}
+				if boundType != "" {
+					binding.Type, ok = boundType, true
+					binding.Imports = append(binding.Imports, override.Imports...)
+				}
+			}
 			out.Imports = append(out.Imports, binding.Imports...)
 			if !ok {
 				diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "unsupported_scalar", Path: object.PhysicalName.Name + "." + column.Name, Message: "scalar has no Go mapping"})
