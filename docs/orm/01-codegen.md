@@ -175,7 +175,7 @@ users := schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{
 		Type: "UserID", NullableType: "NullableUserID",
 	}, Nullable: true,
 }}}
-source, err := generate.PackageSource("store", users)
+source, err := generate.DescriptorSource("store", []schema.TableDef{users})
 if err != nil {
 	fmt.Println(err)
 	return

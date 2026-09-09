@@ -81,7 +81,7 @@ Changing a chapter that produces code means redoing that step and the ones after
 git -C ../taskboard-steps bundle create "$PWD/sample/taskboard/walkthrough/steps.bundle" --all
 ```
 
-`TestWalkthroughBundleMatchesSample` compares the bundle's last commit with the checked-in copy and fails when the two part company, so editing one without the other stops a green test run. It ignores the `// BEGIN(name)` and `// END(name)` markers, which the checked-in copy carries so a chapter can include part of a file and which a reader following the walkthrough never types. `bundleDivergences` in that test owns the short list of paths allowed to differ, and the sample's own README section "What this copy spells differently" explains why go.mod differs from the walkthrough and why the scripts are on that list.
+`TestWalkthroughBundleMatchesSample` compares the bundle's last commit with the checked-in copy and fails when the two part company, so editing one without redoing the walkthrough stops a green test run. It ignores the `// BEGIN(name)` and `// END(name)` markers, which the checked-in copy carries so a chapter can include part of a file and which a reader following the walkthrough never types. `bundleDivergences` in that test owns the short list of paths allowed to differ. The sample's own README section "What this copy spells differently" explains the adjusted `go.mod` and scripts and the compile-only documentation example that does not ship in the walkthrough application.
 
 A chapter that changes only prose needs none of this.
 

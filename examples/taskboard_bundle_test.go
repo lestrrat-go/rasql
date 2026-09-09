@@ -23,12 +23,13 @@ const samplePath = "../sample/taskboard"
 // differently from the bundle's last commit. CONTRIBUTING.md's "Rebuilding the
 // walkthrough's application" section owns why each one differs.
 var bundleDivergences = map[string]struct{}{
-	"README.md":                 {},
-	"go.mod":                    {},
-	"scripts/generate.sh":       {},
-	"scripts/migrate.sh":        {},
-	"scripts/refresh-schema.sh": {},
-	"scripts/rasql.sh":          {},
+	"README.md":                            {},
+	"go.mod":                               {},
+	"internal/store/docs_examples_test.go": {},
+	"scripts/generate.sh":                  {},
+	"scripts/migrate.sh":                   {},
+	"scripts/refresh-schema.sh":            {},
+	"scripts/rasql.sh":                     {},
 }
 
 // TestWalkthroughBundleMatchesSample holds the checked-in application to the

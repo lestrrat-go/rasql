@@ -800,7 +800,7 @@ func rasqlBulkWrite(ctx context.Context, executor rasql.Executor, _ rasql.DB, en
 		}
 		plans = append(plans, plan)
 	}
-	outcome, err := rasql.ExecMutationBatch(ctx, executor, plans, rasql.MutationBatchOptions{MaxRows: 500, Atomic: true})
+	outcome, err := rasql.ExecMutationBatch(ctx, executor, plans, rasql.BulkOptions{MaxRows: 500, Atomic: true})
 	if err != nil {
 		return parityEvidence{}, err
 	}
@@ -1051,11 +1051,11 @@ func rasqlBulkRollback(ctx context.Context, executor rasql.Executor, _ rasql.DB,
 		plans = append(plans, plan)
 	}
 	classifier := rasql.ConstraintFailureClassifier{Classifiers: constraintClassifiers(engine)}
-	var batch rasql.MutationBatchOutcome
+	var batch rasql.BulkOutcome
 	var sentinelOutcome rasql.MutationOutcome
 	err = rasql.Within(ctx, executor, nil, func(scopeCtx context.Context, scoped rasql.Executor) error {
 		var execErr error
-		batch, execErr = rasql.ExecMutationBatch(scopeCtx, scoped, plans, rasql.MutationBatchOptions{MaxRows: 200, Atomic: true, Classifier: classifier})
+		batch, execErr = rasql.ExecMutationBatch(scopeCtx, scoped, plans, rasql.BulkOptions{MaxRows: 200, Atomic: true, Classifier: classifier})
 		if execErr == nil {
 			return errors.New("bulk rollback duplicate unexpectedly succeeded")
 		}

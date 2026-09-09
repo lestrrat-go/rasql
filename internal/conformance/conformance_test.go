@@ -48,7 +48,7 @@ func TestConformanceSignatureSelectionRejectsUnknownWorkload(t *testing.T) {
 }
 
 func TestConformanceEnvironmentRequiresObservedBuildData(t *testing.T) {
-	if os.Getenv("RASQL_CONFORMANCE_COMMIT") != "" {
+	if os.Getenv(ConformanceCommitEnvVar) != "" {
 		t.Skip("archive metadata is supplied by the caller")
 	}
 	require.Empty(t, CommitFromEnvironment())

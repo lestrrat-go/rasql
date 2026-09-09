@@ -1,37 +1,93 @@
 # Querying
 
-`rasql` offers two builders for reading rows, one per layer, and this page says what each one is for. Both start from a table description, both validate the statement before it becomes SQL, and both send every value as a bound argument.
+Every rasql read ends as a `Query[R]` and runs through an `Executor`. The query carries its result projection, so the
+same `Rows`, `All`, `One`, and `Maybe` terminals handle portable builder queries, generated static queries, native SQL,
+and runtime-selected result shapes.
 
-## Two builders
+## Portable queries
 
-The [SQL builder](core/02-sql-builder.md) is the core layer, and it lives in `query` and `render`. `query` assembles a dialect-neutral statement and validates it, and `render` turns that statement into SQL text with its arguments in placeholder order. These two packages import `schema` and `dialect` and nothing else of `rasql`, so the statement is built with no database handle in hand and no Go type for the row. What comes back is a `stmt.Statement`, which holds the rendered SQL text and its arguments and nothing else, and which an application executes however it likes, including through `database/sql` directly.
+A generated table exposes a typed source and column expressions. Build a projection for the result type, pass both to
+`rasql.Select`, and add predicates, joins, grouping, order, or limits immutably. The query validates source membership,
+NULL behavior, result names, codecs, and engine capabilities before it opens database rows.
 
-The [typed builder](orm/03-typed-queries.md) is the ORM layer, and it lives in the root `rasql` package. It starts from a generated table value that carries the Go row type, so `rasql.SelectFrom(users)` already knows what a result row decodes into, and `users.ID()` is a column reference the compiler checks. It builds the same statements the SQL builder builds, then executes them and decodes each row into the row type.
+The lower-level `query` package remains available for dialect-neutral SQL construction and `render` turns those values
+into SQL plus ordered arguments. It is useful for migration tooling and other code that needs SQL without a result type
+or database handle.
 
-| | SQL builder | Typed builder |
-| --- | --- | --- |
-| Packages | `query`, `render` | `rasql`, plus `rasql/dynamic` |
-| Needs a generated table | No | Yes, or a hand-written one of the same shape |
-| Needs a database handle | No | Yes, at the call that executes |
-| Names a column as | `accounts.Column("id")`, checked when the statement is built | `users.ID()`, checked by the compiler |
-| Produces | `stmt.Statement`, holding SQL text and arguments | Decoded rows of the Go row type |
+Correlated subqueries declare their outer sources explicitly, so validation can distinguish an intended outer reference
+from an accidental reference to an unrelated table:
 
-## Which one to reach for
+<!-- INCLUDE(examples/query_correlated_projection_example_test.go#correlated_projection) -->
+```go
+func Example_query_correlated_projection() {
+	users := query.MustTableRef(schema.MustTableDef("users", schema.Integer("id")))
+	orders := query.MustTableRef(schema.MustTableDef(
+		"orders",
+		schema.Integer("id"), schema.Integer("user_id"), schema.Integer("amount"),
+	))
 
-| Situation | Builder |
+	// The constructor declares users before it validates the projection, so the
+	// projection can read both the order and the enclosing user's columns.
+	ordersForUser, err := query.NewCorrelatedSelect(
+		orders, []query.RelationSource{users},
+		query.Project(query.Coalesce(orders.Column("amount"), users.Column("id"))).As("value"),
+	)
+	if err != nil {
+		fmt.Printf("failed to build correlated select: %s\n", err)
+		return
+	}
+	ordersForUser, err = ordersForUser.WithWhere(query.Equal(orders.Column("user_id"), users.Column("id")))
+	if err != nil {
+		fmt.Printf("failed to add correlation predicate: %s\n", err)
+		return
+	}
+	statement, err := query.NewSelect(users, users.Column("id"), query.Project(query.Scalar(ordersForUser)).As("value"))
+	if err != nil {
+		fmt.Printf("failed to build outer select: %s\n", err)
+		return
+	}
+	rendered, err := render.Select(dialect.SQLite(), statement)
+	if err != nil {
+		fmt.Printf("failed to render select: %s\n", err)
+		return
+	}
+	fmt.Println(rendered.SQL())
+
+	// Output:
+	// SELECT "users"."id", (SELECT COALESCE("orders"."amount", "users"."id") AS "value" FROM "orders" WHERE ("orders"."user_id" = "users"."id")) AS "value" FROM "users"
+}
+```
+source: [examples/query_correlated_projection_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/query_correlated_projection_example_test.go)
+<!-- END INCLUDE -->
+
+## Native SQL
+
+Use `rasql.Native` when a statement depends on engine-specific syntax that the portable builder does not model. The
+caller states the engine, SQL text, projection, and cardinality. Execution rejects an executor for another engine rather
+than assuming native SQL is portable.
+
+Generated static query functions use this same route. Their checked-in decoder and result schema keep native templates
+on the normal terminal and codec path.
+
+## Runtime-selected results
+
+Use `rasql.DynamicProjection` when the result columns are known only at run time. It accepts a validated `ResultSchema`
+and produces a projection whose rows retain ordered names and values. Combine it with `Select` or `Native`; there is no
+separate dynamic builder or execution package.
+
+## Choosing a terminal
+
+| Terminal | Contract |
 | --- | --- |
-| The application has a generated store and reads whole rows. | Typed builder. |
-| A tool renders SQL for something else to run, or for a test to compare. | SQL builder. |
-| The table is known only when the program runs. | SQL builder, executed through `rasql/dynamic`. |
-| A join or a projection produces a shape that is not a table row. | Typed builder, through `rasql.DecodeFrom[R]`. |
-| The statement uses syntax the builders do not model. | A [static template](core/06-named-sql.md), or `stmt.New` directly. |
+| `Rows` | Returns a lazy sequence and reports per-row decode errors. |
+| `All` | Collects every row and returns an empty slice when none match. |
+| `One` | Requires exactly one row. |
+| `Maybe` | Accepts zero or one row and reports whether a row was present. |
 
-The two are not exclusive. The typed builder takes `query` expressions in its `Where`, `Having`, `GroupBy`, and `Order` methods, so a predicate tree built with `query.And` and `query.Or` drops straight into a typed select. Its `Build(d)` method stops at the same `stmt.Statement` the SQL builder returns, which is how a typed query is inspected without a database.
-
-## Where rasql/dynamic sits
-
-`rasql/dynamic` opens a database and reads rows for a table that has no Go row type. It offers the same fluent shape as the typed builder, names its columns as strings, and yields `dynamic.Row` values instead of decoding. `QueryResult` adds ordered headers and indexed values for exporters that do not know column names in advance. Use it when the column names arrive as data, and see [Dynamic rows](core/05-dynamic.md) for its methods. It belongs to the core layer, since a caller reaches it without generating anything.
+The executor owns rendering, bind codecs, result codecs, row closure, event observation, and transaction durability.
+Create one with `rasql.AsExecutor` from a `DB` and an explicit engine profile.
 
 ## Next
 
-[The SQL builder](core/02-sql-builder.md) covers the statement constructors, the expression constructors, and rendering. [Typed queries](orm/03-typed-queries.md) covers the typed builder and works through joins, grouping, subqueries, and custom result shapes. [Dynamic rows](core/05-dynamic.md) covers the builder that names its columns as strings. [Writing rows](orm/04-writing.md) covers inserts, updates, and deletes on both sides.
+[The SQL builder](core/02-sql-builder.md) covers dialect-neutral statements. [Typed queries](orm/03-typed-queries.md)
+covers generated sources and projections. [Writing rows](orm/04-writing.md) covers mutation plans and batches.

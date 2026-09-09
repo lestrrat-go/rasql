@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/internal/querycompile"
 	"github.com/lestrrat-go/rasql/internal/sqlscan"
@@ -205,6 +206,41 @@ func CountQuery[R any](q Query[R], includePaging bool) Query[int64] {
 	return Query[int64]{plan: plan, projection: projection}
 }
 
+// Render lowers q to SQL text for dialect d without executing it against a
+// database, the typed counterpart of the removed TypedSelectBuilder.Build.
+// A reader composing a query wants to see the SQL it produces, and a test
+// wants to assert that text; neither needs the live connection or the
+// discovered engine profile Executor otherwise requires, so Render goes
+// straight through the render package the way exec.RenderWrite does for a
+// write statement.
+//
+// It rejects a native query and a mutation rather than guessing which SQL a
+// reader meant to see: Render exists for the SELECT a typed Query composes,
+// a native query is already rendered SQL text by construction, and
+// RenderWrite already covers a write statement carrying its own RETURNING
+// clause.
+func Render[R any](q Query[R], d dialect.Dialect) (stmt.Statement, error) {
+	if err := rejectNativeComposition(q); err != nil {
+		return stmt.Statement{}, err
+	}
+	if q.plan.mutation != nil {
+		return stmt.Statement{}, planError("unsupported_feature", "render", "a mutation query has no SELECT to render")
+	}
+	result, err := resultQuery(q)
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	rendered, err := render.Result(d, result)
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	compiled, err := unwrapBindTokens(rendered)
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	return compiled.Statement()
+}
+
 func rejectNativeComposition[R any](q Query[R]) error {
 	if q.plan.native != nil {
 		return planError("unsupported_feature", "native", "native plans cannot be composed")
@@ -310,7 +346,11 @@ func queryBody(plan QueryPlan) (query.QueryBody, error) {
 	for i, group := range plan.group {
 		groups[i] = group.node
 	}
-	selectBody, err := query.NewCorrelatedJoinedSelect(plan.sources[0].ref, nil, plan.joins, groups, projections...)
+	correlations := make([]query.RelationSource, len(plan.correlations))
+	for i, source := range plan.correlations {
+		correlations[i] = source.ref
+	}
+	selectBody, err := query.NewCorrelatedJoinedSelect(plan.sources[0].ref, correlations, plan.joins, groups, projections...)
 	if err != nil {
 		return nil, err
 	}
@@ -342,6 +382,10 @@ func queryBody(plan QueryPlan) (query.QueryBody, error) {
 	}
 	orders := make([]query.Order, len(plan.order))
 	for i, order := range plan.order {
+		if order.result != nil {
+			orders[i] = lowerResultOrder(*order.result, order.descending)
+			continue
+		}
 		orders[i] = lowerOrder(order.node, order.descending, order.nulls)
 	}
 	if len(orders) > 0 {
@@ -424,6 +468,17 @@ func lowerOrder(expression query.Expression, descending bool, nulls NullOrder) q
 		return query.Desc(expression)
 	}
 	return query.Asc(expression)
+}
+
+// lowerResultOrder rebuilds the same query.Projection the projection lowering
+// above builds for this item, so the statement's own validation resolves the
+// ordering to a result the statement really reports.
+func lowerResultOrder(item ProjectionItem, descending bool) query.Order {
+	projection := query.Project(item.expression).As(item.column.Name)
+	if descending {
+		return query.DescResult(projection)
+	}
+	return query.AscResult(projection)
 }
 
 func resultColumns(items []ProjectionItem) []ResultColumn {

@@ -20,12 +20,14 @@ func TestUnresolvedGeneratedQuery(t *testing.T) {
 	binary := filepath.Join(t.TempDir(), "rasql")
 	build := exec.Command("go", "build", "-o", binary, filepath.Join(repoRoot, "cmd/rasql"))
 	build.Dir = repoRoot
-	build.Env = offlineBuildEnv(filepath.Join(t.TempDir(), "build-cache"))
+	// GOCACHE is deliberately shared, not rooted under t.TempDir(): see
+	// sharedOfflineGOCACHE's comment in generation_test.go.
+	build.Env = offlineBuildEnv(sharedOfflineGOCACHE)
 	buildOutput, buildErr := build.CombinedOutput()
 	require.NoError(t, buildErr, string(buildOutput))
 	command := exec.Command(binary, "schema", "update", "-config", filepath.Join(root, "rasql.json"), "-dsn", "")
 	command.Dir = repoRoot
-	command.Env = offlineBuildEnv(filepath.Join(t.TempDir(), "cache"))
+	command.Env = offlineBuildEnv(sharedOfflineGOCACHE)
 	output, err := command.CombinedOutput()
 	require.Error(t, err)
 	var exitError *exec.ExitError

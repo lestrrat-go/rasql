@@ -9,8 +9,6 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 )
 
-// BEGIN(expressions)
-
 func Example_query_expressions() {
 	accounts := query.MustTableRef(schema.MustTableDef("accounts",
 		schema.Integer("id"), schema.Integer("balance"), schema.Text("email")))
@@ -40,10 +38,6 @@ func Example_query_expressions() {
 	// 1 100 large small 1
 }
 
-// END(expressions)
-
-// BEGIN(trusted_fragments)
-
 func Example_query_trustedFragments() {
 	accounts := query.MustTableRef(schema.MustTableDef("accounts", schema.Integer("id"), schema.Integer("balance")))
 	fragment := query.TrustedSQL("{} + {}", query.IdentifierHole(query.Ident("balance")), query.Hole(2))
@@ -63,5 +57,3 @@ func Example_query_trustedFragments() {
 	// SELECT "balance" + ? AS "total" FROM "accounts"
 	// 2
 }
-
-// END(trusted_fragments)
