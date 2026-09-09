@@ -27,6 +27,7 @@ const (
 	verboseFlag      = "-v"
 	countFlag        = "-count"
 	parallelFlag     = "-p"
+	shortFlag        = "-short"
 )
 
 // TestIntegrationJobListsEveryDBTestGuardedPackage protects the invariant
@@ -397,6 +398,9 @@ func checkRunCommand(workflow string) (*goTestCommand, error) {
 	if cmd.parallel != 1 {
 		return nil, fmt.Errorf("the %q step's command %q has an effective %s value of %d; it must use %s 1 so package test binaries cannot run alongside one another", checkStep, run, parallelFlag, cmd.parallel, parallelFlag)
 	}
+	if cmd.short {
+		return nil, fmt.Errorf("the %q step's command %q has an effective %s value of true; a developer may opt out of the expensive conformance tests with %s locally, but this job must always run them, so it must never pass %s", checkStep, run, shortFlag, shortFlag, shortFlag)
+	}
 	if !slices.Equal(cmd.pkgs, []string{"./..."}) {
 		return nil, fmt.Errorf("the %q step's command %q must run exactly the ./... package, got %v", checkStep, run, cmd.pkgs)
 	}
@@ -443,10 +447,11 @@ func integrationRunPackages(workflow string) ([]string, error) {
 // for a boolean one donates its value to the package list, and this guard
 // then reports a coverage it cannot actually see.
 //
-// -v, -count, and -p are absent from both tables because goTestArgs gives each
-// an arm of its own: their values, not merely their presence, decide whether
-// the listed packages' tests run, are named, and are isolated, so this guard
-// reads each value instead of only stepping over it.
+// -v, -count, -p, and -short are absent from both tables because goTestArgs
+// gives each an arm of its own: their values, not merely their presence,
+// decide whether the listed packages' tests run, are named, are isolated,
+// and skip the expensive conformance tests, so this guard reads each value
+// instead of only stepping over it.
 var goTestBoolFlags = map[string]bool{
 	"-a":          true,
 	"-asan":       true,
@@ -460,7 +465,6 @@ var goTestBoolFlags = map[string]bool{
 	"-msan":       true,
 	"-n":          true,
 	"-race":       true,
-	"-short":      true,
 	"-trimpath":   true,
 	"-work":       true,
 	"-x":          true,
@@ -558,6 +562,7 @@ type goTestCommand struct {
 	count    int
 	countSet bool
 	parallel int
+	short    bool
 }
 
 // goTestArgs reads the arguments following `go test` into the effect the
@@ -567,16 +572,20 @@ type goTestCommand struct {
 //
 // Anything this parser cannot classify is an error rather than a guess:
 // a bare flag of unknown arity, a value-taking flag with no value left to
-// take, a -v, -count, or -p whose value it cannot read, -args (after which go stops
-// reading packages at all), and an operand written in neither ./dir/... nor
-// . form.
+// take, a -v, -count, -p, or -short whose value it cannot read, -args (after
+// which go stops reading packages at all), and an operand written in
+// neither ./dir/... nor . form.
 //
 // The flags that would leave the job green without running the tests it
 // lists packages for -- a selection filter, a listing flag -- are refused
 // before arity is consulted at all, so neither the joined form nor the
-// separate one can slip past on the shape of its value. -v, -count, and -p are
-// the values read instead: the step is required to pass -v, passes -count=1 to
-// defeat the test cache, and passes -p 1 to serialize package test binaries.
+// separate one can slip past on the shape of its value. -v, -count, -p, and
+// -short are the values read instead: the step is required to pass -v,
+// passes -count=1 to defeat the test cache, passes -p 1 to serialize package
+// test binaries, and (in the check job) must never carry an effective
+// -short, since that is the flag a developer uses locally to skip
+// TestGeneratedFootprintBuild and the live conformance tests -- see
+// checkRunCommand.
 func goTestArgs(args []string) (*goTestCommand, error) {
 	// go's own defaults for the flags read here: tests are not named in the
 	// log, and each test runs once.
@@ -649,6 +658,18 @@ func goTestArgs(args []string) (*goTestCommand, error) {
 				return nil, fmt.Errorf("the %q step's command passes %s with the value %q, which this test cannot read as a package parallelism value (%s)", integrationStep, arg, raw, err)
 			}
 			cmd.parallel = parsed
+		case flag == shortFlag:
+			// -short is a boolean flag with the same last-assignment-wins
+			// semantics as -v: a bare -short turns it on, and only a joined
+			// value is read as its own token.
+			cmd.short = true
+			if joined {
+				parsed, err := strconv.ParseBool(value)
+				if err != nil {
+					return nil, fmt.Errorf("the %q step's command passes %s, whose value this test cannot read as a boolean (%s)", integrationStep, arg, err)
+				}
+				cmd.short = parsed
+			}
 		case joined, goTestBoolFlags[flag]:
 			// A flag with no bearing on whether the listed packages' tests run
 			// or are named; it needs no value taken from the argument list.
@@ -1293,6 +1314,25 @@ func TestCheckJobRunsFullSuiteSerially(t *testing.T) {
 			name:    "rejects a test filter",
 			check:   fixtureStep(checkStep, "go test -p 1 -count=1 -v -run TestSomething ./..."),
 			wantErr: "passes -run",
+		},
+		{
+			name:    "rejects short mode",
+			check:   fixtureStep(checkStep, "go test -p 1 -count=1 -v -short ./..."),
+			wantErr: "effective -short value of true",
+		},
+		{
+			name:    "rejects short mode in joined form",
+			check:   fixtureStep(checkStep, "go test -p 1 -count=1 -v -short=true ./..."),
+			wantErr: "effective -short value of true",
+		},
+		{
+			name:    "rejects short mode under its test-binary spelling",
+			check:   fixtureStep(checkStep, "go test -p 1 -count=1 -v -test.short ./..."),
+			wantErr: "effective -short value of true",
+		},
+		{
+			name:  "accepts short mode explicitly turned off",
+			check: fixtureStep(checkStep, "go test -p 1 -count=1 -v -short=false ./..."),
 		},
 		{
 			name:    "rejects a package omission",
