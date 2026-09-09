@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
+	"github.com/lestrrat-go/rasql/internal/nilcheck"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/stmt"
@@ -16,9 +17,28 @@ type MutationPlan interface {
 	mutationPlan() (query.WriteStatement, error)
 }
 
+func (p nativeMutation) mutationPlan() (query.WriteStatement, error) {
+	return nil, planError("unsupported_feature", "native", "native mutations do not have a write statement")
+}
+
+func (p nativeMutation) nativeMutationPlan() (nativeQueryPlan, error) {
+	return p.plan, nil
+}
+
 type mutationBatchPlan interface {
 	MutationPlan
 	mutationInsert() (query.Insert, error)
+}
+
+func requireTableOperation[T any](table Table[T], operation schema.Operation) error {
+	if isNilTable(table) {
+		return fmt.Errorf("rasql: table must not be nil")
+	}
+	if !table.Ref().Definition().Supports(operation) {
+		return fmt.Errorf("rasql: object %q does not support operation %d",
+			table.Ref().Definition().QualifiedName(), operation)
+	}
+	return nil
 }
 
 func (p CreatePlan[T]) mutationPlan() (query.WriteStatement, error) { return p.lower() }
@@ -76,7 +96,11 @@ func (p DeletePlan[T]) mutationPlan() (query.WriteStatement, error) {
 type StatementPlan struct{ statement query.WriteStatement }
 
 func NewStatementPlan(statement query.WriteStatement) (StatementPlan, error) {
-	if statement == nil {
+	// A typed nil such as (*query.Insert)(nil) stored in this interface is not
+	// == nil, and Insert.Validate is a value method: calling it through such a
+	// pointer dereferences nil before the guard below could ever see it, so the
+	// check must ask nilcheck.Is rather than compare the interface directly.
+	if nilcheck.Is(statement) {
 		return StatementPlan{}, fmt.Errorf("rasql: mutation statement must not be nil")
 	}
 	if err := statement.Validate(); err != nil {
@@ -90,23 +114,48 @@ func ExecMutation(ctx context.Context, executor Executor, plan MutationPlan) (Mu
 	if executor == nil {
 		return MutationOutcome{}, fmt.Errorf("rasql: executor must not be nil")
 	}
-	if plan == nil {
+	// Every MutationPlan implementation is a struct with value-receiver
+	// methods, so a typed nil pointer to one (e.g. (*DeletePlan[T])(nil))
+	// satisfies this interface without being == nil, the same gap
+	// NewStatementPlan had. nilcheck.Is catches it before mutationPlan below
+	// can dereference that nil pointer.
+	if nilcheck.Is(plan) {
 		return MutationOutcome{}, fmt.Errorf("rasql: mutation plan must not be nil")
 	}
-	statement, err := plan.mutationPlan()
-	if err != nil {
-		return MutationOutcome{}, err
+	var compiled stmt.Statement
+	var err error
+	if native, ok := plan.(nativeMutationPlanAccessor); ok {
+		compiled, err = compileNativeMutation(executor, native)
+	} else {
+		statement, statementErr := plan.mutationPlan()
+		if statementErr != nil {
+			return MutationOutcome{}, statementErr
+		}
+		if len(statement.Returning()) != 0 {
+			return MutationOutcome{}, fmt.Errorf("rasql: mutation has RETURNING projections; use Returning")
+		}
+		compiled, err = compileMutation(executor, statement)
 	}
-	if len(statement.Returning()) != 0 {
-		return MutationOutcome{}, fmt.Errorf("rasql: mutation has RETURNING projections; use Returning")
-	}
-	compiled, err := compileMutation(executor, statement)
 	if err != nil {
 		return MutationOutcome{}, err
 	}
 	result, err := executor.Exec(ctx, compiled)
 	if err != nil {
-		return MutationOutcome{Durability: DurabilityUnknown}, err
+		// executor.Exec wraps an after-hook failure in *ExtensionError, which
+		// still reports whether the driver call underneath it succeeded. When
+		// it did, and a result came back, the write already landed: reporting
+		// Unknown and zero rows here would tell the caller less than the
+		// executor actually knows, so the outcome is filled in from that
+		// result instead of being discarded alongside the hook error.
+		var extensionErr *ExtensionError
+		if !errors.As(err, &extensionErr) || !extensionErr.ExecutionSucceeded() || result == nil {
+			return MutationOutcome{Durability: DurabilityUnknown}, err
+		}
+		affected, rowsErr := result.RowsAffected()
+		if rowsErr != nil {
+			return MutationOutcome{Durability: DurabilityUnknown}, err
+		}
+		return MutationOutcome{Affected: affected, Durability: executorDurability(executor)}, err
 	}
 	if result == nil {
 		return MutationOutcome{Durability: DurabilityUnknown}, fmt.Errorf("rasql: executor returned nil mutation result")
@@ -155,6 +204,30 @@ func compileMutation(executor Executor, statement query.WriteStatement) (stmt.St
 	return encodeStatement(statementCopy, compiledQuery.bindSlots, registry)
 }
 
+func compileNativeMutation(executor Executor, native nativeMutationPlanAccessor) (stmt.Statement, error) {
+	plan, err := native.nativeMutationPlan()
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	dialect := executor.Dialect()
+	if dialect == nil || dialect.Name() != plan.engine {
+		return stmt.Statement{}, planError("engine_mismatch", "native.engine", "executor dialect does not match native SQL")
+	}
+	provider, ok := executor.(compilerProvider)
+	if !ok || provider.queryCompiler() == nil {
+		return stmt.Statement{}, &PlanError{Code: "engine_profile_unavailable", Detail: "executor has no retained compiler"}
+	}
+	compiled, err := provider.queryCompiler().Native(plan.statement)
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	parts, err := unwrapBindTokens(compiled)
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	return encodeCompiledMutation(parts, executor)
+}
+
 func executorDurability(executor Executor) Durability {
 	provider, ok := executor.(executionDurabilityProvider)
 	if !ok {
@@ -172,8 +245,13 @@ func executorDurability(executor Executor) Durability {
 
 // Returning attaches the requested Q1 projection to a mutation.
 func Returning[R any](plan MutationPlan, projection Projection[R]) (Query[R], error) {
-	if plan == nil {
+	// See the matching comment in ExecMutation: a typed nil MutationPlan
+	// passes == nil and would otherwise reach mutationPlan below.
+	if nilcheck.Is(plan) {
 		return Query[R]{}, fmt.Errorf("rasql: mutation plan must not be nil")
+	}
+	if _, ok := plan.(nativeMutationPlanAccessor); ok {
+		return Query[R]{}, planError("unsupported_feature", "native", "native mutations cannot return rows")
 	}
 	if len(projection.items) == 0 || projection.decoder == nil {
 		return Query[R]{}, fmt.Errorf("rasql: returning projection must not be zero")
@@ -213,14 +291,14 @@ func Returning[R any](plan MutationPlan, projection Projection[R]) (Query[R], er
 	return result, nil
 }
 
-func ExecMutationBatch(ctx context.Context, executor Executor, plans []MutationPlan, options MutationBatchOptions) (MutationBatchOutcome, error) {
+func ExecMutationBatch(ctx context.Context, executor Executor, plans []MutationPlan, options BulkOptions) (BulkOutcome, error) {
 	if executor == nil {
-		return MutationBatchOutcome{}, fmt.Errorf("rasql: executor must not be nil")
+		return BulkOutcome{}, fmt.Errorf("rasql: executor must not be nil")
 	}
 	if len(plans) == 0 {
-		return MutationBatchOutcome{}, fmt.Errorf("rasql: mutation batch requires at least one plan")
+		return BulkOutcome{}, fmt.Errorf("rasql: mutation batch requires at least one plan")
 	}
-	outcome := MutationBatchOutcome{Inputs: make([]InputOutcome, len(plans)), Durability: executorDurability(executor)}
+	outcome := BulkOutcome{Inputs: make([]InputOutcome, len(plans))}
 	maxRows := options.MaxRows
 	if maxRows == 0 {
 		maxRows = 1000
@@ -231,10 +309,24 @@ func ExecMutationBatch(ctx context.Context, executor Executor, plans []MutationP
 	if options.MaxBindParameters < 0 {
 		return outcome, fmt.Errorf("rasql: mutation batch MaxBindParameters must be positive")
 	}
+	for index, plan := range plans {
+		// Same typed-nil gap as ExecMutation's plan guard: a nil *DeletePlan[T]
+		// or similar is not == nil, so this must ask nilcheck.Is too.
+		if nilcheck.Is(plan) {
+			return outcome, fmt.Errorf("rasql: mutation batch input %d is nil", index)
+		}
+		if native, ok := plan.(nativeMutationPlanAccessor); ok {
+			if _, err := native.nativeMutationPlan(); err != nil {
+				return outcome, err
+			}
+			return outcome, planError("unsupported_feature", fmt.Sprintf("inputs[%d]", index), "native mutations are not supported in batches")
+		}
+	}
+	outcome.Durability = executorDurability(executor)
 	bindLimit := mutationBindLimit(executor, options.MaxBindParameters)
 	var target string
 	for index, plan := range plans {
-		if plan == nil {
+		if nilcheck.Is(plan) {
 			return outcome, fmt.Errorf("rasql: mutation batch input %d is nil", index)
 		}
 		statement, err := plan.mutationPlan()
@@ -267,7 +359,7 @@ func ExecMutationBatch(ctx context.Context, executor Executor, plans []MutationP
 		return outcome, err
 	}
 	logicalCtx, logicalExecutor, complete := beginLogicalInvocation(ctx, executor, EventMutationBatch)
-	var preparedOutcome MutationBatchOutcome
+	var preparedOutcome BulkOutcome
 	var executionErr error
 	func() {
 		defer func() {
@@ -389,7 +481,7 @@ func encodeCompiledMutation(compiled compiledQuery, executor Executor) (stmt.Sta
 	return encodeStatement(copy, compiled.bindSlots, registry)
 }
 
-func execPreparedMutationBatches(ctx context.Context, executor Executor, prepared []preparedMutationBatch, options MutationBatchOptions, outcome MutationBatchOutcome) (MutationBatchOutcome, error) {
+func execPreparedMutationBatches(ctx context.Context, executor Executor, prepared []preparedMutationBatch, options BulkOptions, outcome BulkOutcome) (BulkOutcome, error) {
 	for _, batch := range prepared {
 		if err := ctx.Err(); err != nil {
 			return outcome, err
@@ -432,13 +524,13 @@ func mutationBindLimit(executor Executor, override int) int {
 	return limit
 }
 
-func execAtomicMutationBatch(ctx context.Context, executor Executor, plans []MutationPlan, options MutationBatchOptions) (MutationBatchOutcome, error) {
+func execAtomicMutationBatch(ctx context.Context, executor Executor, plans []MutationPlan, options BulkOptions) (BulkOutcome, error) {
 	maxRows := options.MaxRows
 	if maxRows == 0 {
 		maxRows = 1000
 	}
 	prepared, err := prepareMutationBatches(executor, plans, maxRows, mutationBindLimit(executor, options.MaxBindParameters))
-	outcome := MutationBatchOutcome{Inputs: make([]InputOutcome, len(plans)), Durability: executorDurability(executor)}
+	outcome := BulkOutcome{Inputs: make([]InputOutcome, len(plans)), Durability: executorDurability(executor)}
 	if err != nil {
 		return outcome, err
 	}
@@ -477,7 +569,7 @@ func execAtomicMutationBatch(ctx context.Context, executor Executor, plans []Mut
 		outcome, executionErr = execPreparedMutationBatches(logicalCtx, logicalExecutor, prepared, options, outcome)
 	}()
 	attempted := mutationAttempted(outcome)
-	cleanupCtx, cancel := atomicCleanupContext(ctx)
+	cleanupCtx, cancel := atomicCleanupContext(logicalCtx)
 	defer cancel()
 	if panicked != nil {
 		rollbackErr := finalizer.Rollback(cleanupCtx)
@@ -532,7 +624,7 @@ func execAtomicMutationBatch(ctx context.Context, executor Executor, plans []Mut
 	return outcome, nil
 }
 
-func mutationAttempted(outcome MutationBatchOutcome) []int {
+func mutationAttempted(outcome BulkOutcome) []int {
 	indexes := make([]int, 0, len(outcome.Inputs))
 	for index, state := range outcome.Inputs {
 		if state != InputUnattempted {
@@ -566,6 +658,18 @@ func mutationRows(rows [][]query.Expression) [][]any {
 		}
 	}
 	return result
+}
+
+func sameColumns(left, right []query.ColumnRef) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index].Name() != right[index].Name() {
+			return false
+		}
+	}
+	return true
 }
 
 func makeRange(first, end int) []int {

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/internal/sqlscan"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/sqltext"
@@ -21,6 +22,19 @@ type Error struct {
 }
 
 var ErrUnsupportedSelectLock = errors.New("render: unsupported SELECT row lock")
+
+var ErrNativeEngineMismatch = errors.New("render: native engine mismatch")
+
+type NativeEngineMismatchError struct {
+	Native  string
+	Dialect string
+}
+
+func (e *NativeEngineMismatchError) Error() string {
+	return fmt.Sprintf("native SQL uses %s but renderer uses %s", e.Native, e.Dialect)
+}
+
+func (e *NativeEngineMismatchError) Unwrap() error { return ErrNativeEngineMismatch }
 
 type UnsupportedSelectLockError struct {
 	Dialect string
@@ -135,6 +149,13 @@ func validateResultMetadata(result query.ResultQuery) error {
 func validateResultMetadataBody(body query.QueryBody, columns []query.ResultColumn) error {
 	want := len(columns)
 	switch body := body.(type) {
+	case query.NativeResult:
+		return body.Validate()
+	case *query.NativeResult:
+		if body == nil {
+			return fmt.Errorf("result query body must not be empty")
+		}
+		return body.Validate()
 	case query.Select:
 		if source := body.From(); source.ResultBody() != nil {
 			if err := validateResultMetadataBody(source.ResultBody(), source.Columns()); err != nil {
@@ -517,6 +538,13 @@ func (r *renderer) writeLock(lock query.Lock) error {
 
 func (r *renderer) writeQueryBody(body query.QueryBody) error {
 	switch body := body.(type) {
+	case query.NativeResult:
+		return r.writeNativeResult(body)
+	case *query.NativeResult:
+		if body == nil {
+			return fmt.Errorf("unsupported query body %T", body)
+		}
+		return r.writeNativeResult(*body)
 	case query.Select:
 		return r.writeSelect(body)
 	case *query.Select:
@@ -534,6 +562,69 @@ func (r *renderer) writeQueryBody(body query.QueryBody) error {
 	default:
 		return fmt.Errorf("unsupported query body %T", body)
 	}
+}
+
+func (r *renderer) writeNativeResult(native query.NativeResult) error {
+	if native.Engine() != r.dialect.Name() {
+		return &NativeEngineMismatchError{Native: native.Engine(), Dialect: r.dialect.Name()}
+	}
+	text := string(native.SQL())
+	scan, err := sqlscan.Scan(text, native.Engine())
+	if err != nil {
+		return err
+	}
+	if len(scan.Semicolons) > 0 {
+		return fmt.Errorf("embedded SQL must not contain an executable semicolon")
+	}
+	args := native.Args()
+	postgres := native.Engine() == "postgresql"
+	wantKind := sqlscan.Question
+	if postgres {
+		wantKind = sqlscan.Dollar
+	}
+	used := make([]bool, len(args))
+	nextQuestion := 0
+	last := 0
+	for _, placeholder := range scan.Placeholders {
+		if placeholder.Kind != wantKind || placeholder.Invalid {
+			return fmt.Errorf("%w: native placeholder syntax does not match %s", sqlscan.ErrInvalidPlaceholder, native.Engine())
+		}
+		if placeholder.Start < last {
+			return fmt.Errorf("%w: native placeholder scan is out of order", sqlscan.ErrInvalidPlaceholder)
+		}
+		r.builder.WriteString(text[last:placeholder.Start])
+		argumentIndex := nextQuestion
+		if postgres {
+			if placeholder.Number <= 0 || placeholder.Number > len(args) {
+				return fmt.Errorf("%w: native PostgreSQL placeholder $%d is out of range", sqlscan.ErrInvalidPlaceholder, placeholder.Number)
+			}
+			argumentIndex = placeholder.Number - 1
+			used[argumentIndex] = true
+		} else {
+			if nextQuestion >= len(args) {
+				return fmt.Errorf("%w: native placeholder count exceeds argument count", sqlscan.ErrInvalidPlaceholder)
+			}
+			nextQuestion++
+		}
+		output, placeholderErr := r.dialect.Placeholder(len(r.args) + 1)
+		if placeholderErr != nil {
+			return fmt.Errorf("placeholder: %w", placeholderErr)
+		}
+		r.builder.WriteString(output)
+		r.args = append(r.args, args[argumentIndex])
+		last = placeholder.End
+	}
+	r.builder.WriteString(text[last:])
+	if postgres {
+		for i, referenced := range used {
+			if !referenced {
+				return fmt.Errorf("%w: native PostgreSQL argument %d is not referenced", sqlscan.ErrInvalidPlaceholder, i+1)
+			}
+		}
+	} else if nextQuestion != len(args) {
+		return fmt.Errorf("%w: native placeholder count %d does not match argument count %d", sqlscan.ErrInvalidPlaceholder, nextQuestion, len(args))
+	}
+	return nil
 }
 
 func (r *renderer) writeCompound(compound query.Compound) error {

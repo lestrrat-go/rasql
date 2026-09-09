@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/lestrrat-go/rasql/internal/compilerir"
+	"github.com/lestrrat-go/rasql/internal/scratchmod"
 )
 
 func TestMappingCompilePassFixture(t *testing.T) {
@@ -35,7 +36,12 @@ func TestMappingCompilePassFixture(t *testing.T) {
 	writeCompileModule(t, dir, renderCompileModel(goModel), []string{"domain", "nullable"})
 	cmd := exec.Command("go", "test", "./...")
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GOWORK=off", "GOCACHE="+filepath.Join(dir, "cache"))
+	// GOCACHE is deliberately not overridden here: the ambient build cache
+	// already holds rasql and its dependencies from the surrounding `go test
+	// ./...` run, and a fresh per-call GOCACHE bought no isolation this
+	// correctness check needs -- it only forced dependency compilation from
+	// scratch on every call.
+	cmd.Env = append(os.Environ(), "GOWORK=off")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("generated mapping fixture failed to compile: %v\n%s", err, output)
 	}
@@ -56,7 +62,7 @@ func TestMappingCompileFailFixture(t *testing.T) {
 	}
 	cmd := exec.Command("go", "test", "./...")
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GOWORK=off", "GOCACHE="+filepath.Join(dir, "cache"))
+	cmd.Env = append(os.Environ(), "GOWORK=off")
 	output, err := cmd.CombinedOutput()
 	if err == nil || !strings.Contains(string(output), "cannot use") {
 		t.Fatalf("compile-fail fixture did not fail for intended type mismatch: %v\n%s", err, output)
@@ -73,7 +79,7 @@ func TestMappingCompileCanonicalNullableFixture(t *testing.T) {
 	writeCompileModule(t, dir, renderCompileModel(goModel), nil)
 	cmd := exec.Command("go", "test", "-mod=mod", "./...")
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GOWORK=off", "GOCACHE="+filepath.Join(dir, "cache"))
+	cmd.Env = append(os.Environ(), "GOWORK=off")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("canonical nullable fixture failed to compile: %v\n%s", err, output)
 	}
@@ -97,8 +103,7 @@ func writeCompileModule(t *testing.T, dir, source string, packages []string) {
 	t.Helper()
 	_, root, _, _ := runtime.Caller(0)
 	repo := filepath.Clean(filepath.Join(filepath.Dir(root), "../.."))
-	module := "module mappingfixture\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => " + repo + "\n"
-	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(module), 0o600); err != nil {
+	if err := scratchmod.Write(dir, repo, "mappingfixture"); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "generated.go"), []byte(source), 0o600); err != nil {

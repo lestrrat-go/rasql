@@ -12,9 +12,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGoldenV1FixturesAndUpgrade(t *testing.T) {
+func TestGoldenV1FixturesRefuseMissingMappingsAndV2RoundTrips(t *testing.T) {
 	for _, name := range []string{"postgresql", "mysql", "sqlite"} {
 		b, err := os.ReadFile(filepath.Join("testdata", "v1", name+".json"))
+		require.NoError(t, err)
+		_, err = compilerlock.Decode(b)
+		require.ErrorContains(t, err, "lacks mapping records")
+	}
+	for _, name := range []string{"postgresql", "mysql", "sqlite"} {
+		b, err := os.ReadFile(filepath.Join("testdata", "v2", name+".json"))
 		require.NoError(t, err)
 		f, err := compilerlock.Decode(b)
 		require.NoError(t, err)
@@ -40,7 +46,7 @@ func TestEncodeDoesNotMutateInputAndPreservesNativeEmpty(t *testing.T) {
 			Indexes: []compilerir.PhysicalIndex{{Name: "idx", KeyForm: "keys", Parts: []compilerir.IndexPart{{ExpressionSQL: "x"}}}},
 		}},
 	}
-	f := compilerlock.File{Format: 1, Compiler: "x", Source: compilerlock.SourceRecord{Kind: "external", Identity: "x"}, Engine: compilerlock.EngineRecord{Dialect: "sqlite", Profile: "sqlite-3"}, Catalog: compilerlock.FromPhysical(c), Generation: compilerlock.GenerationRecord{Package: "p", Output: "o", Emitter: "compact"}, Digests: compilerlock.Digests{Source: strings.Repeat("a", 64), Mappings: strings.Repeat("b", 64), Queries: strings.Repeat("c", 64), Generation: strings.Repeat("d", 64)}}
+	f := compilerlock.File{Format: compilerlock.FormatVersion, Compiler: "x", Source: compilerlock.SourceRecord{Kind: "external", Identity: "x"}, Engine: compilerlock.EngineRecord{Dialect: "sqlite", Profile: "sqlite-3"}, Catalog: compilerlock.FromPhysical(c), Generation: compilerlock.GenerationRecord{Package: "p", Output: "o", Emitter: "compact"}, Digests: compilerlock.Digests{Source: strings.Repeat("a", 64), Mappings: strings.Repeat("b", 64), Queries: strings.Repeat("c", 64), Generation: strings.Repeat("d", 64)}}
 	before := f
 	encoded, err := compilerlock.Encode(f)
 	require.NoError(t, err)

@@ -18,8 +18,24 @@ import (
 	"github.com/lestrrat-go/rasql/stmt"
 )
 
+type preparedPage[R any] struct {
+	prepared    preparedRows[R]
+	spec        PageSpec[R]
+	limit       int
+	fingerprint [32]byte
+	impossible  bool
+}
+
 func PageAfter[R any](ctx context.Context, executor Executor, q Query[R], spec PageSpec[R], policy PagePolicy, request PageRequest) (Page[R], error) {
-	var result Page[R]
+	prepared, err := preparePageAfter(executor, q, spec, policy, request)
+	if err != nil {
+		return Page[R]{}, err
+	}
+	return consumePreparedPage(ctx, executor, prepared, nil)
+}
+
+func preparePageAfter[R any](executor Executor, q Query[R], spec PageSpec[R], policy PagePolicy, request PageRequest) (preparedPage[R], error) {
+	var result preparedPage[R]
 	if isNilExecutor(executor) {
 		return result, planError("engine_profile_unavailable", "executor", "must not be nil")
 	}
@@ -75,6 +91,9 @@ func PageAfter[R any](ctx context.Context, executor Executor, q Query[R], spec P
 		return result, err
 	}
 	if impossible {
+		result.spec = spec
+		result.limit = limit
+		result.impossible = true
 		return result, nil
 	}
 	final := ordered
@@ -104,24 +123,54 @@ func PageAfter[R any](ctx context.Context, executor Executor, q Query[R], spec P
 	if request.After != "" && !bytesEqual(fingerprint[:], cursorFP[:]) {
 		return result, invalidCursor(errors.New("cursor fingerprint does not match query"))
 	}
-	rows, err := rowsPrepared(ctx, executor, prepared)
+	result.prepared = prepared
+	result.spec = spec
+	result.limit = limit
+	result.fingerprint = fingerprint
+	return result, nil
+}
+
+func consumePreparedPage[R any](ctx context.Context, executor Executor, page preparedPage[R], callback func(R, bool) error) (Page[R], error) {
+	var result Page[R]
+	if page.impossible {
+		return result, nil
+	}
+	if callback == nil {
+		callback = func(R, bool) error { return nil }
+	}
+	var terminal rowTerminal
+	ctx = context.WithValue(ctx, rowTerminalKey{}, &terminal)
+	rows, err := rowsPrepared(ctx, executor, page.prepared)
 	if err != nil {
 		return result, err
 	}
+	var callbackErr error
 	for row, rowErr := range rows {
 		if rowErr != nil {
 			return result, rowErr
 		}
-		if len(result.Values) == limit {
+		kept := len(result.Values) < page.limit
+		if err := callback(row, kept); err != nil {
+			callbackErr = err
+			terminal.cause = err
+			break
+		}
+		if kept {
+			result.Values = append(result.Values, row)
+			continue
+		}
+		if len(result.Values) == page.limit {
 			result.HasMore = true
 			break
 		}
-		result.Values = append(result.Values, row)
+	}
+	if callbackErr != nil {
+		return result, callbackErr
 	}
 	if result.HasMore {
 		last := result.Values[len(result.Values)-1]
-		values := make([]cursorValue, len(spec.keys))
-		for i, key := range spec.keys {
+		values := make([]cursorValue, len(page.spec.keys))
+		for i, key := range page.spec.keys {
 			present, value, extractErr := key.extract(last)
 			if extractErr != nil {
 				return Page[R]{}, extractErr
@@ -136,7 +185,7 @@ func PageAfter[R any](ctx context.Context, executor Executor, q Query[R], spec P
 			}
 			values[i] = cursorValue{present: present, data: data}
 		}
-		result.Next, err = encodeCursorEnvelope(fingerprint, spec.keys, values)
+		result.Next, err = encodeCursorEnvelope(page.fingerprint, page.spec.keys, values)
 		if err != nil {
 			return Page[R]{}, err
 		}
@@ -464,9 +513,6 @@ func writeFingerprintValue(h hashWriter, value any) error {
 		_, _ = h.Write(b[:])
 	case float64:
 		writeField(h, "float64")
-		if math.IsNaN(value) {
-			return errors.New("NaN cannot fingerprint")
-		}
 		var b [8]byte
 		binary.BigEndian.PutUint64(b[:], math.Float64bits(value))
 		_, _ = h.Write(b[:])

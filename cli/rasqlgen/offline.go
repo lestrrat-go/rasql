@@ -10,9 +10,12 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/compilerlock"
+	"github.com/lestrrat-go/rasql/internal/compilerquery"
+	"github.com/lestrrat-go/rasql/namedsql"
 )
 
 func (c command) runOfflineGenerate(settings config, configPath string, check bool) error {
@@ -50,6 +53,12 @@ func (c command) runOfflineGenerate(settings config, configPath string, check bo
 	if err != nil {
 		return err
 	}
+	if len(settings.Mappings) == 0 {
+		mappings, err = lock.Mappings.MappingConfig()
+		if err != nil {
+			return fmt.Errorf("generate: reconstruct mappings from lock: %w", err)
+		}
+	}
 	queries := make([]compilerir.QueryAnalysis, 0, len(lock.Queries))
 	for _, query := range lock.Queries {
 		queries = append(queries, compilerlock.AnalysisFromQuery(query))
@@ -68,9 +77,13 @@ func (c command) runOfflineGenerate(settings config, configPath string, check bo
 	if settings.Output == "" {
 		settings.Output = lock.Generation.Output
 	}
-	generation := compilerir.GoConfig{Package: settings.Package, Output: settings.Output, Emitter: lock.Generation.Emitter, Prune: prune, Scalars: mappings.Scalars}
+	emitter := lock.Generation.Emitter
+	if settings.Emitter != "" {
+		emitter = settings.Emitter
+	}
+	generation := compilerir.GoConfig{Package: settings.Package, Output: settings.Output, Emitter: emitter, Prune: prune, Scalars: mappings.Scalars}
 	if generation.Emitter == "" {
-		generation.Emitter = "legacy"
+		generation.Emitter = "compact"
 	}
 	for _, object := range lock.Generation.Objects {
 		generation.Objects = append(generation.Objects, compilerir.ObjectGoName{ID: compilerir.ObjectID(object.ID), Source: object.Source, Row: object.Row, Create: object.Create, Patch: object.Patch, File: object.File})
@@ -82,16 +95,54 @@ func (c command) runOfflineGenerate(settings config, configPath string, check bo
 	if hasErrors(diagnostics) {
 		return fmt.Errorf("generate: Go model failed")
 	}
-	input, err := generate.NewEmitterInput(catalog, semantic, goModel, generation)
+	input, err := generate.NewEmitterInput(catalog, semantic, goModel, generation, mappings)
 	if err != nil {
 		return err
 	}
-	store, err := generate.LegacyStore(input)
+	store, err := renderEmitter(input)
 	if err != nil {
 		return err
 	}
 	store.Root = root
 	store.Dir = settings.Output
+	goQueries := make(map[compilerir.QueryID]compilerir.GoQuery, len(goModel.Queries))
+	for _, query := range goModel.Queries {
+		goQueries[query.ID] = query
+	}
+	querySnapshots := make([]compilerlock.SourceFileSnapshot, 0, len(lock.Queries))
+	for _, query := range lock.Queries {
+		goQuery := goQueries[query.ID]
+		analysis := compilerlock.AnalysisFromQuery(query)
+		typed := generate.TypedQuery{Function: goQuery.Name, Engine: query.Evidence.Dialect, SQL: "", Operation: query.Operation, Cardinality: query.Cardinality, Result: queryResultName(generation, query.ID), Projection: queryProjectionName(generation, query.ID), Decoder: queryDecoderName(generation, query.ID)}
+		if typed.Function == "" {
+			typed.Function = query.Name
+		}
+		typed.Output = queryFileName(generation, query.ID)
+		typed.Parameters, err = typedValues(analysis.Parameters, goQuery.Parameters)
+		if err != nil {
+			return err
+		}
+		if goQuery.Result != nil {
+			typed.Results, err = typedValues(analysis.Results, goQuery.Result.Fields)
+			if err != nil {
+				return err
+			}
+		}
+		typed.Imports = goModel.Imports
+		snapshot, readErr := compilerlock.SnapshotSourceFile(root, query.SQL.Path)
+		if readErr != nil {
+			return fmt.Errorf("generate: read query %s: %w", query.SQL.Path, readErr)
+		}
+		if snapshot.Record() != query.SQL {
+			return fmt.Errorf("generate: query %s changed after lock", query.SQL.Path)
+		}
+		querySnapshots = append(querySnapshots, snapshot)
+		typed.SQL, typed.ArgumentNames, readErr = lowerTypedSQL(string(snapshot.Bytes()), string(query.ID), query.Evidence.Dialect)
+		if readErr != nil {
+			return readErr
+		}
+		store.TypedQueries = append(store.TypedQueries, typed)
+	}
 	if check {
 		if err := store.Check(); err != nil {
 			return err
@@ -130,9 +181,15 @@ func (c command) runOfflineGenerate(settings config, configPath string, check bo
 	publication := generate.Publication{
 		FinalFiles: []generate.FinalFile{{Path: "rasql.lock.json", Source: encodedLock, Mode: 0o600}},
 		BeforeWrite: func(_ context.Context, entries []generate.PublicationEntry) error {
+			if err := compilerlock.RevalidateSourceFiles(root, querySnapshots); err != nil {
+				return err
+			}
 			return writePending(root, oldLock.SHA256, lockSum, pendingEntries(entries))
 		},
 		AfterVerify: func(context.Context, []generate.PublicationEntry) error { return removePending(root) },
+	}
+	if c.beforePublication != nil {
+		c.beforePublication()
 	}
 	if err := plan.CommitPublication(ctx, publication); err != nil {
 		return err
@@ -141,10 +198,38 @@ func (c command) runOfflineGenerate(settings config, configPath string, check bo
 	return nil
 }
 
+func lowerTypedSQL(source, name, engine string) (string, []string, error) {
+	template, err := namedsql.Parse(name, source)
+	if err != nil {
+		return "", nil, err
+	}
+	var sqlDialect dialect.Dialect
+	switch engine {
+	case "postgresql", "postgres":
+		sqlDialect = dialect.PostgreSQL()
+	case "mysql":
+		sqlDialect = dialect.MySQL()
+	default:
+		sqlDialect = dialect.SQLite()
+	}
+	compiled, err := template.Compile(sqlDialect)
+	if err != nil {
+		return "", nil, err
+	}
+	definition := compiled.QueryDef()
+	return definition.SQL, definition.Parameters, nil
+}
+
 func offlineDigestGroups(root string, settings config, lock compilerlock.File) ([]string, error) {
 	mappings, err := settings.mappings()
 	if err != nil {
 		return nil, err
+	}
+	if len(settings.Mappings) == 0 {
+		mappings, err = lock.Mappings.MappingConfig()
+		if err != nil {
+			return nil, fmt.Errorf("generate: reconstruct mappings from lock: %w", err)
+		}
 	}
 	source := compilerlock.SourceDigestInput{Record: lock.Source, Engine: lock.Engine}
 	source.Record.Files = nil
@@ -162,7 +247,28 @@ func offlineDigestGroups(root string, settings config, lock compilerlock.File) (
 	}
 	queries := make([]compilerlock.QueryDigestInput, 0, len(lock.Queries))
 	queryChanged := false
+	lockedQueries := make(map[compilerir.QueryID]compilerlock.QueryRecord, len(lock.Queries))
 	for _, query := range lock.Queries {
+		if _, exists := lockedQueries[query.ID]; exists {
+			queryChanged = true
+		}
+		lockedQueries[query.ID] = query
+	}
+	configuredQueries := make(map[compilerir.QueryID]configQuery, len(settings.Queries))
+	for _, query := range settings.Queries {
+		if _, exists := configuredQueries[query.ID]; exists {
+			queryChanged = true
+		}
+		configuredQueries[query.ID] = query
+	}
+	if len(lockedQueries) != len(configuredQueries) {
+		queryChanged = true
+	}
+	for _, query := range lock.Queries {
+		configured, configuredOK := configuredQueries[query.ID]
+		if !configuredOK || !queryDeclarationPolicyMatches(configured, query, mappings) {
+			queryChanged = true
+		}
 		input := query.SQL
 		if snapshot, snapshotErr := compilerlock.SnapshotSourceFile(root, query.SQL.Path); snapshotErr == nil {
 			input.SHA256 = snapshot.Record().SHA256
@@ -174,7 +280,11 @@ func offlineDigestGroups(root string, settings config, lock compilerlock.File) (
 		}
 		queries = append(queries, compilerlock.QueryDigestInput{ID: string(query.ID), SQL: input, Operation: query.Operation, Parameters: query.Parameters, Results: query.Results, Cardinality: query.Cardinality})
 	}
-	generation := compilerir.GoConfig{Package: lock.Generation.Package, Output: lock.Generation.Output, Emitter: lock.Generation.Emitter, Prune: lock.Generation.Prune}
+	emitter := lock.Generation.Emitter
+	if settings.Emitter != "" {
+		emitter = settings.Emitter
+	}
+	generation := compilerir.GoConfig{Package: lock.Generation.Package, Output: lock.Generation.Output, Emitter: emitter, Prune: lock.Generation.Prune, Scalars: mappings.Scalars}
 	if settings.Package != "" {
 		generation.Package = settings.Package
 	}
@@ -188,7 +298,13 @@ func offlineDigestGroups(root string, settings config, lock compilerlock.File) (
 		generation.Objects = append(generation.Objects, compilerir.ObjectGoName{ID: compilerir.ObjectID(object.ID), Source: object.Source, Row: object.Row, Create: object.Create, Patch: object.Patch, File: object.File})
 	}
 	for _, query := range lock.Generation.Queries {
-		generation.Queries = append(generation.Queries, compilerir.QueryGoName{ID: compilerir.QueryID(query.ID), Function: query.Function, Result: query.Result, Projection: query.Projection, Decoder: query.Decoder, File: query.File})
+		configured, ok := configuredQueries[compilerir.QueryID(query.ID)]
+		function, file := query.Function, query.File
+		if ok {
+			function = configured.Function
+			file = configuredQueryOutput(configured)
+		}
+		generation.Queries = append(generation.Queries, compilerir.QueryGoName{ID: compilerir.QueryID(query.ID), Function: function, Result: query.Result, Projection: query.Projection, Decoder: query.Decoder, File: file})
 	}
 	digests, err := compilerlock.BuildDigests(compilerlock.DigestInputs{Source: compilerlock.SourceDigestInput{Record: lock.Source, Engine: lock.Engine}, Mappings: mappings, Queries: queries, Generation: generation})
 	if err != nil {
@@ -215,10 +331,114 @@ func offlineDigestGroups(root string, settings config, lock compilerlock.File) (
 	return groups, nil
 }
 
+func queryDeclarationPolicyMatches(configured configQuery, locked compilerlock.QueryRecord, mappings compilerir.MappingConfig) bool {
+	if normalizeQueryPath(configured.Input) != normalizeQueryPath(locked.SQL.Path) ||
+		normalizeQueryEngine(configured.Engine) != normalizeQueryEngine(locked.Evidence.Dialect) ||
+		!strings.EqualFold(configured.Operation, locked.Operation) ||
+		!strings.EqualFold(configured.Cardinality, locked.Cardinality) {
+		return false
+	}
+	return queryValuePolicyMatches(configured.Parameters, locked.Parameters, mappings) &&
+		queryValuePolicyMatches(configured.Results, locked.Results, mappings)
+}
+
+func queryValuePolicyMatches(configured []compilerquery.ValueDeclaration, locked []compilerlock.ValueRecord, mappings compilerir.MappingConfig) bool {
+	if len(configured) != len(locked) {
+		return false
+	}
+	for index, value := range configured {
+		if value.Nullable == nil || value.Name != locked[index].Name || *value.Nullable != locked[index].Nullable {
+			return false
+		}
+		scalar := value.Scalar
+		if scalar == "" {
+			scalar, _ = compilerir.ResolveQueryScalar(
+				locked[index].LogicalKind,
+				lockNative(locked[index].Native),
+				lockInteger(locked[index].Integer),
+				mappings,
+			)
+			if scalar == "" {
+				scalar = locked[index].LogicalKind
+			}
+		}
+		if scalar != locked[index].Scalar {
+			return false
+		}
+	}
+	return true
+}
+
+func lockNative(record *compilerlock.NativeTypeRecord) *compilerir.NativeType {
+	if record == nil {
+		return nil
+	}
+	native := compilerir.NativeType{Dialect: record.Dialect, Schema: record.Schema, Name: record.Name, Kind: record.Kind}
+	if record.Arguments != nil {
+		native.Arguments = append([]string(nil), (*record.Arguments)...)
+	}
+	native.Element = lockNative(record.Element)
+	return &native
+}
+
+func lockInteger(record *compilerlock.IntegerTypeFactsRecord) *compilerir.IntegerTypeFacts {
+	if record == nil {
+		return nil
+	}
+	return &compilerir.IntegerTypeFacts{Unsigned: record.Unsigned, DisplayWidth: compilerir.OptionalInt{Value: record.DisplayWidth.Value, Set: record.DisplayWidth.Set}, ZeroFill: record.ZeroFill}
+}
+
+func normalizeQueryPath(value string) string {
+	if value == "" {
+		return ""
+	}
+	return filepath.ToSlash(filepath.Clean(filepath.FromSlash(value)))
+}
+
+func normalizeQueryEngine(value string) string {
+	switch strings.ToLower(value) {
+	case "postgres":
+		return "postgresql"
+	default:
+		return strings.ToLower(value)
+	}
+}
+
+func configuredQueryOutput(query configQuery) string {
+	if query.Output != "" {
+		return query.Output
+	}
+	if query.Input != "" {
+		return derivedQueryOutput(query.Input)
+	}
+	return snakeCase(query.Function) + "_gen.go"
+}
+
 func lockQueryDigests(lock compilerlock.File) []compilerlock.QueryDigestInput {
 	out := make([]compilerlock.QueryDigestInput, 0, len(lock.Queries))
 	for _, query := range lock.Queries {
 		out = append(out, compilerlock.QueryDigestInput{ID: string(query.ID), SQL: query.SQL, Operation: query.Operation, Parameters: query.Parameters, Results: query.Results, Cardinality: query.Cardinality})
 	}
 	return out
+}
+
+func queryNameRecord(config compilerir.GoConfig, id compilerir.QueryID) compilerlock.QueryNameRecord {
+	for _, query := range config.Queries {
+		if query.ID == id {
+			return compilerlock.QueryNameRecord{ID: string(query.ID), Function: query.Function, Result: query.Result, Projection: query.Projection, Decoder: query.Decoder, File: query.File}
+		}
+	}
+	return compilerlock.QueryNameRecord{}
+}
+func queryResultName(config compilerir.GoConfig, id compilerir.QueryID) string {
+	return queryNameRecord(config, id).Result
+}
+func queryProjectionName(config compilerir.GoConfig, id compilerir.QueryID) string {
+	return queryNameRecord(config, id).Projection
+}
+func queryDecoderName(config compilerir.GoConfig, id compilerir.QueryID) string {
+	return queryNameRecord(config, id).Decoder
+}
+func queryFileName(config compilerir.GoConfig, id compilerir.QueryID) string {
+	return queryNameRecord(config, id).File
 }

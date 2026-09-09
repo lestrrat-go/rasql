@@ -9,8 +9,6 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 )
 
-// BEGIN(row_lock)
-
 func Example_query_rowLock() {
 	queue := query.MustTableRef(schema.MustTableDef("queue", schema.Integer("id"), schema.Integer("claimed")))
 	statement, err := query.NewSelect(queue, queue.Column("id"))
@@ -50,10 +48,6 @@ func Example_query_rowLock() {
 	// 0 1
 }
 
-// END(row_lock)
-
-// BEGIN(conditional_upsert)
-
 func Example_query_conditionalUpsert() {
 	items := query.MustTableRef(schema.MustTableDef("items", schema.Integer("id"), schema.Integer("version"), schema.Text("payload")))
 	id, version, payload := items.Column("id"), items.Column("version"), items.Column("payload")
@@ -85,5 +79,3 @@ func Example_query_conditionalUpsert() {
 	// INSERT INTO "items" ("id", "version", "payload") VALUES (?, ?, ?) ON CONFLICT ("id") DO UPDATE SET "version" = EXCLUDED."version", "payload" = EXCLUDED."payload" WHERE ("items"."version" < EXCLUDED."version")
 	// 1 3 new
 }
-
-// END(conditional_upsert)

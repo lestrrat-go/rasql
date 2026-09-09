@@ -21,7 +21,7 @@ func TestSQLiteSchemaUpdateThenOfflineGenerateAndCheck(t *testing.T) {
 	config := map[string]any{
 		"engine":  map[string]string{"dialect": "sqlite", "profile": "sqlite-3.35"},
 		"schema":  map[string]any{"kind": "migrations", "identity": "fixture-v1", "paths": []string{"migrations/*.sql"}},
-		"package": "store", "output": "internal/store", "emitter": "legacy",
+		"package": "store", "output": "internal/store", "emitter": "compact",
 	}
 	configBytes, err := json.Marshal(config)
 	require.NoError(t, err)
@@ -42,6 +42,34 @@ func TestSQLiteSchemaUpdateThenOfflineGenerateAndCheck(t *testing.T) {
 	diagnostics.Reset()
 	err = rasqlgen.RunTopLevel([]string{"check", "-config", configPath}, &output, &diagnostics)
 	require.NoError(t, err, diagnostics.String())
+}
+
+func TestSchemaUpdateDefaultsToCompactEmitter(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "migrations"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "migrations", "001_init.sql"), []byte("CREATE TABLE users (id INTEGER PRIMARY KEY);\n"), 0o600))
+	configPath := filepath.Join(root, "rasql.json")
+	config := map[string]any{
+		"engine":  map[string]string{"dialect": "sqlite", "profile": "sqlite-3.35"},
+		"schema":  map[string]any{"kind": "migrations", "identity": "compact-default-v1", "paths": []string{"migrations/*.sql"}},
+		"package": "store", "output": "internal/store",
+	}
+	configBytes, err := json.Marshal(config)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(configPath, configBytes, 0o600))
+
+	var output, diagnostics bytes.Buffer
+	require.NoError(t, rasqlgen.RunTopLevel([]string{"schema", "update", "-config", configPath}, &output, &diagnostics), diagnostics.String())
+	source := readFile(t, filepath.Join(root, "internal", "store", "users_gen.go"))
+	require.Contains(t, string(source), "MustTableOf")
+	var lock struct {
+		Generation struct {
+			Emitter string `json:"emitter"`
+		} `json:"generation"`
+	}
+	lockBytes := readFile(t, filepath.Join(root, "rasql.lock.json"))
+	require.NoError(t, json.Unmarshal(lockBytes, &lock))
+	require.Equal(t, "compact", lock.Generation.Emitter)
 }
 
 func TestOfflineCheckReportsSourceDriftAndGenerateRefreshesGenerationOnly(t *testing.T) {
@@ -94,7 +122,7 @@ func writeSchemaConfig(t *testing.T, path, packageName, identity string) {
 	config := map[string]any{
 		"engine":  map[string]string{"dialect": "sqlite", "profile": "sqlite-3.35"},
 		"schema":  map[string]any{"kind": "migrations", "identity": identity, "paths": []string{"migrations/*.sql"}},
-		"package": packageName, "output": "internal/store", "emitter": "legacy",
+		"package": packageName, "output": "internal/store", "emitter": "compact",
 	}
 	b, err := json.Marshal(config)
 	require.NoError(t, err)

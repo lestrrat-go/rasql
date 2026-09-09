@@ -16,6 +16,17 @@ type Nullable[T any] struct {
 	Valid bool
 }
 
+type NullableBindValue interface {
+	NullableBind() (value any, valid bool)
+}
+
+func (n Nullable[T]) NullableBind() (any, bool) {
+	if !n.Valid {
+		return nil, false
+	}
+	return n.Value, true
+}
+
 type nullableScanDestination interface {
 	nullableValue() any
 	nullableClear()
@@ -134,10 +145,39 @@ type Projection[R any] struct {
 	items   []ProjectionItem
 	schema  ResultSchema
 	decoder RowDecoder[R]
+	native  bool
+}
+
+func NativeProjection[R any](decoder RowDecoder[R]) (Projection[R], error) {
+	if decoder == nil || isNilRowDecoder(decoder) {
+		return Projection[R]{}, planError("invalid_projection", "decoder", "must not be zero")
+	}
+	schemaValue, err := NewResultSchema(decoder.ResultSchema().Columns()...)
+	if err != nil {
+		return Projection[R]{}, err
+	}
+	if err := validateQ1DecoderMetadata(schemaValue, decoder); err != nil {
+		return Projection[R]{}, err
+	}
+	items := make([]ProjectionItem, len(schemaValue.columns))
+	for i, column := range schemaValue.columns {
+		items[i] = ProjectionItem{column: column}
+	}
+	return Projection[R]{items: items, schema: schemaValue, decoder: decoder, native: true}, nil
+}
+
+func isNilRowDecoder[R any](decoder RowDecoder[R]) bool {
+	value := reflect.ValueOf(decoder)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 func NewProjection[R any](items []ProjectionItem, decoder RowDecoder[R]) (Projection[R], error) {
-	if decoder == nil || (reflect.ValueOf(decoder).Kind() == reflect.Pointer && reflect.ValueOf(decoder).IsNil()) {
+	if decoder == nil || isNilRowDecoder(decoder) {
 		return Projection[R]{}, planError("invalid_projection", "decoder", "must not be zero")
 	}
 	if len(items) == 0 {
@@ -234,25 +274,27 @@ func (r TypedRelation[R]) Source() Source    { return r.source }
 func (r OptionalRelation[R]) Source() Source { return r.source }
 
 type QueryPlan struct {
-	sources        []Source
-	projection     []ProjectionItem
-	where          []Predicate
-	joins          []query.Join
-	group          []GroupKey
-	having         []Predicate
-	order          []OrderTerm
-	distinct       bool
-	limit, offset  *int
-	ctes           []query.CTE
-	body           query.QueryBody
-	partition      []GroupKey
-	partitionOrder []OrderTerm
-	partitionLimit int
-	err            error
-	projected      bool
-	native         *nativeQueryPlan
-	mutation       query.WriteStatement
-	planErr        error
+	sources             []Source
+	correlations        []Source
+	projection          []ProjectionItem
+	where               []Predicate
+	joins               []query.Join
+	group               []GroupKey
+	having              []Predicate
+	order               []OrderTerm
+	distinct            bool
+	limit, offset       *int
+	ctes                []query.CTE
+	body                query.QueryBody
+	partition           []GroupKey
+	partitionOrder      []OrderTerm
+	partitionLimit      int
+	partitionLimitValue Expr[int64]
+	err                 error
+	projected           bool
+	native              *nativeQueryPlan
+	mutation            query.WriteStatement
+	planErr             error
 }
 type Query[R any] struct {
 	plan              QueryPlan
@@ -266,6 +308,11 @@ func (p QueryPlan) Validate() error {
 	}
 	if p.planErr != nil {
 		return p.planErr
+	}
+	if p.partitionLimit > 0 {
+		if err := validatePartitionLimitValue(p.partitionLimitValue, p.partitionLimit); err != nil {
+			return err
+		}
 	}
 	if p.native != nil {
 		if p.native.engine == "" || strings.TrimSpace(p.native.statement.SQL()) == "" {
@@ -307,6 +354,14 @@ func (p QueryPlan) Validate() error {
 	}
 	for _, join := range p.joins {
 		allowed[q1SourceIdentity(join.Source())] = struct{}{}
+	}
+	// A declared correlation is an enclosing query's source, so an expression
+	// here may read it even though this plan does not select from it.
+	for i, source := range p.correlations {
+		if source.ref.QualifiedName() == "" {
+			return planError("invalid_source", fmt.Sprintf("plan.correlations[%d]", i), "source is zero")
+		}
+		allowed[q1SourceIdentity(source.ref)] = struct{}{}
 	}
 	for i, item := range p.projection {
 		if item.bindErr != nil {
@@ -369,6 +424,15 @@ func (p QueryPlan) Validate() error {
 		}
 	}
 	for i, term := range p.order {
+		// A result term carries the projection instead of an expression, so
+		// what needs checking against the allowed sources is the expression
+		// that projection computes.
+		if term.result != nil {
+			if err := validateQ1Expression(term.result.expression, allowed, fmt.Sprintf("plan.order[%d]", i)); err != nil {
+				return err
+			}
+			continue
+		}
 		if term.node == nil {
 			return planError("invalid_projection", fmt.Sprintf("plan.order[%d]", i), "order term is zero")
 		}
@@ -481,11 +545,18 @@ func validateQ1DecoderMetadata(resultSchema ResultSchema, decoder interface{ Pre
 }
 
 func Select[R any](from Source, projection Projection[R]) Query[R] {
-	return Query[R]{plan: QueryPlan{sources: []Source{from}, projection: cloneItems(projection.items)}, projection: projection}
+	plan := QueryPlan{sources: []Source{from}, projection: cloneItems(projection.items)}
+	if projection.native {
+		plan.planErr = planError("unsupported_feature", "projection", "native projections require Native")
+	}
+	return Query[R]{plan: plan, projection: projection}
 }
 func Project[R any](base QueryPlan, projection Projection[R]) Query[R] {
 	base.projection = cloneItems(projection.items)
 	base.projected = true
+	if projection.native {
+		base.planErr = planError("unsupported_feature", "projection", "native projections require Native")
+	}
 	if base.native != nil {
 		base.planErr = planError("unsupported_feature", "native", "native plans cannot be composed")
 	}
@@ -496,6 +567,7 @@ func (q Query[R]) Projection() Projection[R] { return q.projection }
 func (q Query[R]) Plan() QueryPlan           { return clonePlan(q.plan) }
 func clonePlan(p QueryPlan) QueryPlan {
 	p.sources = append([]Source(nil), p.sources...)
+	p.correlations = append([]Source(nil), p.correlations...)
 	p.projection = cloneItems(p.projection)
 	p.where = append([]Predicate(nil), p.where...)
 	p.joins = append([]query.Join(nil), p.joins...)
@@ -551,6 +623,24 @@ func (q Query[R]) Having(p Predicate) Query[R] {
 		return q
 	}
 	q.plan.having = append(q.plan.having, p)
+	return q
+}
+// Correlated names the enclosing query's sources this query is allowed to
+// read, which is what makes it a correlated subquery. It has to be called
+// before Where, because Where validates the predicate it is given and nothing
+// yet says an enclosing query is coming.
+//
+// sources is what this query itself reads out of the enclosing one, and it is
+// exactly what this query gets; the enclosing query's other sources stay out
+// of scope. query.Select.WithCorrelation owns the full rule, including what a
+// correlation reaching two levels out has to declare.
+func (q Query[R]) Correlated(sources ...Source) Query[R] {
+	q.plan = clonePlan(q.plan)
+	if q.plan.native != nil {
+		q.plan.planErr = planError("unsupported_feature", "native", "native plans cannot be composed")
+		return q
+	}
+	q.plan.correlations = append(q.plan.correlations, sources...)
 	return q
 }
 func (q Query[R]) OrderBy(terms ...OrderTerm) Query[R] {
@@ -659,11 +749,32 @@ func (q Query[R]) withPartitionLimit(partition []GroupKey, order []OrderTerm, li
 	if limit <= 0 {
 		return q, planError("invalid_partition_limit", "limit", "must be positive")
 	}
+	limitValue := Value(int64(limit))
 	q.plan = clonePlan(q.plan)
 	q.plan.partition = append([]GroupKey(nil), partition...)
 	q.plan.partitionOrder = append([]OrderTerm(nil), order...)
 	q.plan.partitionLimit = limit
+	q.plan.partitionLimitValue = limitValue
 	return q, nil
+}
+
+func validatePartitionLimitValue(expression Expr[int64], limit int) error {
+	if expression.bindErr != nil {
+		return planError("unsnapshotable_bind", "plan.partition_limit", expression.bindErr.Error())
+	}
+	node, ok := expression.node.(query.Value)
+	if !ok {
+		return planError("internal_plan", "plan.partition_limit", "partition limit bind is missing")
+	}
+	token, ok := node.Argument().(bindToken)
+	if !ok || token.id == 0 || token.codec != "" || token.preEncoded || token.copy == nil || token.err != nil {
+		return planError("internal_plan", "plan.partition_limit", "partition limit bind is invalid")
+	}
+	value, ok := token.value.(int64)
+	if !ok || value != int64(limit) {
+		return planError("internal_plan", "plan.partition_limit", "partition limit bind value differs")
+	}
+	return nil
 }
 
 type scalarDecoder[T any] struct{ schema ResultSchema }

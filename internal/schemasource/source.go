@@ -87,8 +87,12 @@ type AnalysisRequest struct {
 	Profile engineprofile.Profile
 	Catalog compilerir.PhysicalCatalog
 }
+type AnalysisResult struct {
+	Queries   []compilerir.QueryAnalysis
+	Snapshots []compilerlock.SourceFileSnapshot
+}
 type Analyzer interface {
-	Analyze(context.Context, AnalysisRequest) ([]compilerir.QueryAnalysis, error)
+	Analyze(context.Context, AnalysisRequest) (AnalysisResult, error)
 }
 type Dependencies struct {
 	Factory    DisposableFactory
@@ -262,22 +266,30 @@ func Materialize(ctx context.Context, req Request, deps Dependencies) (Result, e
 		if len(diagnostics) > 0 {
 			return fmt.Errorf("schema source: catalog conversion: %s", diagnostics[0].Message)
 		}
-		queries := []compilerir.QueryAnalysis(nil)
+		analysis := AnalysisResult{}
 		if deps.Analyzer != nil {
 			analysisDSN := ownedConnection
 			if req.Source.Kind == "live" {
 				analysisDSN = req.LiveDSN
 			}
-			queries, err = deps.Analyzer.Analyze(ctx, AnalysisRequest{DB: db, DSN: analysisDSN, Profile: profile, Catalog: catalog.Clone()})
+			analysis, err = deps.Analyzer.Analyze(ctx, AnalysisRequest{DB: db, DSN: analysisDSN, Profile: profile, Catalog: catalog.Clone()})
 			if err != nil {
 				return err
 			}
 		}
+		queries := make([]compilerir.QueryAnalysis, len(analysis.Queries))
+		for i := range analysis.Queries {
+			queries[i] = analysis.Queries[i].Clone()
+		}
+		querySnapshots := append([]compilerlock.SourceFileSnapshot(nil), analysis.Snapshots...)
+		sort.SliceStable(querySnapshots, func(i, j int) bool { return querySnapshots[i].Path() < querySnapshots[j].Path() })
+		allSnapshots := append([]compilerlock.SourceFileSnapshot(nil), snaps...)
+		allSnapshots = append(allSnapshots, querySnapshots...)
 		source := compilerlock.SourceDigestInput{Record: compilerlock.SourceRecord{Kind: req.Source.Kind, Identity: req.Source.Identity}, Engine: compilerlock.EngineRecord{Dialect: req.Engine.Dialect, Version: versionString(profile), Profile: profile.ID}, Materializer: materializer(req)}
 		for _, s := range snaps {
 			source.Record.Files = append(source.Record.Files, s.Record())
 		}
-		returnResult = Result{Catalog: catalog, Profile: profile, Source: source, Snapshots: snaps, Unresolved: read.Unresolved, Queries: queries}
+		returnResult = Result{Catalog: catalog, Profile: profile, Source: source, Snapshots: allSnapshots, Unresolved: read.Unresolved, Queries: queries}
 		return nil
 	}
 	err = primary()

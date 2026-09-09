@@ -5,6 +5,7 @@ package web
 import (
 	"context"
 	_ "embed"
+	"fmt"
 	"html/template"
 	"log/slog"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 
 	"example.com/taskboard/internal/store"
 	"example.com/taskboard/internal/taskboard"
+	"github.com/lestrrat-go/rasql"
 )
 
 // BEGIN(template)
@@ -26,7 +28,7 @@ var pageTemplate = template.Must(template.New("page").Parse(pageSource))
 
 // Reader supplies everything the page shows.
 type Reader interface {
-	OpenTasks(context.Context) ([]store.OpenTask, error)
+	OpenProjects(context.Context, rasql.PageRequest) (store.OpenProjectsPage, error)
 	AllProjects(context.Context) ([]store.ProjectsRow, error)
 	AllMembers(context.Context) ([]store.MembersRow, error)
 	CountOverdue(ctx context.Context, on time.Time) (int64, error)
@@ -71,9 +73,14 @@ func (h Handler) Routes() *http.ServeMux {
 
 func (h Handler) showPage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	rows, err := h.reader.OpenTasks(ctx)
+	request, err := pageRequest(r)
 	if err != nil {
-		h.fail(w, r, "read open tasks", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	projectsPage, err := h.reader.OpenProjects(ctx, request)
+	if err != nil {
+		h.fail(w, r, "read open projects", err)
 		return
 	}
 	projects, err := h.reader.AllProjects(ctx)
@@ -93,16 +100,37 @@ func (h Handler) showPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// END(overdue_read)
+	groups, err := taskboard.OpenProjectGroups(projectsPage.Values)
+	if err != nil {
+		h.fail(w, r, "convert open projects", err)
+		return
+	}
 	page := taskboard.Page{
-		Groups:   taskboard.GroupByProject(rows),
+		Groups:   groups,
 		Overdue:  overdue,
 		Projects: taskboard.ProjectChoices(projects),
 		Members:  taskboard.MemberChoices(members),
+		Limit:    request.Limit,
+		Next:     string(projectsPage.Next),
+		HasMore:  projectsPage.HasMore,
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := pageTemplate.Execute(w, page); err != nil {
 		h.logger.ErrorContext(ctx, "failed to draw the taskboard page", slog.String("error", err.Error()))
 	}
+}
+
+func pageRequest(r *http.Request) (rasql.PageRequest, error) {
+	values := r.URL.Query()
+	request := rasql.PageRequest{After: rasql.Cursor(values.Get("after"))}
+	if raw := values.Get("limit"); raw != "" {
+		limit, err := strconv.Atoi(raw)
+		if err != nil {
+			return rasql.PageRequest{}, fmt.Errorf("limit must be a number")
+		}
+		request.Limit = limit
+	}
+	return request, nil
 }
 
 func (h Handler) addTask(w http.ResponseWriter, r *http.Request) {

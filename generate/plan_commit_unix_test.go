@@ -18,7 +18,6 @@ import (
 	"testing"
 
 	"github.com/lestrrat-go/rasql/internal/genfile"
-	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
 
@@ -92,7 +91,7 @@ func TestPlanCommitRefusesAnOutsideDirectoryReplacedAfterItWasResolved(t *testin
 	planned := filepath.Join(dir, "users_gen.go")
 	require.NoError(t, os.Symlink(filepath.Join(target, "users_gen.go"), planned))
 
-	store := Store{Package: "store", Dir: dir, Tables: []schema.TableDef{commitTestUsersDef()}}
+	store := compactStore(t, dir, commitTestUsersDef())
 	plan, err := store.Plan()
 	require.NoError(t, err)
 
@@ -122,7 +121,7 @@ func TestPlanCommitRefusesADestinationReplacedAfterItWasAuthorized(t *testing.T)
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	require.NoError(t, os.MkdirAll(elsewhere, 0o700))
 
-	store := Store{Package: "store", Dir: dir, Tables: []schema.TableDef{commitTestUsersDef()}}
+	store := compactStore(t, dir, commitTestUsersDef())
 	plan, err := store.Plan()
 	require.NoError(t, err)
 
@@ -153,7 +152,7 @@ func TestPlanCommitRefusesADestinationReplacedAfterItWasAuthorized(t *testing.T)
 func TestPlanCommitRefusesADestinationRedirectedOntoAFileItWrote(t *testing.T) {
 	dir := t.TempDir()
 
-	store := Store{Package: "store", Dir: dir, Tables: []schema.TableDef{commitTestUsersDef()}}
+	store := compactStore(t, dir, commitTestUsersDef())
 	plan, err := store.Plan()
 	require.NoError(t, err)
 
@@ -182,11 +181,11 @@ func TestPlanCommitRefusesADestinationRedirectedOntoAFileItWrote(t *testing.T) {
 // two apart.
 func TestPlanCommitRefusesToDeleteALeftoverReplacedMidCommit(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, WritePackage("store", dir, commitTestUsersDef()))
+	require.NoError(t, compactStore(t, dir, commitTestUsersDef()).Write())
 	orphan := filepath.Join(dir, "dropped_gen.go")
 	require.NoError(t, os.WriteFile(orphan, commitTestMarkerFile, 0o600))
 
-	store := Store{Package: "store", Dir: dir, Tables: []schema.TableDef{commitTestUsersDef()}, Prune: true}
+	store := pruningStore(t, dir, commitTestUsersDef())
 	plan, err := store.Plan()
 	require.NoError(t, err)
 	require.Equal(t, []string{orphan}, plan.Orphans())
