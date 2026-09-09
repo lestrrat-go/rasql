@@ -15,6 +15,12 @@ import (
 // standard error carries diagnostics. A refused flag must leave standard
 // output untouched, and a help request must print there.
 func TestGoRunSeparatesDiagnosticsFromOutput(t *testing.T) {
+	repository, err := filepath.Abs(filepath.Join("..", ".."))
+	require.NoError(t, err)
+	binary := filepath.Join(t.TempDir(), "rasql")
+	build := exec.CommandContext(t.Context(), "go", "build", "-o", binary, "./cmd/rasql")
+	build.Dir = repository
+	require.NoError(t, build.Run())
 	for _, testCase := range []struct {
 		name     string
 		args     []string
@@ -29,22 +35,24 @@ func TestGoRunSeparatesDiagnosticsFromOutput(t *testing.T) {
 		{name: "command help", args: []string{"-h"}, succeeds: true, expected: "Usage: rasql <context> <command> [flags]"},
 		// A "-h" a flag value consumed is not a help request, so the failure
 		// that follows it stays on standard error like any other failure.
-		{name: "codegen help token as flag value", args: []string{"codegen", "generate", "-dialect", "-h", "-unknown"}, expected: "flag provided but not defined: -unknown"},
+		{name: "codegen help token as flag value", args: []string{"codegen", "generate", "-config", "-h", "-unknown"}, expected: "flag provided but not defined: -unknown"},
 		{name: "migrate help token as flag value", args: []string{"migrate", "plan", "-dir", "-h", "-unknown"}, expected: "flag provided but not defined: -unknown"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			repository, err := filepath.Abs(filepath.Join("..", ".."))
-			require.NoError(t, err)
-
 			var stdout, stderr bytes.Buffer
-			command := exec.CommandContext(t.Context(), "go", append([]string{"run", "./cmd/rasql"}, testCase.args...)...)
+			command := exec.CommandContext(t.Context(), binary, testCase.args...)
 			command.Dir = repository
 			command.Stdout = &stdout
 			command.Stderr = &stderr
 			err = command.Run()
+			if testCase.succeeds {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
 
 			if !testCase.succeeds {
-				require.Error(t, err, "stdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
+				require.Equal(t, 2, command.ProcessState.ExitCode(), "stdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
 				require.Empty(t, stdout.String())
 				require.Contains(t, stderr.String(), testCase.expected)
 				require.NotContains(t, stdout.String(), "auditSyntheticPassword572")

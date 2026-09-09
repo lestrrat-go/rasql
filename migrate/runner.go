@@ -16,15 +16,16 @@ const defaultHistoryTable = "rasql_schema_migrations"
 // completed migration.
 // Its configuration is immutable, so Apply is safe to invoke concurrently.
 type Runner struct {
-	database      *sql.DB
-	dialect       dialect.Dialect
-	historyTable  string
-	historySQL    string
-	idSQL         string
-	checksumSQL   string
-	appliedAtSQL  string
-	progressTable string
-	progressSQL   string
+	database         *sql.DB
+	dialect          dialect.Dialect
+	historyTable     string
+	historySQL       string
+	idSQL            string
+	checksumSQL      string
+	appliedAtSQL     string
+	progressTable    string
+	progressSQL      string
+	changePlanLocker ChangePlanLocker
 }
 
 // New creates a Runner with the default migration-history table.

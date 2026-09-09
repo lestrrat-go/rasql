@@ -13,7 +13,9 @@ func TestRuntimeAPICompileFixture(t *testing.T) {
 	}
 	command := exec.Command("go", "test", "./...")
 	command.Dir = directory
-	command.Env = append(command.Environ(), "GOWORK=off", "GOFLAGS=-mod=mod", "GOCACHE="+filepath.Join(t.TempDir(), "cache"))
+	// GOCACHE is deliberately not overridden here: see the matching comment
+	// in query_compile_test.go's TestQueryAPICompileFixture.
+	command.Env = append(command.Environ(), "GOWORK=off", "GOFLAGS=-mod=mod")
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("compile fixture failed: %v\n%s", err, output)
 	}

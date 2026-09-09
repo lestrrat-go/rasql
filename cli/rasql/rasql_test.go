@@ -100,7 +100,7 @@ func TestRunKeepsSwallowedHelpTokenOffOutput(t *testing.T) {
 		args  []string
 		usage string
 	}{
-		{name: "codegen", args: []string{"codegen", "generate", "-dialect", "-h", "-unknown"}, usage: "Usage of rasql codegen generate:"},
+		{name: "codegen", args: []string{"codegen", "generate", "-config", "-h", "-unknown"}, usage: "Usage of rasql codegen generate:"},
 		{name: "migrate", args: []string{"migrate", "plan", "-dir", "-h", "-unknown"}, usage: "Usage of plan:"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -119,13 +119,13 @@ func TestRunKeepsSwallowedHelpTokenOffOutput(t *testing.T) {
 
 // TestRunKeepsHelpAfterSwallowedTokenOnOutput requires that a genuine help
 // request still prints as command output when an earlier flag value happened
-// to hold a help token. The value below is a literal "-h" the dialect flag
+// to hold a help token. The value below is a literal "-h" the config flag
 // consumed, and the "-h" after it is the request itself.
 func TestRunKeepsHelpAfterSwallowedTokenOnOutput(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	var output, diagnostics bytes.Buffer
-	err := Run([]string{"codegen", "generate", "-dialect", "-h", "-h"}, &output, &diagnostics)
+	err := Run([]string{"codegen", "generate", "-config", "-h", "-h"}, &output, &diagnostics)
 	require.ErrorIs(t, err, flag.ErrHelp)
 	require.Contains(t, output.String(), "Usage of rasql codegen generate:")
 	require.Empty(t, diagnostics.String())

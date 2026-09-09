@@ -1,0 +1,278 @@
+{
+  "format": 2,
+  "compiler": "rasqlgen-g1-fixture",
+  "source": {
+    "kind": "migrations",
+    "identity": "fixtures/sqlite",
+    "files": [
+      {
+        "path": "001_schema.up.sql",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      {
+        "path": "002_indexes.up.sql",
+        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    ]
+  },
+  "engine": {
+    "dialect": "sqlite",
+    "version": "3.45",
+    "profile": "sqlite-3.35"
+  },
+  "catalog": {
+    "objects": [
+      {
+        "id": "tasks",
+        "kind": "table",
+        "schema": "main",
+        "name": "tasks",
+        "columns": [
+          {
+            "name": "id",
+            "ordinal": 0,
+            "logical_kind": "integer",
+            "native": {
+              "dialect": "sqlite",
+              "name": "INTEGER",
+              "kind": "builtin"
+            },
+            "integer": {
+              "display_width": {
+                "value": 0,
+                "set": false
+              }
+            },
+            "nullable": false
+          },
+          {
+            "name": "payload",
+            "ordinal": 1,
+            "logical_kind": "native",
+            "native": {
+              "dialect": "sqlite",
+              "name": "BLOBISH",
+              "kind": "other"
+            },
+            "nullable": true
+          }
+        ],
+        "constraints": [
+          {
+            "name": "",
+            "kind": "primary_key",
+            "columns": [
+              "id"
+            ]
+          }
+        ],
+        "strict": true,
+        "without_row_id": true
+      }
+    ]
+  },
+  "queries": [
+    {
+      "id": "q-declared-sqlite",
+      "name": "List",
+      "sql": {
+        "path": "queries/list.sql",
+        "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "operation": "select",
+      "parameters": [
+        {
+          "name": "value",
+          "scalar": "text",
+          "nullable": true,
+          "type_certainty": "declared",
+          "nullability_certainty": "declared"
+        }
+      ],
+      "results": [
+        {
+          "name": "value",
+          "scalar": "text",
+          "nullable": true,
+          "type_certainty": "declared",
+          "nullability_certainty": "declared"
+        }
+      ],
+      "cardinality": "many",
+      "evidence": {
+        "dialect": "sqlite",
+        "profile": "sqlite-3.35",
+        "parameters": [
+          {
+            "name": "value",
+            "scalar": "text",
+            "nullable": true,
+            "type_certainty": "declared",
+            "nullability_certainty": "declared"
+          }
+        ],
+        "results": [
+          {
+            "name": "value",
+            "scalar": "text",
+            "nullable": true,
+            "type_certainty": "declared",
+            "nullability_certainty": "declared"
+          }
+        ]
+      }
+    },
+    {
+      "id": "q-known-sqlite",
+      "name": "Find",
+      "sql": {
+        "path": "queries/find.sql",
+        "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "operation": "select",
+      "parameters": [
+        {
+          "name": "value",
+          "scalar": "text",
+          "nullable": false,
+          "type_certainty": "known",
+          "nullability_certainty": "known"
+        }
+      ],
+      "results": [
+        {
+          "name": "value",
+          "scalar": "text",
+          "nullable": false,
+          "type_certainty": "known",
+          "nullability_certainty": "known"
+        }
+      ],
+      "cardinality": "one",
+      "evidence": {
+        "dialect": "sqlite",
+        "profile": "sqlite-3.35",
+        "parameters": [
+          {
+            "name": "value",
+            "scalar": "text",
+            "nullable": false,
+            "type_certainty": "known",
+            "nullability_certainty": "known"
+          }
+        ],
+        "results": [
+          {
+            "name": "value",
+            "scalar": "text",
+            "nullable": false,
+            "type_certainty": "known",
+            "nullability_certainty": "known"
+          }
+        ]
+      }
+    },
+    {
+      "id": "q-unknown-sqlite",
+      "name": "Probe",
+      "sql": {
+        "path": "queries/probe.sql",
+        "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      },
+      "operation": "select",
+      "parameters": [
+        {
+          "name": "value",
+          "scalar": "text",
+          "nullable": true,
+          "type_certainty": "unknown",
+          "nullability_certainty": "unknown"
+        }
+      ],
+      "results": [
+        {
+          "name": "value",
+          "scalar": "text",
+          "nullable": true,
+          "type_certainty": "unknown",
+          "nullability_certainty": "unknown"
+        }
+      ],
+      "cardinality": "maybe",
+      "evidence": {
+        "dialect": "sqlite",
+        "profile": "sqlite-3.35",
+        "parameters": [
+          {
+            "name": "value",
+            "scalar": "text",
+            "nullable": true,
+            "type_certainty": "unknown",
+            "nullability_certainty": "unknown"
+          }
+        ],
+        "results": [
+          {
+            "name": "value",
+            "scalar": "text",
+            "nullable": true,
+            "type_certainty": "unknown",
+            "nullability_certainty": "unknown"
+          }
+        ],
+        "diagnostics": [
+          "query_result_unknown"
+        ]
+      }
+    }
+  ],
+  "generation": {
+    "package": "store",
+    "output": "internal/store",
+    "emitter": "compact",
+    "prune": true,
+    "objects": [
+      {
+        "id": "tasks",
+        "source": "Events",
+        "row": "EventsRow",
+        "create": "EventsCreate",
+        "patch": "EventsPatch",
+        "file": "tasks_gen.go"
+      }
+    ],
+    "queries": [
+      {
+        "id": "q-declared-sqlite",
+        "function": "List",
+        "result": "ListResult",
+        "projection": "ListProjection",
+        "decoder": "decodeList",
+        "file": "query_q-declared-sqlite.go"
+      },
+      {
+        "id": "q-known-sqlite",
+        "function": "Find",
+        "result": "FindResult",
+        "projection": "FindProjection",
+        "decoder": "decodeFind",
+        "file": "query_q-known-sqlite.go"
+      },
+      {
+        "id": "q-unknown-sqlite",
+        "function": "Probe",
+        "result": "ProbeResult",
+        "projection": "ProbeProjection",
+        "decoder": "decodeProbe",
+        "file": "query_q-unknown-sqlite.go"
+      }
+    ]
+  },
+  "digests": {
+    "source": "1111111111111111111111111111111111111111111111111111111111111111",
+    "mappings": "2222222222222222222222222222222222222222222222222222222222222222",
+    "queries": "3333333333333333333333333333333333333333333333333333333333333333",
+    "generation": "4444444444444444444444444444444444444444444444444444444444444444"
+  },
+  "mappings": {}
+}

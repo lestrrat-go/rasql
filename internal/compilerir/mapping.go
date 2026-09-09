@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/parser"
+	"go/token"
 	"regexp"
 	"strings"
 )
@@ -22,6 +23,34 @@ func DefaultScalarMapping(scalar string) (ScalarMapping, bool) {
 		return ScalarMapping{}, false
 	}
 	return ScalarMapping{Name: scalar, GoType: typeName}, true
+}
+
+// DeclaredQueryLogicalKind resolves only logical kinds that are explicit in a query declaration or mapping.
+func DeclaredQueryLogicalKind(scalar string, mappings MappingConfig) (string, bool, error) {
+	if scalar == "unsigned_integer" {
+		return "integer", true, nil
+	}
+	if _, ok := DefaultScalarMapping(scalar); ok {
+		return scalar, true, nil
+	}
+	var found *ScalarMapping
+	for i := range mappings.Scalars {
+		if mappings.Scalars[i].Name == scalar {
+			if found != nil {
+				return "", false, fmt.Errorf("duplicate scalar mapping %q", scalar)
+			}
+			found = &mappings.Scalars[i]
+		}
+	}
+	if found == nil {
+		return "", false, nil
+	}
+	switch found.Match.LogicalKind {
+	case "boolean", "integer", "float", "text", "bytes", "time", "json", "uuid", "decimal":
+		return found.Match.LogicalKind, true, nil
+	default:
+		return "", false, nil
+	}
 }
 
 // ValidateMappingConfig checks mapping names, match selectors, Go expressions,
@@ -64,7 +93,60 @@ func ValidateMappingConfig(config MappingConfig, packageName string) error {
 			return fmt.Errorf("%s.match.schema: requires name", path)
 		}
 	}
+	relationNames := make(map[string]struct{}, len(config.Relations))
+	for i, relation := range config.Relations {
+		path := fmt.Sprintf("relations[%d]", i)
+		if relation.Name == "" {
+			return fmt.Errorf("%s.name: must not be empty", path)
+		}
+		if !validGeneratedIdentifier(relation.Name) {
+			return fmt.Errorf("%s.name: must be a valid Go identifier", path)
+		}
+		nameKey := string(relation.Source) + "\x00" + relation.Name
+		if _, ok := relationNames[nameKey]; ok {
+			return fmt.Errorf("%s.name: duplicate relation %q", path, relation.Name)
+		}
+		relationNames[nameKey] = struct{}{}
+		if relation.Source == "" || relation.Target == "" || relation.Through.Object == "" {
+			return fmt.Errorf("%s: source, target, and through object are required", path)
+		}
+		if len(relation.From) == 0 || len(relation.To) == 0 {
+			return fmt.Errorf("%s: from and to paths are required", path)
+		}
+		if len(relation.From) != len(relation.Through.SourceFrom) || len(relation.From) != len(relation.Through.SourceTo) {
+			return fmt.Errorf("%s: source paths must have equal widths", path)
+		}
+		if len(relation.To) != len(relation.Through.TargetFrom) || len(relation.To) != len(relation.Through.TargetTo) {
+			return fmt.Errorf("%s: target paths must have equal widths", path)
+		}
+		for j := range relation.From {
+			if relation.From[j] != relation.Through.SourceTo[j] {
+				return fmt.Errorf("%s: source path must equal through source_to", path)
+			}
+		}
+		for j := range relation.To {
+			if relation.To[j] != relation.Through.TargetTo[j] {
+				return fmt.Errorf("%s: target path must equal through target_to", path)
+			}
+		}
+		for _, columns := range [][]string{relation.From, relation.To, relation.Through.SourceFrom, relation.Through.SourceTo, relation.Through.TargetFrom, relation.Through.TargetTo} {
+			seen := map[string]struct{}{}
+			for _, column := range columns {
+				if column == "" {
+					return fmt.Errorf("%s: relation paths must not contain empty columns", path)
+				}
+				if _, ok := seen[column]; ok {
+					return fmt.Errorf("%s: relation paths must not repeat columns", path)
+				}
+				seen[column] = struct{}{}
+			}
+		}
+	}
 	return nil
+}
+
+func validGeneratedIdentifier(name string) bool {
+	return name != "_" && token.IsIdentifier(name)
 }
 
 type mappingSelection struct {
@@ -132,6 +214,12 @@ func selectMapping(column PhysicalColumn, config MappingConfig) mappingSelection
 		return mappingSelection{}
 	}
 	return mappingSelection{scalar: selected.Name, mapping: selected, found: matches == 1, ambiguous: matches > 1}
+}
+
+// ResolveQueryScalar applies the same mapping precedence used for catalog columns.
+func ResolveQueryScalar(logicalKind string, native *NativeType, integer *IntegerTypeFacts, config MappingConfig) (string, bool) {
+	selection := selectMapping(PhysicalColumn{LogicalKind: logicalKind, Native: native, Integer: integer}, config)
+	return selection.scalar, selection.found
 }
 
 func mappingRank(column PhysicalColumn, match NativeMatch) (int, bool) {

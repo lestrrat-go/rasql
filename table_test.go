@@ -6,6 +6,7 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
@@ -255,7 +256,10 @@ func TestColumnOf(t *testing.T) {
 		var zero staffTable
 		var err error
 		require.NotPanics(t, func() {
-			_, err = rasql.SelectFrom(staff(t)).WhereEqual(zero.ID(), 1).Build(dbForBuild(t).Dialect())
+			_, err = render.SelectFrom(dbForBuild(t).Dialect(), staff(t).Ref()).
+				Select("id").
+				Where(query.Equal(zero.ID(), 1)).
+				Build()
 		})
 		require.ErrorContains(t, err, "query table: table must not be nil")
 	})
@@ -282,10 +286,11 @@ func TestAs(t *testing.T) {
 		manager, err := employees.As("manager")
 		require.NoError(t, err)
 
-		statement, err := rasql.SelectFrom(employees).
-			Join(rasql.InnerJoin(manager, query.Equal(employees.ManagerID(), manager.ID()))).
-			OrderAsc(manager.Email()).
-			Build(dbForBuild(t).Dialect())
+		statement, err := render.SelectFrom(dbForBuild(t).Dialect(), employees.Ref()).
+			Select("id", "manager_id", "email").
+			Join(query.InnerJoin(query.Relation(manager.Ref()), query.Equal(employees.ManagerID(), manager.ID()))).
+			Order(query.Asc(manager.Email())).
+			Build()
 		require.NoError(t, err)
 		require.Equal(
 			t,
@@ -301,9 +306,10 @@ func TestAs(t *testing.T) {
 		manager, err := employees.As("manager")
 		require.NoError(t, err)
 
-		statement, err := rasql.SelectFrom(employees).
-			Join(rasql.LeftJoin(manager, query.Equal(employees.ManagerID(), manager.ID()))).
-			Build(dbForBuild(t).Dialect())
+		statement, err := render.SelectFrom(dbForBuild(t).Dialect(), employees.Ref()).
+			Select("id", "manager_id", "email").
+			Join(query.LeftJoin(query.Relation(manager.Ref()), query.Equal(employees.ManagerID(), manager.ID()))).
+			Build()
 		require.NoError(t, err)
 		require.Contains(t, statement.SQL(), `LEFT JOIN "staff" AS "manager" ON ("staff"."manager_id" = "manager"."id")`)
 	})
@@ -312,7 +318,10 @@ func TestAs(t *testing.T) {
 func TestTypedSelectBuilderRejectsForeignColumn(t *testing.T) {
 	contractorID := contractors(t).Column("id")
 
-	_, err := rasql.SelectFrom(staff(t)).WhereEqual(contractorID, 1).Build(dbForBuild(t).Dialect())
+	_, err := render.SelectFrom(dbForBuild(t).Dialect(), staff(t).Ref()).
+		Select("id").
+		Where(query.Equal(contractorID, 1)).
+		Build()
 	require.ErrorContains(t, err, "contractors")
 }
 
@@ -321,65 +330,53 @@ func TestTypedSelectBuilderRejectsForeignColumn(t *testing.T) {
 // each case hands the entry point the table value a caller holds instead of one
 // the test converted to rasql.Table[staffRow] first.
 type nilTableEntryPoint[Wrapper rasql.Table[staffRow]] struct {
-	name string
-	// errorContains is the text the reported error must carry. InnerJoin and
-	// LeftJoin return a query.Join, which has no error channel, so they join a
-	// zero query.TableRef and the error arrives from Select.Validate at Build.
+	name          string
 	errorContains string
 	run           func(t *testing.T, table Wrapper) error
 }
 
 // nilTableEntryPoints returns every entry point that reaches a table through
-// rasql.Table[staffRow]. ColumnOf is missing because it returns the zero
-// ColumnRef rather than reporting an error; requireNilTableRejected covers it
-// separately.
+// rasql.Table[staffRow] in the canonical API. The old builder surface had a
+// separate entry point for a read (SelectFrom), a partial read (DecodeFrom),
+// and a join source (InnerJoin, LeftJoin), each deferring its own table check
+// to Build; the canonical API routes every one of those through a single
+// gate, SourceOf, which reports the nil table immediately instead of waiting
+// for a later Build, so the four old cases collapse into the one "SourceOf"
+// case below. Insert and InsertWithOptions collapse the same way into
+// NewCreatePlan, which a DefaultField turns into what InsertWithOptions was
+// for. ColumnOf is missing because it returns the zero ColumnRef rather than
+// reporting an error; requireNilTableRejected covers it separately.
 func nilTableEntryPoints[Wrapper rasql.Table[staffRow]]() []nilTableEntryPoint[Wrapper] {
 	return []nilTableEntryPoint[Wrapper]{
 		{
-			name:          "SelectFrom",
+			name:          "SourceOf",
 			errorContains: "must not be nil",
 			run: func(t *testing.T, table Wrapper) error {
-				_, err := rasql.SelectFrom[staffRow](table).Build(dbForBuild(t).Dialect())
+				_, err := rasql.SourceOf[staffRow](table, "")
 				return err
 			},
 		},
 		{
-			name:          "DecodeFrom",
+			name:          "NewCreatePlan",
 			errorContains: "must not be nil",
 			run: func(t *testing.T, table Wrapper) error {
-				_, err := rasql.DecodeFrom[staffRow, staffRow](table).Build(dbForBuild(t).Dialect())
+				_, err := rasql.NewCreatePlan[staffRow](table)
 				return err
 			},
 		},
 		{
-			name:          "DeleteFrom",
+			name:          "NewPatchPlan",
 			errorContains: "must not be nil",
 			run: func(t *testing.T, table Wrapper) error {
-				_, err := rasql.DeleteFrom[staffRow](table).Build(dbForBuild(t).Dialect())
+				_, err := rasql.NewPatchPlan[staffRow, rasql.Predicate](table, rasql.Predicate{})
 				return err
 			},
 		},
 		{
-			name:          "Insert",
+			name:          "NewDeletePlan",
 			errorContains: "must not be nil",
 			run: func(t *testing.T, table Wrapper) error {
-				_, err := rasql.Insert[staffRow](t.Context(), dbForBuild(t), table, staffRow{})
-				return err
-			},
-		},
-		{
-			name:          "InsertWithOptions",
-			errorContains: "must not be nil",
-			run: func(t *testing.T, table Wrapper) error {
-				_, err := rasql.InsertWithOptions[staffRow](t.Context(), dbForBuild(t), table, staffRow{})
-				return err
-			},
-		},
-		{
-			name:          "Update",
-			errorContains: "must not be nil",
-			run: func(t *testing.T, table Wrapper) error {
-				_, err := rasql.Update[staffRow](t.Context(), dbForBuild(t), table, staffRow{})
+				_, err := rasql.NewDeletePlan[staffRow](table, query.Predicate{})
 				return err
 			},
 		},
@@ -395,28 +392,6 @@ func nilTableEntryPoints[Wrapper rasql.Table[staffRow]]() []nilTableEntryPoint[W
 			errorContains: "must not be nil",
 			run: func(t *testing.T, table Wrapper) error {
 				_, err := rasql.As[staffRow](table, "alias")
-				return err
-			},
-		},
-		{
-			name:          "InnerJoin",
-			errorContains: "must not be nil",
-			run: func(t *testing.T, table Wrapper) error {
-				employees := staff(t)
-				_, err := rasql.SelectFrom(employees).
-					Join(rasql.InnerJoin[staffRow](table, query.Equal(employees.ID(), query.Bind(1)))).
-					Build(dbForBuild(t).Dialect())
-				return err
-			},
-		},
-		{
-			name:          "LeftJoin",
-			errorContains: "must not be nil",
-			run: func(t *testing.T, table Wrapper) error {
-				employees := staff(t)
-				_, err := rasql.SelectFrom(employees).
-					Join(rasql.LeftJoin[staffRow](table, query.Equal(employees.ID(), query.Bind(1)))).
-					Build(dbForBuild(t).Dialect())
 				return err
 			},
 		},
@@ -453,17 +428,19 @@ func requireTableUsable[Wrapper rasql.Table[staffRow]](t *testing.T, name string
 	t.Helper()
 
 	t.Run(name, func(t *testing.T) {
-		selected, err := rasql.SelectFrom[staffRow](table).Build(dbForBuild(t).Dialect())
+		// SourceOf's own guard is exercised by requireNilTableRejected; here
+		// the table is valid, so a plain render through its real Ref proves
+		// the same reachability SelectFrom and DecodeFrom used to prove,
+		// which the canonical API folds into the one SourceOf gate.
+		selected, err := render.SelectFrom(dbForBuild(t).Dialect(), table.Ref()).Select("id").Build()
 		require.NoError(t, err)
 		require.Contains(t, selected.SQL(), `FROM "staff"`)
 
-		// DecodeFrom projects nothing by default, so this one names a column.
-		email := table.Column("email")
-		decoded, err := rasql.DecodeFrom[staffRow, staffRow](table).Project(email).Build(dbForBuild(t).Dialect())
+		deleteStmt, err := query.NewDelete(table.Ref())
 		require.NoError(t, err)
-		require.Contains(t, decoded.SQL(), `FROM "staff"`)
-
-		deleted, err := rasql.DeleteFrom[staffRow](table).AllowAll().Build(dbForBuild(t).Dialect())
+		deleteStmt, err = deleteStmt.AllowAll()
+		require.NoError(t, err)
+		deleted, err := render.Delete(dbForBuild(t).Dialect(), deleteStmt)
 		require.NoError(t, err)
 		require.Contains(t, deleted.SQL(), `DELETE FROM "staff"`)
 
@@ -476,15 +453,17 @@ func requireTableUsable[Wrapper rasql.Table[staffRow]](t *testing.T, name string
 		others := contractors(t)
 		othersID := others.Column("id")
 
-		joined, err := rasql.SelectFrom(others).
-			Join(rasql.InnerJoin[staffRow](table, query.Equal(othersID, query.Bind(1)))).
-			Build(dbForBuild(t).Dialect())
+		joined, err := render.SelectFrom(dbForBuild(t).Dialect(), others.Ref()).
+			Select("id").
+			Join(query.InnerJoin(query.Relation(table.Ref()), query.Equal(othersID, query.Bind(1)))).
+			Build()
 		require.NoError(t, err)
 		require.Contains(t, joined.SQL(), `INNER JOIN "staff"`)
 
-		left, err := rasql.SelectFrom(others).
-			Join(rasql.LeftJoin[staffRow](table, query.Equal(othersID, query.Bind(1)))).
-			Build(dbForBuild(t).Dialect())
+		left, err := render.SelectFrom(dbForBuild(t).Dialect(), others.Ref()).
+			Select("id").
+			Join(query.LeftJoin(query.Relation(table.Ref()), query.Equal(othersID, query.Bind(1)))).
+			Build()
 		require.NoError(t, err)
 		require.Contains(t, left.SQL(), `LEFT JOIN "staff"`)
 	})
@@ -541,7 +520,7 @@ func TestTableGuardKeepsUnrelatedPanics(t *testing.T) {
 		_, _ = rasql.As[staffRow](buggy, "alias")
 	})
 	require.PanicsWithValue(t, staffTableBug, func() {
-		_, _ = rasql.SelectFrom[staffRow](buggy).Build(dbForBuild(t).Dialect())
+		_, _ = rasql.SourceOf[staffRow](buggy, "")
 	})
 
 	// The nil-dereference subclass needs its own coverage: a string panic and a
@@ -557,7 +536,7 @@ func TestTableGuardKeepsUnrelatedPanics(t *testing.T) {
 		_, _ = rasql.As[staffRow](buggyNilDeref, "alias")
 	})
 	requirePanicsWithNilDereference(t, func() {
-		_, _ = rasql.SelectFrom[staffRow](buggyNilDeref).Build(dbForBuild(t).Dialect())
+		_, _ = rasql.SourceOf[staffRow](buggyNilDeref, "")
 	})
 }
 
@@ -573,9 +552,9 @@ func TestTableGuardDoesNotRelabelACallersOwnNilDereference(t *testing.T) {
 	require.NoError(t, err)
 	buggy := nilDereferenceStaffTable{Table: table}
 
-	t.Run("SelectFrom", func(t *testing.T) {
+	t.Run("SourceOf", func(t *testing.T) {
 		requirePanicsWithNilDereference(t, func() {
-			_, _ = rasql.SelectFrom[staffRow](buggy).Build(dbForBuild(t).Dialect())
+			_, _ = rasql.SourceOf[staffRow](buggy, "")
 		})
 	})
 
@@ -585,9 +564,9 @@ func TestTableGuardDoesNotRelabelACallersOwnNilDereference(t *testing.T) {
 		})
 	})
 
-	t.Run("DecodeFrom", func(t *testing.T) {
+	t.Run("NewCreatePlan", func(t *testing.T) {
 		requirePanicsWithNilDereference(t, func() {
-			_, _ = rasql.DecodeFrom[staffRow, staffRow](buggy).Build(dbForBuild(t).Dialect())
+			_, _ = rasql.NewCreatePlan[staffRow](buggy)
 		})
 	})
 }
@@ -616,9 +595,9 @@ func TestTableGuardDoesNotRelabelAFabricatedNilDereference(t *testing.T) {
 		})
 	})
 
-	t.Run("SelectFrom", func(t *testing.T) {
+	t.Run("SourceOf", func(t *testing.T) {
 		require.PanicsWithValue(t, fabricatedNilDereference{}, func() {
-			_, _ = rasql.SelectFrom[staffRow](buggy).Build(dbForBuild(t).Dialect())
+			_, _ = rasql.SourceOf[staffRow](buggy, "")
 		})
 	})
 }

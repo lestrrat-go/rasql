@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/lestrrat-go/rasql/internal/schemagen"
+	"github.com/lestrrat-go/rasql/internal/scratchmod"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
@@ -15,18 +15,15 @@ func TestTypedQuerySchemaChangeBreaksStaleCaller(t *testing.T) {
 	dir := t.TempDir()
 	root, err := filepath.Abs("..")
 	require.NoError(t, err)
-	module := "module example.com/schema-change\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nreplace github.com/lestrrat-go/rasql => " + filepath.ToSlash(root) + "\n"
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte(module), 0o600))
+	require.NoError(t, scratchmod.Write(dir, root, "example.com/schema-change"))
 	caller := filepath.Join(dir, "caller.go")
+	generated := filepath.Join(dir, "generated")
 	writeSchema := func(column schema.ColumnType) {
-		source, sourceErr := schemagen.PackageSourceInDir(dir, "generated", schema.TableDef{Name: "users", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: column}}})
-		require.NoError(t, sourceErr)
-		generated := filepath.Join(dir, "generated")
-		require.NoError(t, os.MkdirAll(generated, 0o700))
-		require.NoError(t, os.WriteFile(filepath.Join(generated, "schema_gen.go"), source, 0o600))
+		table := schema.TableDef{Name: "users", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: column}}}
+		require.NoError(t, compactPackageStore(t, generated, table).Write())
 	}
 	writeCaller := func(value string) {
-		source := "package caller\n\nimport (\n\t\"github.com/lestrrat-go/rasql/query\"\n\t\"example.com/schema-change/generated\"\n)\n\nvar _ = query.EqualValue(generated.Users().ID(), " + value + ")\n"
+		source := "package caller\n\nimport (\n\t\"github.com/lestrrat-go/rasql\"\n\t\"example.com/schema-change/generated\"\n)\n\nfunc predicate() rasql.Predicate {\n\tsource, err := generated.Users().Source(\"\")\n\tif err != nil {\n\t\tpanic(err)\n\t}\n\tcolumns, err := (generated.UsersColumns{}).Bind(source)\n\tif err != nil {\n\t\tpanic(err)\n\t}\n\treturn rasql.EqualValue(columns.ID.Expr(), " + value + ")\n}\n"
 		require.NoError(t, os.WriteFile(caller, []byte(source), 0o600))
 	}
 	run := func() ([]byte, error) {

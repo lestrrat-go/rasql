@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "rasql D4 measurement",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["format", "semantic_status", "comparable", "implementation", "engine", "profile", "server_version", "driver_version", "go_version", "goos", "goarch", "commit", "portable_signature_digest", "workload", "sample", "sql_digest", "rows_returned", "rows_consumed", "statements", "duration_ns", "allocations_per_op", "generated_files", "generated_bytes", "build_duration_ns", "failure_code", "failure_reason"],
+    "properties": {
+      "format": {"const": "rasql.d4.measurement.v1"},
+      "semantic_status": {"enum": ["pass", "fail", "skip"]},
+      "comparable": {"type": "boolean"},
+      "implementation": {"type": "string", "minLength": 1},
+      "engine": {"type": "string", "minLength": 1},
+      "profile": {"type": "string", "minLength": 1},
+      "server_version": {"type": "string", "minLength": 1},
+      "driver_version": {"type": "string", "minLength": 1},
+      "go_version": {"type": "string", "minLength": 1},
+      "goos": {"type": "string", "minLength": 1},
+      "goarch": {"type": "string", "minLength": 1},
+      "commit": {"type": "string", "minLength": 1},
+      "portable_signature_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+      "workload": {"type": "string", "minLength": 1},
+      "sample": {"type": "integer", "minimum": 0},
+      "sql_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+      "rows_returned": {"type": "integer", "minimum": 0},
+      "rows_consumed": {"type": "integer", "minimum": 0},
+      "statements": {"type": "integer", "minimum": 0},
+      "duration_ns": {"type": "integer", "minimum": 0},
+      "allocations_per_op": {"type": "integer", "minimum": 0},
+      "generated_files": {"type": "integer", "minimum": 0},
+      "generated_bytes": {"type": "integer", "minimum": 0},
+      "build_duration_ns": {"type": "integer", "minimum": 0},
+      "failure_code": {"type": "string"},
+      "failure_reason": {"type": "string"}
+    }
+  }
+}

@@ -3,9 +3,12 @@ package query
 import (
 	"fmt"
 	"reflect"
+	"strings"
 	"sync/atomic"
 
+	"github.com/lestrrat-go/rasql/internal/sqlscan"
 	"github.com/lestrrat-go/rasql/schema"
+	"github.com/lestrrat-go/rasql/sqltext"
 )
 
 // ResultColumn describes one column exposed by a reusable query result.
@@ -20,6 +23,46 @@ type ResultColumn struct {
 type QueryBody interface {
 	Validate() error
 	queryBody()
+}
+
+// NativeResult is an opaque SELECT result supplied by a native query. Its
+// metadata is carried by ResultQuery because native SQL has no projection AST
+// for the query package to inspect.
+type NativeResult struct {
+	engine string
+	sql    sqltext.Text
+	args   []any
+}
+
+// NativeResultOf makes a SELECT-only native statement reusable as a relation.
+// The argument slice is retained as opaque bind tokens and copied on access;
+// snapshotting belongs to the root Native constructor.
+func NativeResultOf(engine string, sql sqltext.Text, args []any) (NativeResult, error) {
+	engine = strings.TrimSpace(engine)
+	if engine == "" {
+		return NativeResult{}, fmt.Errorf("native result engine must not be empty")
+	}
+	if strings.TrimSpace(string(sql)) == "" {
+		return NativeResult{}, fmt.Errorf("native result SQL must not be empty")
+	}
+	if err := sqlscan.ValidateSelect(string(sql), engine); err != nil {
+		return NativeResult{}, err
+	}
+	return NativeResult{engine: engine, sql: sql, args: append([]any(nil), args...)}, nil
+}
+
+func (n NativeResult) Engine() string    { return n.engine }
+func (n NativeResult) SQL() sqltext.Text { return n.sql }
+func (n NativeResult) Args() []any       { return append([]any(nil), n.args...) }
+func (NativeResult) queryBody()          {}
+func (n NativeResult) Validate() error {
+	if strings.TrimSpace(n.engine) == "" {
+		return fmt.Errorf("native result engine must not be empty")
+	}
+	if strings.TrimSpace(string(n.sql)) == "" {
+		return fmt.Errorf("native result SQL must not be empty")
+	}
+	return sqlscan.ValidateSelect(string(n.sql), n.engine)
 }
 
 // ResultQuery pairs a query body with the result metadata callers supplied.
@@ -51,6 +94,9 @@ func ResultOf(body QueryBody, columns ...ResultColumn) (ResultQuery, error) {
 		}
 	}
 	switch typed := body.(type) {
+	case NativeResult, *NativeResult:
+		// Native SQL has no projection AST. ResultColumn metadata is the
+		// authoritative output description for a reusable native result.
 	case Select:
 		if len(typed.projections) != len(columns) {
 			return ResultQuery{}, fmt.Errorf("result columns count %d does not match SELECT projection count %d", len(columns), len(typed.projections))

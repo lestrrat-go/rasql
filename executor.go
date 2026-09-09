@@ -305,8 +305,29 @@ func prepareRows[R any](executor Executor, q Query[R], compiled compiledQuery) (
 	engine, cardinality, native := q.nativeInfo()
 	if native {
 		dialect := executor.Dialect()
-		if dialect == nil || dialect.Name() != engine {
+		if dialect == nil {
+			return result, planError("engine_mismatch", "native.engine", "executor dialect is unavailable")
+		}
+		if dialect.Name() != engine {
 			return result, planError("engine_mismatch", "native.engine", "executor dialect does not match native SQL")
+		}
+	} else if q.plan.mutation == nil {
+		composed, err := resultQuery(q)
+		if err != nil {
+			return result, err
+		}
+		engines := querycompile.NativeEngines(composed)
+		for _, required := range engines {
+			if engine != "" && required != engine {
+				return result, planError("engine_mismatch", "native.engine", "composed native SQL uses multiple engines")
+			}
+			engine = required
+		}
+		if engine != "" {
+			dialect := executor.Dialect()
+			if dialect == nil || dialect.Name() != engine {
+				return result, planError("engine_mismatch", "native.engine", "executor dialect does not match native SQL")
+			}
 		}
 	}
 	registry := builtinCodecs

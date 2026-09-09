@@ -194,7 +194,7 @@ func TestMutationBatchCallerLimitSplitsCandidateOverflow(t *testing.T) {
 		require.NoError(t, planErr)
 		plans = append(plans, plan)
 	}
-	outcome, err := rasql.ExecMutationBatch(t.Context(), f.executor, plans, rasql.MutationBatchOptions{MaxRows: 2, MaxBindParameters: 1})
+	outcome, err := rasql.ExecMutationBatch(t.Context(), f.executor, plans, rasql.BulkOptions{MaxRows: 2, MaxBindParameters: 1})
 	require.NoError(t, err)
 	require.Equal(t, []rasql.InputOutcome{rasql.InputApplied, rasql.InputApplied}, outcome.Inputs)
 }

@@ -14,7 +14,9 @@ func TestMutationCompileFixtures(t *testing.T) {
 	}
 	command := exec.Command("go", "test", "./...")
 	command.Dir = positive
-	command.Env = append(command.Environ(), "GOWORK=off", "GOFLAGS=-mod=mod", "GOCACHE="+filepath.Join(t.TempDir(), "cache"))
+	// GOCACHE is deliberately not overridden here: see the matching comment
+	// in query_compile_test.go's TestQueryAPICompileFixture.
+	command.Env = append(command.Environ(), "GOWORK=off", "GOFLAGS=-mod=mod")
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("positive mutation fixture failed: %v\n%s", err, output)
 	}
@@ -31,7 +33,7 @@ func TestMutationCompileFixtures(t *testing.T) {
 		}
 		command = exec.Command("go", "test", "./...")
 		command.Dir = negative
-		command.Env = append(command.Environ(), "GOWORK=off", "GOFLAGS=-mod=mod", "GOCACHE="+filepath.Join(t.TempDir(), "cache"))
+		command.Env = append(command.Environ(), "GOWORK=off", "GOFLAGS=-mod=mod")
 		output, err := command.CombinedOutput()
 		if err == nil || !strings.Contains(string(output), fixture.diagnostic) {
 			t.Fatalf("negative mutation fixture %s diagnostic = %s", fixture.name, output)
