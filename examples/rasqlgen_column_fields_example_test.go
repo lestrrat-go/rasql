@@ -77,8 +77,14 @@ func Example_rasqlgen_column_fields() {
 	typed, err := query.NewSelect(users.Ref(),
 		users.ID().Ref(), users.Email().Ref(), users.Nickname().Ref(),
 		users.Status().Ref(), users.FirstName().Ref(), users.LastName().Ref())
-	if err == nil {
-		typed, err = typed.WithWhere(query.Equal(users.ID().Ref(), query.Bind(42)))
+	if err != nil {
+		fmt.Printf("failed to create the typed select: %s\n", err)
+		return
+	}
+	typed, err = typed.WithWhere(query.Equal(users.ID().Ref(), query.Bind(42)))
+	if err != nil {
+		fmt.Printf("failed to add the typed predicate: %s\n", err)
+		return
 	}
 	built, err := render.Select(dialect.PostgreSQL(), typed)
 	// END(typed_column)

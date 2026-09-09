@@ -50,8 +50,6 @@ func TestTypedOneAndWriteOneCompletionOwnCardinality(t *testing.T) {
 	require.NoError(t, err)
 	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
 	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(db, profile)
-	require.NoError(t, err)
 	var completions []rasql.Completion
 	db, err = db.WithInvocationObservers(rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), rasql.InvocationObserverFunc(func(ctx context.Context, _ rasql.Operation) (context.Context, rasql.CompletionObserver) {
 		return ctx, rasql.CompletionObserverFunc(func(_ context.Context, value rasql.Completion) error {
@@ -62,7 +60,7 @@ func TestTypedOneAndWriteOneCompletionOwnCardinality(t *testing.T) {
 		})
 	}))
 	require.NoError(t, err)
-	executor, err = rasql.AsExecutor(db, profile)
+	executor, err := rasql.AsExecutor(db, profile)
 	require.NoError(t, err)
 
 	userProjection := terminalProjection(t, terminalUserDecoder{schema: mustTerminalSchema(t, rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}})})
