@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/schema"
 	"golang.org/x/tools/go/packages"
 )
@@ -147,6 +148,20 @@ func (s *BindingSet) Type(ref BindingRef, nullable bool) (string, error) {
 	return rewriteBindingExpression(expression, ref.resolved.Imports, s.aliases)
 }
 
+// importsFor returns the final, aliased imports one binding's expressions
+// use, a subset of Imports filtered to what ref itself references. Two
+// columns that import the same package still each get only their own
+// import here; the shared alias is what keeps their generated text
+// consistent.
+func (s *BindingSet) importsFor(ref BindingRef) []schema.GoImport {
+	result := make([]schema.GoImport, 0, len(ref.resolved.Imports))
+	for _, imported := range ref.resolved.Imports {
+		alias := s.aliases[imported.Path]
+		result = append(result, schema.GoImport{Path: imported.Path, Name: alias})
+	}
+	return result
+}
+
 func (s *BindingSet) Imports() []schema.GoImport {
 	paths := make([]string, 0, len(s.imports))
 	for path := range s.imports {
@@ -158,6 +173,66 @@ func (s *BindingSet) Imports() []schema.GoImport {
 		result = append(result, s.imports[path])
 	}
 	return result
+}
+
+// TableColumnGoBindings resolves the GoBinding set on table's columns into
+// the compilerir generation policy BuildGo consults for object, the ID
+// AssignObjectIDs gave table. Every bound column of the table shares one
+// BindingSet, so two columns that import the same package share one alias
+// and two that import colliding packages get distinct ones; that is why this
+// runs once per table rather than once per column.
+//
+// It returns nil, nil when no column of table carries a GoBinding, so a
+// caller can append its result unconditionally without checking first.
+func TableColumnGoBindings(object compilerir.ObjectID, table schema.TableDef, options BindingSetOptions) ([]compilerir.ColumnGoBinding, error) {
+	var bound []schema.ColumnDef
+	for _, column := range table.Columns {
+		if column.GoBinding != nil {
+			bound = append(bound, column)
+		}
+	}
+	if len(bound) == 0 {
+		return nil, nil
+	}
+	if len(options.Reserved) == 0 {
+		options.Reserved = []string{"rasql", "schema", "time"}
+	}
+	set := NewBindingSet(options)
+	refs := make([]BindingRef, len(bound))
+	for i, column := range bound {
+		ref, err := set.Add(column)
+		if err != nil {
+			return nil, fmt.Errorf("schemagen: table %q column %q: %w", table.Name, column.Name, err)
+		}
+		refs[i] = ref
+	}
+	if err := set.Finalize(); err != nil {
+		return nil, fmt.Errorf("schemagen: table %q: %w", table.Name, err)
+	}
+	bindings := make([]compilerir.ColumnGoBinding, len(bound))
+	for i, column := range bound {
+		typeExpr, err := set.Type(refs[i], false)
+		if err != nil {
+			return nil, fmt.Errorf("schemagen: table %q column %q: %w", table.Name, column.Name, err)
+		}
+		nullableExpr, err := set.Type(refs[i], true)
+		if err != nil {
+			return nil, fmt.Errorf("schemagen: table %q column %q: %w", table.Name, column.Name, err)
+		}
+		bindings[i] = compilerir.ColumnGoBinding{
+			Object: object, Column: column.Name, Type: typeExpr, NullableType: nullableExpr,
+			Imports: goImportsFromSchema(set.importsFor(refs[i])),
+		}
+	}
+	return bindings, nil
+}
+
+func goImportsFromSchema(imports []schema.GoImport) []compilerir.GoImport {
+	out := make([]compilerir.GoImport, len(imports))
+	for i, imported := range imports {
+		out[i] = compilerir.GoImport{Path: imported.Path, Alias: imported.Name}
+	}
+	return out
 }
 
 func SameBindingType(left, right BindingRef, nullable bool) bool {

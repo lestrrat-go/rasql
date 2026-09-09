@@ -123,7 +123,7 @@ func (in EmitterInput) Validate() error {
 		if _, ok := goObjects[object.ID]; ok {
 			return fmt.Errorf("generate: emitter Go object %q is duplicated", object.ID)
 		}
-		if err := validateGoObject(object, p, s, configured[object.ID], in.Mappings.Scalars); err != nil {
+		if err := validateGoObject(object, p, s, configured[object.ID], in.Mappings.Scalars, in.Generation.ColumnBindings); err != nil {
 			return err
 		}
 		goObjects[object.ID] = struct{}{}
@@ -200,7 +200,7 @@ func validateQueryModel(semantic []compilerir.SemanticQuery, model []compilerir.
 	return nil
 }
 
-func validateGoObject(object compilerir.GoObject, physical compilerir.PhysicalObject, semantic compilerir.SemanticObject, cfg compilerir.ObjectGoName, mappings []compilerir.ScalarMapping) error {
+func validateGoObject(object compilerir.GoObject, physical compilerir.PhysicalObject, semantic compilerir.SemanticObject, cfg compilerir.ObjectGoName, mappings []compilerir.ScalarMapping, columnBindings []compilerir.ColumnGoBinding) error {
 	if object.SourceName == "" || object.Row.Name == "" {
 		return fmt.Errorf("generate: emitter Go object %q has incomplete names", object.ID)
 	}
@@ -219,6 +219,12 @@ func validateGoObject(object compilerir.GoObject, physical compilerir.PhysicalOb
 			return fmt.Errorf("generate: emitter Go object %q column %d disagrees with canonical models", object.ID, i)
 		}
 		wantType, wantCodec, ok := expectedBinding(column.Scalar, column.Nullable, mappings)
+		if override, found := compilerir.ColumnGoBindingFor(object.ID, column.Name, columnBindings); found {
+			wantType, ok = override.Type, true
+			if column.Nullable {
+				wantType = override.NullableType
+			}
+		}
 		if !ok || column.GoType != wantType || column.Codec != wantCodec {
 			return fmt.Errorf("generate: emitter Go object %q column %q binding disagrees with mapping", object.ID, column.Name)
 		}

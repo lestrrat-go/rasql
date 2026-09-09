@@ -91,6 +91,10 @@ func RenderCompact(in EmitterInput) (Store, error) {
 	for _, config := range copy.Generation.Objects {
 		configs[config.ID] = config
 	}
+	columnBindings := make(map[compilerir.ObjectID][]compilerir.ColumnGoBinding, len(copy.Generation.ColumnBindings))
+	for _, binding := range copy.Generation.ColumnBindings {
+		columnBindings[binding.Object] = append(columnBindings[binding.Object], binding)
+	}
 	tablesByID := make(map[compilerir.ObjectID]schema.TableDef, len(copy.Catalog.Objects))
 	for _, object := range copy.Catalog.Objects {
 		if table, ok := findCompactTable(tables, object); ok {
@@ -102,6 +106,7 @@ func RenderCompact(in EmitterInput) (Store, error) {
 		targets[object.ID] = schemagen.CompactObjectRef{
 			Catalog: object, Semantic: semantic[object.ID], Go: goObjects[object.ID],
 			Generation: configs[object.ID], Table: tablesByID[object.ID],
+			ColumnBindings: columnBindings[object.ID],
 		}
 	}
 	files := make([]compactFile, 0, len(copy.Catalog.Objects)+2)
@@ -118,7 +123,8 @@ func RenderCompact(in EmitterInput) (Store, error) {
 		}
 		source, err := schemagen.CompactObjectSource(copy.Generation.Package, schemagen.CompactObject{
 			Catalog: object, Semantic: semantic[object.ID], Go: goObjects[object.ID],
-			Generation: config, Table: table, Mappings: copy.Generation.Scalars, Targets: targets,
+			Generation: config, Table: table, Mappings: copy.Generation.Scalars,
+			ColumnBindings: columnBindings[object.ID], Targets: targets,
 		})
 		if err != nil {
 			return Store{}, err
