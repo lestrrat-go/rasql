@@ -16,6 +16,7 @@ import (
 	"github.com/lestrrat-go/rasql/internal/compilerquery"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/internal/schemasource"
+	"github.com/lestrrat-go/rasql/internal/scratchmod"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 
@@ -212,7 +213,7 @@ func newKnownPostgreSQLFixture(t *testing.T) knownPostgreSQLFixture {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "migrations"), 0o700))
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "queries"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.test/known\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => "+filepath.ToSlash(repoRoot(t))+"\n"), 0o600))
+	require.NoError(t, scratchmod.Write(root, repoRoot(t), "example.test/known"))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "migrations", "001.sql"), []byte("-- known evidence fixture\n"), 0o600))
 	queryPath := filepath.Join(root, "queries", "report.sql")
 	require.NoError(t, os.WriteFile(queryPath, []byte("SELECT id, created_at FROM reports WHERE id = {{bind \"id\"}}\n"), 0o600))

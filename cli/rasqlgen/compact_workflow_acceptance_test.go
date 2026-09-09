@@ -6,11 +6,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/schemasource"
+	"github.com/lestrrat-go/rasql/internal/scratchmod"
 	"github.com/stretchr/testify/require"
 )
 
@@ -152,11 +152,7 @@ func (f compactWorkflowFixture) command(t *testing.T, output, diagnostics *bytes
 func writeCompactConsumerModule(t *testing.T, root string) {
 	t.Helper()
 	repository := repoRoot(t)
-	goMod := workflowRead(t, filepath.Join(repository, "go.mod"))
-	goMod = []byte(strings.Replace(string(goMod), "module github.com/lestrrat-go/rasql\n", "module example.test/compact-workflow\n", 1))
-	goMod = append(goMod, []byte("\nrequire github.com/lestrrat-go/rasql v0.0.0\nreplace github.com/lestrrat-go/rasql => "+filepath.ToSlash(repository)+"\n")...)
-	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), goMod, 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "go.sum"), workflowRead(t, filepath.Join(repository, "go.sum")), 0o600))
+	require.NoError(t, scratchmod.Write(root, repository, "example.test/compact-workflow"))
 	consumerDir := filepath.Join(root, "consumer")
 	require.NoError(t, os.MkdirAll(consumerDir, 0o700))
 	const source = `package consumer_test
