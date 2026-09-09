@@ -13,9 +13,9 @@ import (
 // usersQueryHelperSource declares a fixture-local usersIDDecoder and
 // usersQuery, the closest canonical-API equivalent to what the removed
 // rasql.TypedSelectFrom(store.Users()) used to hand a caller directly: a
-// rasql.Query[store.UsersRow] ready for Where. store.UsersRow only
-// implements rasql.Scanner (ScanRow), not rasql.RowDecoder, so the decoder
-// bridges the two rather than reimplementing the scan.
+// rasql.Query[store.UsersRow] ready for Where. store.UsersRow only has a
+// ScanRow method, not rasql.RowDecoder, so the decoder bridges the two
+// rather than reimplementing the scan.
 const usersQueryHelperSource = `type usersIDDecoder struct{ schema rasql.ResultSchema }
 
 func (d usersIDDecoder) ResultSchema() rasql.ResultSchema { return d.schema }
