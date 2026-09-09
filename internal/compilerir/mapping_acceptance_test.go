@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/lestrrat-go/rasql/internal/compilerir"
+	"github.com/lestrrat-go/rasql/internal/scratchmod"
 )
 
 func TestMappingCompilePassFixture(t *testing.T) {
@@ -102,8 +103,7 @@ func writeCompileModule(t *testing.T, dir, source string, packages []string) {
 	t.Helper()
 	_, root, _, _ := runtime.Caller(0)
 	repo := filepath.Clean(filepath.Join(filepath.Dir(root), "../.."))
-	module := "module mappingfixture\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => " + repo + "\n"
-	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(module), 0o600); err != nil {
+	if err := scratchmod.Write(dir, repo, "mappingfixture"); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "generated.go"), []byte(source), 0o600); err != nil {
