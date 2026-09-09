@@ -518,11 +518,12 @@ func WriteMigration(directory string, p Plan) error {
 			return fmt.Errorf("migrate diff: write execution mode: %w", err)
 		}
 	}
-	if strings.TrimSpace(p.IrreversibleReason) != "" {
-		if err := os.WriteFile(filepath.Join(temporary, ".rasql-irreversible"), []byte(p.IrreversibleReason+"\n"), 0o600); err != nil {
-			return fmt.Errorf("migrate diff: write irreversibility marker: %w", err)
-		}
-	} else {
+	// An irreversible plan writes no .down.sql sources at all, which is what
+	// makes the generated directory irreversible once the loader reads it
+	// back: absence alone carries that meaning, with nothing written to
+	// explain why. IrreversibleReason still gates whether Validate required
+	// reverse SQL on every statement; it is not written to disk here.
+	if strings.TrimSpace(p.IrreversibleReason) == "" {
 		for _, statement := range p.Statements {
 			path := filepath.Join(temporary, strings.TrimSuffix(statement.Source, ".sql")+".down.sql")
 			if err := os.WriteFile(path, []byte(statement.ReverseSQL), 0o600); err != nil {

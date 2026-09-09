@@ -13,6 +13,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// This proves that ExecMutation preserves the driver's rows-affected count
+// even when an after-hook fails: the write already reached the server, so a
+// hook failing afterward must not turn that outcome into zero rows and an
+// unknown durability. It exercises both a mutation built directly against a
+// query.WriteStatement and one built through the typed CreatePlan
+// constructor, since either path reaches the same ExecMutation.
 func TestRootExecAndTypedInsertPreserveResultAfterHookError(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
@@ -26,6 +32,11 @@ func TestRootExecAndTypedInsertPreserveResultAfterHookError(t *testing.T) {
 	}}
 	db, err := rasql.New(database, dialect.SQLite(), hook)
 	require.NoError(t, err)
+	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+	require.NoError(t, err)
+	executor, err := rasql.AsExecutor(db, profile)
+	require.NoError(t, err)
+
 	table, err := query.NewTableRef(schema.TableDef{
 		Name:    "users",
 		Columns: []schema.ColumnDef{{Name: "email", Type: schema.TextType{}}},
@@ -34,29 +45,35 @@ func TestRootExecAndTypedInsertPreserveResultAfterHookError(t *testing.T) {
 	statement, err := query.NewInsert(table, query.Set(table.Column("email"), "ada@example.com"))
 	require.NoError(t, err)
 	mock.ExpectExec("INSERT INTO \"users\" (\"email\") VALUES (?)").WithArgs("ada@example.com").WillReturnResult(sqlmock.NewResult(1, 1))
-	result, err := rasql.Exec(t.Context(), db, statement)
-	require.NotNil(t, result)
+	plan, err := rasql.NewStatementPlan(statement)
+	require.NoError(t, err)
+	outcome, err := rasql.ExecMutation(t.Context(), executor, plan)
 	require.Error(t, err)
 	var extensionErr *rasql.ExtensionError
 	require.ErrorAs(t, err, &extensionErr)
 	require.True(t, extensionErr.ExecutionSucceeded())
-	rows, rowsErr := result.RowsAffected()
-	require.NoError(t, rowsErr)
-	require.Equal(t, int64(1), rows)
+	require.Equal(t, int64(1), outcome.Affected)
+	require.Equal(t, rasql.DurabilityCommitted, outcome.Durability)
 
 	type user struct {
-		Email string `rasql:"email"`
+		Email string
 	}
 	users, err := rasql.TableOf[user](schema.TableDef{
 		Name:    "users",
 		Columns: []schema.ColumnDef{{Name: "email", Type: schema.TextType{}}},
 	})
 	require.NoError(t, err)
+	usersSource, err := rasql.SourceOf(users, "")
+	require.NoError(t, err)
+	email, err := rasql.BindColumn[user, string](usersSource, "email", "")
+	require.NoError(t, err)
 	mock.ExpectExec("INSERT INTO \"users\" (\"email\") VALUES (?)").WithArgs("grace@example.com").WillReturnResult(sqlmock.NewResult(2, 1))
-	result, err = rasql.Insert(t.Context(), db, users, user{Email: "grace@example.com"})
-	require.NotNil(t, result)
+	createPlan, err := rasql.NewCreatePlan(users, rasql.SetField(email, "grace@example.com"))
+	require.NoError(t, err)
+	outcome, err = rasql.ExecMutation(t.Context(), executor, createPlan)
 	require.Error(t, err)
-	rows, rowsErr = result.RowsAffected()
-	require.NoError(t, rowsErr)
-	require.Equal(t, int64(1), rows)
+	require.ErrorAs(t, err, &extensionErr)
+	require.True(t, extensionErr.ExecutionSucceeded())
+	require.Equal(t, int64(1), outcome.Affected)
+	require.Equal(t, rasql.DurabilityCommitted, outcome.Durability)
 }

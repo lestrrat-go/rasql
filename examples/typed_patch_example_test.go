@@ -18,9 +18,11 @@ func Example_typedPatch() {
 		WithArgs("active", int64(1)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	db, _ := rasql.New(database, dialect.SQLite())
+	profile, _ := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 40, 0)
+	executor, _ := rasql.AsExecutor(db, profile)
 	predicate := query.EqualValue(store.Users().ID(), int64(1))
 	plan, _ := store.NewUsersPatch().Status("active").Where(predicate)
-	_, err := rasql.ExecPatch(context.Background(), db, plan)
+	_, err := rasql.ExecMutation(context.Background(), executor, plan)
 	fmt.Println(err)
 	// Output: <nil>
 }

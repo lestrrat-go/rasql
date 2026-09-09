@@ -119,12 +119,20 @@ func orderResultAliasFixture(t *testing.T) (*sql.DB, schema.TableDef) {
 	people, err := rasql.TableOf[person](definition)
 	require.NoError(t, err)
 	require.NoError(t, rasql.CreateTable(t.Context(), db, people))
+	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+	require.NoError(t, err)
+	executor, err := rasql.AsExecutor(db, profile)
+	require.NoError(t, err)
+	personID := query.TypedColumnOf[person, int64](people.Column("id"))
+	personCity := query.TypedColumnOf[person, string](people.Column("city"))
 	for _, fixture := range []person{
 		{ID: 1, City: "tokyo"},
 		{ID: 2, City: "osaka"},
 		{ID: 3, City: "tokyo"},
 	} {
-		_, err = rasql.Insert(t.Context(), db, people, fixture)
+		plan, err := rasql.NewCreatePlan(people, rasql.SetField(personID, fixture.ID), rasql.SetField(personCity, fixture.City))
+		require.NoError(t, err)
+		_, err = rasql.ExecMutation(t.Context(), executor, plan)
 		require.NoError(t, err)
 	}
 	return database, definition

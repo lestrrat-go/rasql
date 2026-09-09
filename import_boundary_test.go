@@ -8,20 +8,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestRootAndDynamicDoNotImportEachOther states the layering rule the compiler
-// stopped enforcing when the runtime moved into rasql/exec. Before that move
-// dynamic imported rasql, so rasql importing dynamic was a cycle the compiler
-// refused. Now dynamic imports rasql/exec instead, and neither direction is a
-// cycle: either import would compile, and only this test refuses it. The two
-// directions involving rasql/exec are left out on purpose, because both are
-// still cycles the compiler catches.
-func TestRootAndDynamicDoNotImportEachOther(t *testing.T) {
+// TestRootDoesNotImportRemovedDynamicPackage keeps the root package free of
+// the retired facade without asking go list to load a package that no longer
+// exists. Boundaries among the supported root and exec packages remain
+// compiler-enforced import-cycle checks.
+func TestRootDoesNotImportRemovedDynamicPackage(t *testing.T) {
 	require.NotContains(t, deps(t, "github.com/lestrrat-go/rasql"),
 		"github.com/lestrrat-go/rasql/dynamic",
-		"the root package must not import rasql/dynamic: the typed facade is the layer above it")
-	require.NotContains(t, deps(t, "github.com/lestrrat-go/rasql/dynamic"),
-		"github.com/lestrrat-go/rasql",
-		"rasql/dynamic must not import the root package: it needs the runtime, which is rasql/exec")
+		"the root package must not import the retired rasql/dynamic facade")
 }
 
 // deps returns the import paths go reports for pkg, one per element.
