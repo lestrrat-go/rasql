@@ -458,8 +458,9 @@ func runBuild(t *testing.T, root, packagePath, name string) buildSample {
 
 func writeBuildArtifact(t *testing.T, repoRoot string, manifest footprintManifest, files int, bytes, generationDurationNS int64, rasqlSamples, sqlSamples []buildSample) {
 	t.Helper()
-	commit := CommitFromEnvironment()
-	require.NotEmptyf(t, commit, "%s is not set; this artifact records a performance measurement against the commit that produced it, so it cannot be written without one -- export %s=$(git rev-parse HEAD) for a local run", ConformanceCommitEnvVar, ConformanceCommitEnvVar)
+	commit, err := artifactCommit(repoRoot)
+	require.NoError(t, err)
+	require.NotEmpty(t, commit)
 	data, err := json.MarshalIndent(buildArtifact{
 		Format: "rasql.d4.generated-footprint.v1", Engine: manifest.Engine, Profile: manifest.Profile,
 		GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
@@ -496,6 +497,23 @@ func writeBuildArtifact(t *testing.T, repoRoot string, manifest footprintManifes
 	require.Len(t, decoded.SQLSamples, 5)
 	require.Equal(t, medianBuildSample(decoded.RasqlSamples), decoded.RasqlMedian)
 	require.Equal(t, medianBuildSample(decoded.SQLSamples), decoded.SQLMedian)
+}
+
+func artifactCommit(repoRoot string) (string, error) {
+	if commit := CommitFromEnvironment(); commit != "" {
+		return commit, nil
+	}
+	command := exec.Command("git", "rev-parse", "HEAD")
+	command.Dir = repoRoot
+	output, err := command.Output()
+	if err != nil {
+		return "", fmt.Errorf("resolve repository commit: %w", err)
+	}
+	commit := strings.TrimSpace(string(output))
+	if commit == "" {
+		return "", fmt.Errorf("resolve repository commit: empty output")
+	}
+	return commit, nil
 }
 
 func medianBuildSample(values []buildSample) buildSample {
