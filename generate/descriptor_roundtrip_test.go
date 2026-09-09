@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/lestrrat-go/rasql/internal/scratchmod"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
@@ -74,8 +75,7 @@ func TestSchemaDescriptorRoundTripsThroughGeneratedSource(t *testing.T) {
 	directory := t.TempDir()
 	repository, err := filepath.Abs("..")
 	require.NoError(t, err)
-	module := "module example.com/roundtrip\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => " + filepath.ToSlash(repository) + "\n"
-	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte(module), 0o600))
+	require.NoError(t, scratchmod.Write(directory, repository, "example.com/roundtrip"))
 	packageDir := filepath.Join(directory, "generated")
 	store := compactPackageStore(t, packageDir, widgets, owners)
 	plan, err := store.Plan()

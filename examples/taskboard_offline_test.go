@@ -1,7 +1,6 @@
 package examples_test
 
 import (
-	"bytes"
 	"encoding/json"
 	"io/fs"
 	"os"
@@ -10,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lestrrat-go/rasql/internal/scratchmod"
 	"github.com/stretchr/testify/require"
 )
 
@@ -110,12 +110,7 @@ func copyTaskboardModuleForOffline(t *testing.T, source string) string {
 	t.Helper()
 	destination := filepath.Join(t.TempDir(), "taskboard")
 	require.NoError(t, copyTaskboardTree(source, destination))
-	goMod := filepath.Join(destination, "go.mod")
-	contents, err := os.ReadFile(goMod)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(goMod, bytes.Replace(contents,
-		[]byte("replace github.com/lestrrat-go/rasql => ../.."),
-		[]byte("replace github.com/lestrrat-go/rasql => /unused/local/replace"), 1), 0o644))
+	require.NoError(t, scratchmod.Repoint(filepath.Join(destination, "go.mod"), "github.com/lestrrat-go/rasql", "/unused/local/replace"))
 	return destination
 }
 

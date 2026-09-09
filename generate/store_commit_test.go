@@ -13,10 +13,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/internal/genfile"
+	"github.com/lestrrat-go/rasql/internal/scratchmod"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
@@ -156,14 +156,9 @@ func TestPlanCommitWritesNothingWhenADestinationIsRefused(t *testing.T) {
 
 func TestHeldStorePlanRefusesNewGeneratedOutput(t *testing.T) {
 	moduleDir := t.TempDir()
-	repoGoMod, err := os.ReadFile(filepath.Join("..", "go.mod"))
-	require.NoError(t, err)
 	repository, err := filepath.Abs("..")
 	require.NoError(t, err)
-	module := strings.Replace(string(repoGoMod), "module github.com/lestrrat-go/rasql\n", "module example.com/consumer\n", 1)
-	module += "\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => " + filepath.ToSlash(repository) + "\n"
-	require.NoError(t, os.WriteFile(filepath.Join(moduleDir, "go.mod"), []byte(module), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(moduleDir, "go.sum"), mustReadFile(t, filepath.Join("..", "go.sum")), 0o600))
+	require.NoError(t, scratchmod.Write(moduleDir, repository, "example.com/consumer"))
 
 	dir := filepath.Join(moduleDir, "internal", "store")
 	users, orders := commitTestUsersDef(), commitTestOrdersDef()
@@ -238,13 +233,6 @@ func TestHeldStorePlanWithPruneRefusesNewGeneratedOutput(t *testing.T) {
 	err = held.Check()
 	require.ErrorContains(t, err, "gained 1 file(s) rasqlgen wrote")
 	require.Equal(t, before, snapshotDirFiles(t, dir))
-}
-
-func mustReadFile(t *testing.T, path string) []byte {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
-	return data
 }
 
 func runGeneratedPackageTest(t *testing.T, moduleDir string) {

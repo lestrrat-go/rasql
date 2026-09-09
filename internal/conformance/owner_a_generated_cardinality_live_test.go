@@ -7,10 +7,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/internal/dbtest"
+	"github.com/lestrrat-go/rasql/internal/scratchmod"
 	"github.com/stretchr/testify/require"
 )
 
@@ -30,12 +30,7 @@ func runGeneratedLiveFixture(t *testing.T, engine, dsn string) {
 	// go.sum copied alongside, rather than naming the live driver's version
 	// by hand: see profile_test.go's runGeneratedCardinalityProfile for why
 	// a hand-picked require list breaks under CI's GOPROXY=off.
-	repoGoMod, err := os.ReadFile(filepath.Join(repoRoot, "go.mod"))
-	require.NoError(t, err)
-	goMod := strings.Replace(string(repoGoMod), "module github.com/lestrrat-go/rasql\n", fmt.Sprintf("module %s\n", modulePath), 1)
-	goMod += fmt.Sprintf("\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => %s\n", filepath.ToSlash(repoRoot))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte(goMod), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "go.sum"), mustReadFile(t, filepath.Join(repoRoot, "go.sum")), 0o600))
+	require.NoError(t, scratchmod.Write(root, repoRoot, modulePath))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "cardinality_live_test.go"), []byte(generatedLiveCardinalityTest(engine, modulePath)), 0o600))
 	command := exec.Command("go", "test", "-run", "^TestGeneratedLiveCardinalityRuntime$")
 	command.Dir = root

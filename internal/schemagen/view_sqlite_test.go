@@ -6,13 +6,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/catalog"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/inspect"
+	"github.com/lestrrat-go/rasql/internal/scratchmod"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/mod/modfile"
 	_ "modernc.org/sqlite"
 )
 
@@ -69,8 +70,14 @@ func TestGeneratedSQLiteViewCanBeRead(t *testing.T) {
 		"}\n")
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "usage_test.go"), usage, 0o600))
 	repoRoot := filepath.Join(filepath.Dir(filename), "../..")
-	module := "module example.com/generated\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire " + pinnedRequire(t, repoRoot, "modernc.org/sqlite") + "\n\nreplace github.com/lestrrat-go/rasql => " + filepath.ToSlash(repoRoot) + "\n"
-	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), []byte(module), 0o600))
+	file, err := scratchmod.ForModule(repoRoot, "example.com/generated")
+	require.NoError(t, err)
+	require.NoError(t, file.AddRequire("modernc.org/sqlite", pinnedVersion(t, repoRoot, "modernc.org/sqlite")))
+	data, err := scratchmod.Format(file)
+	require.NoError(t, err)
+	// No go.sum copied alongside: the `go mod tidy` below needs the network
+	// regardless, so a copy would buy this fixture nothing.
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "go.mod"), data, 0o600))
 	command := exec.Command("go", "mod", "tidy")
 	command.Dir = directory
 	output, err := command.CombinedOutput()
@@ -81,21 +88,21 @@ func TestGeneratedSQLiteViewCanBeRead(t *testing.T) {
 	require.NoError(t, err, "generated SQLite view consumer failed:\n%s", output)
 }
 
-// pinnedRequire reads the version the repository's own go.mod pins for
+// pinnedVersion reads the version the repository's own go.mod pins for
 // module, so a scratch fixture's go.mod names a version rasql actually
 // depends on rather than one written down by hand that can drift out of
 // sync with go.mod.
-func pinnedRequire(t *testing.T, repoRoot, module string) string {
+func pinnedVersion(t *testing.T, repoRoot, module string) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(repoRoot, "go.mod"))
+	goModPath := filepath.Join(repoRoot, "go.mod")
+	data, err := os.ReadFile(goModPath)
 	require.NoError(t, err)
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		rest, ok := strings.CutPrefix(line, module+" ")
-		if !ok {
-			continue
+	file, err := modfile.Parse(goModPath, data, nil)
+	require.NoError(t, err)
+	for _, r := range file.Require {
+		if r.Mod.Path == module {
+			return r.Mod.Version
 		}
-		return module + " " + strings.Fields(rest)[0]
 	}
 	t.Fatalf("go.mod has no requirement for %s", module)
 	return ""

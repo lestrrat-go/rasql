@@ -9,6 +9,7 @@ import (
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/schemagen"
+	"github.com/lestrrat-go/rasql/internal/scratchmod"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
@@ -77,16 +78,14 @@ func TestCompactHonoursColumnGoBinding(t *testing.T) {
 	require.Contains(t, accountsSource, `"example.com/domain"`, "the bound type's package must be imported")
 	require.NoError(t, plan.Commit())
 
-	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte(`module example.com/columnbinding
-
-go 1.26
-
-require github.com/lestrrat-go/rasql v0.0.0
-require example.com/domain v1.0.0
-
-replace github.com/lestrrat-go/rasql => `+repoRoot(t)+`
-replace example.com/domain => ./domain
-`), 0o600))
+	file, err := scratchmod.ForModule(repoRoot(t), "example.com/columnbinding")
+	require.NoError(t, err)
+	require.NoError(t, file.AddRequire("example.com/domain", "v1.0.0"))
+	require.NoError(t, file.AddReplace("example.com/domain", "", "./domain", ""))
+	data, err := scratchmod.Format(file)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), data, 0o600))
+	require.NoError(t, scratchmod.WriteGoSum(root, repoRoot(t)))
 	domainDir := filepath.Join(root, "domain")
 	require.NoError(t, os.MkdirAll(domainDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(domainDir, "go.mod"), []byte("module example.com/domain\n\ngo 1.26\n"), 0o600))

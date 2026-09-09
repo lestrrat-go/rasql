@@ -4,14 +4,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/querygen"
+	"github.com/lestrrat-go/rasql/internal/scratchmod"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/mod/modfile"
 )
 
 func TestRenderCompactConcurrent(t *testing.T) {
@@ -257,7 +258,13 @@ func TestCompactGeneratedGraphAliasReproducer(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "generated"), 0o755))
 	require.NoError(t, plan.Commit())
-	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/graph\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire "+pinnedRequire(t, "modernc.org/sqlite")+"\nreplace github.com/lestrrat-go/rasql => "+repoRoot(t)+"\n"), 0o600))
+	file, err := scratchmod.ForModule(repoRoot(t), "example.com/graph")
+	require.NoError(t, err)
+	require.NoError(t, file.AddRequire("modernc.org/sqlite", pinnedVersion(t, "modernc.org/sqlite")))
+	data, err := scratchmod.Format(file)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), data, 0o600))
+	require.NoError(t, scratchmod.WriteGoSum(root, repoRoot(t)))
 	consumer := `package store_test
 
 import (
@@ -319,8 +326,13 @@ func TestCompactGeneratedGraphSourceMismatchMatrix(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "generated"), 0o755))
 	require.NoError(t, plan.Commit())
-	module := "module example.com/mismatch\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire " + pinnedRequire(t, "modernc.org/sqlite") + "\nreplace github.com/lestrrat-go/rasql => " + repoRoot(t) + "\n"
-	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte(module), 0o600))
+	file, err := scratchmod.ForModule(repoRoot(t), "example.com/mismatch")
+	require.NoError(t, err)
+	require.NoError(t, file.AddRequire("modernc.org/sqlite", pinnedVersion(t, "modernc.org/sqlite")))
+	data, err := scratchmod.Format(file)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), data, 0o600))
+	require.NoError(t, scratchmod.WriteGoSum(root, repoRoot(t)))
 	consumer := `package store_test
 
 import (
@@ -524,21 +536,21 @@ func repoRoot(t *testing.T) string {
 	return root
 }
 
-// pinnedRequire reads the version the repository's own go.mod pins for
+// pinnedVersion reads the version the repository's own go.mod pins for
 // module, so a scratch fixture's go.mod names a version rasql actually
 // depends on rather than one written down by hand that can drift out of
 // sync with go.mod.
-func pinnedRequire(t *testing.T, module string) string {
+func pinnedVersion(t *testing.T, module string) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(repoRoot(t), "go.mod"))
+	goModPath := filepath.Join(repoRoot(t), "go.mod")
+	data, err := os.ReadFile(goModPath)
 	require.NoError(t, err)
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		rest, ok := strings.CutPrefix(line, module+" ")
-		if !ok {
-			continue
+	file, err := modfile.Parse(goModPath, data, nil)
+	require.NoError(t, err)
+	for _, r := range file.Require {
+		if r.Mod.Path == module {
+			return r.Mod.Version
 		}
-		return module + " " + strings.Fields(rest)[0]
 	}
 	t.Fatalf("go.mod has no requirement for %s", module)
 	return ""
