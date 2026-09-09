@@ -58,6 +58,7 @@ type buildArtifact struct {
 }
 
 func TestGeneratedFootprintBuild(t *testing.T) {
+	skipUnderShort(t)
 	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
 	require.NoError(t, err)
 	cli := buildRasqlCLI(t)

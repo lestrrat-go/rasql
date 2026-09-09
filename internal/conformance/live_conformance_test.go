@@ -12,6 +12,7 @@ import (
 )
 
 func TestConformancePostgreSQL17(t *testing.T) {
+	skipUnderShort(t)
 	engine, ok := EngineByName("postgresql")
 	if !ok {
 		t.Fatal("postgresql conformance engine is missing")
@@ -21,6 +22,7 @@ func TestConformancePostgreSQL17(t *testing.T) {
 }
 
 func TestConformanceMySQL84(t *testing.T) {
+	skipUnderShort(t)
 	engine, ok := EngineByName("mysql")
 	if !ok {
 		t.Fatal("mysql conformance engine is missing")
