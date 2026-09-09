@@ -4,14 +4,15 @@ The repository returns graph state, and the view model turns that state into
 HTML values. The conversion keeps SQL concerns out of the handler while still
 checking every loaded-state bit.
 
-<!-- INCLUDE(sample/taskboard/internal/taskboard/taskboard.go#task_text) -->
+Every task in this version has an owner, so the view model has no due date
+and nothing to say about an absent one yet:
+
 ```go
 // Task is one open task as the page prints it.
 type Task struct {
 	ID       int64
 	Title    string
 	Assignee string
-	DueOn    string
 }
 
 // Unassigned is what the page prints where an owner's name would go.
@@ -26,23 +27,12 @@ func assigneeText(loaded rasql.LoadedOne[store.MembersRow]) (string, error) {
 	}
 	return loaded.Value.Name, nil
 }
-
-func dueText(due rasql.Nullable[time.Time]) string {
-	if !due.Valid {
-		return ""
-	}
-	return due.Value.Format(time.DateOnly)
-}
 ```
-source: [sample/taskboard/internal/taskboard/taskboard.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/taskboard/taskboard.go)
-<!-- END INCLUDE -->
 
-<!-- INCLUDE(sample/taskboard/internal/taskboard/taskboard.go#page) -->
 ```go
 // Page is everything one drawing of the page needs.
 type Page struct {
 	Groups   []Group
-	Overdue  int64
 	Projects []Choice
 	Members  []Choice
 	Limit    int
@@ -50,8 +40,6 @@ type Page struct {
 	HasMore  bool
 }
 ```
-source: [sample/taskboard/internal/taskboard/taskboard.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/taskboard/taskboard.go)
-<!-- END INCLUDE -->
 
 `Tasks.Loaded` distinguishes a project with no matching open tasks from a
 project whose tasks were never expanded. An optional assignee has
@@ -61,8 +49,8 @@ must include a nonnil value. Any unloaded state is an error.
 ## Pass the page request through HTTP
 
 The handler parses the cursor and limit, calls the one repository page method,
-and places the returned cursor in the next link. It makes separate bounded
-reads for form choices and the overdue count.
+and places the returned cursor in the next link. It makes a separate bounded
+read for the form choices.
 
 <!-- INCLUDE(sample/taskboard/internal/web/taskboard.go#template) -->
 ```go
@@ -115,24 +103,10 @@ func (h Handler) fail(w http.ResponseWriter, r *http.Request, what string, err e
 source: [sample/taskboard/internal/web/taskboard.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/web/taskboard.go)
 <!-- END INCLUDE -->
 
-<!-- INCLUDE(sample/taskboard/internal/web/taskboard.go#empty_assignee) -->
-```go
-// An empty assignee_id is the form's way of saying nobody owns this yet.
-var assigneeID *int64
-if raw := r.FormValue("assignee_id"); raw != "" {
-	parsed, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil {
-		http.Error(w, "assignee_id must be a number", http.StatusBadRequest)
-		return
-	}
-	assigneeID = &parsed
-}
-```
-source: [sample/taskboard/internal/web/taskboard.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/web/taskboard.go)
-<!-- END INCLUDE -->
-
-The page never reconstructs graph keys or joins. It receives project groups and
-cursor state from the repository, then renders them.
+The add-task form requires a real `assignee_id`; chapter 7 is where an empty
+one first means something. The page never reconstructs graph keys or joins.
+It receives project groups and cursor state from the repository, then renders
+them.
 
 ## Start the service
 

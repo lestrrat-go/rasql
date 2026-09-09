@@ -10,8 +10,6 @@ import (
 	"github.com/lestrrat-go/rasql"
 )
 
-// BEGIN(task_text)
-
 // Task is one open task as the page prints it.
 type Task struct {
 	ID       int64
@@ -39,8 +37,6 @@ func dueText(due rasql.Nullable[time.Time]) string {
 	}
 	return due.Value.Format(time.DateOnly)
 }
-
-// END(task_text)
 
 // Group is one project's block of open tasks.
 type Group struct {

@@ -214,6 +214,8 @@ func (repository Repository) OpenProjects(ctx context.Context, request rasql.Pag
 	return result, nil
 }
 
+// BEGIN(addtask)
+
 // AddTask files one open task against projectID. A nil assigneeID files it
 // with nobody on it.
 func (repository Repository) AddTask(ctx context.Context, projectID int64, assigneeID *int64, title string) error {
@@ -232,6 +234,8 @@ func (repository Repository) AddTask(ctx context.Context, projectID int64, assig
 	}
 	return nil
 }
+
+// END(addtask)
 
 // BEGIN(closetask)
 

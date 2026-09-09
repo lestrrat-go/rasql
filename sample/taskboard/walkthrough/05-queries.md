@@ -72,8 +72,9 @@ only retained projects.
 ## Write with generated inputs
 
 `AddTask` uses the generated create input. It asks the database for the open
-and creation-time defaults, and uses `ClearAssigneeID` for an explicit NULL.
-An assignee uses the typed setter. No write column is named as a string.
+and creation-time defaults, and sets the assignee with the typed setter;
+`assignee_id` is required, so every call must name one. No write column is
+named as a string.
 
 <!-- INCLUDE(sample/taskboard/internal/store/repository.go#closetask) -->
 ```go
