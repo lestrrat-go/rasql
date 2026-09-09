@@ -111,8 +111,18 @@ func runGeneratedCardinalityProfile(t *testing.T, tc profileCase) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(moduleRoot, "recording_driver_test.go"), driverSource, 0o600))
 	modulePath := "example.test/cardinality/" + tc.engine
-	goMod := fmt.Sprintf("module %s\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire %s\n\nreplace github.com/lestrrat-go/rasql => %s\n", modulePath, pinnedRequire(t, repoRoot, "github.com/stretchr/testify"), filepath.ToSlash(repoRoot))
+	// The fixture's own go.mod starts from the repository's, with its
+	// go.sum copied alongside, rather than naming testify's version by
+	// hand: a hand-picked require list has no go.sum entry for its own
+	// module graph, and under CI's GOPROXY=off resolving that graph
+	// (testify pulls in gopkg.in/yaml.v3, which requires gopkg.in/check.v1)
+	// fails.
+	repoGoMod, err := os.ReadFile(filepath.Join(repoRoot, "go.mod"))
+	require.NoError(t, err)
+	goMod := strings.Replace(string(repoGoMod), "module github.com/lestrrat-go/rasql\n", fmt.Sprintf("module %s\n", modulePath), 1)
+	goMod += fmt.Sprintf("\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => %s\n", filepath.ToSlash(repoRoot))
 	require.NoError(t, os.WriteFile(filepath.Join(moduleRoot, "go.mod"), []byte(goMod), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(moduleRoot, "go.sum"), mustReadFile(t, filepath.Join(repoRoot, "go.sum")), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(moduleRoot, "cardinality_profile_test.go"), []byte(generatedCardinalityProfileTest(tc, modulePath)), 0o600))
 	command := exec.Command("go", "test", "-run", "^TestGeneratedCardinalityProfile$")
 	command.Dir = moduleRoot
@@ -532,8 +542,15 @@ func runGeneratedProfile(t *testing.T, tc profileCase, records string) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(moduleRoot, "recording_driver_test.go"), driverSource, 0o600))
 	modulePath := "github.com/lestrrat-go/rasql/internal/conformance/fixture/" + tc.engine
-	goMod := fmt.Sprintf("module %s\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire %s\n\nreplace github.com/lestrrat-go/rasql => %s\n", modulePath, pinnedRequire(t, repoRoot, "github.com/stretchr/testify"), filepath.ToSlash(repoRoot))
+	// The fixture's own go.mod starts from the repository's, with its
+	// go.sum copied alongside: see runGeneratedCardinalityProfile's comment
+	// on why a hand-picked require list breaks under CI's GOPROXY=off.
+	repoGoMod, err := os.ReadFile(filepath.Join(repoRoot, "go.mod"))
+	require.NoError(t, err)
+	goMod := strings.Replace(string(repoGoMod), "module github.com/lestrrat-go/rasql\n", fmt.Sprintf("module %s\n", modulePath), 1)
+	goMod += fmt.Sprintf("\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => %s\n", filepath.ToSlash(repoRoot))
 	require.NoError(t, os.WriteFile(filepath.Join(moduleRoot, "go.mod"), []byte(goMod), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(moduleRoot, "go.sum"), mustReadFile(t, filepath.Join(repoRoot, "go.sum")), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(moduleRoot, "profile_consumer_test.go"), []byte(generatedProfileTest(tc, modulePath)), 0o600))
 	command := exec.Command("go", "test", "-run", "^TestGeneratedProfile$")
 	command.Dir = moduleRoot

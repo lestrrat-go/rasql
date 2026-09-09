@@ -281,30 +281,21 @@ func TestOfflineBuildEnvChild(t *testing.T) {
 	}
 }
 
+// writeBuildModule starts the fixture's go.mod from the repository's own,
+// with its go.sum copied alongside, rather than naming modernc.org/sqlite's
+// version by hand: a hand-picked require list has no go.sum entry for its
+// own module graph, and under CI's GOPROXY=off resolving that graph (which
+// runs through gopkg.in/yaml.v3 to gopkg.in/check.v1) fails.
 func writeBuildModule(t *testing.T, root, repoRoot string) error {
 	t.Helper()
-	module := fmt.Sprintf("module example.test/generated\n\ngo 1.26\n\nrequire github.com/lestrrat-go/rasql v0.0.0\nrequire %s\n\nreplace github.com/lestrrat-go/rasql => %s\n", pinnedRequire(t, repoRoot, "modernc.org/sqlite"), filepath.ToSlash(repoRoot))
-	return os.WriteFile(filepath.Join(root, "go.mod"), []byte(module), 0o600)
-}
-
-// pinnedRequire reads the version the repository's own go.mod pins for
-// module, so a scratch fixture's go.mod names a version rasql actually
-// depends on rather than one written down by hand that can drift out of
-// sync with go.mod.
-func pinnedRequire(t *testing.T, repoRoot, module string) string {
-	t.Helper()
-	data, err := os.ReadFile(filepath.Join(repoRoot, "go.mod"))
+	repoGoMod, err := os.ReadFile(filepath.Join(repoRoot, "go.mod"))
 	require.NoError(t, err)
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		rest, ok := strings.CutPrefix(line, module+" ")
-		if !ok {
-			continue
-		}
-		return module + " " + strings.Fields(rest)[0]
+	module := strings.Replace(string(repoGoMod), "module github.com/lestrrat-go/rasql\n", "module example.test/generated\n", 1)
+	module += fmt.Sprintf("\nrequire github.com/lestrrat-go/rasql v0.0.0\n\nreplace github.com/lestrrat-go/rasql => %s\n", filepath.ToSlash(repoRoot))
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte(module), 0o600); err != nil {
+		return err
 	}
-	t.Fatalf("go.mod has no requirement for %s", module)
-	return ""
+	return os.WriteFile(filepath.Join(root, "go.sum"), mustReadFile(t, filepath.Join(repoRoot, "go.sum")), 0o600)
 }
 
 func writeConsumer(root, engine string, rasqlProgram bool) error {
