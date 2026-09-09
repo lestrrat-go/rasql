@@ -6,6 +6,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
 
@@ -75,6 +76,30 @@ func TestNativeEngineMismatchMakesZeroQueryCalls(t *testing.T) {
 	require.Equal(t, int64(0), raw.calls.Load())
 }
 
+func TestNativeDerivedRejectsDollarZeroBeforeHandleUse(t *testing.T) {
+	projection := runtimeQuery(t).Projection()
+	base, err := Native(NativeStatement{Engine: "postgresql", SQL: "SELECT $0 AS value"}, projection, Many)
+	require.NoError(t, err)
+	source, err := Derive(base, "native_values")
+	require.NoError(t, err)
+	value, err := BindResultColumn[int64, int64](source, "value")
+	require.NoError(t, err)
+	outer, err := Scalar("value", value.Expr(), schema.IntegerType{}, "")
+	require.NoError(t, err)
+	query := Select(source.Source(), outer)
+	raw := &runtimeFakeExecutor{dialect: dialect.PostgreSQL()}
+	profile, err := EngineProfileFromVersion("postgresql-17", 17, 6, 0)
+	require.NoError(t, err)
+	executor, err := WithEngineProfile(raw, profile)
+	require.NoError(t, err)
+	_, err = All(t.Context(), executor, query)
+	var planErr *PlanError
+	require.ErrorAs(t, err, &planErr)
+	require.Equal(t, "invalid_query", planErr.Code)
+	require.Equal(t, "native.sql", planErr.Path)
+	require.Equal(t, int64(0), raw.calls.Load())
+}
+
 func TestNativeCompositionRefusesEveryModifier(t *testing.T) {
 	q := nativeRuntimeQuery(t, Many)
 	other := runtimeQuery(t)
@@ -118,8 +143,6 @@ func TestNativeCompositionRefusesEveryModifier(t *testing.T) {
 		name string
 		call func() error
 	}{
-		{"derive", func() error { _, err := Derive(q, "d"); return err }},
-		{"cte", func() error { _, err := CTEOf("c", q); return err }},
 		{"combine", func() error { _, err := Combine(q, UnionAll, q); return err }},
 		{"with", func() error { _, err := With(q); return err }},
 		{"count", func() error { return CountQuery(q, false).Validate() }},
@@ -131,6 +154,29 @@ func TestNativeCompositionRefusesEveryModifier(t *testing.T) {
 			require.Equal(t, "unsupported_feature", planErr.Code)
 			require.Equal(t, "native", planErr.Path)
 		})
+	}
+}
+
+func TestNativeSelectCompositionSucceedsAndDMLCompositionFails(t *testing.T) {
+	q := nativeRuntimeQuery(t, Many)
+	derived, err := Derive(q, "derived_values")
+	require.NoError(t, err)
+	require.Equal(t, q.Schema().Columns(), derived.Source().ref.Columns())
+	cte, err := CTEOf("native_values", q)
+	require.NoError(t, err)
+	_, err = cte.Source("native_alias")
+	require.NoError(t, err)
+
+	dml, err := Native(NativeStatement{Engine: "sqlite", SQL: "UPDATE values SET value = ? RETURNING value", Args: []NativeArgument{{Value: int64(1)}}}, q.Projection(), Many)
+	require.NoError(t, err)
+	for _, compose := range []func() error{
+		func() error { _, err := Derive(dml, "dml_values"); return err },
+		func() error { _, err := CTEOf("dml_values", dml); return err },
+	} {
+		var planErr *PlanError
+		require.ErrorAs(t, compose(), &planErr)
+		require.Equal(t, "unsupported_feature", planErr.Code)
+		require.Equal(t, "native", planErr.Path)
 	}
 }
 

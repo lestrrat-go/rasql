@@ -42,7 +42,7 @@ func TestMutationAtomicCommitAndRollbackLifecycle(t *testing.T) {
 				})
 			}))
 			require.NoError(t, err)
-			outcome, executionErr := rasql.ExecMutationBatch(t.Context(), executor, plans, rasql.MutationBatchOptions{Atomic: true, MaxRows: 1, Classifier: mutationRejectClassifier{}})
+			outcome, executionErr := rasql.ExecMutationBatch(t.Context(), executor, plans, rasql.BulkOptions{Atomic: true, MaxRows: 1, Classifier: mutationRejectClassifier{}})
 			if test.failure {
 				require.Error(t, executionErr)
 				require.Equal(t, []rasql.InputOutcome{rasql.InputRolledBack, rasql.InputRejected}, outcome.Inputs)
@@ -79,14 +79,14 @@ func TestMutationAtomicPreflightRejectsNegativeLimitsWithoutExecution(t *testing
 	value := queryTypedMutationValue(table)
 	plan, err := rasql.NewCreatePlan(table, rasql.SetField(id, int64(1)), rasql.SetField(value, "one"))
 	require.NoError(t, err)
-	for _, options := range []rasql.MutationBatchOptions{{Atomic: true, MaxRows: -1}, {Atomic: true, MaxBindParameters: -1}} {
+	for _, options := range []rasql.BulkOptions{{Atomic: true, MaxRows: -1}, {Atomic: true, MaxBindParameters: -1}} {
 		outcome, executionErr := rasql.ExecMutationBatch(t.Context(), executor, []rasql.MutationPlan{plan}, options)
 		require.Error(t, executionErr)
 		require.Equal(t, []rasql.InputOutcome{rasql.InputUnattempted}, outcome.Inputs)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	outcome, executionErr := rasql.ExecMutationBatch(ctx, executor, []rasql.MutationPlan{plan}, rasql.MutationBatchOptions{Atomic: true})
+	outcome, executionErr := rasql.ExecMutationBatch(ctx, executor, []rasql.MutationPlan{plan}, rasql.BulkOptions{Atomic: true})
 	require.ErrorIs(t, executionErr, context.Canceled)
 	require.Equal(t, []rasql.InputOutcome{rasql.InputUnattempted}, outcome.Inputs)
 }

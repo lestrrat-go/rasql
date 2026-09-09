@@ -100,7 +100,7 @@ func TestMySQLProgressRevertJournalSeamExecutedReconnects(t *testing.T) {
 func TestMySQLProgressRevertNotExecutedReconnectsAndRetries(t *testing.T) {
 	config := dbtest.MySQLConfig(t)
 	database := dbtest.MySQLDB(t)
-	history := dbtest.UniqueName(t, "p7_revert_not_executed_history")
+	history := dbtest.UniqueName(t, "p7_rev_noexec_hist")
 	first := dbtest.UniqueName(t, "p7_revert_not_executed_first")
 	second := dbtest.UniqueName(t, "p7_revert_not_executed_second")
 	migration := liveTwoTableMigration("001_revert_not_executed", first, second, true)

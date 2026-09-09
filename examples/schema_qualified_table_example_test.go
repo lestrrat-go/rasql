@@ -28,6 +28,15 @@ type EventsTable struct {
 func (t EventsTable) ID() query.ColumnRef     { return rasql.ColumnOf(t.Table, "id") }
 func (t EventsTable) Action() query.ColumnRef { return rasql.ColumnOf(t.Table, "action") }
 
+// eventDecoder decodes an EventRow from its two columns, in projection order.
+type eventDecoder struct{ result rasql.ResultSchema }
+
+func (d eventDecoder) ResultSchema() rasql.ResultSchema { return d.result }
+func (d eventDecoder) Presence() []rasql.Presence       { return nil }
+func (d eventDecoder) DecodeRow(src rasql.ScanSource, row *EventRow) error {
+	return src.Scan(&row.ID, &row.Action)
+}
+
 func Example_schema_qualified_table() {
 	// This example creates and queries a table through a schema-qualified
 	// descriptor. Schema names a PostgreSQL schema, a MySQL database, or, as
@@ -56,6 +65,16 @@ func Example_schema_qualified_table() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 40, 0)
+	if err != nil {
+		fmt.Printf("failed to describe engine profile: %s\n", err)
+		return
+	}
+	executor, err := rasql.AsExecutor(db, profile)
+	if err != nil {
+		fmt.Printf("failed to create executor: %s\n", err)
+		return
+	}
 
 	// InSchema qualifies the table without changing how any other option works.
 	events := EventsTable{rasql.MustTableOf[EventRow](schema.MustTableDef("events",
@@ -71,14 +90,56 @@ func Example_schema_qualified_table() {
 		return
 	}
 
+	source, err := rasql.SourceOf(events, "")
+	if err != nil {
+		fmt.Printf("failed to bind events source: %s\n", err)
+		return
+	}
+	id, err := rasql.BindColumn[EventRow, int64](source, "id", "")
+	if err != nil {
+		fmt.Printf("failed to bind id column: %s\n", err)
+		return
+	}
+	action, err := rasql.BindColumn[EventRow, string](source, "action", "")
+	if err != nil {
+		fmt.Printf("failed to bind action column: %s\n", err)
+		return
+	}
+
 	// SQL: INSERT INTO audit.events (id, action) VALUES (?, ?) (arguments: 1, "created")
-	if _, err := rasql.Insert(ctx, db, events, EventRow{ID: 1, Action: "created"}); err != nil {
+	createPlan, err := rasql.NewCreatePlan[EventRow](events,
+		rasql.SetField[EventRow](id, int64(1)),
+		rasql.SetField[EventRow](action, "created"),
+	)
+	if err != nil {
+		fmt.Printf("failed to build create plan: %s\n", err)
+		return
+	}
+	if _, err := rasql.ExecMutation(ctx, executor, createPlan); err != nil {
 		fmt.Printf("failed to insert event: %s\n", err)
 		return
 	}
 
+	result, err := rasql.NewResultSchema(
+		rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}},
+		rasql.ResultColumn{Name: "action", Type: schema.TextType{}},
+	)
+	if err != nil {
+		fmt.Printf("failed to build result schema: %s\n", err)
+		return
+	}
+	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
+		rasql.Item("id", id.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("action", action.Expr(), schema.TextType{}, ""),
+	}, eventDecoder{result: result})
+	if err != nil {
+		fmt.Printf("failed to build projection: %s\n", err)
+		return
+	}
+
 	// SQL: SELECT audit.events.id, audit.events.action FROM audit.events WHERE audit.events.id = ? (argument: 1)
-	event, err := rasql.SelectFrom(events).WhereEqual(events.ID(), int64(1)).One(ctx, db)
+	event, err := rasql.One(ctx, executor,
+		rasql.Select(source.Source(), projection).Where(rasql.EqualValue(id.Expr(), int64(1))))
 	if err != nil {
 		fmt.Printf("failed to query events: %s\n", err)
 		return

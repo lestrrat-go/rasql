@@ -26,6 +26,10 @@ func TestSQLiteComposableExpressionsInTransaction(t *testing.T) {
 	tx, err := db.Begin(t.Context(), nil)
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback() }()
+	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+	require.NoError(t, err)
+	executor, err := rasql.AsExecutor(tx, profile)
+	require.NoError(t, err)
 
 	table := query.MustTableRef(schema.MustTableDef("accounts", schema.Integer("id"), schema.Integer("balance")))
 	id, balance := table.Column("id"), table.Column("balance")
@@ -33,7 +37,7 @@ func TestSQLiteComposableExpressionsInTransaction(t *testing.T) {
 	require.NoError(t, err)
 	update, err = update.WithWhere(query.Equal(id, 1))
 	require.NoError(t, err)
-	require.NoError(t, executeUpdate(t, tx, update))
+	require.NoError(t, executeUpdate(t, executor, update))
 
 	label := query.SearchedCase(query.When(query.GreaterThan(balance, 10), "large")).Else("small")
 	fragment := query.TrustedSQL("{} + {} + {}", query.IdentifierHole(query.Ident("balance")), query.Hole(4), query.Hole(5))
@@ -88,13 +92,17 @@ func TestSQLiteComposableExpressionsInTransaction(t *testing.T) {
 	require.Equal(t, int64(11), stored)
 }
 
-func executeUpdate(t *testing.T, db rasql.DB, statement query.Update) error {
+func executeUpdate(t *testing.T, executor rasql.Executor, statement query.Update) error {
 	t.Helper()
-	return rasqlExec(t, db, statement)
+	return rasqlExec(t, executor, statement)
 }
 
-func rasqlExec(t *testing.T, db rasql.DB, statement query.WriteStatement) error {
+func rasqlExec(t *testing.T, executor rasql.Executor, statement query.WriteStatement) error {
 	t.Helper()
-	_, err := rasql.Exec(t.Context(), db, statement)
+	plan, err := rasql.NewStatementPlan(statement)
+	if err != nil {
+		return err
+	}
+	_, err = rasql.ExecMutation(t.Context(), executor, plan)
 	return err
 }

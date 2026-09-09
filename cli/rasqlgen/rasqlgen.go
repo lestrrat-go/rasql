@@ -10,6 +10,7 @@ import (
 	"io"
 
 	"github.com/lestrrat-go/rasql/generate"
+	"github.com/lestrrat-go/rasql/internal/schemasource"
 )
 
 // ExitCode maps command errors to the CLI contract: success, stale/drift, or
@@ -130,8 +131,10 @@ type command struct {
 	// printed is only known once it returns, so whoever built the command
 	// sorts them: this writer is the single writer under the standalone
 	// binary, and a buffer Run routes by the returned error.
-	diagnostics io.Writer
-	ctx         context.Context
+	diagnostics        io.Writer
+	ctx                context.Context
+	schemaDependencies func() schemasource.Dependencies
+	beforePublication  func()
 }
 
 func (c command) run(args []string) error {

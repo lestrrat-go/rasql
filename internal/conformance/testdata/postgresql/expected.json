@@ -1,0 +1,116 @@
+{
+  "format": "rasql.d4.engine-expected.v1",
+  "engine": "postgresql",
+  "profile": "postgresql-17",
+  "portable_signature_digest": "84323fa2347731b0388181443d158e8f333649177acd057a2c828e42d6f24fbb",
+  "workloads": [
+    {
+      "workload": "single_row_read",
+      "rasql": {
+        "statements": 1
+      },
+      "database_sql": {
+        "statements": 1
+      }
+    },
+    {
+      "workload": "nullable_join_report",
+      "rasql": {
+        "statements": 1
+      },
+      "database_sql": {
+        "statements": 1
+      }
+    },
+    {
+      "workload": "typed_sql_report",
+      "rasql": {
+        "statements": 1
+      },
+      "database_sql": {
+        "statements": 1
+      }
+    },
+    {
+      "workload": "create_patch",
+      "rasql": {
+        "statements": 2
+      },
+      "database_sql": {
+        "statements": 2
+      }
+    },
+    {
+      "workload": "bulk_write",
+      "rasql": {
+        "statements": 1
+      },
+      "database_sql": {
+        "statements": 1
+      }
+    },
+    {
+      "workload": "rollback",
+      "rasql": {
+        "statements": 1
+      },
+      "database_sql": {
+        "statements": 1
+      }
+    },
+    {
+      "workload": "bulk_rollback",
+      "rasql": {
+        "statements": 6
+      },
+      "database_sql": {
+        "statements": 6
+      }
+    },
+    {
+      "workload": "early_exit",
+      "rasql": {
+        "statements": 1
+      },
+      "database_sql": {
+        "statements": 1
+      }
+    },
+    {
+      "workload": "cancellation",
+      "rasql": {
+        "statements": 6
+      },
+      "database_sql": {
+        "statements": 6
+      }
+    },
+    {
+      "workload": "taskboard_graph_page",
+      "rasql": {
+        "statements": 15
+      },
+      "database_sql": {
+        "statements": 15
+      }
+    },
+    {
+      "workload": "graph_500_parent_limit",
+      "rasql": {
+        "statements": 3
+      },
+      "database_sql": {
+        "statements": 3
+      }
+    },
+    {
+      "workload": "unsupported_version",
+      "rasql": {
+        "statements": 0
+      },
+      "database_sql": {
+        "statements": 0
+      }
+    }
+  ]
+}
