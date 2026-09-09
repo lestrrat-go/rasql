@@ -35,6 +35,15 @@ jobs:
         with:
           go-version: '1.26.x'
       - name: Run the full suite
+        # internal/conformance's TestGeneratedFootprintBuild attributes the
+        # performance evidence it writes to the commit that produced it, so
+        # it requires RASQL_CONFORMANCE_COMMIT rather than treating a blank
+        # value as something to skip past; GitHub already knows the commit
+        # this run is testing, so hand it over instead of leaving the test
+        # to guess at one through build-info stamping that a sandboxed
+        # runner can silently fail to produce.
+        env:
+          RASQL_CONFORMANCE_COMMIT: ${{ github.sha }}
         run: go test -p 1 -count=1 -v ./...
       - run: go vet ./...
       # The sample runs on PostgreSQL, so its tests and its generated-store

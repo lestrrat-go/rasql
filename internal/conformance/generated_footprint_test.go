@@ -459,7 +459,7 @@ func runBuild(t *testing.T, root, packagePath, name string) buildSample {
 func writeBuildArtifact(t *testing.T, repoRoot string, manifest footprintManifest, files int, bytes, generationDurationNS int64, rasqlSamples, sqlSamples []buildSample) {
 	t.Helper()
 	commit := CommitFromEnvironment()
-	require.NotEmpty(t, commit)
+	require.NotEmptyf(t, commit, "%s is not set; this artifact records a performance measurement against the commit that produced it, so it cannot be written without one -- export %s=$(git rev-parse HEAD) for a local run", ConformanceCommitEnvVar, ConformanceCommitEnvVar)
 	data, err := json.MarshalIndent(buildArtifact{
 		Format: "rasql.d4.generated-footprint.v1", Engine: manifest.Engine, Profile: manifest.Profile,
 		GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
