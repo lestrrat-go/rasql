@@ -85,11 +85,11 @@ source: [examples/schema_table_definition_example_test.go](https://github.com/le
 <!-- END INCLUDE -->
 
 `schema.MustTableDef` panics on an invalid descriptor.
-It suits a table you declare once at package initialization, exactly like `rasql.MustTableOf[T]`.
+Use it for a table you declare once at package initialization, exactly like `rasql.MustTableOf[T]`.
 `schema.NewTableDef` returns the error instead, for a descriptor you assemble at runtime.
 
 Both collect the columns and constraints that each `schema.TableOption` declares, then assemble them into a `schema.TableDef`.
-That is what makes the order harmless.
+That is why the order you pass the options in does not matter.
 `schema.PrimaryKey("id")` may appear before `schema.Integer("id")` declares the column it names.
 
 Both then validate the assembled descriptor exactly as `TableDef.Validate` validates a struct literal.
@@ -141,7 +141,7 @@ A composite foreign key, a named unique constraint or check, and a unique index 
 ## The struct literal
 
 `schema.TableDef` is the descriptor itself, and `schema.NewTableDef` and `schema.MustTableDef` are one way to build one.
-Its fields are exactly what a `schema.TableOption` assembles behind the scenes.
+Its fields are exactly what a `schema.TableOption` fills in.
 They are also what `inspect` returns from a live database, and what `migrate`'s diff compares between two descriptors.
 So reading a descriptor back means reading this struct rather than a list of options, whether it comes from `inspect.Table` or from a variable holding one.
 
@@ -181,11 +181,11 @@ Skip that page while writing a descriptor by hand, since none of those facts has
 
 ## Relationships
 
-`ForeignKeys` remain the source of database constraints.
+`ForeignKeys` is the only field that renders into a database constraint.
 `rasqlgen` derives a `schema.RelationshipDef` with kind `schema.RelationshipBelongsTo` for each foreign key that has no matching entry in `Relationships`.
 The `schema.RelationshipNamed` foreign-key option states one explicitly instead.
 Set `Relationships` yourself for logical direct links or through-table links.
-Direct metadata may match a physical foreign key, while logical metadata does not change DDL.
+A direct link may describe the same columns as a physical foreign key, and a logical link changes no DDL at all.
 Use `schema.Relationship` with `schema.Through` for many-to-many links.
 
 An inverse method uses the child table shorthand only when that child has one relationship to the parent.
@@ -196,8 +196,8 @@ The generated API supports nullable and composite direct links, unique has-one i
 When both tables are generated in the package, each relation exposes `Join`, `Load`, and `LoadWith`, and a collection relation also exposes `LoadThen`.
 Loads omit missing nullable keys, preserve ordered composite keys, group rows by source key, and split binds within the configured relationship budget.
 
-Polymorphic links and relationships whose target table is not generated in the package remain unsupported.
-The foreign key and its ordinary SQL join remain available for those cases.
+Polymorphic links, and relationships whose target table is not generated in the package, are not supported.
+Write an ordinary SQL join over the foreign key for those.
 
 ## Name the generated row type
 
@@ -206,7 +206,7 @@ The foreign key and its ordinary SQL join remain available for those cases.
 A table can then generate `User` instead, and your calling code reads `store.User` rather than `store.UsersRow`.
 The row type is the one generated name you write throughout your own code.
 
-Nothing is guessed, and `rasqlgen` never singularizes a table name to derive a row name on its own.
+`rasqlgen` never singularizes a table name to derive a row name on its own.
 Stripping a trailing `s` produces `Addresse` from `addresses`, `Serie` from `series`, and `Bu` from `bus`.
 The bare table name does not compile as a row type either way, since `type Users` would collide with the generated `Users()` accessor.
 `RowName` is a code-generation hint only: no renderer, dialect, `inspect`, or `migrate` path reads it, and it never appears in rendered SQL.
@@ -214,7 +214,7 @@ The bare table name does not compile as a row type either way, since `type Users
 ## Qualify a table with a schema
 
 `Schema` is optional, and names the namespace holding the table: a PostgreSQL schema, a MySQL database, or a SQLite attached-database name.
-rasql takes no position on what a namespace means to a server.
+rasql does not interpret what a namespace means to a server.
 It validates `Schema` as a simple identifier exactly like `Name`, and quotes it as a separate identifier in the SQL that reads the field.
 An empty `Schema` leaves the table unqualified, which resolves through the connection's own default.
 That is what every descriptor written before this field existed still does.
@@ -446,7 +446,7 @@ Its empty value means the database default applies.
 
 Identifiers must be simple.
 `schema.ValidateIdentifier` accepts a leading letter or underscore followed by letters, digits, or underscores.
-Everything else is rejected rather than quoted around.
+It rejects every other name rather than wrap it in quotes to make it legal.
 
 `schema.DecimalType` is an exact decimal, for money, quantities, and any other value a binary floating-point `FloatType` would round.
 A decimal type must set `Precision` and `Scale`, and `TableDef.Validate` rejects one that omits either.
@@ -462,7 +462,7 @@ PostgreSQL and MySQL render `NUMERIC(p,s)` and `DECIMAL(p,s)`, each exact and ea
 On both, a decimal column decodes to its declared scale in string form, zero-padded on the right.
 A `NUMERIC(19,4)` column yields `"19.9900"` for the value `19.99`, not `"19.99"`, so compare decimal strings on the declared scale.
 
-That declared scale governs the column itself.
+The declared scale applies to the column itself.
 A projected expression over it need not keep the scale, and [Scalar functions](02-sql-builder.md#scalar-functions) states where MySQL widens one.
 
 SQLite has no exact decimal storage class, so it renders `TEXT` instead.
@@ -634,13 +634,13 @@ source: [examples/schema_decimal_column_example_test.go](https://github.com/lest
 A `schema.IntegerType` column is signed unless `IntegerType.Unsigned` is true.
 An unsigned column stores no negative values, and reaches 18446744073709551615 instead of 9223372036854775807.
 Other concrete column types cannot carry this option.
-`TableDef.Validate` still checks the type-specific values, while dialects reject unsigned integers when they have no unsigned integer syntax.
+`TableDef.Validate` checks the values a concrete type carries, and each dialect rejects an unsigned column when it has no unsigned integer syntax.
 
 The engines differ here.
 MySQL has unsigned integer types, and renders such a column `BIGINT UNSIGNED`.
 PostgreSQL has none, and SQLite stores a signed 64-bit value whatever a column is declared.
 Both report an error naming the column, rather than render a signed `BIGINT` that would reject the values the descriptor permits.
-A schema that has to run on all three declares the column signed, and narrows the range it claims to what every engine can hold.
+A schema that has to run on all three declares the column signed, and stores only what a signed 64-bit integer holds.
 
 ## Integer display width and ZEROFILL
 
@@ -663,7 +663,7 @@ PostgreSQL and SQLite have neither concept, so neither field ever comes from a P
 
 Only `BIGINT UNSIGNED` actually gains range from this.
 Every narrower unsigned type, `TINYINT UNSIGNED` through `INT UNSIGNED`, fits inside a signed `BIGINT` already, so a column of one of those loses no representable value either way.
-What it gains is a descriptor that now says what the column is, and re-rendering it keeps the `UNSIGNED` the database had.
+What it gains is a descriptor that records the column's real declaration, so re-rendering it keeps the `UNSIGNED` the database had.
 
 [`rasqlgen`](../orm/01-codegen.md) generates a `uint64` field for an unsigned column instead of an `int64` one, because `int64` cannot hold the top half of the range.
 `rasql.ScanValue` fills either field from an integer driver value of either signedness.
@@ -800,17 +800,17 @@ source: [examples/schema_bind_row_type_example_test.go](https://github.com/lestr
 <!-- END INCLUDE -->
 
 Each field's `rasql` tag names the column it holds.
-`rasql.MustTableOf` panics on an invalid descriptor, and suits generated or otherwise constant tables.
+`rasql.MustTableOf` panics on an invalid descriptor, so use it for generated or otherwise constant tables.
 `rasql.TableOf` returns the error instead, for descriptors assembled at runtime.
 
-A `rasql.Table[T]` is half of a table value rather than the whole of it.
-Wrap it in a type with one accessor method per column.
+A `rasql.Table[T]` is not yet the table value your code calls through.
+Wrap it in a type that exposes one accessor method per column.
 Generated accessors return `query.TypedColumn` or `query.NullableColumn`, preserving the row and Go value types for typed predicates and writes.
 That is the shape [`rasqlgen`](../orm/01-codegen.md) emits, the shape every generated store uses, and the shape a hand-written table should have too.
-[Getting started](../01-getting-started.md#the-table-used-throughout-the-documentation) shows the full wrapper for the `users` table, and [What the column accessors catch](../orm/02-generated-store.md#what-the-column-accessors-catch) shows what the accessors are worth.
+[Getting started](../01-getting-started.md#the-table-used-throughout-the-documentation) shows the full wrapper for the `users` table, and [What the column accessors catch](../orm/02-generated-store.md#what-the-column-accessors-catch) shows the mistakes they turn into build failures.
 
 Call a generated accessor's `Ref()` when your code needs the dynamic `query.ColumnRef` that the lower-level query package accepts, such as a projection or a dynamic predicate.
-Two methods remain for code that only learns a column name while it runs.
+Two methods take a column name your code only learns while it runs.
 `users.Column(name)` returns a `query.ColumnRef` for that name, and `ColumnRef.Validate` checks the name at the lookup rather than waiting for the statement that carries it.
 `users.Ref()` returns the underlying `query.TableRef` that [The SQL builder](02-sql-builder.md) works in terms of.
 
@@ -818,7 +818,7 @@ Two methods remain for code that only learns a column name while it runs.
 
 A generator normally calls `catalog.FromDatabase` rather than using `inspect` table-by-table.
 Its `catalog.Options` controls `Namespaces`, exact `IncludeObjects` and `ExcludeObjects`, legacy `Include` and `Exclude`, and `HistoryTable` selection, while keeping the metadata read in one transaction.
-Same-name objects require qualified identities.
+A bare name in `Include` that two selected namespaces both hold is an error, and `IncludeObjects` names one of them with its schema.
 
 `inspect` turns live database metadata back into a `schema.TableDef`, normalizing native column types into logical ones.
 `Inspector.Table` looks up an unscoped table name.
@@ -908,9 +908,9 @@ func Example_inspect_sqlite_table() {
 source: [examples/inspect_sqlite_table_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/inspect_sqlite_table_example_test.go)
 <!-- END INCLUDE -->
 
-`Inspector.TableNames(ctx)` retains default-scope behavior, while `TableNamesIn(ctx, namespace)` enumerates one explicit schema, database, or attached SQLite database.
+`Inspector.TableNames(ctx)` enumerates whatever the connection's own default scope reaches, while `TableNamesIn(ctx, namespace)` enumerates one named schema, database, or attached SQLite database.
 Results are sorted by namespace then name, and every scoped result carries the requested namespace.
-Default PostgreSQL and MySQL results remain unqualified for compatibility.
+A default PostgreSQL or MySQL result carries no namespace at all.
 
 <!-- INCLUDE(examples/inspect_sqlite_table_names_example_test.go) -->
 ```go
@@ -1026,7 +1026,7 @@ MySQL text declarations preserve a stated width the same way.
 Re-rendering the column (see [Text column width](#text-column-width) above) then reproduces the same `CHAR(n)` rather than widening it to `VARCHAR(n)`.
 
 `TEXT`, `ENUM`, and `SET` all normalize to `schema.TextType` too, with no width stated.
-MySQL never reports `TEXT` as `TEXT(n)`, and `ENUM` and `SET` carry a value list `schema.TextType` has nowhere to record, so both were already lossy round-trips before `Width` existed and remain so.
+MySQL never reports `TEXT` as `TEXT(n)`, and `ENUM` and `SET` carry a value list `schema.TextType` has nowhere to record, so neither one inspects and re-renders back to what it started as.
 
 MySQL has no UUID type, so a column declared to hold one is a hand-written `CHAR(36)`.
 It inspects exactly like any other fixed-width `CHAR(n)` column, as `schema.TextType{Width: 36, Fixed: true}`.
