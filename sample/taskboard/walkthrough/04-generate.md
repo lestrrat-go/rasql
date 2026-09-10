@@ -1,112 +1,63 @@
-# 4. Lock the schema and generate offline
+# 4. Generate the store from the database
 
-The database is the source used to make a snapshot. The snapshot is the source
-used for normal builds. A clean checkout can therefore generate the same Go
-files without credentials or a running database.
+Applying `db/migrations` to the database `TASKBOARD_DSN` names, then reading
+its catalog back, is what produces the store. A clean checkout can prove the
+checked-in files still match their inputs without a database, and can
+regenerate them only with one.
 
 ## Configure the inputs
 
-Create `rasql.json` at the project root. It names the PostgreSQL profile, the
-ordered migration inputs chapter 3 just applied, and the compact store
-package:
+Create `rasql.json` at the project root. It names the PostgreSQL dialect, the
+migration directory chapter 3 applied, and the compact store package:
 
 ```json
 {
-  "engine": {"dialect": "postgresql", "profile": "postgresql-17"},
-  "schema": {
-    "kind": "migrations",
-    "identity": "taskboard-migrations-v1",
-    "paths": [
-      "db/migrations/001_initial/001_create_members.up.sql",
-      "db/migrations/001_initial/002_create_projects.up.sql",
-      "db/migrations/001_initial/003_create_tasks.up.sql",
-      "db/migrations/001_initial/004_create_index_tasks_open_by_project.up.sql"
-    ]
-  },
+  "dialect": "postgresql",
+  "migrations": "db/migrations",
   "package": "store",
   "output": "internal/store",
   "emitter": "compact"
 }
 ```
 
-The `schema.paths` list contains only `up.sql` files, in application order.
-[Chapter 7](07-change.md) appends to this list rather than editing an entry,
-so every past migration keeps generating the schema it always generated.
+## Add a generate helper
 
-## Add a schema refresh helper
+Generating needs the migrations applied to the database `TASKBOARD_DSN`
+names first, so one script does both:
 
-Capturing the schema needs its own disposable database, separate from the
-one `TASKBOARD_DSN` names, because the capture step is free to apply
-migrations to it without touching the database the running application uses.
-Wrap that in a script:
-
-Create `scripts/refresh-schema.sh`:
+Create `scripts/generate.sh`:
 
 ```sh
 #!/bin/sh
+# Rebuild internal/store from the database TASKBOARD_DSN names, after
+# applying db/migrations to it.
 set -eu
-dsn="${TASKBOARD_SCHEMA_DSN:?set TASKBOARD_SCHEMA_DSN to a disposable PostgreSQL database}"
-rasql migrate apply -dir db/migrations -dialect postgresql -dsn "$dsn"
-exec env TASKBOARD_SCHEMA_DSN="$dsn" rasql schema update --dsn "$dsn"
-```
-
-```sh
-chmod +x scripts/refresh-schema.sh
-git add rasql.json scripts/refresh-schema.sh
-git commit -m 'lock the schema from a disposable database'
-```
-
-## Capture once
-
-Point `TASKBOARD_SCHEMA_DSN` at a database made for this capture alone, apply
-the migrations to it, and let `rasql schema update` write the lock:
-
-```sh
-export TASKBOARD_SCHEMA_DSN='postgres://rasql:rasql@127.0.0.1:5432/taskboard_schema?sslmode=disable'
-./scripts/refresh-schema.sh
-```
-
-```text
-applied	001_initial
-migration apply completed: 1 applied
-updated schema and generated internal/store
-```
-
-That command writes `rasql.lock.json` and the compact generated files. It
-does not alter migration or query text, and it is the only command in this
-chapter that touches a database.
-
-## Generate and check without a database
-
-After capture, generation reads only checked-in inputs. Create
-`scripts/generate.sh`:
-
-```sh
-#!/bin/sh
-# Rebuild internal/store from checked-in snapshots and query inputs.
-set -eu
-unset TASKBOARD_SCHEMA_DSN TASKBOARD_DSN TASKBOARD_TEST_DSN
-exec rasql generate "$@"
+dsn="${TASKBOARD_DSN:?set TASKBOARD_DSN to the taskboard connection string}"
+./scripts/migrate.sh apply
+exec rasql codegen generate -dsn "$dsn" "$@"
 ```
 
 ```sh
 chmod +x scripts/generate.sh
+git add rasql.json scripts/generate.sh
+git commit -m 'configure generation from the database'
 ```
 
+## Generate
+
 ```sh
-env -u TASKBOARD_SCHEMA_DSN -u TASKBOARD_DSN -u TASKBOARD_TEST_DSN \
-  ./scripts/generate.sh
-env -u TASKBOARD_SCHEMA_DSN -u TASKBOARD_DSN -u TASKBOARD_TEST_DSN \
-  ./scripts/generate.sh -check
+./scripts/generate.sh
 ```
 
 ```text
-generated internal/store offline
-internal/store is up to date
+migration apply completed: 0 applied
+generated internal/store
 ```
 
-The first command rewrites generated files. The second, `-check`, reports
-stale output without writing anything.
+Chapter 3 already applied `001_initial`, so this run finds nothing pending
+and generates straight away. Running `./scripts/generate.sh` again later,
+after a migration that is still pending, applies it first; that is chapter
+7.
 
 ## What the generator printed
 
@@ -143,9 +94,30 @@ rebuilding their metadata.
 Commit the generated store:
 
 ```sh
-git add rasql.lock.json internal/store
-git commit -m 'generate the store from the schema'
+git add internal/store
+git commit -m 'generate the store from the database'
 ```
+
+## Check without a database
+
+`internal/store` carries `rasql.sum` beside the generated Go, recording the
+dialect, the profile, the migration checksums, the query inputs, and a hash
+of every generated file. `rasql codegen check` recomputes all of that from
+the working tree alone and reports whether it still matches, without opening
+a connection:
+
+```sh
+env -u TASKBOARD_DSN -u TASKBOARD_TEST_DSN rasql codegen check
+```
+
+```text
+internal/store is up to date; no database was consulted
+```
+
+That is the gate a clean checkout runs: it proves the checked-in files match
+their inputs, and it needs no credentials and no running server to do it.
+Only `./scripts/generate.sh`, which does need both, can bring `internal/store`
+up to date with a schema or query change.
 
 ## Next
 
