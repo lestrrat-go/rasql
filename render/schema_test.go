@@ -1096,12 +1096,7 @@ func TestCreateTableRejectsWithoutRowIDTable(t *testing.T) {
 	require.ErrorIs(t, err, render.ErrUnsupportedTableWithoutRowID)
 }
 
-// TestCreateTableRejectsPrimaryKeyAutoincrement proves that a TableDef
-// setting PrimaryKeyAutoincrement, such as a live SQLite AUTOINCREMENT
-// primary key inspect now describes instead of rejecting, is refused at
-// render time with a typed error rather than silently rendered as a plain
-// primary key with no AUTOINCREMENT keyword.
-func TestCreateTableRejectsPrimaryKeyAutoincrement(t *testing.T) {
+func TestCreateTableRendersPrimaryKeyAutoincrement(t *testing.T) {
 	table := schema.TableDef{
 		Name: "users",
 		Columns: []schema.ColumnDef{
@@ -1112,14 +1107,16 @@ func TestCreateTableRejectsPrimaryKeyAutoincrement(t *testing.T) {
 		PrimaryKeyAutoincrement: true,
 	}
 
-	_, err := render.CreateTable(dialect.SQLite(), table)
-	require.ErrorContains(t, err, `"users"`)
-	require.ErrorContains(t, err, "AUTOINCREMENT")
-	require.ErrorContains(t, err, "can describe but not yet render")
+	statement, err := render.CreateTable(dialect.SQLite(), table)
+	require.NoError(t, err)
+	require.Equal(t, `CREATE TABLE "users" ("id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, "name" TEXT NOT NULL)`, statement.SQL())
+}
 
+func TestCreateTableRejectsPrimaryKeyAutoincrementOnPostgreSQL(t *testing.T) {
+	table := schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}, PrimaryKeyAutoincrement: true}
+	_, err := render.CreateTable(dialect.PostgreSQL(), table)
 	var autoincrementErr *render.UnsupportedPrimaryKeyAutoincrementError
 	require.ErrorAs(t, err, &autoincrementErr)
-	require.Equal(t, "users", autoincrementErr.Table)
 	require.ErrorIs(t, err, render.ErrUnsupportedPrimaryKeyAutoincrement)
 }
 

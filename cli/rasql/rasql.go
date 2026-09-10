@@ -46,6 +46,8 @@ func Run(args []string, output, diagnostics io.Writer) error {
 		// Each context states its own commands, usage line, and unknown-command
 		// error under the name it was called by, so they are stated once, there.
 		err = rasqlgen.Run(args[1:], output, &flagPrinted)
+	case "schema", "generate", "check":
+		err = rasqlgen.RunTopLevel(args, output, &flagPrinted)
 	case "migrate":
 		err = rasqlmigrate.Run(args[1:], output, &flagPrinted)
 	default:
@@ -65,6 +67,9 @@ func printUsage(output io.Writer) {
 	_, _ = fmt.Fprintln(output, "Usage: rasql <context> <command> [flags]")
 	_, _ = fmt.Fprintln(output)
 	_, _ = fmt.Fprintln(output, "Contexts:")
+	_, _ = fmt.Fprintln(output, "  schema    Update, import, or verify the declared schema")
+	_, _ = fmt.Fprintln(output, "  generate  Generate from the checked-in schema lock")
+	_, _ = fmt.Fprintln(output, "  check     Check generated output without writing")
 	_, _ = fmt.Fprintln(output, "  codegen   Scaffold the generator program that writes Go source")
 	_, _ = fmt.Fprintln(output, "  migrate   Create and apply versioned SQL migrations")
 	_, _ = fmt.Fprintln(output)

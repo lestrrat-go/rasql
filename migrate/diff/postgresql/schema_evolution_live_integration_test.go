@@ -149,7 +149,7 @@ CREATE TABLE %s ("id" BIGINT NOT NULL GENERATED ALWAYS AS IDENTITY, "project_id"
 	assertPublicRoundtrip(t, analyzer, base, database, members, projects, tasks)
 	status, err := runner.Status(ctx, migration)
 	require.NoError(t, err)
-	require.Equal(t, []migrate.StatusEntry{{ID: migration.ID, State: migrate.StatusPending}}, status)
+	require.Equal(t, []migrate.StatusEntry{{ID: migration.ID, State: migrate.StatusPending, Reversible: true}}, status)
 }
 
 func TestPostgreSQLSchemaEvolutionOpaqueBackfillArtifact(t *testing.T) {
@@ -212,9 +212,8 @@ func TestPostgreSQLSchemaEvolutionOpaqueBackfillArtifact(t *testing.T) {
 	migration := writeLoadPostgreSQLPlan(t, root, "001_opaque", resolved)
 	files, err := os.ReadDir(filepath.Join(root, migration.ID))
 	require.NoError(t, err)
-	require.Len(t, files, 2)
+	require.Len(t, files, 1, "an irreversible plan writes no .down.sql and no marker, only the forward source")
 	require.Equal(t, expectedSQL, readArtifact(t, filepath.Join(root, migration.ID), "001_add_column_"+tasks+"_owner_label.up.sql"))
-	require.Equal(t, "caller-supplied backfill has no inferred reverse\n", readArtifact(t, filepath.Join(root, migration.ID), ".rasql-irreversible"))
 	require.Empty(t, migration.Down)
 	runner, err := migrate.New(database, dialect.PostgreSQL())
 	require.NoError(t, err)

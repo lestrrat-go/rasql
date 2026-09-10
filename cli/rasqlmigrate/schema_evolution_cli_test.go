@@ -80,7 +80,6 @@ func TestSchemaEvolutionCLIPublishesResolvedBackfillArtifacts(t *testing.T) {
 		backfill string
 		id       string
 		want     []cliArtifact
-		reason   string
 	}{
 		{
 			dialect:  "postgresql",
@@ -90,7 +89,6 @@ func TestSchemaEvolutionCLIPublishesResolvedBackfillArtifacts(t *testing.T) {
 				{source: "001_add_column_members_due_on.up.sql", sql: "ALTER TABLE members ADD COLUMN due_on text NULL;\n"},
 				{source: "002_add_column_members_email.up.sql", sql: "ALTER TABLE members ADD COLUMN email text;\nUPDATE members SET email = name || '@example.test' WHERE email IS NULL;\nALTER TABLE members ALTER COLUMN email SET NOT NULL;\n"},
 			},
-			reason: "caller-supplied backfill has no inferred reverse",
 		},
 		{
 			dialect:  "mysql",
@@ -102,7 +100,6 @@ func TestSchemaEvolutionCLIPublishesResolvedBackfillArtifacts(t *testing.T) {
 				{source: "003_backfill_members_email.up.sql", sql: "UPDATE members SET email = CONCAT(name, '@example.test') WHERE email IS NULL;\n"},
 				{source: "004_require_column_members_email.up.sql", sql: "ALTER TABLE `members` MODIFY COLUMN `email` text NOT NULL;\n"},
 			},
-			reason: "caller-supplied MySQL backfill has no inferred reverse",
 		},
 	} {
 		t.Run(test.dialect, func(t *testing.T) {
@@ -130,7 +127,8 @@ func TestSchemaEvolutionCLIPublishesResolvedBackfillArtifacts(t *testing.T) {
 				allSQL[index] = string(statement.SQL)
 			}
 			require.Equal(t, 1, strings.Count(strings.Join(allSQL, ""), strings.TrimSpace(test.backfill)))
-			require.Equal(t, test.reason, strings.TrimSpace(string(mustReadCLIFile(t, filepath.Join(output, ".rasql-irreversible")))))
+			_, statErr := os.Stat(filepath.Join(output, ".rasql-irreversible"))
+			require.ErrorIs(t, statErr, os.ErrNotExist, "an irreversible plan writes no marker file")
 		})
 	}
 }
