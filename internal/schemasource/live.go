@@ -196,19 +196,45 @@ func (defaultCatalogs) Read(ctx context.Context, db catalogread.DB, p engineprof
 	return catalogread.Read(ctx, db, p, s)
 }
 
+func dialectFor(e engineprofile.EngineID) dialect.Dialect {
+	return map[engineprofile.EngineID]dialect.Dialect{engineprofile.PostgreSQL: dialect.PostgreSQL(), engineprofile.MySQL: dialect.MySQL(), engineprofile.SQLite: dialect.SQLite()}[e]
+}
+
 type defaultMigrations struct{}
 
-func (defaultMigrations) Apply(ctx context.Context, db *sql.DB, p engineprofile.Profile, s []sourcefile.SourceFileSnapshot) error {
-	d := map[engineprofile.EngineID]dialect.Dialect{engineprofile.PostgreSQL: dialect.PostgreSQL(), engineprofile.MySQL: dialect.MySQL(), engineprofile.SQLite: dialect.SQLite()}[p.Engine]
-	r, e := migrate.New(db, d)
+// Apply applies migrations directly when it is non-empty, which is how Read always calls this
+// (migrations loaded through internal/migrationdir carry their own IDs, modes, and reverse
+// sources). Materialize's flat-file "migrations" kind has no such structure, so it still
+// synthesizes one migration per snapshot from s.
+func (defaultMigrations) Apply(ctx context.Context, db *sql.DB, p engineprofile.Profile, s []sourcefile.SourceFileSnapshot, migrations []migrate.Migration) error {
+	r, e := migrate.New(db, dialectFor(p.Engine))
 	if e != nil {
 		return e
 	}
-	ms := make([]migrate.Migration, len(s))
-	for i, x := range s {
-		ms[i] = migrate.Migration{ID: fmt.Sprintf("%06d_%s", i, strings.ReplaceAll(filepath.Base(x.Path()), ".", "_")), Statements: []migrate.Statement{{Source: x.Path(), SQL: sqltext.Text(x.Bytes())}}}
+	ms := migrations
+	if len(ms) == 0 {
+		ms = make([]migrate.Migration, len(s))
+		for i, x := range s {
+			ms[i] = migrate.Migration{ID: fmt.Sprintf("%06d_%s", i, strings.ReplaceAll(filepath.Base(x.Path()), ".", "_")), Statements: []migrate.Statement{{Source: x.Path(), SQL: sqltext.Text(x.Bytes())}}}
+		}
 	}
 	_, e = r.Apply(ctx, migrate.AllPending(), ms...)
 	return e
+}
+
+// Status reports migrations' state without applying or creating anything beyond what
+// migrate.Runner.Status itself creates; see Read's doc comment for the one residual case.
+func (defaultMigrations) Status(ctx context.Context, db *sql.DB, p engineprofile.Profile, migrations []migrate.Migration) ([]migrate.StatusEntry, error) {
+	r, e := migrate.New(db, dialectFor(p.Engine))
+	if e != nil {
+		return nil, e
+	}
+	return r.Status(ctx, migrations...)
+}
+
+type defaultProfileDiscoverer struct{}
+
+func (defaultProfileDiscoverer) Discover(ctx context.Context, db *sql.DB, d string) (engineprofile.Profile, error) {
+	return engineprofile.DiscoverBuiltin(ctx, db, engineID(d))
 }
 func errorsJoin(a, b error) error { return errors.Join(a, b) }
