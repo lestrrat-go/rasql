@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/migrate/changeplan"
 	"github.com/lestrrat-go/rasql/schema"
@@ -459,13 +460,17 @@ func TestPublicImmutabilityContract(t *testing.T) {
 	require.Equal(t, plan.ID(), decoded.ID())
 	require.Equal(t, mustEncode(t, plan), mustEncode(t, decoded))
 
-	lock, err := os.ReadFile("testdata/external/lock.json")
-	require.NoError(t, err)
-	catalog, err := changeplan.CatalogFromLock(lock)
+	physical, diagnostics := compilerir.PhysicalFromTableDefs(
+		compilerir.EngineIdentity{Dialect: "sqlite", Version: "3.35", Profile: "sqlite-3.35"},
+		[]schema.TableDef{{Schema: "main", Name: "tasks", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}}})
+	require.Empty(t, diagnostics)
+	assigned, diagnostics := compilerir.AssignObjectIDs(physical, compilerir.IdentityInput{SourceIdentity: "ownership-contract"})
+	require.Empty(t, diagnostics)
+	catalog, err := changeplan.NewCatalogFromPhysical(assigned, "ownership-contract")
 	require.NoError(t, err)
 	objectID, ok := catalog.ObjectID(schema.ObjectTable, "main", "tasks")
 	require.True(t, ok)
-	lock[0] = 'X'
+	assigned.Objects[0].ID = "mutated-after-call"
 	gotID, ok := catalog.ObjectID(schema.ObjectTable, "main", "tasks")
 	require.True(t, ok)
 	require.Equal(t, objectID, gotID)

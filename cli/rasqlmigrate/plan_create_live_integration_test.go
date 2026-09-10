@@ -5,13 +5,11 @@ package rasqlmigrate
 import (
 	"bytes"
 	"database/sql"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/jackc/pgx/v5/stdlib"
-	"github.com/lestrrat-go/rasql/cli/rasqlgen"
 	"github.com/lestrrat-go/rasql/internal/dbtest"
 	"github.com/stretchr/testify/require"
 )
@@ -23,49 +21,54 @@ import (
 // TestRunSQLiteNonemptyChangePlanFlow already proved the changeplan/migrate
 // side of the pipeline against a real engine, so what these two add is the
 // same CLI producer, apply, and drift-check path proven against the two
-// engines that pipeline was actually built for.
+// engines that pipeline was actually built for -- including that the
+// baseline catalog plan create reads directly from dsn, with no lock file
+// involved, is one both engines accept all the way through apply.
 func TestPostgreSQLCLIChangePlanCreateFlow(t *testing.T) {
 	config := dbtest.PostgreSQLConfig(t)
 	database := dbtest.PostgreSQLDB(t)
 	dsn := stdlib.RegisterConnConfig(config)
 	t.Cleanup(func() { stdlib.UnregisterConnConfig(dsn) })
-	runLiveChangePlanCreateFlow(t, database, "postgresql", "postgresql-17", dsn, dbtest.UniqueName(t, "d2cli_pg"))
+	runLiveChangePlanCreateFlow(t, database, "postgresql", dsn, dbtest.UniqueName(t, "d2cli_pg"))
 }
 
 func TestMySQLCLIChangePlanCreateFlow(t *testing.T) {
 	database := dbtest.MySQLDB(t)
 	dsn := dbtest.MySQLConfig(t).FormatDSN()
-	runLiveChangePlanCreateFlow(t, database, "mysql", "mysql-8.4", dsn, dbtest.UniqueName(t, "d2cli_my"))
+	runLiveChangePlanCreateFlow(t, database, "mysql", dsn, dbtest.UniqueName(t, "d2cli_my"))
 }
 
 // runLiveChangePlanCreateFlow mirrors TestRunSQLiteChangePlanCreateFlow: a
-// real "rasql schema update" writes -lock against dsn, a hand-written
-// migration directory holds the pending table, "plan create" turns the two
-// into a plan file by running that migration against dsn for real, and
-// "plan check"/"apply" then drive the same plan file the way a reviewer
-// would after plan create handed it to them.
-func runLiveChangePlanCreateFlow(t *testing.T, database *sql.DB, dialectName, profileID, dsn, table string) {
+// first migration is applied for real with "migrate apply" to give dsn a
+// non-empty baseline, a second, still-pending migration directory holds the
+// table under test, "plan create" turns the two into a plan file by reading
+// its baseline catalog from dsn and running the pending migration against
+// dsn for real, and "plan check"/"apply" then drive the same plan file the
+// way a reviewer would after plan create handed it to them.
+func runLiveChangePlanCreateFlow(t *testing.T, database *sql.DB, dialectName, dsn, table string) {
 	t.Helper()
+	baseTable := table + "_base"
 	t.Cleanup(func() { _, _ = database.ExecContext(t.Context(), "DROP TABLE IF EXISTS "+table) })
+	t.Cleanup(func() { _, _ = database.ExecContext(t.Context(), "DROP TABLE IF EXISTS "+baseTable) })
 
 	root := t.TempDir()
-	configPath := filepath.Join(root, "rasql.json")
-	configBytes, err := json.Marshal(map[string]any{
-		"engine":  map[string]string{"dialect": dialectName, "profile": profileID},
-		"schema":  map[string]string{"kind": "live", "identity": "cli-plan-create-" + dialectName},
-		"package": "store",
-		"output":  "internal/store",
-	})
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(configPath, configBytes, 0o600))
+	migrationsRoot := filepath.Join(root, "migrations")
+	baseMigrationID := "0000_create_" + baseTable
+	baseMigrationDir := filepath.Join(migrationsRoot, baseMigrationID)
+	require.NoError(t, os.MkdirAll(baseMigrationDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(baseMigrationDir, "0001.up.sql"),
+		[]byte("CREATE TABLE "+baseTable+" (id BIGINT PRIMARY KEY)\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(baseMigrationDir, "0001.down.sql"),
+		[]byte("DROP TABLE "+baseTable+"\n"), 0o600))
+
 	var setupOutput, setupDiagnostics bytes.Buffer
-	require.NoError(t, rasqlgen.RunTopLevelContext(t.Context(),
-		[]string{"schema", "update", "-config", configPath, "-dsn", dsn}, &setupOutput, &setupDiagnostics),
-		setupDiagnostics.String())
-	lockPath := filepath.Join(root, "rasql.lock.json")
+	require.NoError(t, Run([]string{
+		"apply", "-dir", migrationsRoot, "-dialect", dialectName, "-dsn", dsn,
+	}, &setupOutput, &setupDiagnostics), setupDiagnostics.String())
+	require.True(t, liveCLITableExists(t, database, dialectName, baseTable))
 
 	migrationID := "0001_create_" + table
-	migrationsDir := filepath.Join(root, "migrations", migrationID)
+	migrationsDir := filepath.Join(migrationsRoot, migrationID)
 	require.NoError(t, os.MkdirAll(migrationsDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(migrationsDir, "0001.up.sql"),
 		[]byte("CREATE TABLE "+table+" (id BIGINT PRIMARY KEY)\n"), 0o600))
@@ -76,8 +79,7 @@ func runLiveChangePlanCreateFlow(t *testing.T, database *sql.DB, dialectName, pr
 	var output, diagnostics bytes.Buffer
 	require.NoError(t, Run([]string{
 		"plan", "create",
-		"-lock", lockPath,
-		"-dir", filepath.Join(root, "migrations"),
+		"-dir", migrationsRoot,
 		"-dialect", dialectName,
 		"-dsn", dsn,
 		"-output", planPath,
@@ -86,10 +88,10 @@ func runLiveChangePlanCreateFlow(t *testing.T, database *sql.DB, dialectName, pr
 	require.True(t, liveCLITableExists(t, database, dialectName, table))
 
 	// plan create ran the migration for real against dsn to observe its
-	// result; undo it by hand so dsn is back at -lock's baseline, the same
-	// way TestRunSQLiteChangePlanCreateFlow drops the table plan create left
+	// result; undo it by hand so dsn is back at its baseline, the same way
+	// TestRunSQLiteChangePlanCreateFlow drops the table plan create left
 	// behind before treating the database as a fresh apply target.
-	_, err = database.ExecContext(t.Context(), "DROP TABLE "+table)
+	_, err := database.ExecContext(t.Context(), "DROP TABLE "+table)
 	require.NoError(t, err)
 	require.False(t, liveCLITableExists(t, database, dialectName, table))
 

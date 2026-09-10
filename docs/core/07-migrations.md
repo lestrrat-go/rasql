@@ -225,20 +225,18 @@ rasql migrate verify \
 Directory migrations remain the default workflow. A serialized migration plan v1 is an optional reviewed artifact that
 binds its operations to an exact engine profile, history identity, starting catalog, facts, and checkpoints.
 
-`plan create` writes that artifact from a compiler lock and a migration directory, so a schema change reaches a
-reviewable plan file without writing Go against `changeplan`. It runs every migration in `-dir` that `-dsn`'s
-migration history has not yet recorded, and it runs them for real: it does not roll those statements back, since
-MySQL commits DDL immediately regardless of a surrounding transaction. Point `-dsn` at a database you are prepared to
-have changed, such as a disposable copy of the schema `-lock` describes, and apply the finished plan to its real
-target separately through `apply -plan`. `plan create` refuses to run when `-output` already names an existing file,
-so a plan a reviewer already has open is never silently replaced.
+`plan create` reads its baseline catalog from `-dsn` itself, before running anything, and then runs every migration
+in `-dir` that `-dsn`'s migration history has not yet recorded, producing a reviewable plan file without writing Go
+against `changeplan`. It runs those migrations for real: it does not roll the statements back, since MySQL commits
+DDL immediately regardless of a surrounding transaction. Point `-dsn` at a database you are prepared to have changed,
+and apply the finished plan to its real target separately through `apply -plan`. `plan create` refuses to run when
+`-output` already names an existing file, so a plan a reviewer already has open is never silently replaced.
 
 Inspect a plan without opening a database, check it against a live database without changing schema or metadata, then
 apply it:
 
 ```sh
 rasql migrate plan create \
-  -lock rasql.lock.json \
   -dir db/migrations \
   -dialect sqlite \
   -dsn "$DATABASE_URL" \

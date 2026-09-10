@@ -1,9 +1,9 @@
 package changeplan
 
 import (
-	"os"
 	"testing"
 
+	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/sqltext"
@@ -131,24 +131,20 @@ func TestImmutabilityMatrixProfileBoundaries(t *testing.T) {
 		require.Equal(t, []int{1, 1, 1, 1, 1}, source.calls[:])
 	})
 
-	t.Run("FromLock ProfileSource input", func(t *testing.T) {
-		lock, readErr := os.ReadFile("testdata/external/lock.json")
-		require.NoError(t, readErr)
-		lockCatalog, catalogErr := CatalogFromLock(lock)
+	t.Run("FromBaseline ProfileSource input", func(t *testing.T) {
+		object := immutabilityObject(t, "baseline-table")
+		baseline, catalogErr := NewCatalog(sourceRepairProfile(t), "immutability-source", []CatalogObject{object})
 		require.NoError(t, catalogErr)
-		resolved, resolvedErr := NewResolvedChanges(lockCatalog, []ResolvedCatalogStep{}, nil, nil, nil, nil)
+		resolved, resolvedErr := NewResolvedChanges(baseline, []ResolvedCatalogStep{}, nil, nil, nil, nil)
 		require.NoError(t, resolvedErr)
 		history := mustHistory(t)
-		profileValue, profileErr := engineprofile.Builtin("sqlite-3.35", engineprofile.Version{Known: true, Major: 3, Minor: 45})
+		profileValue, profileErr := engineprofile.Builtin("sqlite-3.35", engineprofile.Version{Known: true, Major: 3, Minor: 35})
 		require.NoError(t, profileErr)
 		source := &immutabilityProfileSource{value: profileValue, mutateAfterLast: true}
-		plan, buildErr := FromLock(lock, source, history, resolved)
+		plan, buildErr := FromBaseline(baseline, source, history, resolved)
 		require.NoError(t, buildErr)
 		beforeID := plan.ID()
 		beforeBytes := mustEncodePlan(t, plan)
-		for i := range lock {
-			lock[i] = 'x'
-		}
 		require.Equal(t, beforeID, plan.ID())
 		require.Equal(t, beforeBytes, mustEncodePlan(t, plan))
 		require.Equal(t, []int{1, 1, 1, 1, 1}, source.calls[:])
@@ -427,19 +423,22 @@ func TestImmutabilityMatrixCatalogBoundaries(t *testing.T) {
 		require.Equal(t, object.ID(), got)
 	})
 
-	t.Run("CatalogFromLock bytes input", func(t *testing.T) {
-		lock, err := os.ReadFile("testdata/external/lock.json")
-		require.NoError(t, err)
-		catalog, err := CatalogFromLock(lock)
+	t.Run("NewCatalogFromPhysical PhysicalCatalog input", func(t *testing.T) {
+		physical, diagnostics := compilerir.PhysicalFromTableDefs(
+			compilerir.EngineIdentity{Dialect: "sqlite", Version: "3.35", Profile: "sqlite-3.35"},
+			[]schema.TableDef{immutabilityDefinition()})
+		require.Empty(t, diagnostics)
+		assigned, diagnostics := compilerir.AssignObjectIDs(physical, compilerir.IdentityInput{SourceIdentity: "immutability-physical"})
+		require.Empty(t, diagnostics)
+		catalog, err := NewCatalogFromPhysical(assigned, "immutability-physical")
 		require.NoError(t, err)
 		wantDigest := mustCatalogDigest(t, catalog)
-		wantID, ok := catalog.ObjectID(schema.ObjectTable, "main", "tasks")
+		wantID, ok := catalog.ObjectID(schema.ObjectTable, "main", "users")
 		require.True(t, ok)
-		for i := range lock {
-			lock[i] = 'x'
-		}
+		assigned.Objects[0].ID = "mutated-after-call"
+		assigned.Objects[0].Name = "mutated-after-call"
 		require.Equal(t, wantDigest, mustCatalogDigest(t, catalog))
-		gotID, ok := catalog.ObjectID(schema.ObjectTable, "main", "tasks")
+		gotID, ok := catalog.ObjectID(schema.ObjectTable, "main", "users")
 		require.True(t, ok)
 		require.Equal(t, wantID, gotID)
 	})
