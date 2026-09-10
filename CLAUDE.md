@@ -4,7 +4,9 @@ Agent-facing rules for this repository. Detail and procedure live in `CONTRIBUTI
 
 ## Code in the documentation
 
-A Go block in `README.md` or `docs/` MUST come from a file the compiler and `go test` see. NEVER write a snippet straight into a page, and NEVER hand-edit the body of an include block — write the example under `examples/`, mark it, and run `go test ./examples/ -update-docs`. `TestDocGoBlocksComeFromExamples` fails on a hand-written Go fence, and `TestDocRegionsAreIncluded` fails on a marked region no page includes.
+A worked Go example in `README.md` or `docs/` MUST come from a file the compiler and `go test` see. NEVER write a whole example straight into a page, and NEVER hand-edit the body of an include block — write the example under `examples/`, mark it, and run `go test ./examples/ -update-docs`. `TestDocGoBlocksComeFromExamples` fails on a hand-written Go fence, and `TestDocRegionsAreIncluded` fails on a marked region no page includes.
+
+A short snippet may be written straight into a page. `maxSnippetLines` in `examples/docs_include_test.go` sets how short, and a block carrying a `package` clause is a whole example whatever its length. Use a snippet to show the shape of one call where a worked example would bury the point, and reach for `examples/` as soon as the code does anything a compiler should check.
 
 Include a whole file with `<!-- INCLUDE(examples/x_example_test.go) -->`, or one region of it with `<!-- INCLUDE(examples/x_example_test.go#name) -->` against `// BEGIN(name)` / `// END(name)` in the source. CONTRIBUTING.md's "Code in the documentation" section owns the full workflow.
 

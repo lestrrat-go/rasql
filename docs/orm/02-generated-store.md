@@ -562,8 +562,8 @@ source: [examples/mutation_batch_example_test.go](https://github.com/lestrrat-go
 Each column may carry a `schema.GoBinding`. Its `Type` is used for non-null
 values, and `NullableType` is used when the column is nullable. An omitted
 nullable type uses a pointer to `Type`. Imports are validated and emitted
-deterministically, so named IDs and application wrappers remain consistent
-across row fields, scanners, writes, relationships, and descriptors.
+deterministically, so the same named ID and application wrapper appear in row
+fields, scanners, writes, relationships, and descriptors.
 
 [Typed queries](03-typed-queries.md) reads rows through the generated table, and
 [Writing rows](04-writing.md) inserts, updates, and deletes them.

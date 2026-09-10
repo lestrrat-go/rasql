@@ -1,7 +1,7 @@
 # Querying
 
 Every rasql read ends as a `Query[R]` and runs through an `Executor`. The query carries its result projection, so the
-same `Rows`, `All`, `One`, and `Maybe` terminals handle portable builder queries, generated static queries, native SQL,
+same `Rows`, `All`, `One`, and `Maybe` terminals run portable builder queries, generated static queries, native SQL,
 and runtime-selected result shapes.
 
 ## Portable queries
@@ -10,7 +10,7 @@ A generated table exposes a typed source and column expressions. Build a project
 `rasql.Select`, and add predicates, joins, grouping, order, or limits immutably. The query validates source membership,
 NULL behavior, result names, codecs, and engine capabilities before it opens database rows.
 
-The lower-level `query` package remains available for dialect-neutral SQL construction and `render` turns those values
+The lower-level `query` package builds dialect-neutral SQL of its own, and `render` turns those values
 into SQL plus ordered arguments. It is useful for migration tooling and other code that needs SQL without a result type
 or database handle.
 
