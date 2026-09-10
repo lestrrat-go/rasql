@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -13,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/lestrrat-go/rasql/internal/cursorcodec"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/stmt"
@@ -169,7 +169,7 @@ func consumePreparedPage[R any](ctx context.Context, executor Executor, page pre
 	}
 	if result.HasMore {
 		last := result.Values[len(result.Values)-1]
-		values := make([]cursorValue, len(page.spec.keys))
+		values := make([]cursorcodec.Value, len(page.spec.keys))
 		for i, key := range page.spec.keys {
 			present, value, extractErr := key.extract(last)
 			if extractErr != nil {
@@ -183,12 +183,13 @@ func consumePreparedPage[R any](ctx context.Context, executor Executor, page pre
 					return Page[R]{}, encodeErr
 				}
 			}
-			values[i] = cursorValue{present: present, data: data}
+			values[i] = cursorcodec.Value{Present: present, Data: data}
 		}
-		result.Next, err = encodeCursorEnvelope(page.fingerprint, page.spec.keys, values)
-		if err != nil {
-			return Page[R]{}, err
+		encoded, encodeErr := cursorcodec.EncodeEnvelope(page.fingerprint, pageKeyFields(page.spec.keys), values)
+		if encodeErr != nil {
+			return Page[R]{}, encodeErr
 		}
+		result.Next = Cursor(encoded)
 	}
 	return result, nil
 }
@@ -208,71 +209,37 @@ type decodedCursor struct {
 
 func decodePageCursor[R any](cursor Cursor, spec PageSpec[R], executor Executor) ([]decodedCursor, [32]byte, error) {
 	var fp [32]byte
-	raw, err := base64.RawURLEncoding.DecodeString(string(cursor))
-	if err != nil || len(raw) > 64*1024 {
-		return nil, fp, invalidCursor(errors.New("invalid base64 cursor"))
+	envelope, err := cursorcodec.DecodeEnvelope(string(cursor))
+	if err != nil {
+		return nil, fp, invalidCursor(err)
 	}
-	if len(raw) < 34 || raw[0] != cursorVersion {
-		return nil, fp, invalidCursor(errors.New("invalid cursor version"))
-	}
-	copy(fp[:], raw[1:33])
-	count := int(raw[33])
-	if count != len(spec.keys) {
+	fp = envelope.Fingerprint
+	if len(envelope.Fields) != len(spec.keys) {
 		return nil, fp, invalidCursor(errors.New("cursor arity mismatch"))
 	}
-	offset := 34
-	values := make([]decodedCursor, count)
+	expected := pageKeyFields(spec.keys)
+	values := make([]decodedCursor, len(spec.keys))
 	registry := builtinCodecs
 	if cp, ok := executor.(CodecProvider); ok {
 		registry = cp.Codecs()
 	}
 	for i, key := range spec.keys {
-		if offset+4 > len(raw) {
-			return nil, fp, invalidCursor(errors.New("truncated cursor"))
-		}
-		direction := PageDirection(raw[offset])
-		nullableMarker, nulls, codecLen := raw[offset+1], NullOrder(raw[offset+2]), int(raw[offset+3])
-		if nullableMarker > 1 || nulls > NullsLast {
-			return nil, fp, invalidCursor(errors.New("invalid cursor metadata marker"))
-		}
-		nullable := nullableMarker == 1
-		offset += 4
-		if offset+codecLen+5 > len(raw) {
-			return nil, fp, invalidCursor(errors.New("truncated cursor metadata"))
-		}
-		codec := string(raw[offset : offset+codecLen])
-		offset += codecLen
-		presenceMarker := raw[offset]
-		if presenceMarker > 1 {
-			return nil, fp, invalidCursor(errors.New("invalid cursor presence marker"))
-		}
-		present := presenceMarker == 1
-		offset++
-		length := int(binary.BigEndian.Uint32(raw[offset:]))
-		offset += 4
-		if length > len(raw)-offset {
-			return nil, fp, invalidCursor(errors.New("invalid cursor length"))
-		}
-		data := append([]byte(nil), raw[offset:offset+length]...)
-		offset += length
-		if direction != key.direction || nullable != key.nullable || nulls != key.term.nulls || codec != key.codec {
+		if envelope.Fields[i] != expected[i] {
 			return nil, fp, invalidCursor(errors.New("cursor metadata mismatch"))
 		}
-		if !present {
-			if length != 0 || !key.nullable {
+		value := envelope.Values[i]
+		if !value.Present {
+			if !key.nullable {
 				return nil, fp, invalidCursor(errors.New("invalid absent cursor value"))
 			}
 			values[i] = decodedCursor{}
 			continue
 		}
-		value, decodeErr := decodePageValue(key, data, registry)
+		decoded, decodeErr := decodePageValue(key, value.Data, registry)
 		if decodeErr != nil {
 			return nil, fp, invalidCursor(decodeErr)
 		}
-		values[i] = decodedCursor{true, value}
-	}
-	if offset != len(raw) {
-		return nil, fp, invalidCursor(errors.New("trailing cursor data"))
+		values[i] = decodedCursor{true, decoded}
 	}
 	return values, fp, nil
 }
@@ -284,7 +251,7 @@ func encodePageValue[R any](key *pageKey[R], value any, executor Executor) ([]by
 		return nil, errors.New("nil cursor value")
 	}
 	if key.codec == "" {
-		return encodeBuiltinCursor(value)
+		return cursorcodec.EncodeValue(value)
 	}
 	codec, err := cursorCodec(executor, key.codec)
 	if err != nil {
@@ -294,7 +261,7 @@ func encodePageValue[R any](key *pageKey[R], value any, executor Executor) ([]by
 }
 func decodePageValue[R any](key *pageKey[R], data []byte, registry CodecRegistry) (any, error) {
 	if key.codec == "" {
-		return decodeBuiltinCursor(data, key.typ)
+		return cursorcodec.DecodeValue(data, key.typ)
 	}
 	codec, ok := registry.Lookup(CodecID(key.codec))
 	if !ok {

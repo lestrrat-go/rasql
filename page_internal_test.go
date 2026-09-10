@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/internal/cursorcodec"
 	"github.com/lestrrat-go/rasql/internal/querycompile"
 	querypkg "github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
@@ -390,10 +391,10 @@ func (*r5CountingCursorCodec) Decode(value any, destination any) error {
 	return nil
 }
 func (*r5CountingCursorCodec) EncodeCursor(value any) ([]byte, error) {
-	return encodeBuiltinCursor(value)
+	return cursorcodec.EncodeValue(value)
 }
 func (*r5CountingCursorCodec) DecodeCursor(value []byte) (any, error) {
-	return decodeBuiltinCursor(value, reflect.TypeOf(int64(0)))
+	return cursorcodec.DecodeValue(value, reflect.TypeOf(int64(0)))
 }
 
 func TestPageBinds(t *testing.T) {
