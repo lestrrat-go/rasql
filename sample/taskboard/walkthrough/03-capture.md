@@ -154,9 +154,9 @@ migration verification passed
 ```
 
 The schema now exists twice: once as the durable migration tree just applied,
-and once, read back live, as the input [chapter 4](04-generate.md) locks into
-a snapshot and generates Go from.
+and once, read back live, as what [chapter 4](04-generate.md) generates Go
+from directly, with no snapshot in between.
 
 ## Next
 
-[Lock the schema and generate offline](04-generate.md).
+[Generate the store from the database](04-generate.md).

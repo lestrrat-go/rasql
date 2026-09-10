@@ -45,40 +45,26 @@ ALTER TABLE "tasks"
 ```
 
 Unlike `001_initial`, this migration can be undone: each `.down.sql` reverses
-exactly the statement its `.up.sql` made. Apply it to a disposable database
-and verify the history:
+exactly the statement its `.up.sql` made. `db/migrations` needs no other
+change: `rasql.json` names the whole directory, so a new migration under it
+is picked up without editing the file.
+
+Applying the migration and regenerating are the same script that chapter 4
+introduced:
 
 ```sh
-rasql migrate apply -dir db/migrations \
-  -dialect postgresql -dsn "$TASKBOARD_SCHEMA_DSN"
-rasql migrate verify -dir db/migrations \
-  -dialect postgresql -dsn "$TASKBOARD_SCHEMA_DSN"
+./scripts/generate.sh
 ```
 
-`./scripts/migrate.sh` always targets `$TASKBOARD_DSN`, so a dry run against a
-disposable database uses `rasql` directly instead.
-
-The explicit `schema.paths` list in `rasql.json` must receive the new up
-file at its terminal position.
-
-## Refresh the snapshot
-
-The refresh is an owned, engine-backed operation. It applies the migration tree
-and updates the lock from the disposable database:
-
-```sh
-TASKBOARD_SCHEMA_DSN="$TASKBOARD_DSN" ./scripts/refresh-schema.sh
+```text
+applied	002_due_dates_and_unowned_tasks
+migration apply completed: 1 applied
+generated internal/store
 ```
 
-Review the lock and generated diff. Then run generation with every DSN variable
-removed:
-
-```sh
-env -u TASKBOARD_SCHEMA_DSN -u TASKBOARD_DSN -u TASKBOARD_TEST_DSN \
-  ./scripts/generate.sh
-env -u TASKBOARD_SCHEMA_DSN -u TASKBOARD_DSN -u TASKBOARD_TEST_DSN \
-  ./scripts/generate.sh -check
-```
+Review the generated diff. `rasql.sum` gained a `migration` line for the new
+directory, and its `output` lines for `members_gen.go` and `tasks_gen.go`
+changed to match the regenerated Go; every other line is untouched.
 
 The application code changes only after the generated package has the needed
 typed symbols. A nullable database column is represented in rows by
@@ -163,17 +149,9 @@ a typed report rather than a compile fix.
 
 ## Try reverting
 
-Bring the running application's own database up to the new migration, the
-same way chapter 6 first applied `001_initial`:
-
-```sh
-./scripts/migrate.sh apply
-```
-
-```text
-applied	002_due_dates_and_unowned_tasks
-migration apply completed: 1 applied
-```
+`./scripts/generate.sh` already applied `002_due_dates_and_unowned_tasks` to
+the running application's own database, the one `TASKBOARD_DSN` names, since
+that is the only database this project has:
 
 ```sh
 ./scripts/migrate.sh status
