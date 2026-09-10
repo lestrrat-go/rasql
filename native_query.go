@@ -129,5 +129,5 @@ func cloneNativePlan(native *nativeQueryPlan) *nativeQueryPlan {
 		return nil
 	}
 	args := native.statement.Args()
-	return &nativeQueryPlan{engine: native.engine, statement: stmt.New(sqltext.Text(native.statement.SQL()), args...)}
+	return &nativeQueryPlan{engine: native.engine, statement: stmt.New(native.statement.Text(), args...)}
 }

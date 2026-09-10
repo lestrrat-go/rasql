@@ -9,7 +9,6 @@ import (
 	"reflect"
 
 	"github.com/lestrrat-go/rasql/internal/querycompile"
-	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/lestrrat-go/rasql/stmt"
 )
 
@@ -250,5 +249,5 @@ func encodeStatement(statement stmt.Statement, slots []bindSlot, reg CodecRegist
 			args[i] = encoded
 		}
 	}
-	return stmt.New(sqltext.Text(statement.SQL()), args...), nil
+	return stmt.New(statement.Text(), args...), nil
 }

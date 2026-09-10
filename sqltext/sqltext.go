@@ -12,6 +12,12 @@
 // fields of a schema descriptor, a migration's source, and a desired-schema
 // source file. It does not brand what rasql itself produces as output or
 // reports in an error.
+//
+// Rebuilding a statement from one rasql already rendered goes through
+// stmt.Statement.Text, which hands stmt.New the branded text directly. That
+// keeps a grep for the conversion on the call sites where a program vouches
+// for SQL it assembled, rather than on rasql passing its own output back to
+// itself.
 package sqltext
 
 // Text is SQL text rasql sends to a database as written, without parsing it.

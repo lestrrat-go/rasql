@@ -9,7 +9,6 @@ import (
 	"reflect"
 
 	"github.com/lestrrat-go/rasql/schema"
-	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/lestrrat-go/rasql/stmt"
 )
 
@@ -42,7 +41,7 @@ func graphPreencodeBaseOccurrences(base compiledQuery, encoded stmt.Statement, f
 		result.bindSlots[position].preEncoded = true
 		result.copyArgs[position] = func() (any, error) { return graphCloneEncoded(value), nil }
 	}
-	result.statement = stmt.New(sqltext.Text(final.statement.SQL()), args...)
+	result.statement = stmt.New(final.statement.Text(), args...)
 	return result, nil
 }
 

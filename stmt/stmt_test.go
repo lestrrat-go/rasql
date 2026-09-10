@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"testing"
 
+	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/lestrrat-go/rasql/stmt"
 	"github.com/stretchr/testify/require"
 )
@@ -50,4 +51,18 @@ func TestStatementBoundArgsAliasesStorage(t *testing.T) {
 func TestStatementSQLReturnsRenderedText(t *testing.T) {
 	s := stmt.New("SELECT 1")
 	require.Equal(t, "SELECT 1", s.SQL())
+}
+
+// TestStatementTextRebuildsWithoutAConversion pins the property Text exists
+// for: rebuilding a statement from an existing one reaches New without an
+// sqltext.Text conversion, so the conversions left in the tree are the ones
+// that brand SQL a program assembled itself. The call below is the proof, and
+// it stops compiling if Text stops returning sqltext.Text.
+func TestStatementTextRebuildsWithoutAConversion(t *testing.T) {
+	original := stmt.New("SELECT ?", 7)
+
+	rebuilt := stmt.New(original.Text(), original.BoundArgs()...)
+	require.Equal(t, original.SQL(), rebuilt.SQL())
+	require.Equal(t, original.Args(), rebuilt.Args())
+	require.Equal(t, sqltext.Text("SELECT ?"), original.Text())
 }

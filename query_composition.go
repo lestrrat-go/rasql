@@ -13,7 +13,6 @@ import (
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/schema"
-	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/lestrrat-go/rasql/stmt"
 )
 
@@ -253,7 +252,7 @@ func compositionResultQuery[R any](q Query[R]) (query.ResultQuery, error) {
 		return resultQuery(q)
 	}
 	native := q.plan.native
-	body, err := query.NativeResultOf(native.engine, sqltext.Text(native.statement.SQL()), native.statement.BoundArgs())
+	body, err := query.NativeResultOf(native.engine, native.statement.Text(), native.statement.BoundArgs())
 	if err != nil {
 		if errors.Is(err, sqlscan.ErrNotSelect) {
 			return query.ResultQuery{}, planError("unsupported_feature", "native", err.Error())
@@ -517,7 +516,7 @@ func (c compiledQuery) statementCopy() (stmt.Statement, error) {
 		}
 		args[i] = copy
 	}
-	return stmt.New(sqltext.Text(c.statement.SQL()), args...), nil
+	return stmt.New(c.statement.Text(), args...), nil
 }
 
 func compileQuery[R any](compiler *querycompile.Compiler, q Query[R]) (compiledQuery, error) {
@@ -647,7 +646,7 @@ func unwrapBindTokens(statement stmt.Statement) (compiledQuery, error) {
 	if len(args) != len(slots) || len(args) != len(copyArgs) {
 		return compiledQuery{}, planError("internal_plan", "binds", "statement arguments and bind slots differ")
 	}
-	return compiledQuery{statement: stmt.New(sqltext.Text(statement.SQL()), args...), bindSlots: slots, copyArgs: copyArgs}, nil
+	return compiledQuery{statement: stmt.New(statement.Text(), args...), bindSlots: slots, copyArgs: copyArgs}, nil
 }
 
 func matchBaseOccurrences(base, paged compiledQuery) ([]int, error) {
