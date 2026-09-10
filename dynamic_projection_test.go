@@ -220,6 +220,10 @@ func TestDynamicProjection(t *testing.T) {
 		)
 		require.NoError(t, err)
 		decoder := dynamicProjectionAggregateDecoder{schema: resultSchema}
+		// sqlText below is Native, so these expressions are never rendered and each
+		// item is here only for its column metadata. SumExpr mirrors the SUM in
+		// sqlText because NullItem takes a NullExpr and every public way to build
+		// one without a bound column is an aggregate.
 		items := []rasql.ProjectionItem{
 			rasql.Item("user_id", rasql.Value(int64(0)), schema.IntegerType{}, ""),
 			rasql.Item("name", rasql.Value(""), schema.TextType{}, ""),
