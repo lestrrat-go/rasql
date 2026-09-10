@@ -8,9 +8,9 @@ You can write it by hand, or generate it with [`rasql codegen generate`](../orm/
 foo := schema.MustTableDef("table_name", /* columns .... */)
 ```
 
-Both builders in [Querying](../02-querying.md) stand on a descriptor.
-`query.MustTableRef` takes one as it is, which is all [the SQL builder](02-sql-builder.md) needs.
-`rasql.MustTableOf[T]` binds a Go row type to one for [the typed builder](../orm/03-typed-queries.md).
+A descriptor is where every query in [Querying](../02-querying.md) begins.
+`query.MustTableRef` turns one into the table reference [the SQL builder](02-sql-builder.md) takes.
+`rasql.MustTableOf[T]` binds a Go row type to one, and hands the result to [the typed builder](../orm/03-typed-queries.md).
 
 A generated store holds its descriptors in `schema_gen.go`, written by `rasql codegen generate` from the live database.
 [`rasql codegen`](../orm/01-codegen.md) covers that command and the settings file that drives it.
