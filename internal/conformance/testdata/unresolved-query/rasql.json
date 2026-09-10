@@ -1,0 +1,18 @@
+{
+  "engine": {"dialect": "sqlite", "profile": "sqlite-3.35"},
+  "schema": {"kind": "migrations", "identity": "unresolved-query-v1", "paths": ["migrations/*.sql"]},
+  "output": "internal/store",
+  "package": "store",
+  "queries": [
+    {
+      "id": "unresolved_result",
+      "input": "queries/unresolved_result.sql",
+      "engine": "sqlite",
+      "function": "UnresolvedResult",
+      "output": "unresolved_result_gen.go",
+      "operation": "select",
+      "cardinality": "many",
+      "results": [{"name": "opaque", "nullable": true}]
+    }
+  ]
+}

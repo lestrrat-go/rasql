@@ -137,8 +137,9 @@ func MustTableRef(definition schema.TableDef) TableRef {
 // copying it.
 //
 // It is the trusting counterpart to NewTableRef, for a descriptor whose validity
-// is already established: rasqlgen runs generate.Validate over every descriptor
-// it emits, so a generated table is validated before it is ever compiled.
+// is already established: rasqlgen's compact emitter validates each table
+// descriptor as it renders it, so a generated table is validated before it is
+// ever compiled.
 //
 // It validates nothing. Every dialect this module ships re-validates each
 // identifier at render time through Dialect.QuoteIdentifier and returns an error

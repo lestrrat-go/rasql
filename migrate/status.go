@@ -24,14 +24,24 @@ const (
 )
 
 // StatusEntry reports the database state of one migration ID.
+//
+// Reversible describes the supplied migration itself rather than the
+// database, so it is meaningful for every state except StatusUnknown: a
+// recorded migration absent from the supplied set carries no source to ask,
+// and the field stays false for it. A caller planning a rollback can check
+// Reversible before running revert rather than discovering it from a
+// refusal.
 type StatusEntry struct {
 	ID         string
 	State      StatusState
 	Incomplete *IncompleteMigration
+	Reversible bool
 }
 
 // Status reads migration history and reports every supplied and recorded migration.
-// It creates the migration-history table when it does not exist.
+// It creates the migration-history table when it does not exist. Each
+// entry also reports whether that migration can be reverted, so a caller
+// can find an irreversible migration before running revert into it.
 func (r Runner) Status(ctx context.Context, migrations ...Migration) ([]StatusEntry, error) {
 	if err := r.validate(); err != nil {
 		return nil, err
@@ -117,15 +127,16 @@ func statusEntries(applied map[string]string, migrations []preparedMigration, pr
 
 	pending := false
 	for _, migration := range migrations {
+		reversible := len(migration.down) > 0
 		recordedChecksum, exists := applied[migration.id]
 		if progress != nil && progress.id == migration.id {
 			value := IncompleteMigration{ID: progress.id, Checksum: progress.checksum, Source: progress.source, Direction: progress.direction, SourceIndex: progress.sourceIndex}
-			entries = append(entries, StatusEntry{ID: migration.id, State: StatusIncomplete, Incomplete: &value})
+			entries = append(entries, StatusEntry{ID: migration.id, State: StatusIncomplete, Incomplete: &value, Reversible: reversible})
 			continue
 		}
 		if !exists {
 			pending = true
-			entries = append(entries, StatusEntry{ID: migration.id, State: StatusPending})
+			entries = append(entries, StatusEntry{ID: migration.id, State: StatusPending, Reversible: reversible})
 			continue
 		}
 		state := StatusApplied
@@ -134,7 +145,7 @@ func statusEntries(applied map[string]string, migrations []preparedMigration, pr
 		} else if pending {
 			state = StatusOutOfOrder
 		}
-		entries = append(entries, StatusEntry{ID: migration.id, State: state})
+		entries = append(entries, StatusEntry{ID: migration.id, State: state, Reversible: reversible})
 	}
 	return entries
 }

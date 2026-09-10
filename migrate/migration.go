@@ -11,6 +11,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/lestrrat-go/rasql/migrate/changeplan"
 	"github.com/lestrrat-go/rasql/sqltext"
 )
 
@@ -39,8 +40,10 @@ type IncompleteMigration struct {
 }
 
 type ExecutionResult struct {
-	Completed  []Migration
-	Incomplete *IncompleteMigration
+	Completed           []Migration
+	Incomplete          *IncompleteMigration
+	CompletedOperations []changeplan.Operation
+	IncompleteOperation *IncompleteOperation
 }
 
 type IncompleteMigrationError struct {
@@ -92,9 +95,10 @@ type Migration struct {
 	// reverse script can be added or corrected for a migration that is
 	// already applied without invalidating its history record.
 	//
-	// A migration read from disk may have no reverse sources when it carries
-	// an explicit irreversibility marker. A Migration built in Go may also
-	// leave them empty, and Revert then refuses to select it.
+	// A migration read from disk has no reverse sources when its directory
+	// holds no .down.sql files. A Migration built in Go may also leave them
+	// empty. Revert then refuses the whole run rather than selecting it
+	// partway through.
 	Down []Statement
 }
 

@@ -44,17 +44,23 @@ func Example_rasql_observer() {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	result, err := rasql.Insert(ctx, db, users, store.UsersRow{ID: 1, Email: "ada@example.com", Status: "active"})
+	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 40, 0)
+	if err != nil {
+		fmt.Printf("failed to describe engine profile: %s\n", err)
+		return
+	}
+	executor, err := rasql.AsExecutor(db, profile)
+	if err != nil {
+		fmt.Printf("failed to create executor: %s\n", err)
+		return
+	}
+	plan := store.NewUsersCreate().ID(1).Email("ada@example.com").Status("active").FirstName("First").LastName("Last").Plan()
+	outcome, err := rasql.ExecMutation(ctx, executor, plan)
 	if err != nil {
 		fmt.Printf("insert failed: %s\n", err)
 		return
 	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		fmt.Printf("failed to read result: %s\n", err)
-		return
-	}
-	fmt.Println("rows affected:", rows)
+	fmt.Println("rows affected:", outcome.Affected)
 	fmt.Println("exporter error:", reported)
 
 	// Output:
