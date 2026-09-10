@@ -473,8 +473,8 @@ func (p Plan) commit(ctx context.Context, publication *Publication) error {
 	}
 	var published *preparedPublication
 	if publication != nil {
-		if publication.BeforeWrite == nil || publication.AfterVerify == nil {
-			return errors.New("generate: publication callbacks are required")
+		if publication.BeforeWrite == nil {
+			return errors.New("generate: publication BeforeWrite callback is required")
 		}
 		published, err = preparePublication(ctx, *publication, p.root, realDir, handles)
 		if err != nil {
@@ -613,6 +613,8 @@ type RecoveryDeletion struct {
 
 // Publication describes non-generated files and recovery deletions committed
 // with a generated package. Final files are published after aggregators.
+// BeforeWrite is required. AfterVerify is optional; a nil AfterVerify makes
+// CommitPublication's post-verification step a no-op.
 type Publication struct {
 	FinalFiles        []FinalFile
 	RecoveryDeletions []RecoveryDeletion
@@ -678,12 +680,14 @@ func (p Publication) before(ctx context.Context, entries []PublicationEntry) err
 	return p.BeforeWrite(ctx, clonePublicationEntries(entries))
 }
 
+// after runs the publication's AfterVerify callback, if any. AfterVerify is optional: a
+// publication with none set still commits and verifies, and after is then a no-op.
 func (p Publication) after(ctx context.Context, entries []PublicationEntry) error {
 	if err := contextError(ctx); err != nil {
 		return err
 	}
 	if p.AfterVerify == nil {
-		return errors.New("generate: publication AfterVerify callback is required")
+		return nil
 	}
 	return p.AfterVerify(ctx, clonePublicationEntries(entries))
 }
