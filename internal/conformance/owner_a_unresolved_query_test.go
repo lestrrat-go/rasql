@@ -1,42 +1,35 @@
 package conformance
 
 import (
+	"bytes"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
+	"github.com/lestrrat-go/rasql/cli/rasqlgen"
 	"github.com/stretchr/testify/require"
 )
 
+// TestUnresolvedGeneratedQuery proves that a query whose result column has no scalar declaration
+// refuses generate -scratch with the analyzer's own diagnostic, exits 2, and writes neither
+// internal/store nor rasql.sum -- the live-generation counterpart of what schema update used to
+// prove against a checked-in lock. testdata/unresolved-query/rasql.lock.json was a 45-byte
+// sentinel, not a real lock, so there is nothing left to snapshot and compare byte-for-byte; its
+// removal in this task is what makes that sentinel's absence itself part of the proof.
 func TestUnresolvedGeneratedQuery(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "fixture")
 	require.NoError(t, copyTree(filepath.Join("testdata", "unresolved-query"), root))
-	lockPath := filepath.Join(root, "rasql.lock.json")
-	before, err := os.ReadFile(lockPath)
-	require.NoError(t, err)
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	require.NoError(t, err)
-	binary := filepath.Join(t.TempDir(), "rasql")
-	build := exec.Command("go", "build", "-o", binary, filepath.Join(repoRoot, "cmd/rasql"))
-	build.Dir = repoRoot
-	// GOCACHE is deliberately shared, not rooted under t.TempDir(): see
-	// sharedOfflineGOCACHE's comment in generation_test.go.
-	build.Env = offlineBuildEnv(sharedOfflineGOCACHE)
-	buildOutput, buildErr := build.CombinedOutput()
-	require.NoError(t, buildErr, string(buildOutput))
-	command := exec.Command(binary, "schema", "update", "-config", filepath.Join(root, "rasql.json"), "-dsn", "")
-	command.Dir = repoRoot
-	command.Env = offlineBuildEnv(sharedOfflineGOCACHE)
-	output, err := command.CombinedOutput()
+
+	var output, diagnostics bytes.Buffer
+	err := rasqlgen.RunContext(t.Context(), []string{"generate", "-config", filepath.Join(root, "rasql.json"), "-scratch"}, &output, &diagnostics)
 	require.Error(t, err)
-	var exitError *exec.ExitError
-	require.ErrorAs(t, err, &exitError)
-	require.Equal(t, 2, exitError.ExitCode())
-	require.Equal(t, "schema update: query \"unresolved_result\" value \"opaque\" requires a scalar declaration\n", string(output))
-	require.Equal(t, string(before), string(mustReadFile(t, lockPath)))
+	require.Equal(t, 2, rasqlgen.ExitCode(err))
+	require.Equal(t, `generate: query "unresolved_result" value "opaque" requires a scalar declaration`, err.Error())
+
 	_, statErr := os.Stat(filepath.Join(root, "internal", "store"))
 	require.ErrorIs(t, statErr, os.ErrNotExist)
+	_, sumErr := os.Stat(filepath.Join(root, "internal", "store", "rasql.sum"))
+	require.ErrorIs(t, sumErr, os.ErrNotExist)
 }
 
 func mustReadFile(t *testing.T, path string) []byte {

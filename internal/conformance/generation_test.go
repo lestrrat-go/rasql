@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/lestrrat-go/rasql/internal/compilerlock"
+	"github.com/lestrrat-go/rasql/internal/gensum"
 	"github.com/stretchr/testify/require"
 )
 
@@ -49,26 +49,22 @@ func TestGeneratedFootprintBuildScaffold(t *testing.T) {
 			require.Equal(t, digest, manifest.PortableSignatureDigest)
 			require.Equal(t, engine, manifest.Engine)
 			require.NotEmpty(t, manifest.Profile)
-			lockData, err := os.ReadFile(filepath.Join(fixture, "rasql.lock.json"))
+			sumData, err := os.ReadFile(filepath.Join(fixture, "internal", "store", "rasql.sum"))
 			require.NoError(t, err)
-			lock, err := compilerlock.Decode(lockData)
+			sum, err := gensum.Parse(sumData)
 			require.NoError(t, err)
-			require.Equal(t, manifest.Engine, lock.Engine.Dialect)
-			require.Equal(t, manifest.Profile, lock.Engine.Profile)
+			require.Equal(t, manifest.Engine, sum.Dialect)
+			require.Equal(t, manifest.Profile, sum.Profile)
 
-			copyDir := t.TempDir()
-			require.NoError(t, copyTree(fixture, copyDir))
-			goMod, err := os.ReadFile(filepath.Join(repoRoot, "go.mod"))
-			require.NoError(t, err)
-			require.NoError(t, os.WriteFile(filepath.Join(copyDir, "go.mod"), goMod, 0o644))
-			command := exec.Command("go", "run", "./cmd/rasql", "check", "-config", filepath.Join(copyDir, "rasql.json"))
+			_, nestedFixture := copyFixtureAsModule(t, engine)
+			command := exec.Command("go", "run", "./cmd/rasql", "codegen", "check", "-config", filepath.Join(nestedFixture, "rasql.json"))
 			command.Dir = repoRoot
 			command.Env = append(os.Environ(), "GOCACHE="+sharedOfflineGOCACHE)
 			output, runErr := command.CombinedOutput()
 			require.NoError(t, runErr, string(output))
 			require.Contains(t, string(output), "internal/store is up to date")
 
-			files, bytes := footprint(copyDir)
+			files, bytes := footprint(nestedFixture)
 			require.GreaterOrEqual(t, files, 5)
 			require.Positive(t, bytes)
 		})
@@ -108,6 +104,26 @@ func copyTree(source, destination string) error {
 		_, err = io.Copy(output, input)
 		return err
 	})
+}
+
+// copyFixtureAsModule copies testdata/<engine> into a fresh temporary directory, nested under
+// internal/conformance/testdata/<engine> exactly as it sits in the real repository, with go.mod
+// (copied from the repository's own) at the new root. rasql.sum's migration and query entries are
+// named relative to the module root, and the checked-in sum was generated with the real repository
+// as that root, so a copy that flattened the fixture to its own module root would make every path
+// a fresh check or generate computed there disagree with the sum copied alongside it. It returns
+// the new module root and the nested fixture directory, which holds rasql.json.
+func copyFixtureAsModule(t *testing.T, engine string) (moduleRoot, fixtureDir string) {
+	t.Helper()
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	require.NoError(t, err)
+	moduleRoot = t.TempDir()
+	fixtureDir = filepath.Join(moduleRoot, "internal", "conformance", "testdata", engine)
+	require.NoError(t, copyTree(filepath.Join("testdata", engine), fixtureDir))
+	goMod, err := os.ReadFile(filepath.Join(repoRoot, "go.mod"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(moduleRoot, "go.mod"), goMod, 0o644))
+	return moduleRoot, fixtureDir
 }
 
 func footprint(root string) (int, int64) {

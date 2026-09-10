@@ -1,18 +1,9 @@
 {
   "emitter": "compact",
-  "engine": {
-    "dialect": "postgresql",
-    "profile": "postgresql-17"
-  },
+  "dialect": "postgresql",
   "output": "internal/store",
   "package": "store",
-  "schema": {
-    "identity": "d4-conformance-postgresql-live-v1",
-    "kind": "migrations",
-    "paths": [
-      "migrations/*/*.up.sql"
-    ]
-  },
+  "migrations": "migrations",
   "queries": [
     {
       "id": "overdue_task",
@@ -23,18 +14,58 @@
       "operation": "select",
       "cardinality": "one",
       "parameters": [
-        {"name": "projectID", "scalar": "integer", "nullable": false},
-        {"name": "open", "scalar": "boolean", "nullable": false},
-        {"name": "cutoff", "scalar": "time", "nullable": false}
+        {
+          "name": "projectID",
+          "scalar": "integer",
+          "nullable": false
+        },
+        {
+          "name": "open",
+          "scalar": "boolean",
+          "nullable": false
+        },
+        {
+          "name": "cutoff",
+          "scalar": "time",
+          "nullable": false
+        }
       ],
       "results": [
-        {"name": "id", "scalar": "integer", "nullable": false},
-        {"name": "project_id", "scalar": "integer", "nullable": false},
-        {"name": "assignee_id", "scalar": "integer", "nullable": true},
-        {"name": "title", "scalar": "text", "nullable": false},
-        {"name": "is_open", "scalar": "boolean", "nullable": false},
-        {"name": "due_on", "scalar": "time", "nullable": true},
-        {"name": "created_at", "scalar": "time", "nullable": false}
+        {
+          "name": "id",
+          "scalar": "integer",
+          "nullable": false
+        },
+        {
+          "name": "project_id",
+          "scalar": "integer",
+          "nullable": false
+        },
+        {
+          "name": "assignee_id",
+          "scalar": "integer",
+          "nullable": true
+        },
+        {
+          "name": "title",
+          "scalar": "text",
+          "nullable": false
+        },
+        {
+          "name": "is_open",
+          "scalar": "boolean",
+          "nullable": false
+        },
+        {
+          "name": "due_on",
+          "scalar": "time",
+          "nullable": true
+        },
+        {
+          "name": "created_at",
+          "scalar": "time",
+          "nullable": false
+        }
       ]
     },
     {
@@ -46,18 +77,58 @@
       "operation": "select",
       "cardinality": "maybe",
       "parameters": [
-        {"name": "projectID", "scalar": "integer", "nullable": false},
-        {"name": "open", "scalar": "boolean", "nullable": false},
-        {"name": "cutoff", "scalar": "time", "nullable": false}
+        {
+          "name": "projectID",
+          "scalar": "integer",
+          "nullable": false
+        },
+        {
+          "name": "open",
+          "scalar": "boolean",
+          "nullable": false
+        },
+        {
+          "name": "cutoff",
+          "scalar": "time",
+          "nullable": false
+        }
       ],
       "results": [
-        {"name": "id", "scalar": "integer", "nullable": false},
-        {"name": "project_id", "scalar": "integer", "nullable": false},
-        {"name": "assignee_id", "scalar": "integer", "nullable": true},
-        {"name": "title", "scalar": "text", "nullable": false},
-        {"name": "is_open", "scalar": "boolean", "nullable": false},
-        {"name": "due_on", "scalar": "time", "nullable": true},
-        {"name": "created_at", "scalar": "time", "nullable": false}
+        {
+          "name": "id",
+          "scalar": "integer",
+          "nullable": false
+        },
+        {
+          "name": "project_id",
+          "scalar": "integer",
+          "nullable": false
+        },
+        {
+          "name": "assignee_id",
+          "scalar": "integer",
+          "nullable": true
+        },
+        {
+          "name": "title",
+          "scalar": "text",
+          "nullable": false
+        },
+        {
+          "name": "is_open",
+          "scalar": "boolean",
+          "nullable": false
+        },
+        {
+          "name": "due_on",
+          "scalar": "time",
+          "nullable": true
+        },
+        {
+          "name": "created_at",
+          "scalar": "time",
+          "nullable": false
+        }
       ]
     },
     {
