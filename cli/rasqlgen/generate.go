@@ -32,12 +32,17 @@ const defaultGenerateTimeout = 30 * time.Second
 // runGenerate renders the store package. With -dsn or -scratch it reads a live database and
 // writes rasql.sum beside the generated Go; with neither, and a config still shaped as engine and
 // schema, it falls through to the offline path that regenerates from rasql.lock.json unchanged.
+// -check is accepted only for that offline path -- it predates rasql codegen check existing as
+// its own command, and internal/conformance's own tests still invoke it that way against an
+// engine-and-schema config -- and is refused together with -dsn or -scratch, where rasql codegen
+// check is the spelling.
 func (c command) runGenerate(args []string) error {
 	flags := c.newFlagSet(c.flagSetPrefix + "generate")
 	configPath := flags.String("config", "", "settings file")
 	dsn := flags.String("dsn", "", "connection string; required unless -scratch is set for SQLite")
 	scratch := flags.Bool("scratch", false, "build a throwaway database from -dsn, apply migrations, generate, and drop it")
 	timeout := flags.Duration("timeout", defaultGenerateTimeout, "generation timeout")
+	check := flags.Bool("check", false, "offline path only: report whether generated files are current instead of writing them")
 	if err := parseCommandFlags(flags, args); err != nil {
 		return err
 	}
@@ -46,6 +51,9 @@ func (c command) runGenerate(args []string) error {
 		return err
 	}
 	if *dsn != "" || *scratch {
+		if *check {
+			return errors.New("generate: -check is not valid with -dsn or -scratch; use check instead")
+		}
 		if err := c.runGenerateFromDatabase(*configPath, settings, *dsn, *scratch, *timeout); err != nil {
 			return fmt.Errorf("generate: %w", err)
 		}
@@ -54,7 +62,7 @@ func (c command) runGenerate(args []string) error {
 	if settings.Engine == nil || settings.Schema == nil {
 		return errors.New("generate: config requires engine and schema, or pass -dsn or -scratch to generate from a database")
 	}
-	return c.runOfflineGenerate(settings, *configPath, false)
+	return c.runOfflineGenerate(settings, *configPath, *check)
 }
 
 // runGenerateFromDatabase is the new path: it reads req.DSN (or a scratch database built from it),
