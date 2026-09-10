@@ -222,7 +222,7 @@ rasql migrate verify \
 
 ### Apply a reviewed migration plan
 
-Directory migrations remain the default workflow. A serialized migration plan v1 is an optional reviewed artifact that
+`rasql migrate apply` reads a migration directory unless a plan file says otherwise. A serialized migration plan v1 is an optional reviewed artifact that
 binds its operations to an exact engine profile, history identity, starting catalog, facts, and checkpoints.
 
 `plan create` reads its baseline catalog from `-dsn` itself, before running anything, and then runs every migration
@@ -300,7 +300,7 @@ A reverted migration becomes `pending` again, so `apply` runs it once more. That
 
 The whole run is refused, before any statement runs, when a selected migration's forward sources no longer match their recorded checksum, when `-to` names a migration that is not applied, when `-steps` exceeds the number applied, or when the history disagrees with the supplied migrations. A refused run changes nothing.
 
-Atomic migrations revert atomically on PostgreSQL, MySQL, and SQLite, so a failed revert leaves the database and history unchanged. An explicit `nontransactional` migration retains a progress row when a source outcome is uncertain and blocks replay until reconciliation. Both behaviors are pinned by live tests in `migrate/revert_integration_test.go` and the engine-specific recovery fixtures.
+Atomic migrations revert atomically on PostgreSQL, MySQL, and SQLite, so a failed revert leaves the database and history unchanged. An explicit `nontransactional` migration leaves a progress row behind when a source outcome is uncertain, and blocks replay until someone reconciles it. Both behaviors are pinned by live tests in `migrate/revert_integration_test.go` and the engine-specific recovery fixtures.
 
 ## Generate PostgreSQL, MySQL, and SQLite migrations
 
