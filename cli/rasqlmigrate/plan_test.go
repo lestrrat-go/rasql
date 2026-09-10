@@ -3,14 +3,12 @@ package rasqlmigrate
 import (
 	"bytes"
 	"database/sql"
-	"encoding/json"
 	"errors"
-	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/lestrrat-go/rasql/cli/rasqlgen"
 	"github.com/lestrrat-go/rasql/internal/catalogread"
+	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/migrate/changeplan"
 	"github.com/lestrrat-go/rasql/sqltext"
@@ -163,28 +161,23 @@ func emptySQLiteChangePlan(t *testing.T, database *sql.DB) changeplan.Plan {
 
 func sqliteCreateTableChangePlan(t *testing.T, database *sql.DB, dsn string) changeplan.Plan {
 	t.Helper()
-	root := t.TempDir()
-	configPath := filepath.Join(root, "rasql.json")
-	configBytes, err := json.Marshal(map[string]any{
-		"engine":  map[string]string{"dialect": "sqlite", "profile": "sqlite-3.35"},
-		"schema":  map[string]string{"kind": "live", "identity": "cli-create-table"},
-		"package": "store",
-		"output":  "internal/store",
-	})
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(configPath, configBytes, 0o600))
-	var output, diagnostics bytes.Buffer
-	require.NoError(t, rasqlgen.RunTopLevelContext(t.Context(),
-		[]string{"schema", "update", "-config", configPath, "-dsn", dsn}, &output, &diagnostics),
-		diagnostics.String())
-	lockBytes, err := os.ReadFile(filepath.Join(root, "rasql.lock.json"))
-	require.NoError(t, err)
-
 	profile, err := engineprofile.Discover(t.Context(), database, engineprofile.SQLite, "sqlite-3.35")
 	require.NoError(t, err)
 	adapted := changePlanProfile{profile}
 	sourceIdentity := "cli-create-table"
-	baseline, err := changeplan.CatalogFromLock(lockBytes)
+
+	// The database is empty at this point, so the baseline catalog built
+	// from it is empty too; it is still built the way plan create builds a
+	// live baseline, through compilerir.AssignObjectIDs and
+	// changeplan.NewCatalogFromPhysical, rather than from a compiler lock.
+	beforeRead, err := catalogread.Read(t.Context(), database, profile, catalogread.Scope{})
+	require.NoError(t, err)
+	require.Empty(t, beforeRead.Tables)
+	beforePhysical, diagnostics := compilerir.PhysicalFromTableDefs(changePlanEngineIdentity(profile), beforeRead.Tables)
+	require.Empty(t, diagnostics)
+	assignedBefore, diagnostics := compilerir.AssignObjectIDs(beforePhysical, compilerir.IdentityInput{SourceIdentity: sourceIdentity})
+	require.Empty(t, diagnostics)
+	baseline, err := changeplan.NewCatalogFromPhysical(assignedBefore, sourceIdentity)
 	require.NoError(t, err)
 
 	const createSQL = "CREATE TABLE users (id INTEGER NOT NULL PRIMARY KEY)"
@@ -232,7 +225,7 @@ func sqliteCreateTableChangePlan(t *testing.T, database *sql.DB, dsn string) cha
 		[]changeplan.BaselineRename{},
 	)
 	require.NoError(t, err)
-	plan, err := changeplan.FromLock(lockBytes, adapted, history, resolved)
+	plan, err := changeplan.FromBaseline(baseline, adapted, history, resolved)
 	require.NoError(t, err)
 	return plan
 }

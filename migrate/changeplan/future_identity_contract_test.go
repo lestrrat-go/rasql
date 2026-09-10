@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"os"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
@@ -129,9 +128,7 @@ func TestFutureIdentityRejectedAtNewResolvedChanges(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidIdentity)
 }
 
-func TestFutureIdentityRejectedAtFromLock(t *testing.T) {
-	lock, err := os.ReadFile("testdata/external/lock.json")
-	require.NoError(t, err)
+func TestFutureIdentityRejectedAtFromBaseline(t *testing.T) {
 	fixture := newFutureIdentityFixture(t)
 	future, err := NewIntroducedBaselineObject("fixtures/sqlite", "create", schema.TableDef{
 		Schema: "main", Name: "created", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
@@ -140,15 +137,13 @@ func TestFutureIdentityRejectedAtFromLock(t *testing.T) {
 	operation, err := NewOperation("create", OperationCreateTable, nil, []ObjectID{future.ID()}, nil, nil,
 		Digest{1}, []stmt.Statement{stmt.New(sqltext.Text("CREATE TABLE created (id INTEGER)"))}, TransactionRequired, false, nil)
 	require.NoError(t, err)
-	baseline, err := CatalogFromLock(lock)
+	tasksObject, err := NewCatalogObject("tasks", schema.TableDef{Schema: "main", Name: "tasks", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
 	require.NoError(t, err)
-	tasks, ok := baseline.ObjectID(schema.ObjectTable, "main", "tasks")
-	require.True(t, ok)
-	startingObject, err := NewCatalogObject(tasks, schema.TableDef{Schema: "main", Name: "tasks", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
+	baseline, err := NewCatalog(fixture.profile, "fixtures/sqlite", []CatalogObject{tasksObject})
 	require.NoError(t, err)
 	createdObject, err := NewCatalogObject(future.ID(), schema.TableDef{Schema: "main", Name: "created", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
 	require.NoError(t, err)
-	after, err := NewCatalogLike(baseline, []CatalogObject{startingObject, createdObject})
+	after, err := NewCatalogLike(baseline, []CatalogObject{tasksObject, createdObject})
 	require.NoError(t, err)
 	resultDigest, err := CatalogDigest(after)
 	require.NoError(t, err)
@@ -162,12 +157,6 @@ func TestFutureIdentityRejectedAtFromLock(t *testing.T) {
 	resolved, err := NewResolvedChanges(baseline, []ResolvedCatalogStep{step}, nil, []Operation{operation}, []BaselineObject{future}, nil)
 	require.NoError(t, err)
 	resolved.futureObjects[0] = badFuture
-	lockProfile, err := NewProfile(futureIdentityProfileSource{value: engineprofile.Profile{
-		ID: fixture.profile.ID(), Engine: fixture.profile.Engine(),
-		Version:      engineprofile.Version{Known: true, Major: 3, Minor: 45, Patch: 0},
-		Capabilities: fixture.profile.Capabilities(), Limits: fixture.profile.Limits(),
-	}})
-	require.NoError(t, err)
-	_, err = FromLock(lock, lockProfile, fixture.history, resolved)
+	_, err = FromBaseline(baseline, fixture.profile, fixture.history, resolved)
 	require.ErrorIs(t, err, ErrInvalidIdentity)
 }

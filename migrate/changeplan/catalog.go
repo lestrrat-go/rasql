@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/lestrrat-go/rasql/internal/compilerir"
-	"github.com/lestrrat-go/rasql/internal/compilerlock"
 	"github.com/lestrrat-go/rasql/schema"
 )
 
@@ -35,31 +34,12 @@ func (o CatalogObject) ID() ObjectID { return o.id }
 
 func (o CatalogObject) Definition() schema.TableDef { return o.definition.Clone() }
 
-func CatalogFromLock(lockJSON []byte) (Catalog, error) {
-	copyBytes := append([]byte(nil), lockJSON...)
-	file, err := compilerlock.Decode(copyBytes)
-	if err != nil {
-		return Catalog{}, fmt.Errorf("%w: invalid compiler lock: %v", ErrInvalidPlan, err)
-	}
-	if _, err := compilerlock.Encode(file); err != nil {
-		return Catalog{}, fmt.Errorf("%w: invalid compiler lock: %v", ErrInvalidPlan, err)
-	}
-	physical := compilerlock.PhysicalFromCatalog(file)
-	if err := physical.Validate(); err != nil {
-		return Catalog{}, fmt.Errorf("%w: catalog: %v", ErrInvalidIdentity, err)
-	}
-	if strings.TrimSpace(file.Source.Identity) == "" {
-		return Catalog{}, fmt.Errorf("%w: catalog source identity is required", ErrInvalidIdentity)
-	}
-	return Catalog{physical: physical.Clone(), sourceIdentity: file.Source.Identity}, nil
-}
-
 // NewCatalogFromPhysical builds a Catalog from a compilerir.PhysicalCatalog
-// whose objects already carry their assigned IDs, the live counterpart to
-// CatalogFromLock. The caller is expected to have run
-// compilerir.AssignObjectIDs (or otherwise minted the IDs on catalog.Objects)
-// before calling this; NewCatalogFromPhysical carries those IDs forward
-// rather than assigning its own.
+// whose objects already carry their assigned IDs, such as a live database
+// read through compilerir.AssignObjectIDs. The caller is expected to have
+// run compilerir.AssignObjectIDs (or otherwise minted the IDs on
+// catalog.Objects) before calling this; NewCatalogFromPhysical carries those
+// IDs forward rather than assigning its own.
 func NewCatalogFromPhysical(catalog compilerir.PhysicalCatalog, sourceIdentity string) (Catalog, error) {
 	definitions, diagnostics := compilerir.TableDefsFromPhysical(catalog)
 	for _, diagnostic := range diagnostics {

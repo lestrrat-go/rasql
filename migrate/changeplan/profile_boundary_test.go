@@ -1,11 +1,11 @@
 package changeplan_test
 
 import (
-	"os"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/migrate/changeplan"
+	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 )
 
@@ -89,9 +89,7 @@ func TestProfileRejectsInvalidSourceMatrix(t *testing.T) {
 	}
 }
 
-func TestFromLockCopiesInputAndRejectsInvalidSources(t *testing.T) {
-	lock, err := os.ReadFile("testdata/external/lock.json")
-	require.NoError(t, err)
+func TestFromBaselineRejectsInvalidSources(t *testing.T) {
 	history, err := changeplan.NewHistoryIdentity("main", "schema_migrations")
 	require.NoError(t, err)
 	value := testProfile(t)
@@ -99,17 +97,18 @@ func TestFromLockCopiesInputAndRejectsInvalidSources(t *testing.T) {
 		ID: value.ID(), Engine: value.Engine(), Version: value.Version(),
 		Capabilities: value.Capabilities(), Limits: value.Limits(),
 	}}
-	_, err = changeplan.FromLock(lock, source, history, changeplan.ResolvedChanges{})
+	object, err := changeplan.NewCatalogObject("boundary-table",
+		schema.TableDef{Schema: "main", Name: "tasks", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
+	require.NoError(t, err)
+	baseline, err := changeplan.NewCatalog(value, "profile-boundary-source", []changeplan.CatalogObject{object})
+	require.NoError(t, err)
+	_, err = changeplan.FromBaseline(baseline, source, history, changeplan.ResolvedChanges{})
 	require.Error(t, err)
 	require.Equal(t, []int{1, 1, 1, 1, 1}, source.calls())
-	for i := range lock {
-		lock[i] = 'x'
-	}
-	require.NotEmpty(t, lock)
 
 	var nilSource *nilProfileSource
-	_, err = changeplan.FromLock(lock, nilSource, history, changeplan.ResolvedChanges{})
+	_, err = changeplan.FromBaseline(baseline, nilSource, history, changeplan.ResolvedChanges{})
 	require.Error(t, err)
-	_, err = changeplan.FromLock([]byte("{}"), testProfileSource{value: engineprofile.Profile{}}, history, changeplan.ResolvedChanges{})
+	_, err = changeplan.FromBaseline(changeplan.Catalog{}, testProfileSource{value: engineprofile.Profile{}}, history, changeplan.ResolvedChanges{})
 	require.Error(t, err)
 }

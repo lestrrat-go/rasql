@@ -4,14 +4,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/lestrrat-go/rasql/internal/compilerlock"
-	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/lestrrat-go/rasql/stmt"
 )
 
-// ResolvedChanges is the already-lowered migration result consumed by FromLock.
-// It deliberately contains no compiler or database handles.
+// ResolvedChanges is the already-lowered migration result consumed by
+// FromBaseline. It deliberately contains no compiler or database handles.
 type ResolvedChanges struct {
 	baseline       Catalog
 	steps          []ResolvedCatalogStep
@@ -184,33 +182,6 @@ func catalogEngineID(dialect string) EngineID {
 	}
 }
 
-func FromLock(lockJSON []byte, source ProfileSource, history HistoryIdentity, resolved ResolvedChanges) (Plan, error) {
-	profile, err := NewProfile(source)
-	if err != nil {
-		return Plan{}, err
-	}
-	lockCopy := append([]byte(nil), lockJSON...)
-	file, err := compilerlock.Decode(lockCopy)
-	if err != nil {
-		return Plan{}, fmt.Errorf("%w: invalid compiler lock: %v", ErrInvalidPlan, err)
-	}
-	if _, err := compilerlock.Encode(file); err != nil {
-		return Plan{}, fmt.Errorf("%w: invalid compiler lock: %v", ErrInvalidPlan, err)
-	}
-	if file.Engine.Profile != profile.ID() || !profileEngineMatches(profile.Engine(), file.Engine.Dialect) || !profileVersionMatches(profile, file.Engine.Version) {
-		return Plan{}, fmt.Errorf("%w: lock engine/profile mismatch", ErrInvalidPlan)
-	}
-	sourceDigest, err := parseDigest(file.Digests.Source)
-	if err != nil {
-		return Plan{}, fmt.Errorf("%w: %v", ErrInvalidSourceDigest, err)
-	}
-	lockCatalog, err := CatalogFromLock(lockCopy)
-	if err != nil {
-		return Plan{}, err
-	}
-	return fromBaselineWithSourceDigest(lockCatalog, &sourceDigest, profile, history, resolved)
-}
-
 // FromBaseline builds a Plan from a Catalog read directly from a live
 // database, rather than decoded from a compiler lock. The plan's
 // sourceDigest -- read back nowhere in migrate/, only inside
@@ -224,28 +195,16 @@ func FromBaseline(baseline Catalog, source ProfileSource, history HistoryIdentit
 	if err := baseline.validate(); err != nil {
 		return Plan{}, err
 	}
-	return fromBaselineWithSourceDigest(baseline, nil, profile, history, resolved)
-}
-
-// fromBaselineWithSourceDigest is the shared body of FromLock and
-// FromBaseline. sourceDigest is the lock's own recorded source digest for
-// FromLock; passing nil, as FromBaseline does, means "use the catalog digest
-// itself", which is the design's answer for a baseline with no lock to carry
-// a separate source digest from.
-func fromBaselineWithSourceDigest(baseline Catalog, sourceDigest *Digest, profile Profile, history HistoryIdentity, resolved ResolvedChanges) (Plan, error) {
 	physical := baseline.physical
 	catalogDigest, err := CatalogDigest(baseline)
 	if err != nil {
 		return Plan{}, err
 	}
-	if sourceDigest == nil {
-		sourceDigest = &catalogDigest
-	}
 	profileDigest, err := profileDigestValue(profile)
 	if err != nil {
 		return Plan{}, err
 	}
-	catalogIdentity, err := NewCatalogIdentity(profile.Engine(), profileDigest, catalogDigest, *sourceDigest)
+	catalogIdentity, err := NewCatalogIdentity(profile.Engine(), profileDigest, catalogDigest, catalogDigest)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -269,29 +228,6 @@ func fromBaselineWithSourceDigest(baseline Catalog, sourceDigest *Digest, profil
 		return Plan{}, err
 	}
 	return newPlan(profile, baselineIdentity, history, resolved.decisions, resolved.operations)
-}
-func profileEngineMatches(engine engineprofile.EngineID, dialect string) bool {
-	dialect = strings.ToLower(dialect)
-	switch engine {
-	case engineprofile.PostgreSQL:
-		return dialect == "postgres" || dialect == "postgresql"
-	case engineprofile.MySQL:
-		return dialect == "mysql"
-	case engineprofile.SQLite:
-		return dialect == "sqlite"
-	case engineprofile.Custom:
-		return true
-	default:
-		return false
-	}
-}
-func profileVersionMatches(profile Profile, observed string) bool {
-	version := profile.Version()
-	if !version.Known {
-		return observed == ""
-	}
-	want := fmt.Sprintf("%d.%d.%d", version.Major, version.Minor, version.Patch)
-	return observed == want || (version.Patch == 0 && observed == fmt.Sprintf("%d.%d", version.Major, version.Minor))
 }
 func ProfileDigest(source ProfileSource) (Digest, error) {
 	profile, err := NewProfile(source)
