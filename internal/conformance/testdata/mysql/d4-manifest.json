@@ -1,0 +1,122 @@
+{
+  "format": "rasql.d4.engine-manifest.v1",
+  "portable_signature_digest": "84323fa2347731b0388181443d158e8f333649177acd057a2c828e42d6f24fbb",
+  "migration_digest": "240fee8dd670fbc08696627255c7bddb42feba46469be0870fca2d24541b5992",
+  "seed_digest": "fefa40b6a93ad8ad121314b89400da4fb316f572f70c27a3afb5594675c9cef1",
+  "typed_query_digest": "0a507bf5c425d0736035505a3537c0d476ef795b320381f908cae08010fea25e",
+  "rendered_sql_digest": "0a507bf5c425d0736035505a3537c0d476ef795b320381f908cae08010fea25e",
+  "engine": "mysql",
+  "profile": "mysql-8.4",
+  "observed_server_version": "8.4.11",
+  "lock_sha256": "c769a3919f01d85bff9e32bd326bba6e0306d0cd928448b92e520eb1fbc12f53",
+  "generated_files": 9,
+  "generated_bytes": 55744,
+  "compile_render": {
+    "mysql-8.4": {
+      "digest": "6aac259c73be45249da0cae0351b961db8913d55673eaad03e86859bef6886f7",
+      "statements": [
+        {
+          "operation": "single_row_read",
+          "kind": "query",
+          "sql": "SELECT `p`.`id` AS `id`, `p`.`name` AS `name` FROM `projects` AS `p` WHERE (`p`.`id` = ?) ORDER BY `p`.`id`",
+          "args": [
+            {
+              "type": "int64",
+              "value": "1"
+            }
+          ]
+        },
+        {
+          "operation": "overdue_read",
+          "kind": "query",
+          "sql": "SELECT id, project_id, assignee_id, title, is_open, due_on, created_at\nFROM tasks\nWHERE project_id = ?\n  AND is_open = ?\n  AND due_on IS NOT NULL\n  AND due_on < ?\nORDER BY id\n",
+          "args": [
+            {
+              "type": "int64",
+              "value": "1"
+            },
+            {
+              "type": "bool",
+              "value": "true"
+            },
+            {
+              "type": "time.Time",
+              "value": "2024-01-04T00:00:00Z"
+            }
+          ]
+        },
+        {
+          "operation": "graph_root",
+          "kind": "query",
+          "sql": "SELECT `p`.`id` AS `id`, `p`.`name` AS `name` FROM `projects` AS `p` WHERE (`p`.`id` = ?) ORDER BY `p`.`id`",
+          "args": [
+            {
+              "type": "int64",
+              "value": "1"
+            }
+          ]
+        },
+        {
+          "operation": "graph_tasks",
+          "kind": "query",
+          "sql": "SELECT `partition_source`.`id` AS `id`, `partition_source`.`project_id` AS `project_id`, `partition_source`.`assignee_id` AS `assignee_id`, `partition_source`.`title` AS `title`, `partition_source`.`is_open` AS `is_open`, `partition_source`.`due_on` AS `due_on`, `partition_source`.`created_at` AS `created_at` FROM (SELECT `t`.`id` AS `id`, `t`.`project_id` AS `project_id`, `t`.`assignee_id` AS `assignee_id`, `t`.`title` AS `title`, `t`.`is_open` AS `is_open`, `t`.`due_on` AS `due_on`, `t`.`created_at` AS `created_at`, row_number() OVER (PARTITION BY `t`.`project_id` ORDER BY `t`.`id`) AS `__rasql_partition_row` FROM `tasks` AS `t` WHERE (`t`.`project_id` = ?) ORDER BY `t`.`id`, `t`.`id`) AS `partition_source` WHERE (`partition_source`.`__rasql_partition_row` <= ?)",
+          "args": [
+            {
+              "type": "int64",
+              "value": "1"
+            },
+            {
+              "type": "int64",
+              "value": "5"
+            }
+          ]
+        },
+        {
+          "operation": "graph_assignees",
+          "kind": "query",
+          "sql": "SELECT `partition_source`.`id` AS `id`, `partition_source`.`name` AS `name` FROM (SELECT `m`.`id` AS `id`, `m`.`name` AS `name`, row_number() OVER (PARTITION BY `m`.`id` ORDER BY `m`.`id`) AS `__rasql_partition_row` FROM `members` AS `m` WHERE (`m`.`id` = ?) ORDER BY `m`.`id`, `m`.`id`) AS `partition_source` WHERE (`partition_source`.`__rasql_partition_row` <= ?)",
+          "args": [
+            {
+              "type": "int64",
+              "value": "20"
+            },
+            {
+              "type": "int64",
+              "value": "2"
+            }
+          ]
+        },
+        {
+          "operation": "create",
+          "kind": "exec",
+          "sql": "INSERT INTO `members` (`id`, `name`) VALUES (?, ?)",
+          "args": [
+            {
+              "type": "int64",
+              "value": "4001"
+            },
+            {
+              "type": "string",
+              "value": "created"
+            }
+          ]
+        },
+        {
+          "operation": "patch",
+          "kind": "exec",
+          "sql": "UPDATE `members` SET `name` = ? WHERE (`members`.`id` = ?)",
+          "args": [
+            {
+              "type": "string",
+              "value": "patched"
+            },
+            {
+              "type": "int64",
+              "value": "4001"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

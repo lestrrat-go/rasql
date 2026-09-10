@@ -113,7 +113,11 @@ func TestPlanValidateReportsBothConflictingObjects(t *testing.T) {
 	require.EqualError(t, plan.Validate(), `migrate diff: duplicate generated SQL source "001_create_table_foo_bar.sql" for "create table foo-bar" and "create table foo_bar"`)
 }
 
-func TestWriteMigrationWritesIrreversibleMarker(t *testing.T) {
+// TestWriteMigrationSkipsDownSourcesWhenIrreversible requires an irreversible
+// plan to write only its forward sources: no .down.sql, and no marker file,
+// since the loader no longer recognizes one. Absence of .down.sql is what
+// makes the written directory irreversible once loaded back.
+func TestWriteMigrationSkipsDownSourcesWhenIrreversible(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "migrations", "001_data_change")
 	plan := diff.Plan{
 		Dialect:            "sqlite",
@@ -125,10 +129,9 @@ func TestWriteMigrationWritesIrreversibleMarker(t *testing.T) {
 	require.NoError(t, diff.WriteMigration(directory, plan))
 	_, err := os.Stat(filepath.Join(directory, "001_transform.down.sql"))
 	require.ErrorIs(t, err, os.ErrNotExist)
-	contents, err := os.ReadFile(filepath.Join(directory, ".rasql-irreversible"))
-	require.NoError(t, err)
-	require.Equal(t, "data transformation cannot be reversed\n", string(contents))
-	contents, err = os.ReadFile(filepath.Join(directory, "001_transform.up.sql"))
+	_, err = os.Stat(filepath.Join(directory, ".rasql-irreversible"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	contents, err := os.ReadFile(filepath.Join(directory, "001_transform.up.sql"))
 	require.NoError(t, err)
 	require.Equal(t, "UPDATE users SET name = upper(name);\n", string(contents))
 }
@@ -153,6 +156,13 @@ func TestWriteMigrationRoundTripsExecutionModesAndIrreversibility(t *testing.T) 
 			require.NoError(t, err)
 			require.Len(t, loaded, 1)
 			require.Equal(t, test.mode, loaded[0].Mode)
+			if test.irreversible != "" {
+				require.Empty(t, loaded[0].Down, "an irreversible plan writes no .down.sql sources")
+			} else {
+				require.NotEmpty(t, loaded[0].Down)
+			}
+			_, err = os.Stat(filepath.Join(directory, ".rasql-irreversible"))
+			require.ErrorIs(t, err, os.ErrNotExist, "WriteMigration writes no marker file")
 			_, err = os.Stat(filepath.Join(directory, ".rasql-mode"))
 			if test.wantModeFile {
 				require.NoError(t, err)

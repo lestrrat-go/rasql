@@ -34,7 +34,17 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: '1.26.x'
-      - run: go test ./...
+      - name: Run the full suite
+        # internal/conformance's TestGeneratedFootprintBuild attributes the
+        # performance evidence it writes to the commit that produced it, so
+        # it requires RASQL_CONFORMANCE_COMMIT rather than treating a blank
+        # value as something to skip past; GitHub already knows the commit
+        # this run is testing, so hand it over instead of leaving the test
+        # to guess at one through build-info stamping that a sandboxed
+        # runner can silently fail to produce.
+        env:
+          RASQL_CONFORMANCE_COMMIT: ${{ github.sha }}
+        run: go test -p 1 -count=1 -v ./...
       - run: go vet ./...
       # The sample runs on PostgreSQL, so its tests and its generated-store
       # check both need a live server and run in the "integration" job. This
@@ -42,6 +52,21 @@ jobs:
       - name: Sample module
         working-directory: sample/taskboard
         run: go build ./...
+
+  windows-plan-lock:
+    name: Windows plan lock
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.x'
+      - name: Run native Windows plan-lock tests
+        shell: bash
+        run: >-
+          go test -count=1 -v
+          -run '^(TestPlanLockHashVectors|TestSQLitePlanLockIdentity|TestSQLitePlanLockUnsafeTargets|TestSQLitePlanLockBlocksProcess|TestSQLitePlanLockCancellation)$'
+          ./migrate
 
   integration:
     name: Database integration
@@ -68,8 +93,8 @@ jobs:
         # whole module (measured: ~4200 lines) buries the live tests under
         # ~2000 unrelated unit tests. Naming just these packages keeps the
         # log scoped to what this job exists to prove, while ./... still
-        # runs (without -v, and without a DSN) in the "check" job, so no
-        # package's assertions are skipped anywhere.
+        # runs (with -v, and without a DSN) in the "check" job, so every
+        # package's assertions remain covered by one of the two jobs.
         # TestIntegrationJobListsEveryDBTestGuardedPackage reads this exact
         # step and fails when the command stops covering a package whose
         # tests are guarded by internal/dbtest, or carries an argument its
@@ -81,40 +106,47 @@ jobs:
         # accepts -- and it reads the flags it allows for their effective
         # value, since go's own parsing lets a later assignment overturn an
         # earlier one.
-        run: go test -count=1 -v ./catalog/... ./cli/rasqlgen/... ./cli/rasqlmigrate/... ./generate/... ./inspect/... ./internal/rowvalue/... ./migrate/... ./render/... .
+        run: go test -p 1 -count=1 -v ./catalog/... ./cli/rasqlgen/... ./cli/rasqlmigrate/... ./generate/... ./inspect/... ./internal/engineprofile/... ./internal/rowvalue/... ./migrate/... ./render/... .
 
-      # sample/taskboard is a module of its own that runs on PostgreSQL. Its
-      # two gates are the tests and ./scripts/generate.sh -check, and both
-      # need the server this job already brought up. Each gets a database of
-      # its own: the generate script applies migrations to the one it is
-      # pointed at, so pointing it at the database the tests use would leave
-      # the two steps writing to the same schema.
+      - name: Run D4 conformance matrix
+        env:
+          RASQL_TEST_MYSQL_DSN: root:root@tcp(127.0.0.1:3306)/rasql?parseTime=true
+          RASQL_TEST_POSTGRES_DSN: postgres://rasql:rasql@127.0.0.1:5432/rasql?sslmode=disable
+          RASQL_CONFORMANCE_OUTPUT: ${{ github.workspace }}/.tmp/d4-conformance.json
+          RASQL_CONFORMANCE_LOG: ${{ github.workspace }}/.tmp/d4-conformance.log
+        run: mkdir -p .tmp && ./scripts/conformance.sh live
+      - name: Upload D4 conformance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: d4-conformance-evidence
+          path: |
+            .tmp/d4-conformance.log
+            .tmp/d4-conformance.json
+          if-no-files-found: error
+
+      # sample/taskboard is a module of its own. Its offline check reads the
+      # checked-in lock and generated files without a database. Its live tests
+      # use the migrated database below.
       - name: Create the sample's databases
         run: |
           docker compose exec -T postgres psql -U rasql -d postgres \
-            -c 'CREATE DATABASE taskboard;' \
-            -c 'CREATE DATABASE taskboard_schema;'
+            -c 'CREATE DATABASE taskboard;'
 
       - name: Check the sample's generated store
         working-directory: sample/taskboard
-        env:
-          TASKBOARD_SCHEMA_DSN: postgres://rasql:rasql@127.0.0.1:5432/taskboard_schema?sslmode=disable
-        run: ./scripts/generate.sh -check
+        run: |
+          unset TASKBOARD_SCHEMA_DSN TASKBOARD_DSN TASKBOARD_TEST_DSN
+          test -z "${TASKBOARD_SCHEMA_DSN-}"
+          test -z "${TASKBOARD_DSN-}"
+          test -z "${TASKBOARD_TEST_DSN-}"
+          ./scripts/rasql.sh check
 
       - name: Migrate the sample's test database
         working-directory: sample/taskboard
         env:
           TASKBOARD_DSN: postgres://rasql:rasql@127.0.0.1:5432/taskboard?sslmode=disable
         run: ./scripts/migrate.sh apply
-
-      # The sample's live tests file a task against a project and a member
-      # that already exist, and skip when the database holds neither. Without
-      # these two rows the step below reports ok having proved nothing.
-      - name: Give the sample's live tests a project and a member
-        run: |
-          docker compose exec -T postgres psql -U rasql -d taskboard \
-            -c "INSERT INTO members (name) VALUES ('Ada Lovelace');" \
-            -c "INSERT INTO projects (name) VALUES ('Website refresh');"
 
       - name: Run the sample's tests against a live database
         working-directory: sample/taskboard

@@ -135,6 +135,17 @@ func TestWriteStatementsValidate(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestUpsertRejectsUpdateOnlyDefaultAssignment(t *testing.T) {
+	users, err := query.NewTableRef(usersTable())
+	require.NoError(t, err)
+	id, email := users.Column("id"), users.Column("email")
+	insert, err := query.NewInsert(users, query.Set(id, 1), query.Set(email, "ada@example.com"))
+	require.NoError(t, err)
+	_, err = query.NewUpsert(insert, []query.ColumnRef{id}, []query.Assignment{query.SetDefault(email)})
+	require.ErrorContains(t, err, "assignments[0].value")
+	require.ErrorContains(t, err, "only supported by UPDATE")
+}
+
 func TestWriteStatementsRequireExplicitAllowAll(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())
 	require.NoError(t, err)

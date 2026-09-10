@@ -1,0 +1,1 @@
+{"format":1,"compiler":"bad","source":{"kind":"external","identity":"x"},"engine":{"dialect":"sqlite","profile":"sqlite-3"},"catalog":{"objects":[]},"queries":[],"generation":{"package":"p","output":"../bad","emitter":"compact","objects":[]},"digests":{"source":"BAD","mappings":"","queries":"","generation":""}}

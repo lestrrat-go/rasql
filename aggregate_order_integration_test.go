@@ -124,11 +124,24 @@ func testAggregateOrdering(t *testing.T, database *sql.DB, test aggregateOrderin
 		require.NoError(t, err)
 	}()
 	require.NoError(t, rasql.CreateTable(t.Context(), db, records))
+
+	profileID := "postgresql-17"
+	if test.dialect.Name() == "mysql" {
+		profileID = "mysql-8.4"
+	}
+	profile, err := rasql.DiscoverEngineProfile(t.Context(), db, profileID)
+	require.NoError(t, err)
+	executor, err := rasql.AsExecutor(db, profile)
+	require.NoError(t, err)
+	recordID := query.TypedColumnOf[record, int64](records.Column("id"))
+	recordEmail := query.TypedColumnOf[record, string](records.Column("email"))
 	for _, fixture := range []record{
 		{ID: 1, Email: "ada@example.com"},
 		{ID: 2, Email: "grace@example.com"},
 	} {
-		_, err = rasql.Insert(t.Context(), db, records, fixture)
+		plan, err := rasql.NewCreatePlan(records, rasql.SetField(recordID, fixture.ID), rasql.SetField(recordEmail, fixture.Email))
+		require.NoError(t, err)
+		_, err = rasql.ExecMutation(t.Context(), executor, plan)
 		require.NoError(t, err)
 	}
 

@@ -50,6 +50,19 @@ func Assign[T any](r Row, name string, destination *T) error {
 	return nil
 }
 
+// AssignReflect applies the same conversion rules as Assign to a destination
+// supplied by a runtime decoder.
+func AssignReflect(r Row, name string, destination reflect.Value) error {
+	if !destination.IsValid() || !destination.CanSet() {
+		return fmt.Errorf("row: destination for column %q must be settable", name)
+	}
+	value, ok := r.lookup(name)
+	if !ok {
+		return fmt.Errorf("row: column %q is not present", name)
+	}
+	return assign(destination, value)
+}
+
 // Decode populates T from rasql-tagged fields and snake-cased exported field
 // names. It is the only read mapping; a row type that carries generated scan
 // methods is filled by those instead, through the typed builders rather than

@@ -7,9 +7,10 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/dynamic"
 	"github.com/lestrrat-go/rasql/examples/store"
 	"github.com/lestrrat-go/rasql/namedsql"
+	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/render"
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
@@ -38,7 +39,19 @@ func Example_rasql_static_template() {
 		return
 	}
 	// Insert a row that the bound template will find.
-	if _, err := rasql.Insert(ctx, db, users, store.UsersRow{ID: 42, Email: "ada@example.com"}); err != nil {
+	insert, err := query.NewInsert(users.Ref(),
+		query.Set(users.ID().Ref(), int64(42)), query.Set(users.Email().Ref(), "ada@example.com"),
+		query.Set(users.FirstName().Ref(), "Ada"), query.Set(users.LastName().Ref(), "Lovelace"))
+	if err != nil {
+		fmt.Printf("failed to build insert: %s\n", err)
+		return
+	}
+	renderedInsert, err := render.Insert(db.Dialect(), insert)
+	if err != nil {
+		fmt.Printf("failed to render insert: %s\n", err)
+		return
+	}
+	if _, err := db.ExecRendered(ctx, renderedInsert); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
@@ -63,26 +76,26 @@ func Example_rasql_static_template() {
 	}
 
 	// SQL: SELECT id, email FROM users WHERE email = ? (argument: "ada@example.com")
-	// QueryRendered runs the template statement; dynamic.Scan turns its rows into a rangeable sequence.
+	// QueryRendered runs the template statement and returns its database/sql rows.
 	sqlRows, err := db.QueryRendered(ctx, statement)
 	if err != nil {
 		fmt.Printf("failed to query user: %s\n", err)
 		return
 	}
-	// BEGIN(read_dynamic_rows)
-	for result, err := range dynamic.Scan(sqlRows) {
-		if err != nil {
-			fmt.Printf("failed to query user: %s\n", err)
-			return
-		}
-		email, err := dynamic.Get[string](result, "email")
-		if err != nil {
-			fmt.Printf("failed to read email: %s\n", err)
+	defer func() { _ = sqlRows.Close() }()
+	for sqlRows.Next() {
+		var id int64
+		var email string
+		if err := sqlRows.Scan(&id, &email); err != nil {
+			fmt.Printf("failed to read user: %s\n", err)
 			return
 		}
 		fmt.Println(email)
 	}
-	// END(read_dynamic_rows)
+	if err := sqlRows.Err(); err != nil {
+		fmt.Printf("failed to read user: %s\n", err)
+		return
+	}
 
 	// Output:
 	// ada@example.com

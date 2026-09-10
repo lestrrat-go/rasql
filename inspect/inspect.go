@@ -262,7 +262,14 @@ func (i Inspector) sqliteObjectNames(ctx context.Context, databaseName string) (
 	}
 	rows, err := i.queryer.QueryContext(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("inspect: read SQLite object names: %w", err)
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
+		legacy, legacyErr := i.sqliteLegacyObjectNames(ctx, databaseName)
+		if legacyErr != nil {
+			return nil, errors.Join(err, legacyErr)
+		}
+		return legacy, nil
 	}
 	defer func() { _ = rows.Close() }()
 	var objects []ObjectName
@@ -279,7 +286,7 @@ func (i Inspector) sqliteObjectNames(ctx context.Context, databaseName string) (
 		if strings.EqualFold(kind, "view") {
 			objectKind = schema.ObjectView
 		}
-		if kind != "table" && kind != "view" {
+		if kind != "table" && kind != "view" && kind != "virtual" {
 			continue
 		}
 		objects = append(objects, ObjectName{Schema: database, Name: name, Kind: objectKind})
@@ -287,11 +294,86 @@ func (i Inspector) sqliteObjectNames(ctx context.Context, databaseName string) (
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("inspect: iterate SQLite object names: %w", err)
 	}
+	if len(objects) == 0 {
+		if err := rows.Close(); err != nil {
+			return nil, fmt.Errorf("inspect: close SQLite object names: %w", err)
+		}
+		return i.sqliteLegacyObjectNames(ctx, databaseName)
+	}
 	sort.Slice(objects, func(left, right int) bool {
 		if objects[left].Schema != objects[right].Schema {
 			return objects[left].Schema < objects[right].Schema
 		}
 		return objects[left].Name < objects[right].Name
+	})
+	return objects, nil
+}
+
+func (i Inspector) sqliteLegacyObjectNames(ctx context.Context, databaseName string) ([]ObjectName, error) {
+	databases := make([]string, 0, 1)
+	if databaseName == "" {
+		rows, err := i.queryer.QueryContext(ctx, "PRAGMA database_list")
+		if err != nil {
+			return nil, fmt.Errorf("inspect: read SQLite databases: %w", err)
+		}
+		for rows.Next() {
+			var sequence int64
+			var name, file string
+			if err := rows.Scan(&sequence, &name, &file); err != nil {
+				_ = rows.Close()
+				return nil, fmt.Errorf("inspect: scan SQLite database: %w", err)
+			}
+			databases = append(databases, name)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("inspect: iterate SQLite databases: %w", err)
+		}
+		if err := rows.Close(); err != nil {
+			return nil, fmt.Errorf("inspect: close SQLite databases: %w", err)
+		}
+	} else {
+		databases = append(databases, databaseName)
+	}
+	var objects []ObjectName
+	for _, database := range databases {
+		if err := schema.ValidateIdentifier(database); err != nil {
+			return nil, fmt.Errorf("inspect: SQLite database %q cannot be represented: %w", database, err)
+		}
+		query := `SELECT name, type, sql FROM "` + sqlitePragmaIdentifier(database) + `".sqlite_master WHERE type IN ('table', 'view')`
+		rows, err := i.queryer.QueryContext(ctx, query)
+		if err != nil {
+			return nil, fmt.Errorf("inspect: read SQLite database %q objects: %w", database, err)
+		}
+		for rows.Next() {
+			var name, kind string
+			var definition sql.NullString
+			if err := rows.Scan(&name, &kind, &definition); err != nil {
+				_ = rows.Close()
+				return nil, fmt.Errorf("inspect: scan SQLite database %q object: %w", database, err)
+			}
+			if sqliteIsInternalTableName(name) {
+				continue
+			}
+			objectKind := schema.ObjectTable
+			if strings.EqualFold(kind, "view") {
+				objectKind = schema.ObjectView
+			}
+			objects = append(objects, ObjectName{Schema: database, Name: name, Kind: objectKind})
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("inspect: iterate SQLite database %q objects: %w", database, err)
+		}
+		if err := rows.Close(); err != nil {
+			return nil, fmt.Errorf("inspect: close SQLite database %q objects: %w", database, err)
+		}
+	}
+	sort.Slice(objects, func(i, j int) bool {
+		if objects[i].Schema != objects[j].Schema {
+			return objects[i].Schema < objects[j].Schema
+		}
+		return objects[i].Name < objects[j].Name
 	})
 	return objects, nil
 }

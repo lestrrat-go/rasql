@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"testing"
+	"time"
 
 	"github.com/lestrrat-go/rasql/catalog"
 	"github.com/lestrrat-go/rasql/dialect"
@@ -63,43 +64,61 @@ func TestFromDatabaseSweepsLiveMySQL(t *testing.T) {
 func TestFromDatabaseReadsSelectedPostgreSQLSchemas(t *testing.T) {
 	database := dbtest.PostgreSQLDB(t)
 	ctx := t.Context()
-	mustExecLive(t, ctx, database, "CREATE SCHEMA catalog_billing")
-	mustExecLive(t, ctx, database, "CREATE SCHEMA catalog_audit")
+	billing, audit := dbtest.UniqueName(t, "catalog_billing"), dbtest.UniqueName(t, "catalog_audit")
+	mustExecLive(t, ctx, database, "CREATE SCHEMA "+billing)
 	t.Cleanup(func() {
-		_, _ = database.ExecContext(ctx, "DROP SCHEMA catalog_billing CASCADE")
-		_, _ = database.ExecContext(ctx, "DROP SCHEMA catalog_audit CASCADE")
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, err := database.ExecContext(cleanupCtx, "DROP SCHEMA "+billing+" CASCADE")
+		require.NoError(t, err)
 	})
-	mustExecLive(t, ctx, database, "CREATE TABLE catalog_billing.events (id integer PRIMARY KEY)")
-	mustExecLive(t, ctx, database, "CREATE TABLE catalog_audit.events (id integer PRIMARY KEY, billing_id integer REFERENCES catalog_billing.events(id))")
+	mustExecLive(t, ctx, database, "CREATE SCHEMA "+audit)
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, err := database.ExecContext(cleanupCtx, "DROP SCHEMA "+audit+" CASCADE")
+		require.NoError(t, err)
+	})
+	mustExecLive(t, ctx, database, "CREATE TABLE "+billing+".events (id integer PRIMARY KEY)")
+	mustExecLive(t, ctx, database, "CREATE TABLE "+audit+".events (id integer PRIMARY KEY, billing_id integer REFERENCES "+billing+".events(id))")
 
 	tables, err := catalog.FromDatabase(ctx, database, catalog.Options{
-		Dialect: dialect.PostgreSQL(), Namespaces: []string{"catalog_billing", "catalog_audit"},
+		Dialect: dialect.PostgreSQL(), Namespaces: []string{billing, audit},
 	})
 	require.NoError(t, err)
 	require.Len(t, tables, 2)
-	require.Equal(t, "catalog_audit", tables[0].Schema)
-	require.Equal(t, "catalog_billing", tables[1].Schema)
-	require.Equal(t, "catalog_billing", tables[0].ForeignKeys[0].ReferencedSchema)
+	require.Equal(t, audit, tables[0].Schema)
+	require.Equal(t, billing, tables[1].Schema)
+	require.Equal(t, billing, tables[0].ForeignKeys[0].ReferencedSchema)
 }
 
 func TestFromDatabaseReadsSelectedMySQLDatabases(t *testing.T) {
 	database := dbtest.MySQLDB(t)
 	ctx := t.Context()
-	mustExecLive(t, ctx, database, "CREATE DATABASE catalog_billing")
-	mustExecLive(t, ctx, database, "CREATE DATABASE catalog_audit")
+	billing, audit := dbtest.UniqueName(t, "catalog_billing"), dbtest.UniqueName(t, "catalog_audit")
+	mustExecLive(t, ctx, database, "CREATE DATABASE "+billing)
 	t.Cleanup(func() {
-		_, _ = database.ExecContext(ctx, "DROP DATABASE catalog_billing")
-		_, _ = database.ExecContext(ctx, "DROP DATABASE catalog_audit")
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, err := database.ExecContext(cleanupCtx, "DROP DATABASE "+billing)
+		require.NoError(t, err)
 	})
-	mustExecLive(t, ctx, database, "CREATE TABLE catalog_billing.events (id integer PRIMARY KEY)")
-	mustExecLive(t, ctx, database, "CREATE TABLE catalog_audit.events (id integer PRIMARY KEY, billing_id integer, CONSTRAINT fk_billing FOREIGN KEY (billing_id) REFERENCES catalog_billing.events(id))")
+	mustExecLive(t, ctx, database, "CREATE DATABASE "+audit)
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, err := database.ExecContext(cleanupCtx, "DROP DATABASE "+audit)
+		require.NoError(t, err)
+	})
+	mustExecLive(t, ctx, database, "CREATE TABLE "+billing+".events (id integer PRIMARY KEY)")
+	mustExecLive(t, ctx, database, "CREATE TABLE "+audit+".events (id integer PRIMARY KEY, billing_id integer, CONSTRAINT fk_billing FOREIGN KEY (billing_id) REFERENCES "+billing+".events(id))")
 
 	tables, err := catalog.FromDatabase(ctx, database, catalog.Options{
-		Dialect: dialect.MySQL(), Namespaces: []string{"catalog_billing", "catalog_audit"},
+		Dialect: dialect.MySQL(), Namespaces: []string{billing, audit},
 	})
 	require.NoError(t, err)
 	require.Len(t, tables, 2)
-	require.Equal(t, "catalog_audit", tables[0].Schema)
-	require.Equal(t, "catalog_billing", tables[1].Schema)
-	require.Equal(t, "catalog_billing", tables[0].ForeignKeys[0].ReferencedSchema)
+	require.Equal(t, audit, tables[0].Schema)
+	require.Equal(t, billing, tables[1].Schema)
+	require.Equal(t, billing, tables[0].ForeignKeys[0].ReferencedSchema)
 }
