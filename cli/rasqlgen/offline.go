@@ -15,6 +15,7 @@ import (
 	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/compilerlock"
 	"github.com/lestrrat-go/rasql/internal/compilerquery"
+	"github.com/lestrrat-go/rasql/internal/sourcefile"
 	"github.com/lestrrat-go/rasql/namedsql"
 )
 
@@ -109,7 +110,7 @@ func (c command) runOfflineGenerate(settings config, configPath string, check bo
 	for _, query := range goModel.Queries {
 		goQueries[query.ID] = query
 	}
-	querySnapshots := make([]compilerlock.SourceFileSnapshot, 0, len(lock.Queries))
+	querySnapshots := make([]sourcefile.SourceFileSnapshot, 0, len(lock.Queries))
 	for _, query := range lock.Queries {
 		goQuery := goQueries[query.ID]
 		analysis := compilerlock.AnalysisFromQuery(query)
@@ -129,11 +130,11 @@ func (c command) runOfflineGenerate(settings config, configPath string, check bo
 			}
 		}
 		typed.Imports = goModel.Imports
-		snapshot, readErr := compilerlock.SnapshotSourceFile(root, query.SQL.Path)
+		snapshot, readErr := sourcefile.SnapshotSourceFile(root, query.SQL.Path)
 		if readErr != nil {
 			return fmt.Errorf("generate: read query %s: %w", query.SQL.Path, readErr)
 		}
-		if snapshot.Record() != query.SQL {
+		if compilerlock.SourceFileFrom(snapshot) != query.SQL {
 			return fmt.Errorf("generate: query %s changed after lock", query.SQL.Path)
 		}
 		querySnapshots = append(querySnapshots, snapshot)
@@ -181,7 +182,7 @@ func (c command) runOfflineGenerate(settings config, configPath string, check bo
 	publication := generate.Publication{
 		FinalFiles: []generate.FinalFile{{Path: "rasql.lock.json", Source: encodedLock, Mode: 0o600}},
 		BeforeWrite: func(_ context.Context, entries []generate.PublicationEntry) error {
-			if err := compilerlock.RevalidateSourceFiles(root, querySnapshots); err != nil {
+			if err := sourcefile.RevalidateSourceFiles(root, querySnapshots); err != nil {
 				return err
 			}
 			return writePending(root, oldLock.SHA256, lockSum, pendingEntries(entries))
@@ -235,15 +236,15 @@ func offlineDigestGroups(root string, settings config, lock compilerlock.File) (
 	source.Record.Files = nil
 	sourceChanged := false
 	for _, file := range lock.Source.Files {
-		snapshot, snapshotErr := compilerlock.SnapshotSourceFile(root, file.Path)
+		snapshot, snapshotErr := sourcefile.SnapshotSourceFile(root, file.Path)
 		if snapshotErr != nil {
 			sourceChanged = true
 			continue
 		}
-		if snapshot.Record().SHA256 != file.SHA256 {
+		if snapshot.SHA256() != file.SHA256 {
 			sourceChanged = true
 		}
-		source.Record.Files = append(source.Record.Files, snapshot.Record())
+		source.Record.Files = append(source.Record.Files, compilerlock.SourceFileFrom(snapshot))
 	}
 	queries := make([]compilerlock.QueryDigestInput, 0, len(lock.Queries))
 	queryChanged := false
@@ -270,8 +271,8 @@ func offlineDigestGroups(root string, settings config, lock compilerlock.File) (
 			queryChanged = true
 		}
 		input := query.SQL
-		if snapshot, snapshotErr := compilerlock.SnapshotSourceFile(root, query.SQL.Path); snapshotErr == nil {
-			input.SHA256 = snapshot.Record().SHA256
+		if snapshot, snapshotErr := sourcefile.SnapshotSourceFile(root, query.SQL.Path); snapshotErr == nil {
+			input.SHA256 = snapshot.SHA256()
 		} else {
 			queryChanged = true
 		}

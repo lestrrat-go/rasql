@@ -16,6 +16,7 @@ import (
 	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/compilerlock"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
+	"github.com/lestrrat-go/rasql/internal/sourcefile"
 )
 
 type EngineConfig struct{ Dialect, Profile string }
@@ -40,7 +41,7 @@ type Result struct {
 	Catalog    compilerir.PhysicalCatalog
 	Profile    engineprofile.Profile
 	Source     compilerlock.SourceDigestInput
-	Snapshots  []compilerlock.SourceFileSnapshot
+	Snapshots  []sourcefile.SourceFileSnapshot
 	Unresolved []catalogread.UnresolvedFact
 	Queries    []compilerir.QueryAnalysis
 }
@@ -73,7 +74,7 @@ type ProcessRunner interface {
 	Run(context.Context, ProcessRequest) (ProcessResult, error)
 }
 type MigrationApplier interface {
-	Apply(context.Context, *sql.DB, engineprofile.Profile, []compilerlock.SourceFileSnapshot) error
+	Apply(context.Context, *sql.DB, engineprofile.Profile, []sourcefile.SourceFileSnapshot) error
 }
 type ProfileResolver interface {
 	Resolve(context.Context, *sql.DB, EngineConfig) (engineprofile.Profile, error)
@@ -89,7 +90,7 @@ type AnalysisRequest struct {
 }
 type AnalysisResult struct {
 	Queries   []compilerir.QueryAnalysis
-	Snapshots []compilerlock.SourceFileSnapshot
+	Snapshots []sourcefile.SourceFileSnapshot
 }
 type Analyzer interface {
 	Analyze(context.Context, AnalysisRequest) (AnalysisResult, error)
@@ -141,13 +142,13 @@ func ValidateRequest(r Request) error {
 		}
 	}
 	for _, path := range r.Source.Paths {
-		if _, err := compilerlock.NormalizePath(path); err != nil {
+		if _, err := sourcefile.NormalizePath(path); err != nil {
 			return err
 		}
 	}
 	seenInputs := map[string]bool{}
 	for _, path := range r.Source.Inputs {
-		normalized, err := compilerlock.NormalizePath(path)
+		normalized, err := sourcefile.NormalizePath(path)
 		if err != nil {
 			return err
 		}
@@ -281,13 +282,13 @@ func Materialize(ctx context.Context, req Request, deps Dependencies) (Result, e
 		for i := range analysis.Queries {
 			queries[i] = analysis.Queries[i].Clone()
 		}
-		querySnapshots := append([]compilerlock.SourceFileSnapshot(nil), analysis.Snapshots...)
+		querySnapshots := append([]sourcefile.SourceFileSnapshot(nil), analysis.Snapshots...)
 		sort.SliceStable(querySnapshots, func(i, j int) bool { return querySnapshots[i].Path() < querySnapshots[j].Path() })
-		allSnapshots := append([]compilerlock.SourceFileSnapshot(nil), snaps...)
+		allSnapshots := append([]sourcefile.SourceFileSnapshot(nil), snaps...)
 		allSnapshots = append(allSnapshots, querySnapshots...)
 		source := compilerlock.SourceDigestInput{Record: compilerlock.SourceRecord{Kind: req.Source.Kind, Identity: req.Source.Identity}, Engine: compilerlock.EngineRecord{Dialect: req.Engine.Dialect, Version: versionString(profile), Profile: profile.ID}, Materializer: materializer(req)}
 		for _, s := range snaps {
-			source.Record.Files = append(source.Record.Files, s.Record())
+			source.Record.Files = append(source.Record.Files, compilerlock.SourceFileFrom(s))
 		}
 		returnResult = Result{Catalog: catalog, Profile: profile, Source: source, Snapshots: allSnapshots, Unresolved: read.Unresolved, Queries: queries}
 		return nil
@@ -372,7 +373,7 @@ type redactedError struct {
 
 func (e *redactedError) Error() string { return e.message }
 func (e *redactedError) Unwrap() error { return e.cause }
-func sourceSnapshots(r Request) ([]string, []compilerlock.SourceFileSnapshot, error) {
+func sourceSnapshots(r Request) ([]string, []sourcefile.SourceFileSnapshot, error) {
 	var paths []string
 	switch r.Source.Kind {
 	case "migrations":
@@ -398,7 +399,7 @@ func sourceSnapshots(r Request) ([]string, []compilerlock.SourceFileSnapshot, er
 		if r.Source.Kind == "external" && strings.ContainsAny(p, "*?[") {
 			return nil, nil, fmt.Errorf("schema source: external input %q must be an exact file", p)
 		}
-		n, e := compilerlock.NormalizePath(p)
+		n, e := sourcefile.NormalizePath(p)
 		if e != nil {
 			return nil, nil, e
 		}
@@ -411,9 +412,9 @@ func sourceSnapshots(r Request) ([]string, []compilerlock.SourceFileSnapshot, er
 		uniq = append(uniq, n)
 	}
 	paths = uniq
-	snaps := make([]compilerlock.SourceFileSnapshot, 0, len(paths))
+	snaps := make([]sourcefile.SourceFileSnapshot, 0, len(paths))
 	for _, p := range paths {
-		s, e := compilerlock.SnapshotSourceFile(r.ModuleRoot, p)
+		s, e := sourcefile.SnapshotSourceFile(r.ModuleRoot, p)
 		if e != nil {
 			return nil, nil, e
 		}

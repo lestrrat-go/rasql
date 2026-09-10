@@ -11,9 +11,9 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/lestrrat-go/rasql/internal/catalogread"
-	"github.com/lestrrat-go/rasql/internal/compilerlock"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/internal/schemasource"
+	"github.com/lestrrat-go/rasql/internal/sourcefile"
 )
 
 type fakeFactory struct {
@@ -58,7 +58,7 @@ func (f *fakeCatalog) Read(context.Context, catalogread.DB, engineprofile.Profil
 
 type fakeMigration struct{ calls int }
 
-func (f *fakeMigration) Apply(context.Context, *sql.DB, engineprofile.Profile, []compilerlock.SourceFileSnapshot) error {
+func (f *fakeMigration) Apply(context.Context, *sql.DB, engineprofile.Profile, []sourcefile.SourceFileSnapshot) error {
 	f.calls++
 	return nil
 }

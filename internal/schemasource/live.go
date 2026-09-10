@@ -18,8 +18,8 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/catalogread"
-	"github.com/lestrrat-go/rasql/internal/compilerlock"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
+	"github.com/lestrrat-go/rasql/internal/sourcefile"
 	"github.com/lestrrat-go/rasql/migrate"
 	"github.com/lestrrat-go/rasql/sqltext"
 	_ "modernc.org/sqlite"
@@ -198,7 +198,7 @@ func (defaultCatalogs) Read(ctx context.Context, db catalogread.DB, p engineprof
 
 type defaultMigrations struct{}
 
-func (defaultMigrations) Apply(ctx context.Context, db *sql.DB, p engineprofile.Profile, s []compilerlock.SourceFileSnapshot) error {
+func (defaultMigrations) Apply(ctx context.Context, db *sql.DB, p engineprofile.Profile, s []sourcefile.SourceFileSnapshot) error {
 	d := map[engineprofile.EngineID]dialect.Dialect{engineprofile.PostgreSQL: dialect.PostgreSQL(), engineprofile.MySQL: dialect.MySQL(), engineprofile.SQLite: dialect.SQLite()}[p.Engine]
 	r, e := migrate.New(db, d)
 	if e != nil {

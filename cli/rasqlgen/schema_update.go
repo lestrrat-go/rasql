@@ -17,6 +17,7 @@ import (
 	"github.com/lestrrat-go/rasql/internal/compilerquery"
 	"github.com/lestrrat-go/rasql/internal/querygen"
 	"github.com/lestrrat-go/rasql/internal/schemasource"
+	"github.com/lestrrat-go/rasql/internal/sourcefile"
 	"github.com/lestrrat-go/rasql/querydescribe"
 	"github.com/lestrrat-go/rasql/schema"
 )
@@ -210,7 +211,7 @@ func (c command) runSchemaUpdate(args []string) error {
 		FinalFiles:        []generate.FinalFile{{Path: "rasql.lock.json", Source: encoded, Mode: 0o600}},
 		RecoveryDeletions: recoveries,
 		BeforeWrite: func(_ context.Context, current []generate.PublicationEntry) error {
-			if err := compilerlock.RevalidateSourceFiles(root, result.Snapshots); err != nil {
+			if err := sourcefile.RevalidateSourceFiles(root, result.Snapshots); err != nil {
 				return err
 			}
 			entries := pendingEntries(current)

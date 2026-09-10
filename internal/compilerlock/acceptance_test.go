@@ -9,6 +9,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/compilerlock"
+	"github.com/lestrrat-go/rasql/internal/sourcefile"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,15 +59,13 @@ func TestEncodeDoesNotMutateInputAndPreservesNativeEmpty(t *testing.T) {
 	require.Equal(t, "keys", decoded.Catalog.Objects[0].Indexes[0].KeyForm)
 }
 
-func TestSourceSnapshotRevalidation(t *testing.T) {
+func TestSourceFileFromMatchesSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "schema.sql"), []byte("create table t (id int);"), 0600))
-	s, err := compilerlock.SnapshotSourceFile(dir, "schema.sql")
+	s, err := sourcefile.SnapshotSourceFile(dir, "schema.sql")
 	require.NoError(t, err)
-	require.Equal(t, "schema.sql", s.Record().Path)
-	require.NoError(t, s.Revalidate())
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "schema.sql"), []byte("changed"), 0600))
-	require.ErrorIs(t, s.Revalidate(), compilerlock.ErrSourceChanged)
-	_, err = compilerlock.SourceBytes(filepath.Join(dir, "missing"))
-	require.Error(t, err)
+	record := compilerlock.SourceFileFrom(s)
+	require.Equal(t, "schema.sql", record.Path)
+	require.Equal(t, s.SHA256(), record.SHA256)
+	require.Len(t, record.SHA256, 64)
 }

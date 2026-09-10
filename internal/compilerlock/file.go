@@ -17,7 +17,6 @@ import (
 
 const FormatVersion = 2
 const legacyFormatVersion = 1
-const MaxSourceFileBytes int64 = 64 << 20
 
 type File struct {
 	Format     int              `json:"format"`
@@ -795,29 +794,4 @@ func less4(a, b, c, d, e, f, g, h string) bool {
 		}
 	}
 	return false
-}
-
-// SourceBytes reads a source file with the lockfile input limit.
-func SourceBytes(name string) ([]byte, error) {
-	st, err := os.Stat(name)
-	if err != nil {
-		return nil, err
-	}
-	if !st.Mode().IsRegular() {
-		return nil, fmt.Errorf("compilerlock: source is not regular: %s", name)
-	}
-	f, err := os.Open(name)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = f.Close() }()
-	r := io.LimitReader(f, MaxSourceFileBytes+1)
-	b, err := io.ReadAll(r)
-	if err != nil {
-		return nil, err
-	}
-	if int64(len(b)) > MaxSourceFileBytes {
-		return nil, fmt.Errorf("compilerlock: source exceeds %d bytes", MaxSourceFileBytes)
-	}
-	return b, nil
 }
