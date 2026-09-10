@@ -148,7 +148,7 @@ func (c command) run(args []string) error {
 	case "generate":
 		return c.runGenerate(args[1:])
 	case "check":
-		return c.runGenerate(append([]string{"-check"}, args[1:]...))
+		return c.runCheck(args[1:])
 	case "schema":
 		if c.program != "rasql" {
 			return fmt.Errorf("unknown %s command %q; expected generate", c.program, args[0])

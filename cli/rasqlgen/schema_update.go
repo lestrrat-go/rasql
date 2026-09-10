@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/lestrrat-go/rasql/generate"
-	"github.com/lestrrat-go/rasql/internal/catalogread"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/compilerlock"
 	"github.com/lestrrat-go/rasql/internal/compilerquery"
@@ -273,23 +272,6 @@ func exportGoName(name string) string {
 	return strings.ToUpper(name[:1]) + name[1:]
 }
 
-func catalogScope(cfg config) catalogread.Scope {
-	scope := catalogread.Scope{IncludeViews: cfg.Tables.IncludeViews}
-	for _, name := range cfg.Tables.Include {
-		scope.Include = append(scope.Include, schema.ObjectName{Name: name})
-	}
-	for _, name := range cfg.Tables.Exclude {
-		scope.Exclude = append(scope.Exclude, schema.ObjectName{Name: name})
-	}
-	scope.Include = append(scope.Include, cfg.Tables.IncludeObjects...)
-	scope.Exclude = append(scope.Exclude, cfg.Tables.ExcludeObjects...)
-	history := cfg.Tables.HistoryTable
-	if history == "" {
-		history = "rasql_schema_migrations"
-	}
-	scope.HistoryTable = schema.ObjectName{Name: history}
-	return scope
-}
 func queryInputs(queries []compilerir.QueryAnalysis) []compilerlock.QueryDigestInput {
 	out := make([]compilerlock.QueryDigestInput, 0, len(queries))
 	for _, q := range queries {
