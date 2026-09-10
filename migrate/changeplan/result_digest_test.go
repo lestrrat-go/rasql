@@ -3,10 +3,8 @@ package changeplan
 import (
 	"bytes"
 	"encoding/json"
-	"os"
 	"testing"
 
-	"github.com/lestrrat-go/rasql/internal/compilerlock"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/sqltext"
@@ -382,20 +380,12 @@ func resultDigestLockProfile(t *testing.T) Profile {
 }
 
 // resultDigestLockBaseline builds the same "tasks" baseline catalog the
-// fixture lock at testdata/external/lock.json has always described, through
-// compilerlock.PhysicalFromCatalog and NewCatalogFromPhysical rather than
-// the retired CatalogFromLock, so every golden result digest below, computed
-// long before this rewrite, still holds.
+// retired testdata/external/lock.json fixture always described (see
+// fixtureTasksPhysicalCatalog), so every golden result digest below, computed
+// long before internal/compilerlock was deleted, still holds.
 func resultDigestLockBaseline(t *testing.T) Catalog {
 	t.Helper()
-	lock, err := os.ReadFile("testdata/external/lock.json")
-	require.NoError(t, err)
-	file, err := compilerlock.Decode(lock)
-	require.NoError(t, err)
-	physical := compilerlock.PhysicalFromCatalog(file)
-	baseline, err := NewCatalogFromPhysical(physical, file.Source.Identity)
-	require.NoError(t, err)
-	return baseline
+	return fixtureTasksCatalog(t, "tasks")
 }
 
 func mustHistory(t *testing.T) HistoryIdentity {

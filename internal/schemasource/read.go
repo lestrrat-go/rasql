@@ -146,7 +146,7 @@ func Read(ctx context.Context, req ReadRequest, deps Dependencies) (ReadResult, 
 				return e
 			}
 			if req.Scratch {
-				if e := deps.Migrations.Apply(ctx, db, profile, nil, migrations); e != nil {
+				if e := deps.Migrations.Apply(ctx, db, profile, migrations); e != nil {
 					return e
 				}
 			} else {

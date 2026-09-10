@@ -31,7 +31,7 @@ func TestRunCodegenHelp(t *testing.T) {
 	err := Run([]string{"codegen", "-h"}, &output, &bytes.Buffer{})
 	require.ErrorIs(t, err, flag.ErrHelp)
 	require.Contains(t, output.String(), "Usage: rasql codegen <command> [flags]")
-	require.Contains(t, output.String(), "generate  Generate the store package from a live database")
+	require.Contains(t, output.String(), "generate  Generate the store package from a database")
 }
 
 func TestRunCodegenRejectsRemovedCommands(t *testing.T) {

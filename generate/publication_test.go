@@ -155,31 +155,6 @@ func TestPlanCommitPublicationRefusesChangedOrphanBytes(t *testing.T) {
 	require.Equal(t, changed, mustReadPublicationFile(t, orphan))
 }
 
-func TestPlanCommitPublicationRecoversMarkerOwnedMissingAndPresent(t *testing.T) {
-	root := t.TempDir()
-	dir := filepath.Join(root, "store")
-	old := []byte(genfile.Marker + "\n\npackage store\n")
-	require.NoError(t, os.MkdirAll(dir, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "old_gen.go"), old, 0o600))
-	store := pruningStore(t, dir, schema.MustTableDef("users", schema.Integer("id"), schema.PrimaryKey("id")))
-	store.Root = root
-	plan, err := store.PlanContext(t.Context())
-	require.NoError(t, err)
-	hash := sha256.Sum256(old)
-	missingHash := sha256.Sum256([]byte("already gone"))
-	publication := Publication{
-		FinalFiles: []FinalFile{{Path: "rasql.sum", Source: []byte("lock\n"), Mode: 0o600}},
-		RecoveryDeletions: []RecoveryDeletion{
-			{Path: "store/old_gen.go", OldSHA256: hex.EncodeToString(hash[:])},
-			{Path: "store/missing_gen.go", OldSHA256: hex.EncodeToString(missingHash[:])},
-		},
-		BeforeWrite: func(context.Context, []PublicationEntry) error { return nil },
-		AfterVerify: func(context.Context, []PublicationEntry) error { return nil },
-	}
-	require.NoError(t, plan.CommitPublication(t.Context(), publication))
-	require.NoFileExists(t, filepath.Join(dir, "old_gen.go"))
-}
-
 func TestPlanCommitPublicationCancellationDoesNotWrite(t *testing.T) {
 	root := t.TempDir()
 	store := compactStore(t, filepath.Join(root, "store"), schema.MustTableDef("users", schema.Integer("id"), schema.PrimaryKey("id")))

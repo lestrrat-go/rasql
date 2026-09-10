@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/catalogread"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
@@ -18,9 +19,11 @@ import (
 	"github.com/lestrrat-go/rasql/internal/gensum"
 	"github.com/lestrrat-go/rasql/internal/migrationdir"
 	"github.com/lestrrat-go/rasql/internal/modroot"
+	"github.com/lestrrat-go/rasql/internal/querygen"
 	"github.com/lestrrat-go/rasql/internal/schemasource"
 	"github.com/lestrrat-go/rasql/internal/sourcefile"
 	"github.com/lestrrat-go/rasql/migrate"
+	"github.com/lestrrat-go/rasql/namedsql"
 	"github.com/lestrrat-go/rasql/querydescribe"
 	"github.com/lestrrat-go/rasql/schema"
 )
@@ -29,20 +32,14 @@ import (
 // checking migrations, reading the catalog, describing every query, and publishing the result.
 const defaultGenerateTimeout = 30 * time.Second
 
-// runGenerate renders the store package. With -dsn or -scratch it reads a live database and
-// writes rasql.sum beside the generated Go; with neither, and a config still shaped as engine and
-// schema, it falls through to the offline path that regenerates from rasql.lock.json unchanged.
-// -check is accepted only for that offline path -- it predates rasql codegen check existing as
-// its own command, and internal/conformance's own tests still invoke it that way against an
-// engine-and-schema config -- and is refused together with -dsn or -scratch, where rasql codegen
-// check is the spelling.
+// runGenerate renders the store package by reading a live database, named by -dsn or built as a
+// throwaway from it with -scratch, and writes rasql.sum beside the generated Go.
 func (c command) runGenerate(args []string) error {
 	flags := c.newFlagSet(c.flagSetPrefix + "generate")
 	configPath := flags.String("config", "", "settings file")
 	dsn := flags.String("dsn", "", "connection string; required unless -scratch is set for SQLite")
 	scratch := flags.Bool("scratch", false, "build a throwaway database from -dsn, apply migrations, generate, and drop it")
 	timeout := flags.Duration("timeout", defaultGenerateTimeout, "generation timeout")
-	check := flags.Bool("check", false, "offline path only: report whether generated files are current instead of writing them")
 	if err := parseCommandFlags(flags, args); err != nil {
 		return err
 	}
@@ -50,19 +47,13 @@ func (c command) runGenerate(args []string) error {
 	if err != nil {
 		return err
 	}
-	if *dsn != "" || *scratch {
-		if *check {
-			return errors.New("generate: -check is not valid with -dsn or -scratch; use check instead")
-		}
-		if err := c.runGenerateFromDatabase(*configPath, settings, *dsn, *scratch, *timeout); err != nil {
-			return fmt.Errorf("generate: %w", err)
-		}
-		return nil
+	if *dsn == "" && !*scratch {
+		return errors.New("generate: -dsn or -scratch is required")
 	}
-	if settings.Engine == nil || settings.Schema == nil {
-		return errors.New("generate: config requires engine and schema, or pass -dsn or -scratch to generate from a database")
+	if err := c.runGenerateFromDatabase(*configPath, settings, *dsn, *scratch, *timeout); err != nil {
+		return fmt.Errorf("generate: %w", err)
 	}
-	return c.runOfflineGenerate(settings, *configPath, *check)
+	return nil
 }
 
 // runGenerateFromDatabase is the new path: it reads req.DSN (or a scratch database built from it),
@@ -490,4 +481,102 @@ func formatGensumDiffs(diffs []gensum.Difference) string {
 		parts = append(parts, fmt.Sprintf("%s: %s", d.Group, d.Path))
 	}
 	return strings.Join(parts, "; ")
+}
+
+// moduleRootForConfig is the directory a config-relative path resolves against: the -config
+// file's own directory when one is given, or the working directory otherwise.
+func moduleRootForConfig(path string) (string, error) {
+	if path != "" {
+		return filepath.Abs(filepath.Dir(path))
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Abs(wd)
+}
+
+func hasErrors(diagnostics []compilerir.Diagnostic) bool {
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Level == compilerir.DiagnosticError {
+			return true
+		}
+	}
+	return false
+}
+
+func queryFields(query compilerir.GoQuery) []compilerir.GoField {
+	if query.Result == nil {
+		return nil
+	}
+	return append([]compilerir.GoField(nil), query.Result.Fields...)
+}
+
+func typedValues(semantic []compilerir.SemanticValue, goFields []compilerir.GoField) ([]querygen.TypedValue, error) {
+	if len(semantic) != len(goFields) {
+		return nil, fmt.Errorf("typed query value count mismatch: semantic=%d go=%d", len(semantic), len(goFields))
+	}
+	values := make([]querygen.TypedValue, len(semantic))
+	for i := range semantic {
+		if semantic[i].Name != goFields[i].Name || semantic[i].Nullable != goFields[i].Nullable {
+			return nil, fmt.Errorf("typed query value mismatch at %d: semantic %q go %q", i, semantic[i].Name, goFields[i].Name)
+		}
+		values[i] = querygen.TypedValue{Semantic: semantic[i], Go: goFields[i]}
+	}
+	return values, nil
+}
+
+func queryConfigFor(cfg config, id compilerir.QueryID) configQuery {
+	for _, query := range cfg.Queries {
+		if query.ID == id {
+			return query
+		}
+	}
+	return configQuery{}
+}
+
+func schemaObjectName(namespace, name string) schema.ObjectName {
+	return schema.ObjectName{Schema: namespace, Name: name}
+}
+
+func exportGoName(name string) string {
+	if name == "" {
+		return name
+	}
+	return strings.ToUpper(name[:1]) + name[1:]
+}
+
+// queryNameRecord reports the generated Go names configured for one query, or the zero value when
+// none is configured.
+func queryNameRecord(config compilerir.GoConfig, id compilerir.QueryID) compilerir.QueryGoName {
+	for _, query := range config.Queries {
+		if query.ID == id {
+			return query
+		}
+	}
+	return compilerir.QueryGoName{}
+}
+
+// lowerTypedSQL parses and compiles a query's template SQL against the dialect it targets,
+// reporting the rendered SQL and its positional argument names.
+func lowerTypedSQL(source, name, engine string) (string, []string, error) {
+	template, err := namedsql.Parse(name, source)
+	if err != nil {
+		return "", nil, err
+	}
+	var sqlDialect dialect.Dialect
+	switch engine {
+	case "postgresql", "postgres":
+		sqlDialect = dialect.PostgreSQL()
+	case "mysql":
+		sqlDialect = dialect.MySQL()
+	default:
+		sqlDialect = dialect.SQLite()
+	}
+	compiled, err := template.Compile(sqlDialect)
+	if err != nil {
+		return "", nil, err
+	}
+	definition := compiled.QueryDef()
+	return definition.SQL, definition.Parameters, nil
 }

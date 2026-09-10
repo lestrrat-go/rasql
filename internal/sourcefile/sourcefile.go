@@ -1,6 +1,6 @@
 // Package sourcefile snapshots a source file so its later re-read can be checked against what a
 // caller already observed, without keeping the file open or trusting the filesystem in between.
-// It carries no lock or catalog concepts; that vocabulary lives in internal/compilerlock.
+// It carries no lock or catalog concepts.
 package sourcefile
 
 import (

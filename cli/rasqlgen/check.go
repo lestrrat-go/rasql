@@ -14,10 +14,8 @@ import (
 )
 
 // runCheck reports whether generated output is current, without writing anything. With -dsn or
-// -scratch it regenerates in memory against a live database and compares; with neither, and a
-// config still shaped as engine and schema, it falls through to the offline, lock-backed check;
-// otherwise it reads rasql.sum and recomputes every line from the working tree, consulting no
-// database at all.
+// -scratch it regenerates in memory against a live database and compares; otherwise it reads
+// rasql.sum and recomputes every line from the working tree, consulting no database at all.
 func (c command) runCheck(args []string) error {
 	flags := c.newFlagSet(c.flagSetPrefix + "check")
 	configPath := flags.String("config", "", "settings file")
@@ -36,9 +34,6 @@ func (c command) runCheck(args []string) error {
 			return fmt.Errorf("check: %w", err)
 		}
 		return nil
-	}
-	if settings.Engine != nil && settings.Schema != nil {
-		return c.runOfflineGenerate(settings, *configPath, true)
 	}
 	if err := c.runCheckOffline(*configPath, settings); err != nil {
 		return fmt.Errorf("check: %w", err)

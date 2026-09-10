@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lestrrat-go/rasql/internal/compilerlock"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/sqltext"
@@ -432,23 +431,7 @@ func TestResolvedAdjacentColumnRenameMatrix(t *testing.T) {
 	}
 }
 
-// catalogFromLockFixtureBytes builds a Catalog from lock-shaped JSON through
-// compilerlock.Decode and compilerlock.PhysicalFromCatalog followed by
-// NewCatalogFromPhysical, so tests built against this fixture keep the same
-// object IDs and digests a decoded lock has always produced.
-func catalogFromLockFixtureBytes(t *testing.T, lockBytes []byte) Catalog {
-	t.Helper()
-	file, err := compilerlock.Decode(lockBytes)
-	require.NoError(t, err)
-	physical := compilerlock.PhysicalFromCatalog(file)
-	catalog, err := NewCatalogFromPhysical(physical, file.Source.Identity)
-	require.NoError(t, err)
-	return catalog
-}
-
 func TestTableRenameBindingFromLock(t *testing.T) {
-	lock, err := os.ReadFile("testdata/external/lock.json")
-	require.NoError(t, err)
 	baseProfile := sourceRepairProfile(t)
 	lockProfileValue := engineprofile.Profile{
 		ID: baseProfile.ID(), Engine: baseProfile.Engine(),
@@ -457,12 +440,11 @@ func TestTableRenameBindingFromLock(t *testing.T) {
 	}
 	lockProfile, err := NewProfile(sourceRepairProfileSource{value: lockProfileValue})
 	require.NoError(t, err)
-	baseline := catalogFromLockFixtureBytes(t, lock)
+	baseline := fixtureTasksCatalog(t, "tasks")
 	tasks, ok := baseline.ObjectID(schema.ObjectTable, "main", "tasks")
 	require.True(t, ok)
 	resolvedBaseline := baseline
-	mutatedLock := bytes.Replace(lock, []byte(`"name": "tasks"`), []byte(`"name": "accounts"`), 1)
-	after := catalogFromLockFixtureBytes(t, mutatedLock)
+	after := fixtureTasksCatalog(t, "accounts")
 	resultDigest, err := CatalogDigest(after)
 	require.NoError(t, err)
 	operation, err := NewOperation("rename", OperationRenameTable, nil, []ObjectID{tasks}, nil, nil,
