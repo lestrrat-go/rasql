@@ -1,18 +1,6 @@
 {
-  "engine": {"dialect": "postgresql", "profile": "postgresql-17"},
-  "schema": {
-    "kind": "migrations",
-    "identity": "taskboard-migrations-v1",
-    "paths": [
-      "db/migrations/001_initial/001_create_members.up.sql",
-      "db/migrations/001_initial/002_create_projects.up.sql",
-      "db/migrations/001_initial/003_create_tasks.up.sql",
-      "db/migrations/001_initial/004_create_index_tasks_open_by_project.up.sql",
-      "db/migrations/002_due_dates_and_unowned_tasks/001_add_due_on.up.sql",
-      "db/migrations/002_due_dates_and_unowned_tasks/002_relax_assignee.up.sql",
-      "db/migrations/002_due_dates_and_unowned_tasks/003_assignee_on_delete_set_null.up.sql"
-    ]
-  },
+  "dialect": "postgresql",
+  "migrations": "db/migrations",
   "package": "store",
   "output": "internal/store",
   "emitter": "compact",

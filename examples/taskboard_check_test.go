@@ -1,19 +1,32 @@
 package examples_test
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+	clirasql "github.com/lestrrat-go/rasql/cli/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/internal/dbtest"
+	"github.com/lestrrat-go/rasql/internal/migrationdir"
 	"github.com/lestrrat-go/rasql/internal/scratchmod"
+	"github.com/lestrrat-go/rasql/migrate"
 	"github.com/stretchr/testify/require"
 )
 
-func TestTaskboardOfflineGenerationAndDrift(t *testing.T) {
+// TestTaskboardOfflineCheckAndDrift is the DSN-free gate CI runs: rasql codegen check passes on
+// the checked-in sample without touching any database, and a stale migration, query, setting, or
+// generated file each name the group they belong to and leave the working tree unchanged.
+func TestTaskboardOfflineCheckAndDrift(t *testing.T) {
 	repoRoot, err := filepath.Abs("..")
 	require.NoError(t, err)
 	cli := buildTaskboardCLI(t, repoRoot)
@@ -21,14 +34,9 @@ func TestTaskboardOfflineGenerationAndDrift(t *testing.T) {
 	committed := snapshotTaskboardGenerated(t, source)
 
 	clean := copyTaskboardModuleForOffline(t, source)
-	firstOutput, err := runTaskboardCLI(t, cli, clean, "generate")
-	require.NoError(t, err, "first offline generate: %s", firstOutput)
-	first := snapshotTaskboardGenerated(t, clean)
-	require.Equal(t, committed, first, "offline generate changed checked-in lock or generated files")
-
-	secondOutput, err := runTaskboardCLI(t, cli, clean, "generate")
-	require.NoError(t, err, "second offline generate: %s", secondOutput)
-	require.Equal(t, first, snapshotTaskboardGenerated(t, clean), "repeated offline generate changed bytes")
+	output, err := runTaskboardCLI(t, cli, clean, "codegen", "check")
+	require.NoError(t, err, "offline check on the checked-in sample: %s", output)
+	require.Equal(t, committed, snapshotTaskboardGenerated(t, clean), "offline check wrote something")
 
 	for _, test := range []struct {
 		name   string
@@ -36,15 +44,15 @@ func TestTaskboardOfflineGenerationAndDrift(t *testing.T) {
 		change func(*testing.T, string)
 	}{
 		{
-			name:   "migration",
-			needle: "source",
+			name:   "migrations",
+			needle: "migrations",
 			change: func(t *testing.T, module string) {
 				path := filepath.Join(module, "db", "migrations", "001_initial", "001_create_members.up.sql")
 				appendTaskboardBytes(t, path, []byte("\n-- offline migration drift\n"))
 			},
 		},
 		{
-			name:   "query",
+			name:   "queries",
 			needle: "queries",
 			change: func(t *testing.T, module string) {
 				path := filepath.Join(module, "queries", "overdue_count.sql")
@@ -52,8 +60,8 @@ func TestTaskboardOfflineGenerationAndDrift(t *testing.T) {
 			},
 		},
 		{
-			name:   "config",
-			needle: "mappings",
+			name:   "settings",
+			needle: "settings",
 			change: func(t *testing.T, module string) {
 				path := filepath.Join(module, "rasql.json")
 				contents, err := os.ReadFile(path)
@@ -71,19 +79,76 @@ func TestTaskboardOfflineGenerationAndDrift(t *testing.T) {
 				require.NoError(t, os.WriteFile(path, append(updated, '\n'), 0o644))
 			},
 		},
+		{
+			name:   "outputs",
+			needle: "outputs",
+			change: func(t *testing.T, module string) {
+				path := filepath.Join(module, "internal", "store", "members_gen.go")
+				appendTaskboardBytes(t, path, []byte("\n// offline output drift\n"))
+			},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			module := copyTaskboardModuleForOffline(t, source)
-			before := snapshotTaskboardGenerated(t, module)
 			test.change(t, module)
-			output, err := runTaskboardCLI(t, cli, module, "check")
+			before := snapshotTaskboardGenerated(t, module)
+			output, err := runTaskboardCLI(t, cli, module, "codegen", "check")
 			require.Error(t, err, "offline check accepted stale %s input", test.name)
 			require.Contains(t, strings.ToLower(output), test.needle,
 				"offline check did not name stale %s input: %s", test.name, output)
 			require.Equal(t, before, snapshotTaskboardGenerated(t, module),
-				"stale %s check changed lock or generated files", test.name)
+				"stale %s check changed the working tree", test.name)
 		})
 	}
+}
+
+// TestTaskboardLiveCheckMatchesGeneratedStore is the real producer's output through the real
+// consumer: a fresh PostgreSQL database gets db/migrations applied to it, and rasql codegen check
+// -dsn is required to accept the checked-in store against that database, exactly as CI's
+// integration job does. This is a claim about what a live server reports, so it is guarded by
+// internal/dbtest per CLAUDE.md rather than resting on the offline test above.
+//
+// rasql.json declares a typed query, so check -dsn opens a second connection of its own through
+// querydescribe.NewPostgreSQL to describe it, using pgx.Connect on the literal DSN string rather
+// than the *sql.DB check's other steps share -- stdlib.RegisterConnConfig's key is invisible to
+// that connector, so this builds a real postgres:// URL from the fields dbtest resolved instead of
+// trusting pgx.ConnConfig.ConnString(), which the campaign's decision 13 warns still names the
+// shared bootstrap database after PostgreSQLConfig repoints .Database at a fresh one.
+func TestTaskboardLiveCheckMatchesGeneratedStore(t *testing.T) {
+	repoRoot, err := filepath.Abs("..")
+	require.NoError(t, err)
+	source := filepath.Join(repoRoot, "sample", "taskboard")
+	module := copyTaskboardModuleForOffline(t, source)
+
+	db := dbtest.PostgreSQLDB(t)
+	migrations, err := migrationdir.Load(filepath.Join(module, "db", "migrations"))
+	require.NoError(t, err)
+	runner, err := migrate.New(db, dialect.PostgreSQL())
+	require.NoError(t, err)
+	_, err = runner.Apply(context.Background(), migrate.AllPending(), migrations...)
+	require.NoError(t, err)
+
+	dsn := postgresDSNFromConfig(dbtest.PostgreSQLConfig(t))
+
+	var output, diagnostics bytes.Buffer
+	configPath := filepath.Join(module, "rasql.json")
+	err = clirasql.Run([]string{"codegen", "check", "-config", configPath, "-dsn", dsn}, &output, &diagnostics)
+	require.NoError(t, err, "live check against a freshly migrated database: %s / %s", output.String(), diagnostics.String())
+}
+
+// postgresDSNFromConfig builds a postgres:// URL directly from a parsed *pgx.ConnConfig's fields.
+// ConnConfig.ConnString() is not safe to use here: it returns the string pgx originally parsed,
+// which for dbtest's per-test database still names the shared bootstrap database it was derived
+// from, not the fresh one .Database was repointed at.
+func postgresDSNFromConfig(cfg *pgx.ConnConfig) string {
+	u := url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(cfg.User, cfg.Password),
+		Host:     fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
+		Path:     "/" + cfg.Database,
+		RawQuery: "sslmode=disable",
+	}
+	return u.String()
 }
 
 func buildTaskboardCLI(t *testing.T, repoRoot string) string {
@@ -138,15 +203,16 @@ func copyTaskboardTree(source, destination string) error {
 	})
 }
 
+// snapshotTaskboardGenerated captures rasql.sum and every generated Go file, so a test can require
+// that a refused check left the working tree exactly as it found it.
 func snapshotTaskboardGenerated(t *testing.T, module string) map[string][]byte {
 	t.Helper()
 	result := map[string][]byte{}
-	result["rasql.lock.json"] = mustTaskboardFile(t, filepath.Join(module, "rasql.lock.json"))
 	output := filepath.Join(module, "internal", "store")
 	entries, err := os.ReadDir(output)
 	require.NoError(t, err)
 	for _, entry := range entries {
-		if entry.IsDir() || (!strings.HasSuffix(entry.Name(), "_gen.go") && !strings.HasSuffix(entry.Name(), "_gen_test.go")) {
+		if entry.IsDir() || (!strings.HasSuffix(entry.Name(), "_gen.go") && !strings.HasSuffix(entry.Name(), "_gen_test.go") && entry.Name() != "rasql.sum") {
 			continue
 		}
 		relative := filepath.Join("internal", "store", entry.Name())
@@ -169,9 +235,9 @@ func appendTaskboardBytes(t *testing.T, path string, suffix []byte) {
 }
 
 func withoutTaskboardDSNs(environment []string) []string {
-	result := make([]string, 0, len(environment)+3)
+	result := make([]string, 0, len(environment)+2)
 	for _, value := range environment {
-		if strings.HasPrefix(value, "TASKBOARD_SCHEMA_DSN=") || strings.HasPrefix(value, "TASKBOARD_DSN=") || strings.HasPrefix(value, "TASKBOARD_TEST_DSN=") {
+		if strings.HasPrefix(value, "TASKBOARD_DSN=") || strings.HasPrefix(value, "TASKBOARD_TEST_DSN=") {
 			continue
 		}
 		result = append(result, value)

@@ -125,5 +125,5 @@ source: [sample/taskboard/internal/web/taskboard.go](https://github.com/lestrrat
 <!-- END INCLUDE -->
 
 Adding another typed query follows this same path: check in SQL and its
-manifest entry, refresh the lock once, generate offline, and keep the generated
+manifest entry, regenerate against the database, and keep the generated
 result at the repository boundary.
