@@ -6,7 +6,7 @@
     "identity": "d4-conformance-sqlite-v1",
     "files": [
       {
-        "path": "migrations/001.sql",
+        "path": "migrations/001_schema/001.up.sql",
         "sha256": "530a9c8e3a069b18c59640e3d49a0f3d84085f598e3134a878ca4b6cbb1862a6"
       }
     ]
@@ -960,7 +960,7 @@
     ]
   },
   "digests": {
-    "source": "d7b24d2631a72ac96b26358f102419591b9c6ba3a8d9c6e7a771360a68d336a4",
+    "source": "eb5e64c059ccbd4a9d77bdbd197d58dede5495af103d59c7cf63acf7bd6874c3",
     "mappings": "2223f019a9501fd1b6f8dfc06c959c67e16eadc4bad78f87c16ee97d5e88cb02",
     "queries": "0a507bf5c425d0736035505a3537c0d476ef795b320381f908cae08010fea25e",
     "generation": "a88bd91d0d551b205485ad99e9142337dbbb25af93ec773fcd288aa13fc38354"

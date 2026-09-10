@@ -10,7 +10,7 @@
     "identity": "d4-conformance-sqlite-v1",
     "kind": "migrations",
     "paths": [
-      "migrations/*.sql"
+      "migrations/*/*.up.sql"
     ]
   },
   "queries": [

@@ -6,27 +6,27 @@
     "identity": "d4-conformance-mysql-live-v1",
     "files": [
       {
-        "path": "migrations/001.sql",
+        "path": "migrations/001_members/001.up.sql",
         "sha256": "cd3c9974fc6a8dcfdd88bd456cf48c2a3896f001c67ca7d7769bc36c33a89144"
       },
       {
-        "path": "migrations/002.sql",
+        "path": "migrations/002_projects/001.up.sql",
         "sha256": "97a35833511528d472d279f05a47f3121b18adae9b8be720e3fd8c47e1b04339"
       },
       {
-        "path": "migrations/003.sql",
+        "path": "migrations/003_tasks/001.up.sql",
         "sha256": "4544df4aa34bbd788804f29182eedca4e83030159227403cf35d8486540b3b5d"
       },
       {
-        "path": "migrations/004.sql",
+        "path": "migrations/004_task_labels/001.up.sql",
         "sha256": "e1e5fa5ad24f648ec27a5e002a0f9d6a15871eaafa61714011cd7682b0411b0d"
       },
       {
-        "path": "migrations/005.sql",
+        "path": "migrations/005_tasks_project_open_id_index/001.up.sql",
         "sha256": "e84115b0e9a1a6b3d8b088d35a671d7746b3400f1a31fcaa96efec05381c63b0"
       },
       {
-        "path": "migrations/006.sql",
+        "path": "migrations/006_tasks_assignee_index/001.up.sql",
         "sha256": "f3770052d4175d4129d07a01784fcb73d02d5e7ade30a4ac5d5d3303b12085d9"
       }
     ]
@@ -934,7 +934,7 @@
     ]
   },
   "digests": {
-    "source": "dfd205626e47b8f6f9b5658eecdbcdc4768aaf14990b0d6ccd0ff0a4f91fda79",
+    "source": "bb0381df172a3a90b6ec8ca40cd277231d3bcc58851ff207cfd37cf8d9700b61",
     "mappings": "2223f019a9501fd1b6f8dfc06c959c67e16eadc4bad78f87c16ee97d5e88cb02",
     "queries": "0a507bf5c425d0736035505a3537c0d476ef795b320381f908cae08010fea25e",
     "generation": "12515fe3927fd44292deb5bd35fc3da9cc495230e079e9a8f69616b82104f16b"
