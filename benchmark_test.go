@@ -1,4 +1,4 @@
-package rasql
+package rasql_test
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/stmt"
@@ -37,23 +38,23 @@ type benchmarkMemberName struct {
 	Name string `rasql:"name"`
 }
 
-type benchmarkMemberDecoder struct{ schema ResultSchema }
+type benchmarkMemberDecoder struct{ schema rasql.ResultSchema }
 
-func (d benchmarkMemberDecoder) ResultSchema() ResultSchema { return d.schema }
-func (benchmarkMemberDecoder) Presence() []Presence         { return nil }
-func (benchmarkMemberDecoder) DecodeRow(source ScanSource, row *benchmarkMemberRow) error {
+func (d benchmarkMemberDecoder) ResultSchema() rasql.ResultSchema { return d.schema }
+func (benchmarkMemberDecoder) Presence() []rasql.Presence         { return nil }
+func (benchmarkMemberDecoder) DecodeRow(source rasql.ScanSource, row *benchmarkMemberRow) error {
 	return source.Scan(&row.ID, &row.Name, &row.Email)
 }
 
-type benchmarkMemberNameDecoder struct{ schema ResultSchema }
+type benchmarkMemberNameDecoder struct{ schema rasql.ResultSchema }
 
-func (d benchmarkMemberNameDecoder) ResultSchema() ResultSchema { return d.schema }
-func (benchmarkMemberNameDecoder) Presence() []Presence         { return nil }
-func (benchmarkMemberNameDecoder) DecodeRow(source ScanSource, row *benchmarkMemberName) error {
+func (d benchmarkMemberNameDecoder) ResultSchema() rasql.ResultSchema { return d.schema }
+func (benchmarkMemberNameDecoder) Presence() []rasql.Presence         { return nil }
+func (benchmarkMemberNameDecoder) DecodeRow(source rasql.ScanSource, row *benchmarkMemberName) error {
 	return source.Scan(&row.Name)
 }
 
-func benchmarkExecutor(b *testing.B) Executor {
+func benchmarkExecutor(b *testing.B) rasql.Executor {
 	b.Helper()
 	database, err := sql.Open(benchmarkDriverName, "")
 	if err != nil {
@@ -64,24 +65,24 @@ func benchmarkExecutor(b *testing.B) Executor {
 			b.Error(err)
 		}
 	})
-	db, err := New(database, dialect.SQLite())
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
 		b.Fatal(err)
 	}
-	profile, err := EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
 	if err != nil {
 		b.Fatal(err)
 	}
-	executor, err := AsExecutor(db, profile)
+	executor, err := rasql.AsExecutor(db, profile)
 	if err != nil {
 		b.Fatal(err)
 	}
 	return executor
 }
 
-func benchmarkNativeQuery[R any](b *testing.B, sqlText string, projection Projection[R]) Query[R] {
+func benchmarkNativeQuery[R any](b *testing.B, sqlText string, projection rasql.Projection[R]) rasql.Query[R] {
 	b.Helper()
-	query, err := Native(NativeStatement{Engine: "sqlite", SQL: sqlText}, projection, Many)
+	query, err := rasql.Native(rasql.NativeStatement{Engine: "sqlite", SQL: sqlText}, projection, rasql.Many)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -91,31 +92,31 @@ func benchmarkNativeQuery[R any](b *testing.B, sqlText string, projection Projec
 // BenchmarkTypedRowScan preserves the established scan series while measuring
 // the two canonical decoder choices through the same Executor and All path.
 func BenchmarkTypedRowScan(b *testing.B) {
-	fullSchema, err := NewResultSchema(
-		ResultColumn{Name: "id", Type: schema.IntegerType{}},
-		ResultColumn{Name: "name", Type: schema.TextType{}},
-		ResultColumn{Name: "email", Type: schema.TextType{}},
+	fullSchema, err := rasql.NewResultSchema(
+		rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}},
+		rasql.ResultColumn{Name: "name", Type: schema.TextType{}},
+		rasql.ResultColumn{Name: "email", Type: schema.TextType{}},
 	)
 	if err != nil {
 		b.Fatal(err)
 	}
-	nameSchema, err := NewResultSchema(ResultColumn{Name: "name", Type: schema.TextType{}})
+	nameSchema, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "name", Type: schema.TextType{}})
 	if err != nil {
 		b.Fatal(err)
 	}
-	fullStatic, err := NativeProjection[benchmarkMemberRow](benchmarkMemberDecoder{schema: fullSchema})
+	fullStatic, err := rasql.NativeProjection[benchmarkMemberRow](benchmarkMemberDecoder{schema: fullSchema})
 	if err != nil {
 		b.Fatal(err)
 	}
-	fullDynamic, err := DynamicProjection[benchmarkMemberRow](fullSchema)
+	fullDynamic, err := rasql.DynamicProjection[benchmarkMemberRow](fullSchema)
 	if err != nil {
 		b.Fatal(err)
 	}
-	nameStatic, err := NativeProjection[benchmarkMemberName](benchmarkMemberNameDecoder{schema: nameSchema})
+	nameStatic, err := rasql.NativeProjection[benchmarkMemberName](benchmarkMemberNameDecoder{schema: nameSchema})
 	if err != nil {
 		b.Fatal(err)
 	}
-	nameDynamic, err := DynamicProjection[benchmarkMemberName](nameSchema)
+	nameDynamic, err := rasql.DynamicProjection[benchmarkMemberName](nameSchema)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -123,7 +124,7 @@ func BenchmarkTypedRowScan(b *testing.B) {
 	for _, testCase := range []struct {
 		name       string
 		query      string
-		projection Projection[benchmarkMemberRow]
+		projection rasql.Projection[benchmarkMemberRow]
 	}{
 		{name: "full_static_generated", query: benchmarkFullQuery, projection: fullStatic},
 		{name: "full_dynamic", query: benchmarkFullQuery, projection: fullDynamic},
@@ -134,7 +135,7 @@ func BenchmarkTypedRowScan(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {
-				rows, err := All(b.Context(), executor, query)
+				rows, err := rasql.All(b.Context(), executor, query)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -147,7 +148,7 @@ func BenchmarkTypedRowScan(b *testing.B) {
 	}
 	for _, testCase := range []struct {
 		name       string
-		projection Projection[benchmarkMemberName]
+		projection rasql.Projection[benchmarkMemberName]
 	}{
 		{name: "partial_generated", projection: nameStatic},
 		{name: "partial_dynamic", projection: nameDynamic},
@@ -158,7 +159,7 @@ func BenchmarkTypedRowScan(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {
-				rows, err := All(b.Context(), executor, query)
+				rows, err := rasql.All(b.Context(), executor, query)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -171,9 +172,9 @@ func BenchmarkTypedRowScan(b *testing.B) {
 	}
 }
 
-func benchmarkCollectionQuery(b *testing.B, limit *int) Query[benchmarkMemberRow] {
+func benchmarkCollectionQuery(b *testing.B, limit *int) rasql.Query[benchmarkMemberRow] {
 	b.Helper()
-	table, err := ReadTableOf[benchmarkMemberRow](schema.TableDef{Name: "members", Columns: []schema.ColumnDef{
+	table, err := rasql.ReadTableOf[benchmarkMemberRow](schema.TableDef{Name: "members", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "name", Type: schema.TextType{}},
 		{Name: "email", Type: schema.TextType{}},
@@ -181,39 +182,39 @@ func benchmarkCollectionQuery(b *testing.B, limit *int) Query[benchmarkMemberRow
 	if err != nil {
 		b.Fatal(err)
 	}
-	relation, err := SourceOf(table, "")
+	relation, err := rasql.SourceOf(table, "")
 	if err != nil {
 		b.Fatal(err)
 	}
-	id, err := BindColumn[benchmarkMemberRow, int64](relation, "id", "")
+	id, err := rasql.BindColumn[benchmarkMemberRow, int64](relation, "id", "")
 	if err != nil {
 		b.Fatal(err)
 	}
-	name, err := BindColumn[benchmarkMemberRow, string](relation, "name", "")
+	name, err := rasql.BindColumn[benchmarkMemberRow, string](relation, "name", "")
 	if err != nil {
 		b.Fatal(err)
 	}
-	email, err := BindColumn[benchmarkMemberRow, string](relation, "email", "")
+	email, err := rasql.BindColumn[benchmarkMemberRow, string](relation, "email", "")
 	if err != nil {
 		b.Fatal(err)
 	}
-	resultSchema, err := NewResultSchema(
-		ResultColumn{Name: "id", Type: schema.IntegerType{}},
-		ResultColumn{Name: "name", Type: schema.TextType{}},
-		ResultColumn{Name: "email", Type: schema.TextType{}},
+	resultSchema, err := rasql.NewResultSchema(
+		rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}},
+		rasql.ResultColumn{Name: "name", Type: schema.TextType{}},
+		rasql.ResultColumn{Name: "email", Type: schema.TextType{}},
 	)
 	if err != nil {
 		b.Fatal(err)
 	}
-	projection, err := NewProjection([]ProjectionItem{
-		Item("id", id.Expr(), schema.IntegerType{}, ""),
-		Item("name", name.Expr(), schema.TextType{}, ""),
-		Item("email", email.Expr(), schema.TextType{}, ""),
+	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
+		rasql.Item("id", id.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("name", name.Expr(), schema.TextType{}, ""),
+		rasql.Item("email", email.Expr(), schema.TextType{}, ""),
 	}, benchmarkMemberDecoder{schema: resultSchema})
 	if err != nil {
 		b.Fatal(err)
 	}
-	query := Select(relation.Source(), projection)
+	query := rasql.Select(relation.Source(), projection)
 	if limit != nil {
 		query, err = query.Limit(*limit)
 		if err != nil {
@@ -240,7 +241,7 @@ func BenchmarkCollectAll(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {
-				rows, err := All(b.Context(), executor, query)
+				rows, err := rasql.All(b.Context(), executor, query)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -258,43 +259,43 @@ type benchmarkCountRow struct {
 	ID int64
 }
 
-type benchmarkCountRowDecoder struct{ schema ResultSchema }
+type benchmarkCountRowDecoder struct{ schema rasql.ResultSchema }
 
-func (d benchmarkCountRowDecoder) ResultSchema() ResultSchema { return d.schema }
-func (benchmarkCountRowDecoder) Presence() []Presence         { return nil }
-func (benchmarkCountRowDecoder) DecodeRow(source ScanSource, result *benchmarkCountRow) error {
+func (d benchmarkCountRowDecoder) ResultSchema() rasql.ResultSchema { return d.schema }
+func (benchmarkCountRowDecoder) Presence() []rasql.Presence         { return nil }
+func (benchmarkCountRowDecoder) DecodeRow(source rasql.ScanSource, result *benchmarkCountRow) error {
 	return source.Scan(&result.ID)
 }
 
-func benchmarkCountBaseQuery(b *testing.B) Query[benchmarkCountRow] {
+func benchmarkCountBaseQuery(b *testing.B) rasql.Query[benchmarkCountRow] {
 	b.Helper()
-	table, err := ReadTableOf[benchmarkCountRow](schema.TableDef{
+	table, err := rasql.ReadTableOf[benchmarkCountRow](schema.TableDef{
 		Name:    "members",
 		Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 	})
 	if err != nil {
 		b.Fatal(err)
 	}
-	relation, err := SourceOf(table, "")
+	relation, err := rasql.SourceOf(table, "")
 	if err != nil {
 		b.Fatal(err)
 	}
-	id, err := BindColumn[benchmarkCountRow, int64](relation, "id", "")
+	id, err := rasql.BindColumn[benchmarkCountRow, int64](relation, "id", "")
 	if err != nil {
 		b.Fatal(err)
 	}
-	resultSchema, err := NewResultSchema(ResultColumn{Name: "id", Type: schema.IntegerType{}})
+	resultSchema, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}})
 	if err != nil {
 		b.Fatal(err)
 	}
-	projection, err := NewProjection(
-		[]ProjectionItem{Item("id", id.Expr(), schema.IntegerType{}, "")},
+	projection, err := rasql.NewProjection(
+		[]rasql.ProjectionItem{rasql.Item("id", id.Expr(), schema.IntegerType{}, "")},
 		benchmarkCountRowDecoder{schema: resultSchema},
 	)
 	if err != nil {
 		b.Fatal(err)
 	}
-	return Select(relation.Source(), projection)
+	return rasql.Select(relation.Source(), projection)
 }
 
 func BenchmarkTypedSelectCount(b *testing.B) {
@@ -304,8 +305,8 @@ func BenchmarkTypedSelectCount(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for range b.N {
-		query := CountQuery(base, false)
-		count, err := One(b.Context(), executor, query)
+		query := rasql.CountQuery(base, false)
+		count, err := rasql.One(b.Context(), executor, query)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -392,7 +393,7 @@ func BenchmarkQueryRenderedBoundArgs(b *testing.B) {
 		}
 	})
 
-	db, err := New(database, dialect.SQLite())
+	db, err := rasql.New(database, dialect.SQLite())
 	if err != nil {
 		b.Fatal(err)
 	}

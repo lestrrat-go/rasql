@@ -1,9 +1,10 @@
-package rasql
+package rasql_test
 
 import (
 	"database/sql"
 	"testing"
 
+	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/dbtest"
 	"github.com/lestrrat-go/rasql/query"
@@ -41,15 +42,15 @@ type acceptanceRefundRow struct {
 // as an exact decimal they then deliver as text.
 type acceptanceTotalRow struct {
 	Customer string
-	Total    Nullable[int64]
-	Average  Nullable[float64]
+	Total    rasql.Nullable[int64]
+	Average  rasql.Nullable[float64]
 }
 
-type acceptanceTotalDecoder struct{ result ResultSchema }
+type acceptanceTotalDecoder struct{ result rasql.ResultSchema }
 
-func (d acceptanceTotalDecoder) ResultSchema() ResultSchema { return d.result }
-func (d acceptanceTotalDecoder) Presence() []Presence       { return nil }
-func (d acceptanceTotalDecoder) DecodeRow(src ScanSource, row *acceptanceTotalRow) error {
+func (d acceptanceTotalDecoder) ResultSchema() rasql.ResultSchema { return d.result }
+func (d acceptanceTotalDecoder) Presence() []rasql.Presence       { return nil }
+func (d acceptanceTotalDecoder) DecodeRow(src rasql.ScanSource, row *acceptanceTotalRow) error {
 	return src.Scan(&row.Customer, &row.Total, &row.Average)
 }
 
@@ -68,82 +69,82 @@ func (d acceptanceTotalDecoder) DecodeRow(src ScanSource, row *acceptanceTotalRo
 // one position SQL allows a result name in, and the second orders by a
 // recomputed expression. Having both proves the two kinds of ordering term
 // compose in one statement.
-func acceptanceQuery(t *testing.T) Query[acceptanceTotalRow] {
+func acceptanceQuery(t *testing.T) rasql.Query[acceptanceTotalRow] {
 	t.Helper()
 
-	orders, err := ReadTableOf[acceptanceOrderRow](schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{
+	orders, err := rasql.ReadTableOf[acceptanceOrderRow](schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "customer", Type: schema.TextType{}},
 		{Name: "amount", Type: schema.IntegerType{}},
 	}})
 	require.NoError(t, err)
-	refunds, err := ReadTableOf[acceptanceRefundRow](schema.TableDef{Name: "refunds", Columns: []schema.ColumnDef{
+	refunds, err := rasql.ReadTableOf[acceptanceRefundRow](schema.TableDef{Name: "refunds", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "order_id", Type: schema.IntegerType{}},
 	}})
 	require.NoError(t, err)
 
-	o, err := SourceOf(orders, "o")
+	o, err := rasql.SourceOf(orders, "o")
 	require.NoError(t, err)
-	r, err := SourceOf(refunds, "r")
+	r, err := rasql.SourceOf(refunds, "r")
 	require.NoError(t, err)
 
-	orderID, err := BindColumn[acceptanceOrderRow, int64](o, "id", "")
+	orderID, err := rasql.BindColumn[acceptanceOrderRow, int64](o, "id", "")
 	require.NoError(t, err)
-	customer, err := BindColumn[acceptanceOrderRow, string](o, "customer", "")
+	customer, err := rasql.BindColumn[acceptanceOrderRow, string](o, "customer", "")
 	require.NoError(t, err)
-	amount, err := BindColumn[acceptanceOrderRow, int64](o, "amount", "")
+	amount, err := rasql.BindColumn[acceptanceOrderRow, int64](o, "amount", "")
 	require.NoError(t, err)
-	refundOrder, err := BindColumn[acceptanceRefundRow, int64](r, "order_id", "")
+	refundOrder, err := rasql.BindColumn[acceptanceRefundRow, int64](r, "order_id", "")
 	require.NoError(t, err)
 
 	// The subquery projects exactly one int64 column, so InQuery can check
 	// its element type against the left-hand side at compile time.
-	refunded, err := Scalar("order_id", refundOrder.Expr(), schema.IntegerType{}, "")
+	refunded, err := rasql.Scalar("order_id", refundOrder.Expr(), schema.IntegerType{}, "")
 	require.NoError(t, err)
-	refundQuery := Select(r.Source(), refunded)
+	refundQuery := rasql.Select(r.Source(), refunded)
 
-	result, err := NewResultSchema(
-		ResultColumn{Name: "customer", Type: schema.TextType{}},
-		ResultColumn{Name: "total", Type: schema.IntegerType{}, Nullable: true},
-		ResultColumn{Name: "average", Type: schema.FloatType{}, Nullable: true},
+	result, err := rasql.NewResultSchema(
+		rasql.ResultColumn{Name: "customer", Type: schema.TextType{}},
+		rasql.ResultColumn{Name: "total", Type: schema.IntegerType{}, Nullable: true},
+		rasql.ResultColumn{Name: "average", Type: schema.FloatType{}, Nullable: true},
 	)
 	require.NoError(t, err)
 	// total is held in a variable so the ordering below can name this exact
 	// projection rather than repeat its alias as a second string.
-	total := NullItem("total", SumExpr(amount.Expr()), schema.IntegerType{}, "")
-	projection, err := NewProjection([]ProjectionItem{
-		Item("customer", customer.Expr(), schema.TextType{}, ""),
+	total := rasql.NullItem("total", rasql.SumExpr(amount.Expr()), schema.IntegerType{}, "")
+	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
+		rasql.Item("customer", customer.Expr(), schema.TextType{}, ""),
 		total,
-		NullItem("average", AvgExpr(amount.Expr()), schema.FloatType{}, ""),
+		rasql.NullItem("average", rasql.AvgExpr(amount.Expr()), schema.FloatType{}, ""),
 	}, acceptanceTotalDecoder{result: result})
 	require.NoError(t, err)
 
 	// InQuery reports its error rather than deferring it, like every other
 	// structural composition in this package.
-	refundedOrder, err := InQuery(orderID.Expr(), refundQuery)
+	refundedOrder, err := rasql.InQuery(orderID.Expr(), refundQuery)
 	require.NoError(t, err)
 
 	// The same restriction written a second way, as a correlated EXISTS. Its
 	// WHERE reads o.id, a column of the enclosing query, which is what makes
 	// it correlated. It is redundant with refundedOrder on purpose: an EXISTS
 	// that changed which rows survive would not prove the two forms agree.
-	correlated, err := ExistsQuery(
-		Select(r.Source(), refunded).
+	correlated, err := rasql.ExistsQuery(
+		rasql.Select(r.Source(), refunded).
 			Correlated(o.Source()).
-			Where(EqualExpr(refundOrder.Expr(), orderID.Expr())),
+			Where(rasql.EqualExpr(refundOrder.Expr(), orderID.Expr())),
 	)
 	require.NoError(t, err)
 
-	return Select(o.Source(), projection).
-		Where(And(
-			GreaterValue(amount.Expr(), int64(100)),
-			LikeValue(LowerExpr(customer.Expr()), "a%"),
+	return rasql.Select(o.Source(), projection).
+		Where(rasql.And(
+			rasql.GreaterValue(amount.Expr(), int64(100)),
+			rasql.LikeValue(rasql.LowerExpr(customer.Expr()), "a%"),
 			refundedOrder,
 			correlated,
 		)).
-		GroupBy(Group(customer.Expr())).
-		OrderBy(DescResult(total), AscExpr(LowerExpr(customer.Expr())))
+		GroupBy(rasql.Group(customer.Expr())).
+		OrderBy(rasql.DescResult(total), rasql.AscExpr(rasql.LowerExpr(customer.Expr())))
 }
 
 // acceptanceSeed fills both tables. Each row is chosen so that exactly one
@@ -172,28 +173,28 @@ func acceptanceSeed(t *testing.T, database *sql.DB, textType string) {
 		(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6)`)
 }
 
-func runAcceptance(t *testing.T, database *sql.DB, executor Executor, textType string) {
+func runAcceptance(t *testing.T, database *sql.DB, executor rasql.Executor, textType string) {
 	t.Helper()
 	acceptanceSeed(t, database, textType)
-	rows, err := All(t.Context(), executor, acceptanceQuery(t))
+	rows, err := rasql.All(t.Context(), executor, acceptanceQuery(t))
 	require.NoError(t, err)
 	// The rows come back by descending total, which is the order the result
 	// alias asks for and not the order LOWER(customer) alone would give.
 	require.Equal(t, []acceptanceTotalRow{
 		{
 			Customer: "amy",
-			Total:    Nullable[int64]{Value: 500, Valid: true},
-			Average:  Nullable[float64]{Value: 500, Valid: true},
+			Total:    rasql.Nullable[int64]{Value: 500, Valid: true},
+			Average:  rasql.Nullable[float64]{Value: 500, Valid: true},
 		},
 		{
 			Customer: "Anna",
-			Total:    Nullable[int64]{Value: 400, Valid: true},
-			Average:  Nullable[float64]{Value: 400, Valid: true},
+			Total:    rasql.Nullable[int64]{Value: 400, Valid: true},
+			Average:  rasql.Nullable[float64]{Value: 400, Valid: true},
 		},
 		{
 			Customer: "alice",
-			Total:    Nullable[int64]{Value: 350, Valid: true},
-			Average:  Nullable[float64]{Value: 175, Valid: true},
+			Total:    rasql.Nullable[int64]{Value: 350, Valid: true},
+			Average:  rasql.Nullable[float64]{Value: 175, Valid: true},
 		},
 	}, rows)
 }
@@ -206,62 +207,62 @@ func runAcceptance(t *testing.T, database *sql.DB, executor Executor, textType s
 // any row at all, which is true for every order, and alice would come back at
 // 1250. The two answers differ, which is what makes this a test of the
 // correlation rather than of the seed.
-func correlationQuery(t *testing.T) Query[acceptanceTotalRow] {
+func correlationQuery(t *testing.T) rasql.Query[acceptanceTotalRow] {
 	t.Helper()
 
-	orders, err := ReadTableOf[acceptanceOrderRow](schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{
+	orders, err := rasql.ReadTableOf[acceptanceOrderRow](schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "customer", Type: schema.TextType{}},
 		{Name: "amount", Type: schema.IntegerType{}},
 	}})
 	require.NoError(t, err)
-	refunds, err := ReadTableOf[acceptanceRefundRow](schema.TableDef{Name: "refunds", Columns: []schema.ColumnDef{
+	refunds, err := rasql.ReadTableOf[acceptanceRefundRow](schema.TableDef{Name: "refunds", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "order_id", Type: schema.IntegerType{}},
 	}})
 	require.NoError(t, err)
 
-	o, err := SourceOf(orders, "o")
+	o, err := rasql.SourceOf(orders, "o")
 	require.NoError(t, err)
-	r, err := SourceOf(refunds, "r")
-	require.NoError(t, err)
-
-	orderID, err := BindColumn[acceptanceOrderRow, int64](o, "id", "")
-	require.NoError(t, err)
-	customer, err := BindColumn[acceptanceOrderRow, string](o, "customer", "")
-	require.NoError(t, err)
-	amount, err := BindColumn[acceptanceOrderRow, int64](o, "amount", "")
-	require.NoError(t, err)
-	refundOrder, err := BindColumn[acceptanceRefundRow, int64](r, "order_id", "")
+	r, err := rasql.SourceOf(refunds, "r")
 	require.NoError(t, err)
 
-	refunded, err := Scalar("order_id", refundOrder.Expr(), schema.IntegerType{}, "")
+	orderID, err := rasql.BindColumn[acceptanceOrderRow, int64](o, "id", "")
+	require.NoError(t, err)
+	customer, err := rasql.BindColumn[acceptanceOrderRow, string](o, "customer", "")
+	require.NoError(t, err)
+	amount, err := rasql.BindColumn[acceptanceOrderRow, int64](o, "amount", "")
+	require.NoError(t, err)
+	refundOrder, err := rasql.BindColumn[acceptanceRefundRow, int64](r, "order_id", "")
 	require.NoError(t, err)
 
-	result, err := NewResultSchema(
-		ResultColumn{Name: "customer", Type: schema.TextType{}},
-		ResultColumn{Name: "total", Type: schema.IntegerType{}, Nullable: true},
-		ResultColumn{Name: "average", Type: schema.FloatType{}, Nullable: true},
+	refunded, err := rasql.Scalar("order_id", refundOrder.Expr(), schema.IntegerType{}, "")
+	require.NoError(t, err)
+
+	result, err := rasql.NewResultSchema(
+		rasql.ResultColumn{Name: "customer", Type: schema.TextType{}},
+		rasql.ResultColumn{Name: "total", Type: schema.IntegerType{}, Nullable: true},
+		rasql.ResultColumn{Name: "average", Type: schema.FloatType{}, Nullable: true},
 	)
 	require.NoError(t, err)
-	projection, err := NewProjection([]ProjectionItem{
-		Item("customer", customer.Expr(), schema.TextType{}, ""),
-		NullItem("total", SumExpr(amount.Expr()), schema.IntegerType{}, ""),
-		NullItem("average", AvgExpr(amount.Expr()), schema.FloatType{}, ""),
+	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
+		rasql.Item("customer", customer.Expr(), schema.TextType{}, ""),
+		rasql.NullItem("total", rasql.SumExpr(amount.Expr()), schema.IntegerType{}, ""),
+		rasql.NullItem("average", rasql.AvgExpr(amount.Expr()), schema.FloatType{}, ""),
 	}, acceptanceTotalDecoder{result: result})
 	require.NoError(t, err)
 
-	correlated, err := ExistsQuery(
-		Select(r.Source(), refunded).
+	correlated, err := rasql.ExistsQuery(
+		rasql.Select(r.Source(), refunded).
 			Correlated(o.Source()).
-			Where(EqualExpr(refundOrder.Expr(), orderID.Expr())),
+			Where(rasql.EqualExpr(refundOrder.Expr(), orderID.Expr())),
 	)
 	require.NoError(t, err)
 
-	return Select(o.Source(), projection).
+	return rasql.Select(o.Source(), projection).
 		Where(correlated).
-		GroupBy(Group(customer.Expr())).
-		OrderBy(AscExpr(customer.Expr()))
+		GroupBy(rasql.Group(customer.Expr())).
+		OrderBy(rasql.AscExpr(customer.Expr()))
 }
 
 func TestTypedOperator(t *testing.T) {
@@ -270,33 +271,33 @@ func TestTypedOperator(t *testing.T) {
 			database, err := sql.Open("sqlite", ":memory:")
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = database.Close() })
-			db, err := New(database, dialect.SQLite())
+			db, err := rasql.New(database, dialect.SQLite())
 			require.NoError(t, err)
-			profile, err := EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+			profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
 			require.NoError(t, err)
-			executor, err := AsExecutor(db, profile)
+			executor, err := rasql.AsExecutor(db, profile)
 			require.NoError(t, err)
 			runAcceptance(t, database, executor, "TEXT")
 		})
 
 		t.Run("PostgreSQL", func(t *testing.T) {
 			database := dbtest.PostgreSQLDB(t)
-			db, err := New(database, dialect.PostgreSQL())
+			db, err := rasql.New(database, dialect.PostgreSQL())
 			require.NoError(t, err)
-			profile, err := DiscoverEngineProfile(t.Context(), db, "postgresql-17")
+			profile, err := rasql.DiscoverEngineProfile(t.Context(), db, "postgresql-17")
 			require.NoError(t, err)
-			executor, err := AsExecutor(db, profile)
+			executor, err := rasql.AsExecutor(db, profile)
 			require.NoError(t, err)
 			runAcceptance(t, database, executor, "TEXT")
 		})
 
 		t.Run("MySQL", func(t *testing.T) {
 			database := dbtest.MySQLDB(t)
-			db, err := New(database, dialect.MySQL())
+			db, err := rasql.New(database, dialect.MySQL())
 			require.NoError(t, err)
-			profile, err := DiscoverEngineProfile(t.Context(), db, "mysql-8.4")
+			profile, err := rasql.DiscoverEngineProfile(t.Context(), db, "mysql-8.4")
 			require.NoError(t, err)
-			executor, err := AsExecutor(db, profile)
+			executor, err := rasql.AsExecutor(db, profile)
 			require.NoError(t, err)
 			runAcceptance(t, database, executor, "VARCHAR(64)")
 		})
@@ -307,33 +308,33 @@ func TestTypedOperator(t *testing.T) {
 			database, err := sql.Open("sqlite", ":memory:")
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = database.Close() })
-			db, err := New(database, dialect.SQLite())
+			db, err := rasql.New(database, dialect.SQLite())
 			require.NoError(t, err)
-			profile, err := EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+			profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
 			require.NoError(t, err)
-			executor, err := AsExecutor(db, profile)
+			executor, err := rasql.AsExecutor(db, profile)
 			require.NoError(t, err)
 			runCoalesceGapAcceptance(t, database, executor)
 		})
 
 		t.Run("PostgreSQL", func(t *testing.T) {
 			database := dbtest.PostgreSQLDB(t)
-			db, err := New(database, dialect.PostgreSQL())
+			db, err := rasql.New(database, dialect.PostgreSQL())
 			require.NoError(t, err)
-			profile, err := DiscoverEngineProfile(t.Context(), db, "postgresql-17")
+			profile, err := rasql.DiscoverEngineProfile(t.Context(), db, "postgresql-17")
 			require.NoError(t, err)
-			executor, err := AsExecutor(db, profile)
+			executor, err := rasql.AsExecutor(db, profile)
 			require.NoError(t, err)
 			runCoalesceGapAcceptance(t, database, executor)
 		})
 
 		t.Run("MySQL", func(t *testing.T) {
 			database := dbtest.MySQLDB(t)
-			db, err := New(database, dialect.MySQL())
+			db, err := rasql.New(database, dialect.MySQL())
 			require.NoError(t, err)
-			profile, err := DiscoverEngineProfile(t.Context(), db, "mysql-8.4")
+			profile, err := rasql.DiscoverEngineProfile(t.Context(), db, "mysql-8.4")
 			require.NoError(t, err)
-			executor, err := AsExecutor(db, profile)
+			executor, err := rasql.AsExecutor(db, profile)
 			require.NoError(t, err)
 			runCoalesceGapAcceptance(t, database, executor)
 		})
@@ -344,33 +345,33 @@ func TestTypedOperator(t *testing.T) {
 			database, err := sql.Open("sqlite", ":memory:")
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = database.Close() })
-			db, err := New(database, dialect.SQLite())
+			db, err := rasql.New(database, dialect.SQLite())
 			require.NoError(t, err)
-			profile, err := EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+			profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
 			require.NoError(t, err)
-			executor, err := AsExecutor(db, profile)
+			executor, err := rasql.AsExecutor(db, profile)
 			require.NoError(t, err)
 			runSubqueryGapAcceptance(t, database, executor)
 		})
 
 		t.Run("PostgreSQL", func(t *testing.T) {
 			database := dbtest.PostgreSQLDB(t)
-			db, err := New(database, dialect.PostgreSQL())
+			db, err := rasql.New(database, dialect.PostgreSQL())
 			require.NoError(t, err)
-			profile, err := DiscoverEngineProfile(t.Context(), db, "postgresql-17")
+			profile, err := rasql.DiscoverEngineProfile(t.Context(), db, "postgresql-17")
 			require.NoError(t, err)
-			executor, err := AsExecutor(db, profile)
+			executor, err := rasql.AsExecutor(db, profile)
 			require.NoError(t, err)
 			runSubqueryGapAcceptance(t, database, executor)
 		})
 
 		t.Run("MySQL", func(t *testing.T) {
 			database := dbtest.MySQLDB(t)
-			db, err := New(database, dialect.MySQL())
+			db, err := rasql.New(database, dialect.MySQL())
 			require.NoError(t, err)
-			profile, err := DiscoverEngineProfile(t.Context(), db, "mysql-8.4")
+			profile, err := rasql.DiscoverEngineProfile(t.Context(), db, "mysql-8.4")
 			require.NoError(t, err)
-			executor, err := AsExecutor(db, profile)
+			executor, err := rasql.AsExecutor(db, profile)
 			require.NoError(t, err)
 			runSubqueryGapAcceptance(t, database, executor)
 		})
@@ -381,33 +382,33 @@ func TestTypedOperator(t *testing.T) {
 			database, err := sql.Open("sqlite", ":memory:")
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = database.Close() })
-			db, err := New(database, dialect.SQLite())
+			db, err := rasql.New(database, dialect.SQLite())
 			require.NoError(t, err)
-			profile, err := EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+			profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
 			require.NoError(t, err)
-			executor, err := AsExecutor(db, profile)
+			executor, err := rasql.AsExecutor(db, profile)
 			require.NoError(t, err)
 			runSubqueryNullAcceptance(t, database, executor)
 		})
 
 		t.Run("PostgreSQL", func(t *testing.T) {
 			database := dbtest.PostgreSQLDB(t)
-			db, err := New(database, dialect.PostgreSQL())
+			db, err := rasql.New(database, dialect.PostgreSQL())
 			require.NoError(t, err)
-			profile, err := DiscoverEngineProfile(t.Context(), db, "postgresql-17")
+			profile, err := rasql.DiscoverEngineProfile(t.Context(), db, "postgresql-17")
 			require.NoError(t, err)
-			executor, err := AsExecutor(db, profile)
+			executor, err := rasql.AsExecutor(db, profile)
 			require.NoError(t, err)
 			runSubqueryNullAcceptance(t, database, executor)
 		})
 
 		t.Run("MySQL", func(t *testing.T) {
 			database := dbtest.MySQLDB(t)
-			db, err := New(database, dialect.MySQL())
+			db, err := rasql.New(database, dialect.MySQL())
 			require.NoError(t, err)
-			profile, err := DiscoverEngineProfile(t.Context(), db, "mysql-8.4")
+			profile, err := rasql.DiscoverEngineProfile(t.Context(), db, "mysql-8.4")
 			require.NoError(t, err)
-			executor, err := AsExecutor(db, profile)
+			executor, err := rasql.AsExecutor(db, profile)
 			require.NoError(t, err)
 			runSubqueryNullAcceptance(t, database, executor)
 		})
@@ -417,15 +418,15 @@ func TestTypedOperator(t *testing.T) {
 		database, err := sql.Open("sqlite", ":memory:")
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = database.Close() })
-		db, err := New(database, dialect.SQLite())
+		db, err := rasql.New(database, dialect.SQLite())
 		require.NoError(t, err)
-		profile, err := EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
 		require.NoError(t, err)
-		executor, err := AsExecutor(db, profile)
+		executor, err := rasql.AsExecutor(db, profile)
 		require.NoError(t, err)
 		acceptanceSeed(t, database, "TEXT")
 
-		rows, err := All(t.Context(), executor, correlationQuery(t))
+		rows, err := rasql.All(t.Context(), executor, correlationQuery(t))
 		require.NoError(t, err)
 		totals := make(map[string]int64, len(rows))
 		for _, row := range rows {
@@ -448,11 +449,11 @@ type coalesceGapAccountRow struct {
 	Name string
 }
 
-type coalesceGapDecoder struct{ result ResultSchema }
+type coalesceGapDecoder struct{ result rasql.ResultSchema }
 
-func (d coalesceGapDecoder) ResultSchema() ResultSchema { return d.result }
-func (d coalesceGapDecoder) Presence() []Presence       { return nil }
-func (d coalesceGapDecoder) DecodeRow(src ScanSource, row *coalesceGapAccountRow) error {
+func (d coalesceGapDecoder) ResultSchema() rasql.ResultSchema { return d.result }
+func (d coalesceGapDecoder) Presence() []rasql.Presence       { return nil }
+func (d coalesceGapDecoder) DecodeRow(src rasql.ScanSource, row *coalesceGapAccountRow) error {
 	return src.Scan(&row.Name)
 }
 
@@ -468,35 +469,35 @@ func (d coalesceGapDecoder) DecodeRow(src ScanSource, row *coalesceGapAccountRow
 // rows are actually replaced with 100 rather than passed through as NULL
 // (which would drop that row from a > comparison entirely) or as some other
 // placeholder such as 0 (which would also drop it, since 0 is not > 40).
-func coalesceGapQuery(t *testing.T) Query[coalesceGapAccountRow] {
+func coalesceGapQuery(t *testing.T) rasql.Query[coalesceGapAccountRow] {
 	t.Helper()
 
-	accounts, err := ReadTableOf[coalesceGapAccountRow](schema.TableDef{Name: "accounts", Columns: []schema.ColumnDef{
+	accounts, err := rasql.ReadTableOf[coalesceGapAccountRow](schema.TableDef{Name: "accounts", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "name", Type: schema.TextType{}},
 		{Name: "credit_limit", Type: schema.IntegerType{}, Nullable: true},
 	}})
 	require.NoError(t, err)
-	a, err := SourceOf(accounts, "")
+	a, err := rasql.SourceOf(accounts, "")
 	require.NoError(t, err)
 
-	name, err := BindColumn[coalesceGapAccountRow, string](a, "name", "")
+	name, err := rasql.BindColumn[coalesceGapAccountRow, string](a, "name", "")
 	require.NoError(t, err)
-	creditLimit, err := BindNullColumn[coalesceGapAccountRow, int64](a, "credit_limit", "")
+	creditLimit, err := rasql.BindNullColumn[coalesceGapAccountRow, int64](a, "credit_limit", "")
 	require.NoError(t, err)
 
-	limit := CoalesceExpr(creditLimit.NullExpr(), Value(int64(100)))
+	limit := rasql.CoalesceExpr(creditLimit.NullExpr(), rasql.Value(int64(100)))
 
-	result, err := NewResultSchema(ResultColumn{Name: "name", Type: schema.TextType{}})
+	result, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "name", Type: schema.TextType{}})
 	require.NoError(t, err)
-	projection, err := NewProjection([]ProjectionItem{
-		Item("name", name.Expr(), schema.TextType{}, ""),
+	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
+		rasql.Item("name", name.Expr(), schema.TextType{}, ""),
 	}, coalesceGapDecoder{result: result})
 	require.NoError(t, err)
 
-	return Select(a.Source(), projection).
-		Where(GreaterValue(limit, int64(40))).
-		OrderBy(AscExpr(name.Expr()))
+	return rasql.Select(a.Source(), projection).
+		Where(rasql.GreaterValue(limit, int64(40))).
+		OrderBy(rasql.AscExpr(name.Expr()))
 }
 
 // coalesceGapSeed seeds three accounts: alice has no credit_limit at all
@@ -516,10 +517,10 @@ func coalesceGapSeed(t *testing.T, database *sql.DB) {
 		(1, 'alice', NULL), (2, 'bob', 30), (3, 'carol', 5000)`)
 }
 
-func runCoalesceGapAcceptance(t *testing.T, database *sql.DB, executor Executor) {
+func runCoalesceGapAcceptance(t *testing.T, database *sql.DB, executor rasql.Executor) {
 	t.Helper()
 	coalesceGapSeed(t, database)
-	rows, err := All(t.Context(), executor, coalesceGapQuery(t))
+	rows, err := rasql.All(t.Context(), executor, coalesceGapQuery(t))
 	require.NoError(t, err)
 	require.Equal(t, []coalesceGapAccountRow{
 		{Name: "alice"},
@@ -552,11 +553,11 @@ type subqueryGapRow struct {
 	BigOrderCount int64
 }
 
-type subqueryGapDecoder struct{ result ResultSchema }
+type subqueryGapDecoder struct{ result rasql.ResultSchema }
 
-func (d subqueryGapDecoder) ResultSchema() ResultSchema { return d.result }
-func (d subqueryGapDecoder) Presence() []Presence       { return nil }
-func (d subqueryGapDecoder) DecodeRow(src ScanSource, row *subqueryGapRow) error {
+func (d subqueryGapDecoder) ResultSchema() rasql.ResultSchema { return d.result }
+func (d subqueryGapDecoder) Presence() []rasql.Presence       { return nil }
+func (d subqueryGapDecoder) DecodeRow(src rasql.ScanSource, row *subqueryGapRow) error {
 	return src.Scan(&row.Name, &row.BigOrderCount)
 }
 
@@ -576,39 +577,39 @@ func (d subqueryGapDecoder) DecodeRow(src ScanSource, row *subqueryGapRow) error
 // GreaterExpr. Both positions the capability has to cover appear in one
 // query, and the inner one nests inside the outer one, the way a reader
 // composing this from smaller queries would naturally arrive at it.
-func subqueryGapQuery(t *testing.T) Query[subqueryGapRow] {
+func subqueryGapQuery(t *testing.T) rasql.Query[subqueryGapRow] {
 	t.Helper()
 
-	customers, err := ReadTableOf[subqueryGapCustomerRow](schema.TableDef{Name: "customers", Columns: []schema.ColumnDef{
+	customers, err := rasql.ReadTableOf[subqueryGapCustomerRow](schema.TableDef{Name: "customers", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "name", Type: schema.TextType{}},
 	}})
 	require.NoError(t, err)
-	orders, err := ReadTableOf[subqueryGapOrderRow](schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{
+	orders, err := rasql.ReadTableOf[subqueryGapOrderRow](schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "customer_id", Type: schema.IntegerType{}},
 		{Name: "amount", Type: schema.IntegerType{}},
 	}})
 	require.NoError(t, err)
 
-	c, err := SourceOf(customers, "c")
+	c, err := rasql.SourceOf(customers, "c")
 	require.NoError(t, err)
-	o, err := SourceOf(orders, "o")
+	o, err := rasql.SourceOf(orders, "o")
 	require.NoError(t, err)
-	baseline, err := SourceOf(orders, "baseline")
+	baseline, err := rasql.SourceOf(orders, "baseline")
 	require.NoError(t, err)
 
-	customerID, err := BindColumn[subqueryGapCustomerRow, int64](c, "id", "")
+	customerID, err := rasql.BindColumn[subqueryGapCustomerRow, int64](c, "id", "")
 	require.NoError(t, err)
-	customerName, err := BindColumn[subqueryGapCustomerRow, string](c, "name", "")
+	customerName, err := rasql.BindColumn[subqueryGapCustomerRow, string](c, "name", "")
 	require.NoError(t, err)
-	orderCustomerID, err := BindColumn[subqueryGapOrderRow, int64](o, "customer_id", "")
+	orderCustomerID, err := rasql.BindColumn[subqueryGapOrderRow, int64](o, "customer_id", "")
 	require.NoError(t, err)
-	orderAmount, err := BindColumn[subqueryGapOrderRow, int64](o, "amount", "")
+	orderAmount, err := rasql.BindColumn[subqueryGapOrderRow, int64](o, "amount", "")
 	require.NoError(t, err)
-	baselineID, err := BindColumn[subqueryGapOrderRow, int64](baseline, "id", "")
+	baselineID, err := rasql.BindColumn[subqueryGapOrderRow, int64](baseline, "id", "")
 	require.NoError(t, err)
-	baselineAmount, err := BindColumn[subqueryGapOrderRow, int64](baseline, "amount", "")
+	baselineAmount, err := rasql.BindColumn[subqueryGapOrderRow, int64](baseline, "amount", "")
 	require.NoError(t, err)
 
 	// Level two: the amount of the fixed order seeded with id 1, read as a
@@ -617,13 +618,13 @@ func subqueryGapQuery(t *testing.T) Query[subqueryGapRow] {
 	// it selects; CoalesceExpr turns it into the plain, ordered Expr
 	// GreaterExpr requires. The fallback is never actually read here, since
 	// the baseline order seeded with id 1 always exists.
-	baselineProjection, err := Scalar("amount", baselineAmount.Expr(), schema.IntegerType{}, "")
+	baselineProjection, err := rasql.Scalar("amount", baselineAmount.Expr(), schema.IntegerType{}, "")
 	require.NoError(t, err)
-	baselineQuery := Select(baseline.Source(), baselineProjection).
-		Where(EqualValue(baselineID.Expr(), int64(1)))
-	baselineSubquery, err := SubqueryExpr(baselineQuery)
+	baselineQuery := rasql.Select(baseline.Source(), baselineProjection).
+		Where(rasql.EqualValue(baselineID.Expr(), int64(1)))
+	baselineSubquery, err := rasql.SubqueryExpr(baselineQuery)
 	require.NoError(t, err)
-	baselineExpr := CoalesceExpr(baselineSubquery, Value(int64(0)))
+	baselineExpr := rasql.CoalesceExpr(baselineSubquery, rasql.Value(int64(0)))
 
 	// Level one: how many of this customer's orders beat the baseline.
 	// Correlated(c.Source()) is what makes "this customer's" true instead of
@@ -632,30 +633,30 @@ func subqueryGapQuery(t *testing.T) Query[subqueryGapRow] {
 	// returns exactly one row; CoalesceExpr turns SubqueryExpr's NullExpr
 	// into the plain Expr Item wants, and its fallback is never actually
 	// read for the same reason.
-	bigOrderCountProjection, err := Scalar("big_order_count", CountRows(), schema.IntegerType{}, "")
+	bigOrderCountProjection, err := rasql.Scalar("big_order_count", rasql.CountRows(), schema.IntegerType{}, "")
 	require.NoError(t, err)
-	bigOrderCountQuery := Select(o.Source(), bigOrderCountProjection).
+	bigOrderCountQuery := rasql.Select(o.Source(), bigOrderCountProjection).
 		Correlated(c.Source()).
-		Where(And(
-			EqualExpr(orderCustomerID.Expr(), customerID.Expr()),
-			GreaterExpr(orderAmount.Expr(), baselineExpr),
+		Where(rasql.And(
+			rasql.EqualExpr(orderCustomerID.Expr(), customerID.Expr()),
+			rasql.GreaterExpr(orderAmount.Expr(), baselineExpr),
 		))
-	bigOrderCountSubquery, err := SubqueryExpr(bigOrderCountQuery)
+	bigOrderCountSubquery, err := rasql.SubqueryExpr(bigOrderCountQuery)
 	require.NoError(t, err)
-	bigOrderCountExpr := CoalesceExpr(bigOrderCountSubquery, Value(int64(0)))
+	bigOrderCountExpr := rasql.CoalesceExpr(bigOrderCountSubquery, rasql.Value(int64(0)))
 
-	result, err := NewResultSchema(
-		ResultColumn{Name: "name", Type: schema.TextType{}},
-		ResultColumn{Name: "big_order_count", Type: schema.IntegerType{}},
+	result, err := rasql.NewResultSchema(
+		rasql.ResultColumn{Name: "name", Type: schema.TextType{}},
+		rasql.ResultColumn{Name: "big_order_count", Type: schema.IntegerType{}},
 	)
 	require.NoError(t, err)
-	projection, err := NewProjection([]ProjectionItem{
-		Item("name", customerName.Expr(), schema.TextType{}, ""),
-		Item("big_order_count", bigOrderCountExpr, schema.IntegerType{}, ""),
+	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
+		rasql.Item("name", customerName.Expr(), schema.TextType{}, ""),
+		rasql.Item("big_order_count", bigOrderCountExpr, schema.IntegerType{}, ""),
 	}, subqueryGapDecoder{result: result})
 	require.NoError(t, err)
 
-	return Select(c.Source(), projection).OrderBy(AscExpr(customerName.Expr()))
+	return rasql.Select(c.Source(), projection).OrderBy(rasql.AscExpr(customerName.Expr()))
 }
 
 // subqueryGapSeed seeds two customers and five orders. Order 1 is the
@@ -685,10 +686,10 @@ func subqueryGapSeed(t *testing.T, database *sql.DB) {
 		(1, 1, 50), (2, 1, 80), (3, 1, 120), (4, 2, 10), (5, 2, 999)`)
 }
 
-func runSubqueryGapAcceptance(t *testing.T, database *sql.DB, executor Executor) {
+func runSubqueryGapAcceptance(t *testing.T, database *sql.DB, executor rasql.Executor) {
 	t.Helper()
 	subqueryGapSeed(t, database)
-	rows, err := All(t.Context(), executor, subqueryGapQuery(t))
+	rows, err := rasql.All(t.Context(), executor, subqueryGapQuery(t))
 	require.NoError(t, err)
 	require.Equal(t, []subqueryGapRow{
 		{Name: "alice", BigOrderCount: 2},
@@ -720,14 +721,14 @@ type subqueryNullOrderRow struct {
 // have never placed: orders stays empty, so the scalar subquery behind
 // Total has nothing to select from and comes back NULL.
 type subqueryNullResultRow struct {
-	Total Nullable[int64]
+	Total rasql.Nullable[int64]
 }
 
-type subqueryNullDecoder struct{ result ResultSchema }
+type subqueryNullDecoder struct{ result rasql.ResultSchema }
 
-func (d subqueryNullDecoder) ResultSchema() ResultSchema { return d.result }
-func (d subqueryNullDecoder) Presence() []Presence       { return nil }
-func (d subqueryNullDecoder) DecodeRow(src ScanSource, row *subqueryNullResultRow) error {
+func (d subqueryNullDecoder) ResultSchema() rasql.ResultSchema { return d.result }
+func (d subqueryNullDecoder) Presence() []rasql.Presence       { return nil }
+func (d subqueryNullDecoder) DecodeRow(src rasql.ScanSource, row *subqueryNullResultRow) error {
 	return src.Scan(&row.Total)
 }
 
@@ -738,50 +739,50 @@ func (d subqueryNullDecoder) DecodeRow(src ScanSource, row *subqueryNullResultRo
 //
 // against an orders table that stays empty, so the correlated scalar
 // subquery has zero rows to return from for the one seeded customer.
-func subqueryNullQuery(t *testing.T) Query[subqueryNullResultRow] {
+func subqueryNullQuery(t *testing.T) rasql.Query[subqueryNullResultRow] {
 	t.Helper()
 
-	customers, err := ReadTableOf[subqueryNullCustomerRow](schema.TableDef{Name: "customers", Columns: []schema.ColumnDef{
+	customers, err := rasql.ReadTableOf[subqueryNullCustomerRow](schema.TableDef{Name: "customers", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 	}})
 	require.NoError(t, err)
-	orders, err := ReadTableOf[subqueryNullOrderRow](schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{
+	orders, err := rasql.ReadTableOf[subqueryNullOrderRow](schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "customer_id", Type: schema.IntegerType{}},
 		{Name: "amount", Type: schema.IntegerType{}},
 	}})
 	require.NoError(t, err)
 
-	c, err := SourceOf(customers, "c")
+	c, err := rasql.SourceOf(customers, "c")
 	require.NoError(t, err)
-	o, err := SourceOf(orders, "o")
-	require.NoError(t, err)
-
-	customerID, err := BindColumn[subqueryNullCustomerRow, int64](c, "id", "")
-	require.NoError(t, err)
-	orderCustomerID, err := BindColumn[subqueryNullOrderRow, int64](o, "customer_id", "")
-	require.NoError(t, err)
-	orderAmount, err := BindColumn[subqueryNullOrderRow, int64](o, "amount", "")
+	o, err := rasql.SourceOf(orders, "o")
 	require.NoError(t, err)
 
-	amountProjection, err := Scalar("amount", orderAmount.Expr(), schema.IntegerType{}, "")
+	customerID, err := rasql.BindColumn[subqueryNullCustomerRow, int64](c, "id", "")
 	require.NoError(t, err)
-	totalQuery := Select(o.Source(), amountProjection).
+	orderCustomerID, err := rasql.BindColumn[subqueryNullOrderRow, int64](o, "customer_id", "")
+	require.NoError(t, err)
+	orderAmount, err := rasql.BindColumn[subqueryNullOrderRow, int64](o, "amount", "")
+	require.NoError(t, err)
+
+	amountProjection, err := rasql.Scalar("amount", orderAmount.Expr(), schema.IntegerType{}, "")
+	require.NoError(t, err)
+	totalQuery := rasql.Select(o.Source(), amountProjection).
 		Correlated(c.Source()).
-		Where(EqualExpr(orderCustomerID.Expr(), customerID.Expr()))
-	totalExpr, err := SubqueryExpr(totalQuery)
+		Where(rasql.EqualExpr(orderCustomerID.Expr(), customerID.Expr()))
+	totalExpr, err := rasql.SubqueryExpr(totalQuery)
 	require.NoError(t, err)
 
-	result, err := NewResultSchema(
-		ResultColumn{Name: "total", Type: schema.IntegerType{}, Nullable: true},
+	result, err := rasql.NewResultSchema(
+		rasql.ResultColumn{Name: "total", Type: schema.IntegerType{}, Nullable: true},
 	)
 	require.NoError(t, err)
-	projection, err := NewProjection([]ProjectionItem{
-		NullItem("total", totalExpr, schema.IntegerType{}, ""),
+	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
+		rasql.NullItem("total", totalExpr, schema.IntegerType{}, ""),
 	}, subqueryNullDecoder{result: result})
 	require.NoError(t, err)
 
-	return Select(c.Source(), projection)
+	return rasql.Select(c.Source(), projection)
 }
 
 func subqueryNullSeed(t *testing.T, database *sql.DB) {
@@ -797,12 +798,12 @@ func subqueryNullSeed(t *testing.T, database *sql.DB) {
 	// orders stays empty.
 }
 
-func runSubqueryNullAcceptance(t *testing.T, database *sql.DB, executor Executor) {
+func runSubqueryNullAcceptance(t *testing.T, database *sql.DB, executor rasql.Executor) {
 	t.Helper()
 	subqueryNullSeed(t, database)
-	rows, err := All(t.Context(), executor, subqueryNullQuery(t))
+	rows, err := rasql.All(t.Context(), executor, subqueryNullQuery(t))
 	require.NoError(t, err)
-	require.Equal(t, []subqueryNullResultRow{{Total: Nullable[int64]{}}}, rows)
+	require.Equal(t, []subqueryNullResultRow{{Total: rasql.Nullable[int64]{}}}, rows)
 }
 
 // This proves BindTypedColumn and BindNullTypedColumn, the bridge from a
@@ -815,7 +816,7 @@ func runSubqueryNullAcceptance(t *testing.T, database *sql.DB, executor Executor
 type bindTypedColumnGapRow struct {
 	ID       int64
 	Name     string
-	Nickname Nullable[string]
+	Nickname rasql.Nullable[string]
 }
 
 // bindTypedColumnGapTable is shaped exactly the way rasqlgen shapes a
@@ -825,21 +826,23 @@ type bindTypedColumnGapRow struct {
 // the generator while another agent is converting them onto this API;
 // BindTypedColumn and BindNullTypedColumn are proved against this exact
 // shape, the one a real generated store also produces.
-type bindTypedColumnGapTable struct{ Table[bindTypedColumnGapRow] }
+type bindTypedColumnGapTable struct {
+	rasql.Table[bindTypedColumnGapRow]
+}
 
 func (t bindTypedColumnGapTable) ID() query.TypedColumn[bindTypedColumnGapRow, int64] {
-	return query.TypedColumnOf[bindTypedColumnGapRow, int64](ColumnOf(t.Table, "id"))
+	return query.TypedColumnOf[bindTypedColumnGapRow, int64](rasql.ColumnOf(t.Table, "id"))
 }
 func (t bindTypedColumnGapTable) Name() query.TypedColumn[bindTypedColumnGapRow, string] {
-	return query.TypedColumnOf[bindTypedColumnGapRow, string](ColumnOf(t.Table, "name"))
+	return query.TypedColumnOf[bindTypedColumnGapRow, string](rasql.ColumnOf(t.Table, "name"))
 }
 func (t bindTypedColumnGapTable) Nickname() query.NullableColumn[bindTypedColumnGapRow, string] {
-	return query.NullableColumnOf[bindTypedColumnGapRow, string](ColumnOf(t.Table, "nickname"))
+	return query.NullableColumnOf[bindTypedColumnGapRow, string](rasql.ColumnOf(t.Table, "nickname"))
 }
 
 func bindTypedColumnGapUsers(t *testing.T) bindTypedColumnGapTable {
 	t.Helper()
-	table, err := TableOf[bindTypedColumnGapRow](schema.TableDef{Name: "gap_users", Columns: []schema.ColumnDef{
+	table, err := rasql.TableOf[bindTypedColumnGapRow](schema.TableDef{Name: "gap_users", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "name", Type: schema.TextType{}},
 		{Name: "nickname", Type: schema.TextType{}, Nullable: true},
@@ -850,14 +853,14 @@ func bindTypedColumnGapUsers(t *testing.T) bindTypedColumnGapTable {
 
 type bindTypedColumnGapResultRow struct {
 	Name     string
-	Nickname Nullable[string]
+	Nickname rasql.Nullable[string]
 }
 
-type bindTypedColumnGapDecoder struct{ result ResultSchema }
+type bindTypedColumnGapDecoder struct{ result rasql.ResultSchema }
 
-func (d bindTypedColumnGapDecoder) ResultSchema() ResultSchema { return d.result }
-func (d bindTypedColumnGapDecoder) Presence() []Presence       { return nil }
-func (d bindTypedColumnGapDecoder) DecodeRow(src ScanSource, row *bindTypedColumnGapResultRow) error {
+func (d bindTypedColumnGapDecoder) ResultSchema() rasql.ResultSchema { return d.result }
+func (d bindTypedColumnGapDecoder) Presence() []rasql.Presence       { return nil }
+func (d bindTypedColumnGapDecoder) DecodeRow(src rasql.ScanSource, row *bindTypedColumnGapResultRow) error {
 	return src.Scan(&row.Name, &row.Nickname)
 }
 
@@ -869,34 +872,34 @@ func (d bindTypedColumnGapDecoder) DecodeRow(src ScanSource, row *bindTypedColum
 // — the query.TypedColumn and query.NullableColumn a generated accessor
 // returns — bridged by BindTypedColumn and BindNullTypedColumn, never by a
 // string passed to BindColumn.
-func bindTypedColumnGapQuery(t *testing.T) Query[bindTypedColumnGapResultRow] {
+func bindTypedColumnGapQuery(t *testing.T) rasql.Query[bindTypedColumnGapResultRow] {
 	t.Helper()
 
 	users := bindTypedColumnGapUsers(t)
-	u, err := SourceOf(users, "")
+	u, err := rasql.SourceOf(users, "")
 	require.NoError(t, err)
 
-	id, err := BindTypedColumn(users.ID())
+	id, err := rasql.BindTypedColumn(users.ID())
 	require.NoError(t, err)
-	name, err := BindTypedColumn(users.Name())
+	name, err := rasql.BindTypedColumn(users.Name())
 	require.NoError(t, err)
-	nickname, err := BindNullTypedColumn(users.Nickname())
+	nickname, err := rasql.BindNullTypedColumn(users.Nickname())
 	require.NoError(t, err)
 
-	result, err := NewResultSchema(
-		ResultColumn{Name: "name", Type: schema.TextType{}},
-		ResultColumn{Name: "nickname", Type: schema.TextType{}, Nullable: true},
+	result, err := rasql.NewResultSchema(
+		rasql.ResultColumn{Name: "name", Type: schema.TextType{}},
+		rasql.ResultColumn{Name: "nickname", Type: schema.TextType{}, Nullable: true},
 	)
 	require.NoError(t, err)
-	projection, err := NewProjection([]ProjectionItem{
-		Item("name", name.Expr(), schema.TextType{}, ""),
-		NullItem("nickname", nickname.NullExpr(), schema.TextType{}, ""),
+	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
+		rasql.Item("name", name.Expr(), schema.TextType{}, ""),
+		rasql.NullItem("nickname", nickname.NullExpr(), schema.TextType{}, ""),
 	}, bindTypedColumnGapDecoder{result: result})
 	require.NoError(t, err)
 
-	return Select(u.Source(), projection).
-		Where(GreaterValue(id.Expr(), int64(0))).
-		OrderBy(AscExpr(name.Expr()))
+	return rasql.Select(u.Source(), projection).
+		Where(rasql.GreaterValue(id.Expr(), int64(0))).
+		OrderBy(rasql.AscExpr(name.Expr()))
 }
 
 func bindTypedColumnGapSeed(t *testing.T, database *sql.DB) {
@@ -916,14 +919,14 @@ func bindTypedColumnGapSeed(t *testing.T, database *sql.DB) {
 // either fail Validate outright or decode the wrong values into name and
 // nickname; getting alice's real nickname back and bob's real NULL back is
 // what a passing assertion here requires.
-func runBindTypedColumnGapAcceptance(t *testing.T, database *sql.DB, executor Executor) {
+func runBindTypedColumnGapAcceptance(t *testing.T, database *sql.DB, executor rasql.Executor) {
 	t.Helper()
 	bindTypedColumnGapSeed(t, database)
-	rows, err := All(t.Context(), executor, bindTypedColumnGapQuery(t))
+	rows, err := rasql.All(t.Context(), executor, bindTypedColumnGapQuery(t))
 	require.NoError(t, err)
 	require.Equal(t, []bindTypedColumnGapResultRow{
-		{Name: "alice", Nickname: Nullable[string]{Value: "ali", Valid: true}},
-		{Name: "bob", Nickname: Nullable[string]{}},
+		{Name: "alice", Nickname: rasql.Nullable[string]{Value: "ali", Valid: true}},
+		{Name: "bob", Nickname: rasql.Nullable[string]{}},
 	}, rows)
 }
 
@@ -932,33 +935,33 @@ func TestBindTypedColumn(t *testing.T) {
 		database, err := sql.Open("sqlite", ":memory:")
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = database.Close() })
-		db, err := New(database, dialect.SQLite())
+		db, err := rasql.New(database, dialect.SQLite())
 		require.NoError(t, err)
-		profile, err := EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
 		require.NoError(t, err)
-		executor, err := AsExecutor(db, profile)
+		executor, err := rasql.AsExecutor(db, profile)
 		require.NoError(t, err)
 		runBindTypedColumnGapAcceptance(t, database, executor)
 	})
 
 	t.Run("PostgreSQL", func(t *testing.T) {
 		database := dbtest.PostgreSQLDB(t)
-		db, err := New(database, dialect.PostgreSQL())
+		db, err := rasql.New(database, dialect.PostgreSQL())
 		require.NoError(t, err)
-		profile, err := DiscoverEngineProfile(t.Context(), db, "postgresql-17")
+		profile, err := rasql.DiscoverEngineProfile(t.Context(), db, "postgresql-17")
 		require.NoError(t, err)
-		executor, err := AsExecutor(db, profile)
+		executor, err := rasql.AsExecutor(db, profile)
 		require.NoError(t, err)
 		runBindTypedColumnGapAcceptance(t, database, executor)
 	})
 
 	t.Run("MySQL", func(t *testing.T) {
 		database := dbtest.MySQLDB(t)
-		db, err := New(database, dialect.MySQL())
+		db, err := rasql.New(database, dialect.MySQL())
 		require.NoError(t, err)
-		profile, err := DiscoverEngineProfile(t.Context(), db, "mysql-8.4")
+		profile, err := rasql.DiscoverEngineProfile(t.Context(), db, "mysql-8.4")
 		require.NoError(t, err)
-		executor, err := AsExecutor(db, profile)
+		executor, err := rasql.AsExecutor(db, profile)
 		require.NoError(t, err)
 		runBindTypedColumnGapAcceptance(t, database, executor)
 	})
@@ -975,44 +978,44 @@ type renderGapRow struct {
 	Name string
 }
 
-type renderGapDecoder struct{ result ResultSchema }
+type renderGapDecoder struct{ result rasql.ResultSchema }
 
-func (d renderGapDecoder) ResultSchema() ResultSchema { return d.result }
-func (d renderGapDecoder) Presence() []Presence       { return nil }
-func (d renderGapDecoder) DecodeRow(src ScanSource, row *renderGapRow) error {
+func (d renderGapDecoder) ResultSchema() rasql.ResultSchema { return d.result }
+func (d renderGapDecoder) Presence() []rasql.Presence       { return nil }
+func (d renderGapDecoder) DecodeRow(src rasql.ScanSource, row *renderGapRow) error {
 	return src.Scan(&row.ID, &row.Name)
 }
 
-func renderGapQuery(t *testing.T) Query[renderGapRow] {
+func renderGapQuery(t *testing.T) rasql.Query[renderGapRow] {
 	t.Helper()
 
-	widgets, err := ReadTableOf[renderGapRow](schema.TableDef{Name: "widgets", Columns: []schema.ColumnDef{
+	widgets, err := rasql.ReadTableOf[renderGapRow](schema.TableDef{Name: "widgets", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "name", Type: schema.TextType{}},
 	}})
 	require.NoError(t, err)
-	w, err := SourceOf(widgets, "")
+	w, err := rasql.SourceOf(widgets, "")
 	require.NoError(t, err)
 
-	id, err := BindColumn[renderGapRow, int64](w, "id", "")
+	id, err := rasql.BindColumn[renderGapRow, int64](w, "id", "")
 	require.NoError(t, err)
-	name, err := BindColumn[renderGapRow, string](w, "name", "")
+	name, err := rasql.BindColumn[renderGapRow, string](w, "name", "")
 	require.NoError(t, err)
 
-	result, err := NewResultSchema(
-		ResultColumn{Name: "id", Type: schema.IntegerType{}},
-		ResultColumn{Name: "name", Type: schema.TextType{}},
+	result, err := rasql.NewResultSchema(
+		rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}},
+		rasql.ResultColumn{Name: "name", Type: schema.TextType{}},
 	)
 	require.NoError(t, err)
-	projection, err := NewProjection([]ProjectionItem{
-		Item("id", id.Expr(), schema.IntegerType{}, ""),
-		Item("name", name.Expr(), schema.TextType{}, ""),
+	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
+		rasql.Item("id", id.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("name", name.Expr(), schema.TextType{}, ""),
 	}, renderGapDecoder{result: result})
 	require.NoError(t, err)
 
-	return Select(w.Source(), projection).
-		Where(GreaterValue(id.Expr(), int64(5))).
-		OrderBy(AscExpr(name.Expr()))
+	return rasql.Select(w.Source(), projection).
+		Where(rasql.GreaterValue(id.Expr(), int64(5))).
+		OrderBy(rasql.AscExpr(name.Expr()))
 }
 
 // TestRenderProducesDialectSpecificSQL builds one query and renders it for
@@ -1023,17 +1026,17 @@ func renderGapQuery(t *testing.T) Query[renderGapRow] {
 func TestRenderProducesDialectSpecificSQL(t *testing.T) {
 	q := renderGapQuery(t)
 
-	sqliteStatement, err := Render(q, dialect.SQLite())
+	sqliteStatement, err := rasql.Render(q, dialect.SQLite())
 	require.NoError(t, err)
 	require.Equal(t, `SELECT "widgets"."id" AS "id", "widgets"."name" AS "name" FROM "widgets" WHERE ("widgets"."id" > ?) ORDER BY "widgets"."name"`, sqliteStatement.SQL())
 	require.Equal(t, []any{int64(5)}, sqliteStatement.Args())
 
-	postgresStatement, err := Render(q, dialect.PostgreSQL())
+	postgresStatement, err := rasql.Render(q, dialect.PostgreSQL())
 	require.NoError(t, err)
 	require.Equal(t, `SELECT "widgets"."id" AS "id", "widgets"."name" AS "name" FROM "widgets" WHERE ("widgets"."id" > $1) ORDER BY "widgets"."name"`, postgresStatement.SQL())
 	require.Equal(t, []any{int64(5)}, postgresStatement.Args())
 
-	mysqlStatement, err := Render(q, dialect.MySQL())
+	mysqlStatement, err := rasql.Render(q, dialect.MySQL())
 	require.NoError(t, err)
 	require.Equal(t, "SELECT `widgets`.`id` AS `id`, `widgets`.`name` AS `name` FROM `widgets` WHERE (`widgets`.`id` > ?) ORDER BY `widgets`.`name`", mysqlStatement.SQL())
 	require.Equal(t, []any{int64(5)}, mysqlStatement.Args())
