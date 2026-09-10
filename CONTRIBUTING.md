@@ -30,7 +30,7 @@ Write the example first, under `examples/`, as an `Example*` function with an `/
 go test ./examples/ -update-docs
 ```
 
-An example reads its tables from `examples/store`, the package `TestGeneratedStoreIsCurrent` regenerates. Add the table to `exampleStore` in `examples/generated_store_test.go`, run `go test ./examples/ -update-docs` to write its `_gen.go` file, and bind it in the example with `users := store.Users()`. The reason is that a reader arrives holding a generated store, so an example that hand-writes the wrapper shows a shape it merely claims the generator emits, and the claim goes unchecked while the generated one is compared against the generator on every run.
+An example reads its tables from `examples/store`. Nothing in this repository currently regenerates or verifies that package against a live database; add a table by hand, keeping it consistent with what `rasql codegen generate` would emit, run `go test ./examples/ -update-docs` to refresh the doc pages that quote it, and bind it in the example with `users := store.Users()`. The reason is that a reader arrives holding a generated store, so an example that hand-writes the wrapper shows a shape it merely claims the generator emits.
 
 Give a lesson the column it needs by adding that column to `users`, rather than by adding a table next to it. The store once held `members` for a nullable column, `default_users` for a defaulted one, and `people` for two name columns, so a reader met four tables that were all the same concept and no page said what separated them. One wide `users` costs the examples a six-column list wherever they select whole rows, which is the price of a reader never having to tell `users` from `members`. Reach for a second table only when the lesson itself involves more than one, the way `orders` carries the join examples and `employees` carries the self-join.
 
@@ -40,21 +40,21 @@ Name a column in an example through an accessor method, as `users.ID()`, and giv
 
 The string form stays in three places, each of which says in the example why it is there. `examples/rasqlgen_column_fields_example_test.go` is the escape-hatch example, and exists to show what the string costs and when a caller has no choice. `examples/query_render_select_example_test.go` and `examples/query_render_write_example_test.go` work on a `query.TableRef`, which binds no Go row type and therefore has no accessors to generate. Every `rasql/dynamic` example names columns as strings, since the builder takes nothing else.
 
-New generator examples should use `rasql codegen generate`, which reads the database and writes the package in one command, and `rasql codegen generate -check`, which reports drift without writing. Settings other than the DSN belong in that project's `rasql.json`, including a Go-side row name or a static query.
+New generator examples should use `rasql codegen generate`, which reads the database and writes the package in one command, and `rasql codegen check`, which reports drift without writing. Settings other than the DSN belong in that project's `rasql.json`, including a Go-side row name or a static query.
 
-The same flag rewrites the checked-in generated files the documentation shows. Every `_gen.go` file under `examples/store`, one per table plus `schema_gen.go`, `schema_gen_test.go`, and the compiled queries, is checked by `TestGeneratedStoreIsCurrent`, which plans a `generate.Store` over the same table and query the files were generated from, reads the directory itself rather than a hardcoded file list, and requires the two to name the same generated files with the same bytes.
+The same flag rewrites the doc pages that quote the checked-in generated files. Every `_gen.go` file under `examples/store`, one per table plus `schema_gen.go`, `schema_gen_test.go`, and the compiled queries, is hand-maintained; nothing regenerates or checks it against the generator, so keep a change there consistent with what `rasql codegen generate` would emit.
 
-The six files under `sample/taskboard/internal/store` are generated too. The Taskboard module generates through `rasql codegen generate` and owns no generator program; refresh it with `./scripts/generate.sh` from `sample/taskboard`, then verify it with `./scripts/generate.sh -check`. That module runs on PostgreSQL, so both commands need a live server.
+The six files under `sample/taskboard/internal/store` are generated too. The Taskboard module generates through `rasql codegen generate` and owns no generator program; refresh it with `./scripts/generate.sh` from `sample/taskboard`, then verify it with `./scripts/rasql.sh codegen check`. Refreshing needs a live PostgreSQL server; the offline check does not.
 
 ### Generated files outside the root module
 
-`sample/taskboard` is a separate module with checked-in generated output, and nothing in the root `go test ./...` regenerates or checks it. Its own script does both, against a PostgreSQL database it may apply migrations to. Set `TASKBOARD_SCHEMA_DSN` to that database and refresh the checked-in files in the same commit as the migration that moved them:
+`sample/taskboard` is a separate module with checked-in generated output, and nothing in the root `go test ./...` regenerates or checks it. Set `TASKBOARD_DSN` to a PostgreSQL database and refresh the checked-in files in the same commit as the migration that moved them:
 
 ```sh
 cd sample/taskboard && ./scripts/generate.sh
 ```
 
-The script applies `sample/taskboard/db/migrations` with `rasql migrate apply` and then runs `rasql codegen generate` over the result, so the generated store describes whatever the checked-in migrations build. `./scripts/generate.sh -check` reports staleness instead of writing, which is the gate CI runs. The sample's `//go:generate` directive in `internal/store/repository.go` runs the same script, so `go generate ./...` from that module does the same work.
+The script applies `sample/taskboard/db/migrations` to `TASKBOARD_DSN` with `rasql migrate apply` and then runs `rasql codegen generate -dsn` over the result, so the generated store describes whatever the checked-in migrations build. `./scripts/rasql.sh codegen check` reads `rasql.sum` and recomputes it from the working tree, consulting no database, which is the gate CI runs; `./scripts/rasql.sh codegen check -dsn "$TASKBOARD_DSN"` is the same check against the live database, which CI also runs once the sample's database is migrated. The sample's `//go:generate` directive in `internal/store/repository.go` runs `generate.sh`, so `go generate ./...` from that module does the same work.
 
 Then run the sample module's own build and tests, which the root `go test ./...` never reaches. Its live tests read `TASKBOARD_TEST_DSN` and skip without it:
 

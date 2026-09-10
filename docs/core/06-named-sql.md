@@ -68,9 +68,10 @@ returned column metadata provide the runtime checks that are possible without ch
 
 ## Reproducible generation
 
-The lock file records source identity, engine profile, catalog facts, query evidence, mappings, names, and digests.
-Offline generation uses that checked evidence and refuses stale or incomplete inputs. Run `rasql codegen check` in CI and
-require a second offline generation to produce identical bytes.
+`rasql.sum`, written beside the generated Go, records one line per setting group, migration,
+file-backed query, and generated output. Run `rasql codegen check` in CI to prove the checked-in
+package still matches those recorded inputs, and `rasql codegen check -dsn` where a database is
+reachable to prove it against the database itself.
 
 ## Next
 

@@ -44,14 +44,14 @@ a statement.
 
 ## Generate a store
 
-Create a checked-in `rasql.json` with an engine, schema source, generated package, output directory, and compact emitter.
+Create a checked-in `rasql.json` naming the dialect, generated package, output directory, and compact emitter.
 Then run:
 
 ```sh
-go run github.com/lestrrat-go/rasql/cmd/rasql codegen generate
+go run github.com/lestrrat-go/rasql/cmd/rasql codegen generate -dsn "$DATABASE_URL"
 ```
 
-The command can inspect a live database or compile checked-in migration SQL offline. It writes typed tables, sources,
+The command inspects the live database named by `-dsn`. It writes typed tables, sources,
 column expressions, projections, decoders, mutation builders, graph descriptors, and static query functions. Commit the
 generated files and use `rasql codegen check` in CI to detect drift.
 
