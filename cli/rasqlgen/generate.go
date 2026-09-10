@@ -1,11 +1,13 @@
 package rasqlgen
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +18,7 @@ import (
 	"github.com/lestrrat-go/rasql/internal/catalogread"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/compilerquery"
+	"github.com/lestrrat-go/rasql/internal/genfile"
 	"github.com/lestrrat-go/rasql/internal/gensum"
 	"github.com/lestrrat-go/rasql/internal/migrationdir"
 	"github.com/lestrrat-go/rasql/internal/modroot"
@@ -440,9 +443,22 @@ func outputEntriesFromFiles(files []generate.File, outputAbs string) ([]gensum.E
 // plan to read bytes from and instead reads the files a previous generate actually wrote. A name
 // that no longer reads back is skipped, which is how a deleted or renamed generated file surfaces
 // as an "outputs" difference rather than a read error.
+//
+// It also reports every file directly in outputAbs that is not one of the recorded names but
+// carries rasqlgen's own generated-file marker on its first line: a leftover generate itself would
+// have pruned had it run, or a marker-carrying file dropped there by hand. rasql.sum already
+// records the complete set of files the last generate wrote, so that recorded set is itself the
+// ownership record no database or rebuilt plan is needed to consult -- listing the directory and
+// diffing it against rasql.sum's own names is enough. gensum.Compare already treats a name present
+// in current but absent from recorded as a difference, the same way it treats a missing or changed
+// one, so appending an orphan here is what surfaces it in the "outputs" group. A file without the
+// marker is invisible to this check: it is not rasqlgen's to report on, foreign.go beside a store
+// being the ordinary case.
 func currentOutputEntries(outputAbs string, recorded []gensum.Entry) []gensum.Entry {
+	known := make(map[string]bool, len(recorded))
 	entries := make([]gensum.Entry, 0, len(recorded))
 	for _, e := range recorded {
+		known[e.Name] = true
 		data, err := os.ReadFile(filepath.Join(outputAbs, filepath.FromSlash(e.Name)))
 		if err != nil {
 			continue
@@ -450,7 +466,58 @@ func currentOutputEntries(outputAbs string, recorded []gensum.Entry) []gensum.En
 		digest := sha256.Sum256(data)
 		entries = append(entries, gensum.Entry{Name: e.Name, Value: "sha256:" + hex.EncodeToString(digest[:])})
 	}
-	return entries
+	return append(entries, orphanGeneratedFiles(outputAbs, known)...)
+}
+
+// orphanGeneratedFiles lists outputAbs directly (never recursing, since a store's output
+// directory holds only files) and reports one gensum.Entry per file whose name is not in known
+// and whose first line is rasqlgen's own generated-file marker. A directory that cannot be read at
+// all reports no orphans rather than failing the check; a missing directory is already reported as
+// every recorded output going missing.
+func orphanGeneratedFiles(outputAbs string, known map[string]bool) []gensum.Entry {
+	dirEntries, err := os.ReadDir(outputAbs)
+	if err != nil {
+		return nil
+	}
+	var orphans []gensum.Entry
+	for _, dirEntry := range dirEntries {
+		if dirEntry.IsDir() || known[dirEntry.Name()] {
+			continue
+		}
+		path := filepath.Join(outputAbs, dirEntry.Name())
+		if !fileStartsWithGeneratedMarker(path) {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		digest := sha256.Sum256(data)
+		orphans = append(orphans, gensum.Entry{Name: dirEntry.Name(), Value: "sha256:" + hex.EncodeToString(digest[:])})
+	}
+	return orphans
+}
+
+// fileStartsWithGeneratedMarker reports whether path opens with genfile.Marker standing alone on
+// its first line, the same test genfile itself applies before overwriting or deleting a file it
+// believes it owns. A file this cannot open, for any reason, is reported as not carrying it.
+func fileStartsWithGeneratedMarker(path string) bool {
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = file.Close() }()
+	head := make([]byte, len(genfile.Marker)+1)
+	n, err := io.ReadFull(file, head)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return false
+	}
+	head = head[:n]
+	if !bytes.HasPrefix(head, []byte(genfile.Marker)) {
+		return false
+	}
+	rest := head[len(genfile.Marker):]
+	return len(rest) == 0 || rest[0] == '\n' || rest[0] == '\r'
 }
 
 // currentMigrationEntries loads every migration currently under dir (moduleRoot-relative, in
