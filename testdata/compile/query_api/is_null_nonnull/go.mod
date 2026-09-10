@@ -1,0 +1,7 @@
+module query_api_is_null_nonnull
+
+go 1.26.0
+
+require github.com/lestrrat-go/rasql v0.0.0
+
+replace github.com/lestrrat-go/rasql => ../../../..

@@ -13,6 +13,7 @@ type ResultColumn struct {
 	Name     string
 	Type     schema.ColumnType
 	Nullable bool
+	Codec    string
 }
 
 // QueryBody is a validated relational query body.
