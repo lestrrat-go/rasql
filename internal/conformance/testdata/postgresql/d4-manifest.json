@@ -8,7 +8,6 @@
   "engine": "postgresql",
   "profile": "postgresql-17",
   "observed_server_version": "17.10.0",
-  "lock_sha256": "717da880d2b0718cc6332f8fb1e5513a430a59327390ed8c7b266d44973f3b62",
   "generated_files": 9,
   "generated_bytes": 56416,
   "compile_render": {

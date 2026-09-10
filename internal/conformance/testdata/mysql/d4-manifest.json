@@ -8,7 +8,6 @@
   "engine": "mysql",
   "profile": "mysql-8.4",
   "observed_server_version": "8.4.11",
-  "lock_sha256": "ce2c03e6f22abfb1fec17b1f0821f032349dd925bad1b854adc6897f615e3cb6",
   "generated_files": 9,
   "generated_bytes": 55744,
   "compile_render": {
