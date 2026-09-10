@@ -1,6 +1,6 @@
 {
   "engine": {"dialect": "sqlite", "profile": "sqlite-3.35"},
-  "schema": {"kind": "migrations", "identity": "unresolved-query-v1", "paths": ["migrations/*.sql"]},
+  "schema": {"kind": "migrations", "identity": "unresolved-query-v1", "paths": ["migrations/*/*.up.sql"]},
   "output": "internal/store",
   "package": "store",
   "queries": [

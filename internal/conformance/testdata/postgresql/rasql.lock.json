@@ -6,34 +6,34 @@
     "identity": "d4-conformance-postgresql-live-v1",
     "files": [
       {
-        "path": "migrations/001.sql",
+        "path": "migrations/001_members/001.up.sql",
         "sha256": "cd3c9974fc6a8dcfdd88bd456cf48c2a3896f001c67ca7d7769bc36c33a89144"
       },
       {
-        "path": "migrations/002.sql",
+        "path": "migrations/002_projects/001.up.sql",
         "sha256": "97a35833511528d472d279f05a47f3121b18adae9b8be720e3fd8c47e1b04339"
       },
       {
-        "path": "migrations/003.sql",
+        "path": "migrations/003_tasks/001.up.sql",
         "sha256": "2e8072728ef927db9774e1c0c131a6a31c96745022cc0fa4832f9cc38f116673"
       },
       {
-        "path": "migrations/004.sql",
+        "path": "migrations/004_task_labels/001.up.sql",
         "sha256": "e1e5fa5ad24f648ec27a5e002a0f9d6a15871eaafa61714011cd7682b0411b0d"
       },
       {
-        "path": "migrations/005.sql",
+        "path": "migrations/005_tasks_project_open_id_index/001.up.sql",
         "sha256": "e84115b0e9a1a6b3d8b088d35a671d7746b3400f1a31fcaa96efec05381c63b0"
       },
       {
-        "path": "migrations/006.sql",
+        "path": "migrations/006_tasks_assignee_index/001.up.sql",
         "sha256": "f3770052d4175d4129d07a01784fcb73d02d5e7ade30a4ac5d5d3303b12085d9"
       }
     ]
   },
   "engine": {
     "dialect": "postgresql",
-    "version": "17.11.0",
+    "version": "17.10.0",
     "profile": "postgresql-17"
   },
   "catalog": {
@@ -1393,7 +1393,7 @@
     ]
   },
   "digests": {
-    "source": "b19b663ec9807413e5b82500fae43acc84485a899e04b5f6c5f203b41bddb229",
+    "source": "87999eb7b556ca225eb6d60eea3cd878e024b25e166cc3b51aa320d0da663ca2",
     "mappings": "2223f019a9501fd1b6f8dfc06c959c67e16eadc4bad78f87c16ee97d5e88cb02",
     "queries": "c5b40be538e268177da662cf07ef200575d5c48d88fed8d3f1b805fbcbd0f0c6",
     "generation": "d42c2be7cb736a8aa7f32fb58d9c54c4409734aba9fba943752c57fcb62b1532"
