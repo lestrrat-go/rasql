@@ -2,10 +2,11 @@ package store
 
 // BEGIN(generate)
 
-// The generated files beside this one are rebuilt from the checked-in
-// migrations by scripts/generate.sh. The directive lives here because every
-// other file in this package is generated, and a regenerating run would
-// overwrite it there.
+// The generated files beside this one are rebuilt from the database
+// TASKBOARD_DSN names, after applying db/migrations to it, by
+// scripts/generate.sh. The directive lives here because every other file in
+// this package is generated, and a regenerating run would overwrite it
+// there.
 //
 //go:generate ../../scripts/generate.sh
 // END(generate)

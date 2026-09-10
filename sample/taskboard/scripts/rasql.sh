@@ -2,7 +2,7 @@
 # Run one rasql command, and pass every argument straight through:
 #
 #   ./scripts/rasql.sh migrate status
-#   ./scripts/rasql.sh generate
+#   ./scripts/rasql.sh codegen generate -dsn "$TASKBOARD_DSN"
 #
 # The walkthrough installs the command with `go install` and calls it by name.
 # This copy of the project is checked into the rasql repository itself, two
