@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -19,9 +18,7 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/catalogread"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
-	"github.com/lestrrat-go/rasql/internal/sourcefile"
 	"github.com/lestrrat-go/rasql/migrate"
-	"github.com/lestrrat-go/rasql/sqltext"
 	_ "modernc.org/sqlite"
 )
 
@@ -173,12 +170,6 @@ func replaceKeywordDatabase(s, name string) string {
 	return s + " dbname=" + quoted
 }
 
-type defaultProfiles struct{}
-
-func (defaultProfiles) Resolve(ctx context.Context, db *sql.DB, e EngineConfig) (engineprofile.Profile, error) {
-	id := engineID(e.Dialect)
-	return engineprofile.Discover(ctx, db, id, e.Profile)
-}
 func engineID(s string) engineprofile.EngineID {
 	switch strings.ToLower(s) {
 	case "postgresql", "postgres":
@@ -202,23 +193,14 @@ func dialectFor(e engineprofile.EngineID) dialect.Dialect {
 
 type defaultMigrations struct{}
 
-// Apply applies migrations directly when it is non-empty, which is how Read always calls this
-// (migrations loaded through internal/migrationdir carry their own IDs, modes, and reverse
-// sources). Materialize's flat-file "migrations" kind has no such structure, so it still
-// synthesizes one migration per snapshot from s.
-func (defaultMigrations) Apply(ctx context.Context, db *sql.DB, p engineprofile.Profile, s []sourcefile.SourceFileSnapshot, migrations []migrate.Migration) error {
+// Apply applies migrations to db, in order, the migrations loaded through internal/migrationdir
+// and carrying their own IDs, modes, and reverse sources.
+func (defaultMigrations) Apply(ctx context.Context, db *sql.DB, p engineprofile.Profile, migrations []migrate.Migration) error {
 	r, e := migrate.New(db, dialectFor(p.Engine))
 	if e != nil {
 		return e
 	}
-	ms := migrations
-	if len(ms) == 0 {
-		ms = make([]migrate.Migration, len(s))
-		for i, x := range s {
-			ms[i] = migrate.Migration{ID: fmt.Sprintf("%06d_%s", i, strings.ReplaceAll(filepath.Base(x.Path()), ".", "_")), Statements: []migrate.Statement{{Source: x.Path(), SQL: sqltext.Text(x.Bytes())}}}
-		}
-	}
-	_, e = r.Apply(ctx, migrate.AllPending(), ms...)
+	_, e = r.Apply(ctx, migrate.AllPending(), migrations...)
 	return e
 }
 

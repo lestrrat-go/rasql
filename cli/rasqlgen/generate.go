@@ -1,26 +1,32 @@
 package rasqlgen
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/generate"
 	"github.com/lestrrat-go/rasql/internal/catalogread"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/compilerquery"
+	"github.com/lestrrat-go/rasql/internal/genfile"
 	"github.com/lestrrat-go/rasql/internal/gensum"
 	"github.com/lestrrat-go/rasql/internal/migrationdir"
 	"github.com/lestrrat-go/rasql/internal/modroot"
+	"github.com/lestrrat-go/rasql/internal/querygen"
 	"github.com/lestrrat-go/rasql/internal/schemasource"
 	"github.com/lestrrat-go/rasql/internal/sourcefile"
 	"github.com/lestrrat-go/rasql/migrate"
+	"github.com/lestrrat-go/rasql/namedsql"
 	"github.com/lestrrat-go/rasql/querydescribe"
 	"github.com/lestrrat-go/rasql/schema"
 )
@@ -29,20 +35,14 @@ import (
 // checking migrations, reading the catalog, describing every query, and publishing the result.
 const defaultGenerateTimeout = 30 * time.Second
 
-// runGenerate renders the store package. With -dsn or -scratch it reads a live database and
-// writes rasql.sum beside the generated Go; with neither, and a config still shaped as engine and
-// schema, it falls through to the offline path that regenerates from rasql.lock.json unchanged.
-// -check is accepted only for that offline path -- it predates rasql codegen check existing as
-// its own command, and internal/conformance's own tests still invoke it that way against an
-// engine-and-schema config -- and is refused together with -dsn or -scratch, where rasql codegen
-// check is the spelling.
+// runGenerate renders the store package by reading a live database, named by -dsn or built as a
+// throwaway from it with -scratch, and writes rasql.sum beside the generated Go.
 func (c command) runGenerate(args []string) error {
 	flags := c.newFlagSet(c.flagSetPrefix + "generate")
 	configPath := flags.String("config", "", "settings file")
 	dsn := flags.String("dsn", "", "connection string; required unless -scratch is set for SQLite")
 	scratch := flags.Bool("scratch", false, "build a throwaway database from -dsn, apply migrations, generate, and drop it")
 	timeout := flags.Duration("timeout", defaultGenerateTimeout, "generation timeout")
-	check := flags.Bool("check", false, "offline path only: report whether generated files are current instead of writing them")
 	if err := parseCommandFlags(flags, args); err != nil {
 		return err
 	}
@@ -50,19 +50,13 @@ func (c command) runGenerate(args []string) error {
 	if err != nil {
 		return err
 	}
-	if *dsn != "" || *scratch {
-		if *check {
-			return errors.New("generate: -check is not valid with -dsn or -scratch; use check instead")
-		}
-		if err := c.runGenerateFromDatabase(*configPath, settings, *dsn, *scratch, *timeout); err != nil {
-			return fmt.Errorf("generate: %w", err)
-		}
-		return nil
+	if *dsn == "" && !*scratch {
+		return errors.New("generate: -dsn or -scratch is required")
 	}
-	if settings.Engine == nil || settings.Schema == nil {
-		return errors.New("generate: config requires engine and schema, or pass -dsn or -scratch to generate from a database")
+	if err := c.runGenerateFromDatabase(*configPath, settings, *dsn, *scratch, *timeout); err != nil {
+		return fmt.Errorf("generate: %w", err)
 	}
-	return c.runOfflineGenerate(settings, *configPath, *check)
+	return nil
 }
 
 // runGenerateFromDatabase is the new path: it reads req.DSN (or a scratch database built from it),
@@ -449,9 +443,22 @@ func outputEntriesFromFiles(files []generate.File, outputAbs string) ([]gensum.E
 // plan to read bytes from and instead reads the files a previous generate actually wrote. A name
 // that no longer reads back is skipped, which is how a deleted or renamed generated file surfaces
 // as an "outputs" difference rather than a read error.
+//
+// It also reports every file directly in outputAbs that is not one of the recorded names but
+// carries rasqlgen's own generated-file marker on its first line: a leftover generate itself would
+// have pruned had it run, or a marker-carrying file dropped there by hand. rasql.sum already
+// records the complete set of files the last generate wrote, so that recorded set is itself the
+// ownership record no database or rebuilt plan is needed to consult -- listing the directory and
+// diffing it against rasql.sum's own names is enough. gensum.Compare already treats a name present
+// in current but absent from recorded as a difference, the same way it treats a missing or changed
+// one, so appending an orphan here is what surfaces it in the "outputs" group. A file without the
+// marker is invisible to this check: it is not rasqlgen's to report on, foreign.go beside a store
+// being the ordinary case.
 func currentOutputEntries(outputAbs string, recorded []gensum.Entry) []gensum.Entry {
+	known := make(map[string]bool, len(recorded))
 	entries := make([]gensum.Entry, 0, len(recorded))
 	for _, e := range recorded {
+		known[e.Name] = true
 		data, err := os.ReadFile(filepath.Join(outputAbs, filepath.FromSlash(e.Name)))
 		if err != nil {
 			continue
@@ -459,7 +466,58 @@ func currentOutputEntries(outputAbs string, recorded []gensum.Entry) []gensum.En
 		digest := sha256.Sum256(data)
 		entries = append(entries, gensum.Entry{Name: e.Name, Value: "sha256:" + hex.EncodeToString(digest[:])})
 	}
-	return entries
+	return append(entries, orphanGeneratedFiles(outputAbs, known)...)
+}
+
+// orphanGeneratedFiles lists outputAbs directly (never recursing, since a store's output
+// directory holds only files) and reports one gensum.Entry per file whose name is not in known
+// and whose first line is rasqlgen's own generated-file marker. A directory that cannot be read at
+// all reports no orphans rather than failing the check; a missing directory is already reported as
+// every recorded output going missing.
+func orphanGeneratedFiles(outputAbs string, known map[string]bool) []gensum.Entry {
+	dirEntries, err := os.ReadDir(outputAbs)
+	if err != nil {
+		return nil
+	}
+	var orphans []gensum.Entry
+	for _, dirEntry := range dirEntries {
+		if dirEntry.IsDir() || known[dirEntry.Name()] {
+			continue
+		}
+		path := filepath.Join(outputAbs, dirEntry.Name())
+		if !fileStartsWithGeneratedMarker(path) {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		digest := sha256.Sum256(data)
+		orphans = append(orphans, gensum.Entry{Name: dirEntry.Name(), Value: "sha256:" + hex.EncodeToString(digest[:])})
+	}
+	return orphans
+}
+
+// fileStartsWithGeneratedMarker reports whether path opens with genfile.Marker standing alone on
+// its first line, the same test genfile itself applies before overwriting or deleting a file it
+// believes it owns. A file this cannot open, for any reason, is reported as not carrying it.
+func fileStartsWithGeneratedMarker(path string) bool {
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = file.Close() }()
+	head := make([]byte, len(genfile.Marker)+1)
+	n, err := io.ReadFull(file, head)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return false
+	}
+	head = head[:n]
+	if !bytes.HasPrefix(head, []byte(genfile.Marker)) {
+		return false
+	}
+	rest := head[len(genfile.Marker):]
+	return len(rest) == 0 || rest[0] == '\n' || rest[0] == '\r'
 }
 
 // currentMigrationEntries loads every migration currently under dir (moduleRoot-relative, in
@@ -490,4 +548,102 @@ func formatGensumDiffs(diffs []gensum.Difference) string {
 		parts = append(parts, fmt.Sprintf("%s: %s", d.Group, d.Path))
 	}
 	return strings.Join(parts, "; ")
+}
+
+// moduleRootForConfig is the directory a config-relative path resolves against: the -config
+// file's own directory when one is given, or the working directory otherwise.
+func moduleRootForConfig(path string) (string, error) {
+	if path != "" {
+		return filepath.Abs(filepath.Dir(path))
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Abs(wd)
+}
+
+func hasErrors(diagnostics []compilerir.Diagnostic) bool {
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Level == compilerir.DiagnosticError {
+			return true
+		}
+	}
+	return false
+}
+
+func queryFields(query compilerir.GoQuery) []compilerir.GoField {
+	if query.Result == nil {
+		return nil
+	}
+	return append([]compilerir.GoField(nil), query.Result.Fields...)
+}
+
+func typedValues(semantic []compilerir.SemanticValue, goFields []compilerir.GoField) ([]querygen.TypedValue, error) {
+	if len(semantic) != len(goFields) {
+		return nil, fmt.Errorf("typed query value count mismatch: semantic=%d go=%d", len(semantic), len(goFields))
+	}
+	values := make([]querygen.TypedValue, len(semantic))
+	for i := range semantic {
+		if semantic[i].Name != goFields[i].Name || semantic[i].Nullable != goFields[i].Nullable {
+			return nil, fmt.Errorf("typed query value mismatch at %d: semantic %q go %q", i, semantic[i].Name, goFields[i].Name)
+		}
+		values[i] = querygen.TypedValue{Semantic: semantic[i], Go: goFields[i]}
+	}
+	return values, nil
+}
+
+func queryConfigFor(cfg config, id compilerir.QueryID) configQuery {
+	for _, query := range cfg.Queries {
+		if query.ID == id {
+			return query
+		}
+	}
+	return configQuery{}
+}
+
+func schemaObjectName(namespace, name string) schema.ObjectName {
+	return schema.ObjectName{Schema: namespace, Name: name}
+}
+
+func exportGoName(name string) string {
+	if name == "" {
+		return name
+	}
+	return strings.ToUpper(name[:1]) + name[1:]
+}
+
+// queryNameRecord reports the generated Go names configured for one query, or the zero value when
+// none is configured.
+func queryNameRecord(config compilerir.GoConfig, id compilerir.QueryID) compilerir.QueryGoName {
+	for _, query := range config.Queries {
+		if query.ID == id {
+			return query
+		}
+	}
+	return compilerir.QueryGoName{}
+}
+
+// lowerTypedSQL parses and compiles a query's template SQL against the dialect it targets,
+// reporting the rendered SQL and its positional argument names.
+func lowerTypedSQL(source, name, engine string) (string, []string, error) {
+	template, err := namedsql.Parse(name, source)
+	if err != nil {
+		return "", nil, err
+	}
+	var sqlDialect dialect.Dialect
+	switch engine {
+	case "postgresql", "postgres":
+		sqlDialect = dialect.PostgreSQL()
+	case "mysql":
+		sqlDialect = dialect.MySQL()
+	default:
+		sqlDialect = dialect.SQLite()
+	}
+	compiled, err := template.Compile(sqlDialect)
+	if err != nil {
+		return "", nil, err
+	}
+	definition := compiled.QueryDef()
+	return definition.SQL, definition.Parameters, nil
 }

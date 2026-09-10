@@ -1,7 +1,6 @@
 {
   "format": "rasql.d4.engine-manifest.v1",
   "portable_signature_digest": "84323fa2347731b0388181443d158e8f333649177acd057a2c828e42d6f24fbb",
-  "migration_digest": "2aae4173abff2d04f4c1df909fcfb34d2174a399a28af8400f5f887fb34ed6d1",
   "seed_digest": "fefa40b6a93ad8ad121314b89400da4fb316f572f70c27a3afb5594675c9cef1",
   "typed_query_digest": "c5b40be538e268177da662cf07ef200575d5c48d88fed8d3f1b805fbcbd0f0c6",
   "rendered_sql_digest": "c5b40be538e268177da662cf07ef200575d5c48d88fed8d3f1b805fbcbd0f0c6",

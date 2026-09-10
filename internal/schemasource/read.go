@@ -38,8 +38,8 @@ type ReadRequest struct {
 	Scope         catalogread.Scope
 }
 
-// ReadResult is Materialize's Result without any lock-record concept: nothing here is compared
-// against or folded into compilerlock.File.
+// ReadResult carries no lock-record concept: nothing here is compared against or folded into a
+// checked-in file.
 type ReadResult struct {
 	Catalog    compilerir.PhysicalCatalog
 	Profile    engineprofile.Profile
@@ -62,12 +62,11 @@ func (r ReadResult) Clone() ReadResult {
 	return x
 }
 
-// Read opens req.DSN (or, with Scratch, creates a throwaway database through the same
-// DisposableFactory Materialize uses), discovers the engine profile from the server alone
-// (ProfileDiscoverer, no config override), applies or checks any configured migration
-// directory, reads the catalog under req.Scope, and runs the query analyzer against the same
-// connection. Unlike Materialize, ReadResult carries no lock record: there is nothing here to
-// compare against a checked-in file.
+// Read opens req.DSN (or, with Scratch, creates a throwaway database through DisposableFactory),
+// discovers the engine profile from the server alone (ProfileDiscoverer, no config override),
+// applies or checks any configured migration directory, reads the catalog under req.Scope, and
+// runs the query analyzer against the same connection. ReadResult carries no lock record: there
+// is nothing here to compare against a checked-in file.
 //
 // When MigrationsDir is set and Scratch is false, Read first asks the catalog whether the
 // migration history table exists, and refuses - naming "rasql migrate apply -dir <dir>" as the
@@ -146,7 +145,7 @@ func Read(ctx context.Context, req ReadRequest, deps Dependencies) (ReadResult, 
 				return e
 			}
 			if req.Scratch {
-				if e := deps.Migrations.Apply(ctx, db, profile, nil, migrations); e != nil {
+				if e := deps.Migrations.Apply(ctx, db, profile, migrations); e != nil {
 					return e
 				}
 			} else {

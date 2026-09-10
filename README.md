@@ -19,7 +19,7 @@ Most applications start with the ORM layer. [Getting started](docs/01-getting-st
   [`rasql migrate revert`](docs/core/07-migrations.md#revert-a-migration), and generate a PostgreSQL, MySQL, or SQLite
   migration from desired-schema sources when that helps. See [Migrations](docs/core/07-migrations.md).
 * **Query builder.** The `query` package builds a dialect-neutral statement and validates it, and `render` turns that statement into SQL text with its arguments in placeholder order. Both packages import only `schema` and `dialect`, so this layer runs with no database handle and no Go row type. See [The SQL builder](docs/core/02-sql-builder.md).
-* **ORM.** Run `rasql codegen generate` against a schema source to write typed rows, sources, projections, mutation builders,
+* **ORM.** Run `rasql codegen generate` against a database to write typed rows, sources, projections, mutation builders,
   graph descriptors, and static queries as checked-in Go. Build reads with `rasql.Select`, writes with mutation plans, and consume
   results with `Rows`, `All`, `One`, or `Maybe`. See [`rasql codegen`](docs/orm/01-codegen.md),
   [Typed queries](docs/orm/03-typed-queries.md), and [Writing rows](docs/orm/04-writing.md).

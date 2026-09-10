@@ -88,7 +88,7 @@ func TestGeneratedFootprintBuild(t *testing.T) {
 			removeGeneratedOutput(t, copyRoot)
 			require.NoError(t, writeBuildModule(t, copyRoot, repoRoot))
 			config := filepath.Join(copyRoot, "rasql.json")
-			generateArgs := []string{"generate", "-config", config, "-scratch"}
+			generateArgs := []string{"codegen", "generate", "-config", config, "-scratch"}
 			if dsn != "" {
 				generateArgs = append(generateArgs, "-dsn", dsn)
 			}
@@ -103,7 +103,7 @@ func TestGeneratedFootprintBuild(t *testing.T) {
 			assertGeneratedFiles(t, copyRoot, original)
 			require.Equal(t, manifest.GeneratedFiles, files)
 			require.Equal(t, manifest.GeneratedBytes, bytes)
-			checkArgs := []string{"check", "-config", config, "-scratch"}
+			checkArgs := []string{"codegen", "check", "-config", config, "-scratch"}
 			if dsn != "" {
 				checkArgs = append(checkArgs, "-dsn", dsn)
 			}
@@ -292,7 +292,7 @@ func generatedFootprint(t *testing.T, root string, expected map[string]struct{})
 func offlineBuildEnv(cache string) []string {
 	blocked := map[string]struct{}{
 		"RASQL_TEST_POSTGRES_DSN": {}, "RASQL_TEST_MYSQL_DSN": {},
-		"TASKBOARD_SCHEMA_DSN": {}, "TASKBOARD_DSN": {}, "TASKBOARD_TEST_DSN": {},
+		"TASKBOARD_DSN": {}, "TASKBOARD_TEST_DSN": {},
 		"GOPROXY": {}, "GOSUMDB": {}, "GOTOOLCHAIN": {}, "GOFLAGS": {}, "GOCACHE": {}, "GOWORK": {},
 	}
 	env := make([]string, 0, len(os.Environ())+5)
