@@ -1,0 +1,7 @@
+{
+  "engine": "postgresql",
+  "profile": "postgresql-17",
+  "dsn_env": "RASQL_TEST_POSTGRES_DSN",
+  "driver": "github.com/jackc/pgx/v5/stdlib",
+  "transaction_mode": "explicit-transaction-v1"
+}

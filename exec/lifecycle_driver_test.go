@@ -11,14 +11,22 @@ import (
 )
 
 type lifecycleDriverConfig struct {
-	queryDelay  time.Duration
-	nextDelay   time.Duration
-	columnError error
+	queryDelay   time.Duration
+	nextDelay    time.Duration
+	queryStarted chan<- struct{}
+	queryRelease <-chan struct{}
+	nextStarted  chan<- struct{}
+	nextRelease  <-chan struct{}
+	columnError  error
 }
 
 type lifecycleDriverRecorder struct {
-	mu      sync.Mutex
-	markers []string
+	mu            sync.Mutex
+	markers       []string
+	queryStarted  time.Time
+	queryFinished time.Time
+	nextStarted   time.Time
+	nextFinished  time.Time
 }
 
 type lifecycleConnector struct {
@@ -48,8 +56,20 @@ func (lifecycleConn) Close() error              { return nil }
 func (lifecycleConn) Begin() (driver.Tx, error) { return nil, errors.New("begin is not supported") }
 
 func (c lifecycleConn) QueryContext(ctx context.Context, _ string, _ []driver.NamedValue) (driver.Rows, error) {
+	if c.recorder != nil {
+		c.recorder.markQueryStarted()
+	}
+	if c.config.queryStarted != nil {
+		c.config.queryStarted <- struct{}{}
+	}
 	if c.config.queryDelay > 0 {
 		time.Sleep(c.config.queryDelay)
+	}
+	if c.config.queryRelease != nil {
+		<-c.config.queryRelease
+	}
+	if c.recorder != nil {
+		c.recorder.markQueryFinished()
 	}
 	if c.recorder != nil {
 		if marker, ok := ctx.Value(lifecycleMarkerKey{}).(string); ok {
@@ -58,7 +78,7 @@ func (c lifecycleConn) QueryContext(ctx context.Context, _ string, _ []driver.Na
 			c.recorder.mu.Unlock()
 		}
 	}
-	return &lifecycleRows{config: c.config}, nil
+	return &lifecycleRows{config: c.config, recorder: c.recorder}, nil
 }
 
 func (c lifecycleConn) ExecContext(context.Context, string, []driver.NamedValue) (driver.Result, error) {
@@ -66,8 +86,9 @@ func (c lifecycleConn) ExecContext(context.Context, string, []driver.NamedValue)
 }
 
 type lifecycleRows struct {
-	config lifecycleDriverConfig
-	index  int
+	config   lifecycleDriverConfig
+	recorder *lifecycleDriverRecorder
+	index    int
 }
 
 func (r *lifecycleRows) Columns() []string {
@@ -80,8 +101,20 @@ func (r *lifecycleRows) Columns() []string {
 func (r *lifecycleRows) Close() error { return nil }
 
 func (r *lifecycleRows) Next(destinations []driver.Value) error {
+	if r.recorder != nil {
+		r.recorder.markNextStarted()
+	}
+	if r.config.nextStarted != nil {
+		r.config.nextStarted <- struct{}{}
+	}
 	if r.config.nextDelay > 0 {
 		time.Sleep(r.config.nextDelay)
+	}
+	if r.config.nextRelease != nil {
+		<-r.config.nextRelease
+	}
+	if r.recorder != nil {
+		r.recorder.markNextFinished()
 	}
 	if r.index > 0 {
 		return io.EOF
@@ -89,6 +122,30 @@ func (r *lifecycleRows) Next(destinations []driver.Value) error {
 	r.index++
 	destinations[0] = int64(1)
 	return nil
+}
+
+func (r *lifecycleDriverRecorder) markQueryStarted() {
+	r.mu.Lock()
+	r.queryStarted = time.Now()
+	r.mu.Unlock()
+}
+
+func (r *lifecycleDriverRecorder) markQueryFinished() {
+	r.mu.Lock()
+	r.queryFinished = time.Now()
+	r.mu.Unlock()
+}
+
+func (r *lifecycleDriverRecorder) markNextStarted() {
+	r.mu.Lock()
+	r.nextStarted = time.Now()
+	r.mu.Unlock()
+}
+
+func (r *lifecycleDriverRecorder) markNextFinished() {
+	r.mu.Lock()
+	r.nextFinished = time.Now()
+	r.mu.Unlock()
 }
 
 func openLifecycleDatabase(t interface {

@@ -280,8 +280,10 @@ func ValidateSemantic(m SemanticModel) error {
 	ids := map[ObjectID]struct{}{}
 	names := map[QualifiedName]struct{}{}
 	knownIDs := map[ObjectID]struct{}{}
+	objects := make(map[ObjectID]SemanticObject, len(m.Objects))
 	for _, o := range m.Objects {
 		knownIDs[o.ID] = struct{}{}
+		objects[o.ID] = o
 	}
 	for i, o := range m.Objects {
 		if o.ID == "" {
@@ -309,12 +311,71 @@ func ValidateSemantic(m SemanticModel) error {
 				return invalid(fmt.Sprintf("objects[%d].columns[%d].certainty", i, j), "unknown certainty")
 			}
 		}
+		columns := semanticColumnNames(o.Columns)
+		relationNames := make(map[string]struct{}, len(o.Relations))
 		for j, relation := range o.Relations {
-			if relation.Name == "" || relation.Target == "" || len(relation.From) == 0 || len(relation.To) == 0 || len(relation.From) != len(relation.To) {
-				return invalid(fmt.Sprintf("objects[%d].relations[%d]", i, j), "incomplete relation")
+			path := fmt.Sprintf("objects[%d].relations[%d]", i, j)
+			if relation.Name == "" || relation.Target == "" || len(relation.From) == 0 || len(relation.To) == 0 {
+				return invalid(path, "incomplete relation")
 			}
+			if _, ok := relationNames[RelationGoName(relation.Name)]; ok {
+				return invalid(path+".name", "duplicate relation name")
+			}
+			relationNames[RelationGoName(relation.Name)] = struct{}{}
 			if _, ok := knownIDs[relation.Target]; !ok {
-				return invalid(fmt.Sprintf("objects[%d].relations[%d].target", i, j), "unknown target")
+				return invalid(path+".target", "unknown target")
+			}
+			if err := validateRelationColumns(path+".from", relation.From, columns); err != nil {
+				return err
+			}
+			targetColumns := semanticColumnNames(objects[relation.Target].Columns)
+			if err := validateRelationColumns(path+".to", relation.To, targetColumns); err != nil {
+				return err
+			}
+			switch relation.Kind {
+			case "belongs_to", "has_one", "has_many":
+				if relation.Through != nil || len(relation.From) != len(relation.To) {
+					return invalid(path, "invalid belongs-to metadata")
+				}
+			case "many_through":
+				if !validGeneratedIdentifier(relation.Name) {
+					return invalid(path+".name", "must be a valid Go identifier")
+				}
+				if relation.Nullable || relation.Through == nil || relation.Through.Object == "" {
+					return invalid(path, "invalid many-through metadata")
+				}
+				through, ok := objects[relation.Through.Object]
+				if !ok {
+					return invalid(path+".through.object", "unknown through object")
+				}
+				throughColumns := semanticColumnNames(through.Columns)
+				if len(relation.From) != len(relation.Through.SourceFrom) || len(relation.From) != len(relation.Through.SourceTo) || len(relation.To) != len(relation.Through.TargetFrom) || len(relation.To) != len(relation.Through.TargetTo) {
+					return invalid(path, "invalid many-through path widths")
+				}
+				for k := range relation.From {
+					if relation.From[k] != relation.Through.SourceTo[k] {
+						return invalid(path+".from", "must equal through source_to")
+					}
+				}
+				for k := range relation.To {
+					if relation.To[k] != relation.Through.TargetTo[k] {
+						return invalid(path+".to", "must equal through target_to")
+					}
+				}
+				if err := validateRelationColumns(path+".through.source_from", relation.Through.SourceFrom, throughColumns); err != nil {
+					return err
+				}
+				if err := validateRelationColumns(path+".through.source_to", relation.Through.SourceTo, columns); err != nil {
+					return err
+				}
+				if err := validateRelationColumns(path+".through.target_from", relation.Through.TargetFrom, throughColumns); err != nil {
+					return err
+				}
+				if err := validateRelationColumns(path+".through.target_to", relation.Through.TargetTo, targetColumns); err != nil {
+					return err
+				}
+			default:
+				return invalid(path+".kind", "unknown relation kind")
 			}
 		}
 	}
@@ -333,12 +394,10 @@ func ValidateSemantic(m SemanticModel) error {
 			return invalid(fmt.Sprintf("queries[%d].id", i), "duplicate query ID")
 		}
 		queryIDs[q.ID] = struct{}{}
-		for j, value := range append(append([]SemanticValue{}, q.Parameters...), q.Results...) {
-			if value.Name == "" || value.Scalar == "" {
-				return invalid(fmt.Sprintf("queries[%d].values[%d]", i, j), "name and scalar are required")
-			}
-			if !validCertainty(value.TypeCertainty) || !validCertainty(value.NullabilityCertainty) {
-				return invalid(fmt.Sprintf("queries[%d].values[%d]", i, j), "unknown certainty")
+		values := append(append([]SemanticValue{}, q.Parameters...), q.Results...)
+		for j, value := range values {
+			if err := validateSemanticValue(value, fmt.Sprintf("queries[%d].values[%d]", i, j)); err != nil {
+				return err
 			}
 		}
 	}
@@ -346,6 +405,68 @@ func ValidateSemantic(m SemanticModel) error {
 		if diagnostic.Level != DiagnosticError && diagnostic.Level != DiagnosticWarning {
 			return invalid(fmt.Sprintf("diagnostics[%d].level", i), "unknown diagnostic level")
 		}
+	}
+	return nil
+}
+
+func validateSemanticValue(value SemanticValue, path string) error {
+	if value.Name == "" || value.Scalar == "" {
+		return invalid(path, "name and scalar are required")
+	}
+	if !validCertainty(value.TypeCertainty) || !validCertainty(value.NullabilityCertainty) {
+		return invalid(path, "unknown certainty")
+	}
+	if value.Integer != nil {
+		if value.LogicalKind != "integer" {
+			return invalid(path+".integer", "facts do not match logical kind")
+		}
+		if value.Integer.DisplayWidth.Set && value.Integer.DisplayWidth.Value < 0 {
+			return invalid(path+".integer.display_width", "must not be negative")
+		}
+	}
+	if value.Native != nil {
+		if err := validateNative(value.Native, path+".native"); err != nil {
+			return err
+		}
+	}
+	if value.TypeCertainty == CertaintyKnown && value.Scalar == "" && value.LogicalKind == "" && value.Native == nil {
+		return invalid(path+".type_certainty", "known type requires logical kind or native descriptor")
+	}
+	return nil
+}
+
+func semanticColumnNames(columns []SemanticColumn) map[string]struct{} {
+	result := make(map[string]struct{}, len(columns))
+	for _, column := range columns {
+		result[column.Name] = struct{}{}
+	}
+	return result
+}
+
+func goColumnNames(columns []GoColumn) map[string]struct{} {
+	result := make(map[string]struct{}, len(columns))
+	for _, column := range columns {
+		result[column.Name] = struct{}{}
+	}
+	return result
+}
+
+func validateRelationColumns(path string, names []string, columns map[string]struct{}) error {
+	if len(names) == 0 {
+		return invalid(path, "path must not be empty")
+	}
+	seen := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		if name == "" {
+			return invalid(path, "path contains an empty column")
+		}
+		if _, ok := columns[name]; !ok {
+			return invalid(path, "references unknown column %q", name)
+		}
+		if _, ok := seen[name]; ok {
+			return invalid(path, "path repeats column %q", name)
+		}
+		seen[name] = struct{}{}
 	}
 	return nil
 }
@@ -378,8 +499,10 @@ func ValidateGo(m GoModel) error {
 	}
 	objects := map[ObjectID]struct{}{}
 	knownObjects := map[ObjectID]struct{}{}
+	goObjects := make(map[ObjectID]GoObject, len(m.Objects))
 	for _, object := range m.Objects {
 		knownObjects[object.ID] = struct{}{}
+		goObjects[object.ID] = object
 	}
 	for i, f := range m.Files {
 		if f.Path == "" || f.Path[0] == '/' || path.Clean(f.Path) != f.Path || strings.HasPrefix(f.Path, "../") || f.Path == ".." {
@@ -427,12 +550,85 @@ func ValidateGo(m GoModel) error {
 				return invalid(fmt.Sprintf("objects[%d].columns[%d].go_type", i, j), "%v", err)
 			}
 		}
-		for j, relation := range object.Relations {
-			if relation.Name == "" || relation.Target == "" {
-				return invalid(fmt.Sprintf("objects[%d].relations[%d]", i, j), "invalid relation")
+		states := make(map[string]struct{ insert, patch string }, len(object.Columns))
+		for _, column := range object.Columns {
+			states[column.Name] = struct{ insert, patch string }{insert: column.InsertState, patch: column.PatchState}
+		}
+		for _, field := range object.Create.Fields {
+			if state, ok := states[field.Name]; ok && (state.insert == "generated" || state.insert == "forbidden") {
+				return invalid(fmt.Sprintf("objects[%d].create.%s", i, field.Name), "generated or forbidden column is caller-writable")
 			}
+		}
+		for _, field := range object.Patch.Fields {
+			if state, ok := states[field.Name]; ok && state.patch == "forbidden" {
+				return invalid(fmt.Sprintf("objects[%d].patch.%s", i, field.Name), "forbidden column is caller-writable")
+			}
+		}
+		columns := goColumnNames(object.Columns)
+		relationNames := make(map[string]struct{}, len(object.Relations))
+		for j, relation := range object.Relations {
+			path := fmt.Sprintf("objects[%d].relations[%d]", i, j)
+			if relation.Name == "" || relation.Target == "" {
+				return invalid(path, "invalid relation")
+			}
+			if _, ok := relationNames[RelationGoName(relation.Name)]; ok {
+				return invalid(path+".name", "duplicate relation name")
+			}
+			relationNames[RelationGoName(relation.Name)] = struct{}{}
 			if _, ok := knownObjects[relation.Target]; !ok {
-				return invalid(fmt.Sprintf("objects[%d].relations[%d].target", i, j), "unknown target")
+				return invalid(path+".target", "unknown target")
+			}
+			if err := validateRelationColumns(path+".from", relation.From, columns); err != nil {
+				return err
+			}
+			targetColumns := goColumnNames(goObjects[relation.Target].Columns)
+			if err := validateRelationColumns(path+".to", relation.To, targetColumns); err != nil {
+				return err
+			}
+			switch relation.Kind {
+			case "belongs_to", "has_one", "has_many":
+				if relation.Through != nil || len(relation.From) != len(relation.To) {
+					return invalid(path, "invalid belongs-to metadata")
+				}
+			case "many_through":
+				if !validGeneratedIdentifier(relation.Name) {
+					return invalid(path+".name", "must be a valid Go identifier")
+				}
+				if relation.Nullable || relation.Through == nil || relation.Through.Object == "" {
+					return invalid(path, "invalid many-through metadata")
+				}
+				through, ok := goObjects[relation.Through.Object]
+				if !ok {
+					return invalid(path+".through.object", "unknown through object")
+				}
+				throughColumns := goColumnNames(through.Columns)
+				if len(relation.From) != len(relation.Through.SourceFrom) || len(relation.From) != len(relation.Through.SourceTo) || len(relation.To) != len(relation.Through.TargetFrom) || len(relation.To) != len(relation.Through.TargetTo) {
+					return invalid(path, "invalid many-through path widths")
+				}
+				for k := range relation.From {
+					if relation.From[k] != relation.Through.SourceTo[k] {
+						return invalid(path+".from", "must equal through source_to")
+					}
+				}
+				for k := range relation.To {
+					if relation.To[k] != relation.Through.TargetTo[k] {
+						return invalid(path+".to", "must equal through target_to")
+					}
+				}
+				if err := validateRelationColumns(path+".through.source_from", relation.Through.SourceFrom, throughColumns); err != nil {
+					return err
+				}
+				if err := validateRelationColumns(path+".through.source_to", relation.Through.SourceTo, columns); err != nil {
+					return err
+				}
+				if err := validateRelationColumns(path+".through.target_from", relation.Through.TargetFrom, throughColumns); err != nil {
+					return err
+				}
+				if err := validateRelationColumns(path+".through.target_to", relation.Through.TargetTo, targetColumns); err != nil {
+					return err
+				}
+			default:
+				return invalid(path+".kind", "unknown relation kind")
 			}
 		}
 	}
@@ -470,11 +666,48 @@ func ValidateGo(m GoModel) error {
 			}
 		}
 	}
+	if err := validateGoExpressions(goModelExpressions(m), m.Imports, m.Package); err != nil {
+		return invalid("types", "%v", err)
+	}
 	return nil
+}
+
+func goModelExpressions(m GoModel) []string {
+	var expressions []string
+	for _, object := range m.Objects {
+		for _, column := range object.Columns {
+			expressions = append(expressions, column.GoType)
+		}
+		for _, field := range object.Row.Fields {
+			expressions = append(expressions, field.Type)
+		}
+		for _, shape := range []*GoShape{object.Create, object.Patch} {
+			if shape == nil {
+				continue
+			}
+			for _, field := range shape.Fields {
+				expressions = append(expressions, field.Type)
+			}
+		}
+	}
+	for _, query := range m.Queries {
+		for _, field := range query.Parameters {
+			expressions = append(expressions, field.Type)
+		}
+		if query.Result != nil {
+			for _, field := range query.Result.Fields {
+				expressions = append(expressions, field.Type)
+			}
+		}
+	}
+	return expressions
 }
 func validateGoField(field GoField, imports map[string]struct{}) error {
 	if field.Name == "" || !token.IsIdentifier(field.Name) || field.Type == "" {
 		return fmt.Errorf("invalid field")
+	}
+	if !field.Nullable && strings.HasPrefix(field.Type, "rasql.Nullable[") {
+		return fmt.Errorf("non-null field cannot use nullable type")
 	}
 	return parseGoType(field.Type, imports)
 }
@@ -535,6 +768,103 @@ func parseGoType(s string, imports map[string]struct{}) error {
 		return err
 	}
 	return nil
+}
+
+func validateGoExpressions(expressions []string, imports []GoImport, packageName string) error {
+	if packageName == "" || !token.IsIdentifier(packageName) || packageName == "_" {
+		return fmt.Errorf("invalid package name %q", packageName)
+	}
+	importNames := make(map[string]struct{}, len(imports))
+	paths := make(map[string]struct{}, len(imports))
+	for i, imp := range imports {
+		if imp.Path == "" {
+			return fmt.Errorf("imports[%d]: import path must not be empty", i)
+		}
+		if _, ok := paths[imp.Path]; ok {
+			return fmt.Errorf("imports[%d]: duplicate import path %q", i, imp.Path)
+		}
+		paths[imp.Path] = struct{}{}
+		alias := imp.Alias
+		if alias == "" {
+			alias = path.Base(imp.Path)
+		}
+		if !token.IsIdentifier(alias) || alias == "_" || alias == "." {
+			return fmt.Errorf("imports[%d]: invalid import alias %q", i, alias)
+		}
+		if _, ok := importNames[alias]; ok {
+			return fmt.Errorf("imports[%d]: duplicate effective import name %q", i, alias)
+		}
+		importNames[alias] = struct{}{}
+	}
+	used := make(map[string]struct{}, len(importNames))
+	for _, expression := range expressions {
+		expr, err := parser.ParseExpr(expression)
+		if err != nil {
+			return fmt.Errorf("invalid Go type %q", expression)
+		}
+		if err := validateGoTypeAST(expr, importNames, used); err != nil {
+			return err
+		}
+	}
+	for name := range importNames {
+		if _, ok := used[name]; !ok {
+			return fmt.Errorf("unused import %q", name)
+		}
+	}
+	return nil
+}
+
+func validateGoTypeAST(expr ast.Expr, imports, used map[string]struct{}) error {
+	var check func(ast.Expr) error
+	check = func(node ast.Expr) error {
+		switch n := node.(type) {
+		case *ast.Ident:
+			return nil
+		case *ast.SelectorExpr:
+			x, ok := n.X.(*ast.Ident)
+			if !ok {
+				return fmt.Errorf("invalid selector")
+			}
+			if _, ok := imports[x.Name]; !ok {
+				return fmt.Errorf("unresolved import %q", x.Name)
+			}
+			used[x.Name] = struct{}{}
+		case *ast.ArrayType:
+			if n.Len != nil {
+				if _, ok := n.Len.(*ast.BasicLit); !ok {
+					return fmt.Errorf("invalid array length")
+				}
+			}
+			return check(n.Elt)
+		case *ast.StarExpr:
+			return check(n.X)
+		case *ast.MapType:
+			if err := check(n.Key); err != nil {
+				return err
+			}
+			return check(n.Value)
+		case *ast.ParenExpr:
+			return check(n.X)
+		case *ast.IndexExpr:
+			if err := check(n.X); err != nil {
+				return err
+			}
+			return check(n.Index)
+		case *ast.IndexListExpr:
+			if err := check(n.X); err != nil {
+				return err
+			}
+			for _, index := range n.Indices {
+				if err := check(index); err != nil {
+					return err
+				}
+			}
+		default:
+			return fmt.Errorf("expression is not a Go type")
+		}
+		return nil
+	}
+	return check(expr)
 }
 func sortDiagnostics(d []Diagnostic) []Diagnostic {
 	out := append([]Diagnostic(nil), d...)

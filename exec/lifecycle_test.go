@@ -346,7 +346,15 @@ func TestCompletionErrorsGoOnlyToHandler(t *testing.T) {
 }
 
 func TestDelayedDriverSeparatesExecutionAndConsumptionDuration(t *testing.T) {
-	database := openLifecycleDatabase(t, lifecycleDriverConfig{queryDelay: 2 * time.Millisecond, nextDelay: 5 * time.Millisecond}, nil)
+	queryStarted := make(chan struct{})
+	queryRelease := make(chan struct{})
+	nextStarted := make(chan struct{})
+	nextRelease := make(chan struct{})
+	recorder := &lifecycleDriverRecorder{}
+	database := openLifecycleDatabase(t, lifecycleDriverConfig{
+		queryStarted: queryStarted, queryRelease: queryRelease,
+		nextStarted: nextStarted, nextRelease: nextRelease,
+	}, recorder)
 	db, err := exec.New(database, dialect.SQLite())
 	require.NoError(t, err)
 	var completions []exec.Completion
@@ -357,15 +365,42 @@ func TestDelayedDriverSeparatesExecutionAndConsumptionDuration(t *testing.T) {
 		})
 	}))
 	require.NoError(t, err)
-	rows, err := db.QueryOwned(t.Context(), stmt.New("SELECT value"))
-	require.NoError(t, err)
-	require.True(t, rows.Next())
+	type queryResult struct {
+		rows *exec.Rows
+		err  error
+	}
+	result := make(chan queryResult, 1)
+	go func() {
+		rows, queryErr := db.QueryOwned(t.Context(), stmt.New("SELECT value"))
+		result <- queryResult{rows: rows, err: queryErr}
+	}()
+	<-queryStarted
+	close(queryRelease)
+	query := <-result
+	require.NoError(t, query.err)
+	rows := query.rows
+	next := make(chan bool, 1)
+	go func() { next <- rows.Next() }()
+	<-nextStarted
+	close(nextRelease)
+	require.True(t, <-next)
 	require.NoError(t, rows.Close())
 	require.Len(t, completions, 2)
 	executionDuration := completions[0].Finished.Sub(completions[0].Started)
 	consumptionDuration := completions[1].Finished.Sub(completions[1].Started)
-	require.Greater(t, executionDuration, time.Millisecond)
-	require.Greater(t, consumptionDuration, executionDuration)
+	recorder.mu.Lock()
+	queryStartedAt := recorder.queryStarted
+	queryFinishedAt := recorder.queryFinished
+	nextStartedAt := recorder.nextStarted
+	nextFinishedAt := recorder.nextFinished
+	recorder.mu.Unlock()
+	require.False(t, queryStartedAt.IsZero())
+	require.False(t, queryFinishedAt.IsZero())
+	require.False(t, nextStartedAt.IsZero())
+	require.False(t, nextFinishedAt.IsZero())
+	require.GreaterOrEqual(t, executionDuration, queryFinishedAt.Sub(queryStartedAt))
+	require.GreaterOrEqual(t, consumptionDuration, nextFinishedAt.Sub(nextStartedAt))
+	require.True(t, completions[0].Finished.Before(completions[1].Started))
 }
 
 func TestConcurrentInvocationsKeepDerivedMarkersPaired(t *testing.T) {

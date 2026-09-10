@@ -29,6 +29,16 @@ func Example_rasql_insert() {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 40, 0)
+	if err != nil {
+		fmt.Printf("failed to describe engine profile: %s\n", err)
+		return
+	}
+	executor, err := rasql.AsExecutor(db, profile)
+	if err != nil {
+		fmt.Printf("failed to create executor: %s\n", err)
+		return
+	}
 	users := store.Users()
 	// Create the table described by the generated users descriptor.
 	if err := rasql.CreateTable(ctx, db, users); err != nil {
@@ -36,20 +46,16 @@ func Example_rasql_insert() {
 		return
 	}
 
-	// Insert reads store.UsersRow's fields through the mapping method the
-	// generator wrote, and binds them as values for the users table.
+	// The generated create builder binds the row's fields as values, through
+	// the column accessors the generator wrote.
 	// SQL: INSERT INTO users (id, email) VALUES (?, ?) (arguments: 42, "ada@example.com")
-	result, err := rasql.Insert(ctx, db, users, store.UsersRow{ID: 42, Email: "ada@example.com"})
+	plan := store.NewUsersCreate().ID(42).Email("ada@example.com").FirstName("First").LastName("Last").Plan()
+	outcome, err := rasql.ExecMutation(ctx, executor, plan)
 	if err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
-	inserted, err := result.RowsAffected()
-	if err != nil {
-		fmt.Printf("failed to count inserted users: %s\n", err)
-		return
-	}
-	fmt.Printf("%d user inserted\n", inserted)
+	fmt.Printf("%d user inserted\n", outcome.Affected)
 
 	// Output:
 	// 1 user inserted
