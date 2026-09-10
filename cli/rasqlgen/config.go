@@ -52,8 +52,18 @@ type config struct {
 	Root string `json:"root"`
 
 	// Dialect is the SQL dialect: postgresql (or postgres), mysql, or
-	// sqlite.
+	// sqlite. Required for generate -dsn/-scratch and check -dsn/-scratch;
+	// the offline, lock-backed path reads Engine.Dialect instead.
 	Dialect string `json:"dialect"`
+
+	// Migrations is a directory in internal/migrationdir layout, resolved
+	// against this file's own directory. Present means rasql manages these
+	// migrations for this store: generate refuses to run while any of them
+	// is pending, -scratch builds a database from them, and rasql.sum
+	// records their checksums. Empty means generate reads whatever -dsn or
+	// -scratch already holds, with no migration directory of its own.
+	Migrations string `json:"migrations"`
+
 	Emitter string `json:"emitter"`
 
 	// Prune allows a run to delete a generated file it no longer writes.
