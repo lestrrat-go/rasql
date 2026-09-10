@@ -54,6 +54,42 @@ func TestReadSQLiteScopePoliciesAndVirtualObjects(t *testing.T) {
 	require.Equal(t, "ordinary", result.Tables[0].Name)
 }
 
+// TestReadSQLiteScopeNamespacesEnumeratesAttachedDatabase pins catalogNames'
+// new namespace enumeration against SQLite's ATTACH DATABASE, the same
+// technique catalog/namespace_test.go uses to give a single-engine table
+// two independent namespaces without a second live server. It cannot stand
+// in for the live PostgreSQL/MySQL test: it proves the Go-side selection
+// logic picks the right rows out of ObjectNamesIn, not that a real schema or
+// database boundary reports what this package assumes.
+func TestReadSQLiteScopeNamespacesEnumeratesAttachedDatabase(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:catalogread_namespaces?mode=memory&cache=shared")
+	require.NoError(t, err)
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	_, err = db.ExecContext(context.Background(), "CREATE TABLE events (id INTEGER PRIMARY KEY)")
+	require.NoError(t, err)
+	_, err = db.ExecContext(context.Background(), "ATTACH DATABASE ':memory:' AS audit")
+	require.NoError(t, err)
+	_, err = db.ExecContext(context.Background(), "CREATE TABLE audit.events (id INTEGER PRIMARY KEY)")
+	require.NoError(t, err)
+
+	result, err := catalogread.Read(context.Background(), db, sqliteProfile(t), catalogread.Scope{
+		Namespaces: []string{"audit"},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Tables, 1)
+	require.Equal(t, "audit", result.Tables[0].Schema)
+	require.Equal(t, "events", result.Tables[0].Name)
+
+	result, err = catalogread.Read(context.Background(), db, sqliteProfile(t), catalogread.Scope{
+		Namespaces: []string{"main", "audit"},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Tables, 2)
+	require.Equal(t, "audit", result.Tables[0].Schema)
+	require.Equal(t, "main", result.Tables[1].Schema)
+}
+
 func TestReadRejectsInvalidScopeAndCustomBeforeBegin(t *testing.T) {
 	p := sqliteProfile(t)
 	_, err := catalogread.Read(context.Background(), nil, p, catalogread.Scope{
