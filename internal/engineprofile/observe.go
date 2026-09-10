@@ -92,6 +92,45 @@ func Discover(ctx context.Context, q Queryer, engine EngineID, id string) (Profi
 	}
 	return p, nil
 }
+
+// DiscoverBuiltin observes the connected server's version and selects the
+// built-in profile spec whose engine matches and whose version range
+// contains the observation, without a caller-supplied profile ID. It is how
+// a profile is derived from the server alone, with no config override: the
+// built-in specs are not one per engine major (mysql-8.4 pins a minor,
+// sqlite-3.35 pins a minor floor), so selection matches on the full
+// (major, minMinor..maxMinor, maxPatch) range rather than on the major
+// alone. It returns ErrUnsupportedVersion when no spec's range contains the
+// observed version.
+func DiscoverBuiltin(ctx context.Context, q Queryer, engine EngineID) (Profile, error) {
+	o, err := Observe(ctx, q, engine)
+	if err != nil {
+		return Profile{}, err
+	}
+	spec, ok := specForObservation(o)
+	if !ok {
+		return Profile{}, &ProfileError{Code: ErrUnsupportedVersion, Engine: o.Engine, Version: o.Version, Detail: "no built-in profile matches the observed version"}
+	}
+	return Resolve(spec.id, o)
+}
+
+// specForObservation returns the built-in spec whose engine matches o and
+// whose (major, minMinor..maxMinor, maxPatch) range contains o's version.
+func specForObservation(o ObservedIdentity) (profileSpec, bool) {
+	if !o.Version.Known {
+		return profileSpec{}, false
+	}
+	for _, s := range specs() {
+		if s.engine != o.Engine {
+			continue
+		}
+		if o.Version.Major != s.major || o.Version.Minor < s.minMinor || o.Version.Minor > s.maxMinor || o.Version.Patch > s.maxPatch {
+			continue
+		}
+		return s, true
+	}
+	return profileSpec{}, false
+}
 func parseVersion(engine EngineID, raw string) (Version, error) {
 	if engine == PostgreSQL {
 		n, e := strconv.ParseUint(strings.TrimSpace(raw), 10, 64)

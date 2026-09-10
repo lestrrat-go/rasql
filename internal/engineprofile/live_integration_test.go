@@ -22,6 +22,26 @@ func TestDiscoverAndReadMySQL(t *testing.T) {
 	testLiveEngine(t, dbtest.MySQLDB, engineprofile.MySQL, "mysql-8.4")
 }
 
+// TestDiscoverBuiltinAgainstLiveServers confirms DiscoverBuiltin derives the
+// right built-in profile from a real server's own reported version, with no
+// profile ID supplied by the caller. A fixture test cannot stand in for
+// this: it would only prove the selection logic agrees with itself, not
+// that PostgreSQL and MySQL report the versions this repository assumes.
+func TestDiscoverBuiltinAgainstLiveServers(t *testing.T) {
+	t.Run("postgresql", func(t *testing.T) {
+		db := dbtest.PostgreSQLDB(t)
+		p, err := engineprofile.DiscoverBuiltin(t.Context(), db, engineprofile.PostgreSQL)
+		require.NoError(t, err)
+		require.Equal(t, "postgresql-17", p.ID)
+	})
+	t.Run("mysql", func(t *testing.T) {
+		db := dbtest.MySQLDB(t)
+		p, err := engineprofile.DiscoverBuiltin(t.Context(), db, engineprofile.MySQL)
+		require.NoError(t, err)
+		require.Equal(t, "mysql-8.4", p.ID)
+	})
+}
+
 func testLiveEngine(t *testing.T, open func(*testing.T) *sql.DB, engine engineprofile.EngineID, id string) {
 	db := open(t)
 	p, err := engineprofile.Discover(t.Context(), db, engine, id)
