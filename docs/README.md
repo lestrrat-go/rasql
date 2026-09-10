@@ -4,7 +4,7 @@ These pages explain how to use `rasql` in an application. For what `rasql` is an
 
 ## Two layers
 
-`rasql` is two layers, and these pages are grouped the same way. The core layer describes tables, builds and renders SQL, runs statements, compiles templates, and applies migrations, all without a Go row type. The ORM layer sits on top: `rasql codegen` writes a store package from the live database, and the typed builders read and write Go values through it.
+`rasql` is two layers, and these pages are grouped the same way. The core layer describes tables, builds and renders SQL, runs statements, compiles templates, and applies migrations, all without a Go row type. The ORM layer builds on it: `rasql codegen` writes a store package from the live database, and the typed builders read and write Go values through it.
 
 Start with these two, whichever layer the task belongs to:
 
@@ -29,7 +29,7 @@ Start with these two, whichever layer the task belongs to:
 3. [Typed queries](orm/03-typed-queries.md) reads rows through the generated table: typed selects, joins, custom projections, and SQL inspection.
 4. [Writing rows](orm/04-writing.md) creates tables and inserts, updates, or deletes rows.
 
-Within each layer the pages stand on their own. Read the first two, then jump to whichever fits the task.
+Each page inside a layer reads on its own. Read the first two, then jump to whichever fits the task.
 
 For a new application, start with the `rasql codegen generate` command in [the generator guide](orm/01-codegen.md#run-the-command). The checked-in [`rasql.json`](orm/01-codegen.md#the-settings-file) keeps the package name, output directory, table selection, row-type names, static queries, and pruning policy in the application repository.
 

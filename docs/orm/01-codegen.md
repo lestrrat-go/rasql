@@ -45,8 +45,8 @@ migrations to the database it then generates from. See `sample/taskboard`.
 
 ## The settings file
 
-Everything that stays the same from run to run lives in `rasql.json` at the
-module root. Write it once and check it in:
+`rasql.json` at the module root holds everything that stays the same from run
+to run. Write it once and check it in:
 
 ```json
 {
@@ -78,8 +78,8 @@ resolved against the module root unless `root` names a different base.
 `generate` and `check`.
 
 `migrations` names a directory in `internal/migrationdir` layout, resolved
-against `rasql.json`'s own directory. Present means rasql manages these
-migrations for this store: `generate` refuses to run while any of them is
+against `rasql.json`'s own directory. Naming it hands these migrations to rasql for this
+store: `generate` refuses to run while any of them is
 pending, naming `rasql migrate apply` as the fix; `-scratch` applies every one
 of them into the throwaway database it builds; and `rasql.sum` records each
 migration's checksum. Leave it out for a project that points `-dsn` at
@@ -102,8 +102,8 @@ Programmatic generators can set `generate.Store.Names` when physical names do
 not make good Go identifiers or normalize to the same symbol. Keys are exact
 `schema.ObjectName` values, so an empty schema targets only the unqualified
 table. `ObjectNames` can set table accessors, table and row types, output file
-bases, and per-column fields and accessors. These names affect Go output only;
-SQL descriptors retain the exact physical names.
+bases, and per-column fields and accessors. These names affect Go output only, and
+SQL descriptors keep the exact physical names.
 
 `queries` compiles static SQL templates into generated functions beside the
 table code. Each entry names the `function` to generate and states its
@@ -137,7 +137,7 @@ needs an explicit Go type:
 An explicit binding overrides the generated application type while a stated
 column reference still has to resolve. Set `Nullable` to `true` to select the
 binding's `NullableType`; an unconfigured nullable column uses its nullable
-form automatically. Unconfigured standalone binds remain `any`.
+form automatically. An unconfigured standalone bind generates `any`.
 
 A template held in `input` is read again before the run writes anything, so an
 edit made while a run was in flight is caught rather than committed around. A
@@ -152,7 +152,7 @@ misspelling is a message rather than a setting that silently does nothing.
 
 Generated descriptors preserve native type metadata alongside portable column
 types. PostgreSQL domains, enums, and arrays, MySQL ENUM and SET labels, and
-validated SQLite declarations remain available to generated code. A native
+generated code reads validated SQLite declarations. A native
 type without a portable Go binding generates `any`; callers provide explicit
 `sql.Scanner` and `driver.Valuer` implementations when they need a concrete
 value. Code generation refuses incomplete native metadata before it writes

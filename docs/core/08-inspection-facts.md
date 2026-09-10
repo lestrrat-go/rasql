@@ -185,7 +185,7 @@ All three engines are covered. SQLite reports a generated column through `PRAGMA
 
 On PostgreSQL and MySQL, `GeneratedExpression` is the server's own re-serialized, normalized form of the expression, not the source text a migration wrote — both engines parse the `GENERATED ALWAYS AS` clause once at `CREATE TABLE` time and report it back from that parsed form, fully parenthesized, rather than keeping the original characters around. A column declared `GENERATED ALWAYS AS (celsius * 9 / 5 + 32) STORED` inspects with `GeneratedExpression` equal to `(((celsius * 9) / 5) + 32)` on PostgreSQL, or `` (((`celsius` * 9) / 5) + 32) `` on MySQL, never the `celsius * 9 / 5 + 32` a person typed. A descriptor `rasqlgen` generates from a live PostgreSQL or MySQL database therefore will not textually match a hand-written migration's expression even when they mean the same thing, and regenerating from that database reproduces the normalized form again, not the original. SQLite is the exception: its `GeneratedExpression` comes from parsing the table's own checked-in `CREATE TABLE` text (see `sqliteGeneratedExpression` in `inspect/inspect.go`), so it preserves whatever the source actually wrote, spacing included.
 
-A generated column remains an ordinary generated row field because it reads like any other column. The generated create and
+`rasqlgen` emits a generated column as an ordinary row field, since reading one is no different from reading any other column. The generated create and
 patch builders omit setters for it, and `NewCreatePlan` or `NewPatchPlan` rejects a manually supplied mutation field that
 targets it. Database defaults and identity columns have their own explicit omitted, value, or default states.
 
@@ -205,12 +205,12 @@ behavior. `catalog.Options.Namespaces` sweeps selected namespaces, while
 live table with a desired schema.
 # Native type facts
 
-Inspection keeps native ENUM and SET labels and opaque SQLite declarations in `ColumnDef.NativeType`. Portable type
-classification remains available separately, so catalog consumers can choose faithful same-engine DDL or reject a
-cross-dialect operation explicitly.
+Inspection keeps native ENUM and SET labels and opaque SQLite declarations in `ColumnDef.NativeType`. `ColumnDef.Type` still carries the
+portable classification, so catalog consumers can choose faithful same-engine DDL or reject a cross-dialect operation
+explicitly.
 
-Native metadata is also carried into generated descriptors and remains available
-to runtime scanners and column valuers. Opaque columns generate `any` fields;
+Generated descriptors carry the native metadata too, and runtime scanners and
+column valuers read it from there. Opaque columns generate `any` fields;
 applications bind concrete enum, set, domain, or array values through explicit
 `sql.Scanner` and `driver.Valuer` implementations. Same-dialect DDL preserves
 the inspected native identity, while a different dialect returns a typed

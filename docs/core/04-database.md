@@ -1,8 +1,8 @@
 # Database execution
 
 A `rasql.DB` pairs a `database/sql` handle with a dialect. The canonical runtime uses `rasql.Executor`, which adds an
-engine profile and retains the compiler, bind limits, codecs, scopes, and event observers needed by every query and
-mutation.
+engine profile and carries the compiler, bind limits, codecs, scopes, and event observers that every query and
+mutation needs.
 
 ## Create an executor
 
@@ -41,8 +41,8 @@ Every `Query[R]` uses `Rows`, `All`, `One`, or `Maybe`. Every `MutationPlan` use
 `ExecMutationBatch` for an ordered batch. Native SQL enters through `Native` or `NativeMutation` and states its engine
 identity explicitly.
 
-The executor applies codecs and reports `PlanError`, `BindError`, or `DecodeError` with structured paths. Database and
-driver errors remain available through error wrapping.
+The executor applies codecs and reports `PlanError`, `BindError`, or `DecodeError` with structured paths. Each of
+those wraps the database or driver error it came from, so `errors.Is` and `errors.As` reach it.
 
 ## Transactions and savepoints
 
@@ -62,7 +62,7 @@ source: [sample/taskboard/internal/store/docs_examples_test.go](https://github.c
 <!-- END INCLUDE -->
 
 A database executor starts a transaction. A transaction executor starts a savepoint when the engine supports it. The
-scoped executor retains the parent compiler, engine profile, codecs, limits, and observers. A successful mutation inside
+scoped executor reuses the parent's compiler, engine profile, codecs, limits, and observers. A successful mutation inside
 the scope reports pending durability until the outer transaction commits.
 
 ## Observe work
@@ -72,13 +72,12 @@ mutation batches, graphs, and scopes. Logical IDs connect nested work, statement
 events report rows, early closure, and errors.
 
 Extension errors do not erase successful database evidence. The returned error records whether execution succeeded,
-while mutation outcomes retain affected rows and the durability that the executor can prove.
+while a mutation outcome still reports its affected rows and the durability the executor can prove.
 
 ## Low-level handles
 
-The lower-level `DB` and `exec.DB` APIs remain implementation building blocks for inspection, migration, and compiler
-packages. Application ORM code should use `Executor` so every operation receives the same capability checks and result
-lifecycle.
+The lower-level `DB` and `exec.DB` APIs carry no engine profile. A statement run through them skips the capability
+checks and result lifecycle `Executor` applies, so application ORM code should use `Executor` instead.
 
 ## Next
 
