@@ -208,21 +208,49 @@ func FromLock(lockJSON []byte, source ProfileSource, history HistoryIdentity, re
 	if err != nil {
 		return Plan{}, err
 	}
-	physical := lockCatalog.physical
-	catalogDigest, err := CatalogDigest(lockCatalog)
+	return fromBaselineWithSourceDigest(lockCatalog, &sourceDigest, profile, history, resolved)
+}
+
+// FromBaseline builds a Plan from a Catalog read directly from a live
+// database, rather than decoded from a compiler lock. The plan's
+// sourceDigest -- read back nowhere in migrate/, only inside
+// migrate/changeplan -- is set equal to the catalog digest, since there is
+// no separate lock-source digest to carry forward.
+func FromBaseline(baseline Catalog, source ProfileSource, history HistoryIdentity, resolved ResolvedChanges) (Plan, error) {
+	profile, err := NewProfile(source)
 	if err != nil {
 		return Plan{}, err
+	}
+	if err := baseline.validate(); err != nil {
+		return Plan{}, err
+	}
+	return fromBaselineWithSourceDigest(baseline, nil, profile, history, resolved)
+}
+
+// fromBaselineWithSourceDigest is the shared body of FromLock and
+// FromBaseline. sourceDigest is the lock's own recorded source digest for
+// FromLock; passing nil, as FromBaseline does, means "use the catalog digest
+// itself", which is the design's answer for a baseline with no lock to carry
+// a separate source digest from.
+func fromBaselineWithSourceDigest(baseline Catalog, sourceDigest *Digest, profile Profile, history HistoryIdentity, resolved ResolvedChanges) (Plan, error) {
+	physical := baseline.physical
+	catalogDigest, err := CatalogDigest(baseline)
+	if err != nil {
+		return Plan{}, err
+	}
+	if sourceDigest == nil {
+		sourceDigest = &catalogDigest
 	}
 	profileDigest, err := profileDigestValue(profile)
 	if err != nil {
 		return Plan{}, err
 	}
-	catalogIdentity, err := NewCatalogIdentity(profile.Engine(), profileDigest, catalogDigest, sourceDigest)
+	catalogIdentity, err := NewCatalogIdentity(profile.Engine(), profileDigest, catalogDigest, *sourceDigest)
 	if err != nil {
 		return Plan{}, err
 	}
-	if !sameCatalogIdentity(lockCatalog, resolved.baseline) || !samePhysicalObjects(lockCatalog.physical, resolved.baseline.physical) {
-		return Plan{}, fmt.Errorf("%w: resolved baseline differs from lock catalog", ErrInvalidPlan)
+	if !sameCatalogIdentity(baseline, resolved.baseline) || !samePhysicalObjects(baseline.physical, resolved.baseline.physical) {
+		return Plan{}, fmt.Errorf("%w: resolved baseline differs from baseline catalog", ErrInvalidPlan)
 	}
 	objects := make([]BaselineObject, 0, len(physical.Objects)+len(resolved.futureObjects))
 	for _, object := range physical.Objects {
@@ -233,14 +261,14 @@ func FromLock(lockJSON []byte, source ProfileSource, history HistoryIdentity, re
 		objects = append(objects, value)
 	}
 	objects = append(objects, resolved.futureObjects...)
-	baseline, err := NewBaselineIdentity(catalogIdentity, file.Source.Identity, objects, resolved.renamedObjects)
+	baselineIdentity, err := NewBaselineIdentity(catalogIdentity, baseline.sourceIdentity, objects, resolved.renamedObjects)
 	if err != nil {
 		return Plan{}, err
 	}
-	if err := validateResolvedState(resolved, baseline); err != nil {
+	if err := validateResolvedState(resolved, baselineIdentity); err != nil {
 		return Plan{}, err
 	}
-	return newPlan(profile, baseline, history, resolved.decisions, resolved.operations)
+	return newPlan(profile, baselineIdentity, history, resolved.decisions, resolved.operations)
 }
 func profileEngineMatches(engine engineprofile.EngineID, dialect string) bool {
 	dialect = strings.ToLower(dialect)

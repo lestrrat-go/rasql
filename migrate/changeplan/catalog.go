@@ -54,6 +54,33 @@ func CatalogFromLock(lockJSON []byte) (Catalog, error) {
 	return Catalog{physical: physical.Clone(), sourceIdentity: file.Source.Identity}, nil
 }
 
+// NewCatalogFromPhysical builds a Catalog from a compilerir.PhysicalCatalog
+// whose objects already carry their assigned IDs, the live counterpart to
+// CatalogFromLock. The caller is expected to have run
+// compilerir.AssignObjectIDs (or otherwise minted the IDs on catalog.Objects)
+// before calling this; NewCatalogFromPhysical carries those IDs forward
+// rather than assigning its own.
+func NewCatalogFromPhysical(catalog compilerir.PhysicalCatalog, sourceIdentity string) (Catalog, error) {
+	definitions, diagnostics := compilerir.TableDefsFromPhysical(catalog)
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Level == compilerir.DiagnosticError {
+			return Catalog{}, fmt.Errorf("%w: catalog conversion: %s", ErrInvalidIdentity, diagnostic.Message)
+		}
+	}
+	if len(definitions) != len(catalog.Objects) {
+		return Catalog{}, fmt.Errorf("%w: catalog conversion dropped an object", ErrInvalidIdentity)
+	}
+	objects := make([]CatalogObject, len(definitions))
+	for i, definition := range definitions {
+		object, err := NewCatalogObject(ObjectID(catalog.Objects[i].ID), definition)
+		if err != nil {
+			return Catalog{}, err
+		}
+		objects[i] = object
+	}
+	return newCatalogPhysical(catalog.Engine, sourceIdentity, objects)
+}
+
 func NewCatalog(source ProfileSource, sourceIdentity string, objects []CatalogObject) (Catalog, error) {
 	profile, err := NewProfile(source)
 	if err != nil {
