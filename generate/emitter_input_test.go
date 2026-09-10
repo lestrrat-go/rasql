@@ -1,0 +1,178 @@
+package generate_test
+
+import (
+	"testing"
+
+	"github.com/lestrrat-go/rasql/generate"
+	"github.com/lestrrat-go/rasql/internal/compilerir"
+	"github.com/stretchr/testify/require"
+)
+
+func plainEmitterFixture(t *testing.T) generate.EmitterInput {
+	t.Helper()
+	catalog := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "sqlite", Version: "3"}, Objects: []compilerir.PhysicalObject{{ID: "users", Kind: "table", Name: "users", Columns: []compilerir.PhysicalColumn{{Name: "id", Ordinal: 0, LogicalKind: "integer"}}}}}
+	semantic, diagnostics := compilerir.BuildSemantic(catalog, compilerir.MappingConfig{}, nil)
+	if len(diagnostics) != 0 {
+		t.Fatalf("semantic diagnostics: %#v", diagnostics)
+	}
+	config := compilerir.GoConfig{Package: "store", Output: "generated", Emitter: "legacy", Objects: []compilerir.ObjectGoName{{ID: "users", File: "users_gen.go"}}}
+	model, diagnostics := compilerir.BuildGo(semantic, config)
+	if len(diagnostics) != 0 {
+		t.Fatalf("Go diagnostics: %#v", diagnostics)
+	}
+	in, err := generate.NewEmitterInput(catalog, semantic, model, config, compilerir.MappingConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return in
+}
+
+func emitterFixture(t *testing.T) (generate.EmitterInput, compilerir.GoConfig) {
+	t.Helper()
+	catalog := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "sqlite", Version: "3"}, Objects: []compilerir.PhysicalObject{{
+		ID: "users", Kind: "table", Name: "users", Columns: []compilerir.PhysicalColumn{
+			{Name: "id", Ordinal: 0, LogicalKind: "integer"},
+			{Name: "status", Ordinal: 1, LogicalKind: "text", Nullable: true},
+		},
+	}}}
+	mapping := compilerir.ScalarMapping{Name: "status", Match: compilerir.NativeMatch{LogicalKind: "text"}, GoType: "Status", NullableGoType: "NullableStatus", Codec: "status"}
+	semantic, diagnostics := compilerir.BuildSemantic(catalog, compilerir.MappingConfig{Scalars: []compilerir.ScalarMapping{mapping}}, nil)
+	if len(diagnostics) != 0 {
+		t.Fatalf("semantic diagnostics: %#v", diagnostics)
+	}
+	config := compilerir.GoConfig{Package: "store", Output: "generated", Emitter: "legacy", Scalars: []compilerir.ScalarMapping{mapping}, Objects: []compilerir.ObjectGoName{{ID: "users", File: "users_gen.go"}}}
+	model, diagnostics := compilerir.BuildGo(semantic, config)
+	if len(diagnostics) != 0 {
+		t.Fatalf("Go diagnostics: %#v", diagnostics)
+	}
+	in, err := generate.NewEmitterInput(catalog, semantic, model, config, compilerir.MappingConfig{Scalars: []compilerir.ScalarMapping{mapping}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return in, config
+}
+
+func TestEmitterInputCloneOwnsNestedValues(t *testing.T) {
+	in, _ := emitterFixture(t)
+	clone := in.Clone()
+	clone.Catalog.Objects[0].Columns[0].Name = "changed"
+	clone.Semantic.Objects[0].Columns[0].Name = "changed"
+	clone.Go.Objects[0].Columns[0].GoType = "Changed"
+	clone.Generation.Scalars[0].Imports = append(clone.Generation.Scalars[0].Imports, compilerir.GoImport{Path: "example.com/changed"})
+	if in.Catalog.Objects[0].Columns[0].Name != "id" || in.Semantic.Objects[0].Columns[0].Name != "id" || in.Go.Objects[0].Columns[0].GoType == "Changed" || len(in.Generation.Scalars[0].Imports) != 0 {
+		t.Fatal("clone mutation changed emitter input")
+	}
+}
+
+func TestNewEmitterInputOwnsConstructorInputs(t *testing.T) {
+	in, _ := emitterFixture(t)
+	constructed, err := generate.NewEmitterInput(in.Catalog, in.Semantic, in.Go, in.Generation, in.Mappings)
+	require.NoError(t, err)
+
+	in.Catalog.Objects[0].Columns[0].Name = "changed"
+	in.Semantic.Objects[0].Columns[0].Name = "changed"
+	in.Go.Objects[0].Columns[0].GoType = "Changed"
+	in.Generation.Objects[0].File = "changed.go"
+	in.Mappings.Scalars[0].GoType = "Changed"
+
+	require.Equal(t, "id", constructed.Catalog.Objects[0].Columns[0].Name)
+	require.Equal(t, "id", constructed.Semantic.Objects[0].Columns[0].Name)
+	require.NotEqual(t, "Changed", constructed.Go.Objects[0].Columns[0].GoType)
+	require.Equal(t, "users_gen.go", constructed.Generation.Objects[0].File)
+	require.Equal(t, "Status", constructed.Mappings.Scalars[0].GoType)
+}
+
+func TestEmitterInputRejectsMissingOrConflictingPolicy(t *testing.T) {
+	in, config := emitterFixture(t)
+	cases := []struct {
+		name string
+		edit func(*generate.EmitterInput)
+	}{
+		{name: "missing object policy", edit: func(value *generate.EmitterInput) { value.Generation.Objects = nil }},
+		{name: "semantic kind", edit: func(value *generate.EmitterInput) { value.Semantic.Objects[0].Kind = "view" }},
+		{name: "codec", edit: func(value *generate.EmitterInput) { value.Go.Objects[0].Columns[1].Codec = "other" }},
+		{name: "relation coverage", edit: func(value *generate.EmitterInput) {
+			value.Go.Objects[0].Relations = []compilerir.GoRelation{{Name: "missing", Target: "users", Kind: "belongs_to"}}
+		}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := in.Clone()
+			test.edit(&candidate)
+			if err := candidate.Validate(); err == nil {
+				t.Fatal("inconsistent emitter input was accepted")
+			}
+		})
+	}
+	config.Objects = nil
+	if _, err := generate.NewEmitterInput(in.Catalog, in.Semantic, in.Go, config, in.Mappings); err == nil {
+		t.Fatal("missing generation policy was accepted")
+	}
+}
+
+func TestEmitterInputAcceptsCanonicalViewWithoutWriteShapes(t *testing.T) {
+	in := plainEmitterFixture(t)
+	in.Catalog.Objects[0].Kind = "view"
+	in.Semantic.Objects[0].Kind = "view"
+	in.Semantic.Objects[0].Columns[0].InsertState = "forbidden"
+	in.Semantic.Objects[0].Columns[0].PatchState = "forbidden"
+	in.Go.Objects[0].Columns[0].InsertState = "forbidden"
+	in.Go.Objects[0].Columns[0].PatchState = "forbidden"
+	in.Go.Objects[0].Create = nil
+	in.Go.Objects[0].Patch = nil
+	if err := in.Validate(); err != nil {
+		t.Fatalf("view without write shapes rejected: %v", err)
+	}
+}
+
+func TestEmitterInputRequiresCanonicalRelationMappings(t *testing.T) {
+	in := manyThroughEmitterFixture(t)
+	clone := in.Clone()
+	clone.Mappings.Relations[0].Through.SourceFrom[0] = "changed"
+	require.Equal(t, "user_id", in.Mappings.Relations[0].Through.SourceFrom[0])
+	require.Error(t, clone.Validate())
+
+	_, err := generate.NewEmitterInput(in.Catalog, in.Semantic, in.Go, in.Generation)
+	require.ErrorContains(t, err, "semantic model disagrees")
+
+	fabricated := in.Clone()
+	fabricated.Mappings = compilerir.MappingConfig{}
+	require.ErrorContains(t, fabricated.Validate(), "semantic model disagrees")
+
+	changedGo := in.Clone()
+	var found bool
+	for index := range changedGo.Go.Objects[0].Relations {
+		relation := &changedGo.Go.Objects[0].Relations[index]
+		if relation.Name != "Roles" || relation.Through == nil {
+			continue
+		}
+		relation.Through.TargetFrom[0] = "user_id"
+		found = true
+		break
+	}
+	require.True(t, found, "canonical many-through relation Roles was not found")
+	require.ErrorContains(t, changedGo.Validate(), "path disagrees")
+}
+
+func manyThroughEmitterFixture(t *testing.T) generate.EmitterInput {
+	t.Helper()
+	integer := func(name string, ordinal int) compilerir.PhysicalColumn {
+		return compilerir.PhysicalColumn{Name: name, Ordinal: ordinal, LogicalKind: "integer"}
+	}
+	users := compilerir.PhysicalObject{ID: "users", Kind: "table", Name: "users", Columns: []compilerir.PhysicalColumn{integer("id", 0)}}
+	roles := compilerir.PhysicalObject{ID: "roles", Kind: "table", Name: "roles", Columns: []compilerir.PhysicalColumn{integer("id", 0)}}
+	userRoles := compilerir.PhysicalObject{ID: "user_roles", Kind: "table", Name: "user_roles", Columns: []compilerir.PhysicalColumn{integer("user_id", 0), integer("role_id", 1)}, Constraints: []compilerir.PhysicalConstraint{
+		{Kind: "foreign_key", Name: "user_roles_user", Columns: []string{"user_id"}, Reference: &compilerir.ForeignReference{Object: "users", Columns: []string{"id"}}},
+		{Kind: "foreign_key", Name: "user_roles_role", Columns: []string{"role_id"}, Reference: &compilerir.ForeignReference{Object: "roles", Columns: []string{"id"}}},
+	}}
+	catalog := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "sqlite", Version: "3"}, Objects: []compilerir.PhysicalObject{users, roles, userRoles}}
+	mappings := compilerir.MappingConfig{Relations: []compilerir.RelationMapping{{Name: "Roles", Source: "users", From: []string{"id"}, Target: "roles", To: []string{"id"}, Through: compilerir.ThroughMapping{Object: "user_roles", SourceFrom: []string{"user_id"}, SourceTo: []string{"id"}, TargetFrom: []string{"role_id"}, TargetTo: []string{"id"}}}}}
+	semantic, diagnostics := compilerir.BuildSemantic(catalog, mappings, nil)
+	require.Empty(t, diagnostics)
+	config := compilerir.GoConfig{Package: "store", Output: "generated", Emitter: "legacy", Objects: []compilerir.ObjectGoName{{ID: "users"}, {ID: "roles"}, {ID: "user_roles"}}}
+	model, diagnostics := compilerir.BuildGo(semantic, config)
+	require.Empty(t, diagnostics)
+	in, err := generate.NewEmitterInput(catalog, semantic, model, config, mappings)
+	require.NoError(t, err)
+	return in
+}

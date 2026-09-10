@@ -1,10 +1,19 @@
 package query
 
+import "github.com/lestrrat-go/rasql/internal/mutationcolumn"
+
 // TypedColumn is a compile-time typed reference to a non-null column.
 type TypedColumn[Row, Value any] struct{ ref ColumnRef }
 
 // NullableColumn is a compile-time typed reference to a nullable column.
 type NullableColumn[Row, Value any] struct{ ref ColumnRef }
+
+func (c TypedColumn[Row, Value]) RasqlMutationColumn() mutationcolumn.NonNull[Row, Value] {
+	return mutationcolumn.NonNull[Row, Value]{}
+}
+func (c NullableColumn[Row, Value]) RasqlMutationNullColumn() mutationcolumn.Nullable[Row, Value] {
+	return mutationcolumn.Nullable[Row, Value]{}
+}
 
 func TypedColumnOf[Row, Value any](ref ColumnRef) TypedColumn[Row, Value] {
 	return TypedColumn[Row, Value]{ref: ref}

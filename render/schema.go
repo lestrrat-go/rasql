@@ -920,9 +920,8 @@ func (e *UnsupportedVirtualTableError) Unwrap() error {
 var ErrUnsupportedPrimaryKeyAutoincrement = errors.New("render: unsupported primary key AUTOINCREMENT")
 
 // UnsupportedPrimaryKeyAutoincrementError reports that a TableDef sets
-// [schema.TableDef.PrimaryKeyAutoincrement]. inspect can describe such a
-// primary key, and TableDef.Validate accepts it, but this package does not
-// yet know how to build DDL for an AUTOINCREMENT primary key.
+// [schema.TableDef.PrimaryKeyAutoincrement] with facts this dialect cannot
+// render as SQLite's single integer AUTOINCREMENT primary key.
 type UnsupportedPrimaryKeyAutoincrementError struct {
 	// Table is the name of the table whose primary key named
 	// AUTOINCREMENT.
@@ -1200,6 +1199,25 @@ func CreateIndexes(d dialect.Dialect, table schema.TableDef) ([]stmt.Statement, 
 	return statements, nil
 }
 
+func (r *renderer) sqliteAutoincrementColumn(table schema.TableDef) (string, error) {
+	unsupported := func() (string, error) {
+		return "", &UnsupportedPrimaryKeyAutoincrementError{Table: table.Name}
+	}
+	if r.dialect.Name() != "sqlite" || len(table.PrimaryKey) != 1 || table.PrimaryKeyOnConflict != "" {
+		return unsupported()
+	}
+	name := table.PrimaryKey[0]
+	column, ok := table.Column(name)
+	if !ok {
+		return unsupported()
+	}
+	integer, ok := column.Type.(schema.IntegerType)
+	if !ok || integer != (schema.IntegerType{}) || column.Nullable || column.Default != "" || column.NativeType != nil || column.Identity != "" || column.GeneratedExpression != "" || column.Collation != "" {
+		return unsupported()
+	}
+	return name, nil
+}
+
 func (r *renderer) writeCreateTable(table schema.TableDef) error {
 	if table.VirtualTableModule != "" {
 		return &UnsupportedVirtualTableError{Table: table.Name, Module: table.VirtualTableModule}
@@ -1210,8 +1228,19 @@ func (r *renderer) writeCreateTable(table schema.TableDef) error {
 	if table.WithoutRowID {
 		return &UnsupportedTableWithoutRowIDError{Table: table.Name}
 	}
+	if table.PrimaryKeyAutoincrement && table.PrimaryKeyOnConflict != "" {
+		return &UnsupportedPrimaryKeyConflictResolutionError{Table: table.Name, OnConflict: table.PrimaryKeyOnConflict}
+	}
 	if r.dialect.Name() == "mysql" {
 		if err := r.checkMySQLIdentityKeyness(table); err != nil {
+			return err
+		}
+	}
+	autoColumn := ""
+	if table.PrimaryKeyAutoincrement {
+		var err error
+		autoColumn, err = r.sqliteAutoincrementColumn(table)
+		if err != nil {
 			return err
 		}
 	}
@@ -1229,23 +1258,25 @@ func (r *renderer) writeCreateTable(table schema.TableDef) error {
 		if err != nil {
 			return err
 		}
+		if column.Name == autoColumn {
+			definition += " PRIMARY KEY AUTOINCREMENT"
+		}
 		definitions = append(definitions, definition)
 	}
 	if len(table.PrimaryKey) > 0 {
-		if table.PrimaryKeyAutoincrement {
-			return &UnsupportedPrimaryKeyAutoincrementError{Table: table.Name}
-		}
 		if table.PrimaryKeyOnConflict != "" {
 			return &UnsupportedPrimaryKeyConflictResolutionError{Table: table.Name, OnConflict: table.PrimaryKeyOnConflict}
 		}
 		if err := r.rejectUnboundedMySQLText(table, table.PrimaryKey, "a primary key"); err != nil {
 			return err
 		}
-		columns, err := r.quotedNames(table.PrimaryKey)
-		if err != nil {
-			return err
+		if autoColumn == "" {
+			columns, err := r.quotedNames(table.PrimaryKey)
+			if err != nil {
+				return err
+			}
+			definitions = append(definitions, "PRIMARY KEY ("+strings.Join(columns, ", ")+")")
 		}
-		definitions = append(definitions, "PRIMARY KEY ("+strings.Join(columns, ", ")+")")
 	}
 	for _, constraint := range table.UniqueConstraints {
 		if constraint.Deferrable != "" {

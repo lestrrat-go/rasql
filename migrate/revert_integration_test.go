@@ -4,10 +4,13 @@ package migrate_test
 
 import (
 	"database/sql"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/dbtest"
+	"github.com/lestrrat-go/rasql/internal/migrationdir"
 	"github.com/lestrrat-go/rasql/migrate"
 	"github.com/stretchr/testify/require"
 )
@@ -49,11 +52,63 @@ func TestRevertAgainstLiveDatabases(t *testing.T) {
 
 			entries, err := runner.Status(t.Context(), migrations...)
 			require.NoError(t, err)
-			require.Contains(t, entries, migrate.StatusEntry{ID: "002_projects", State: migrate.StatusPending},
+			require.Contains(t, entries, migrate.StatusEntry{ID: "002_projects", State: migrate.StatusPending, Reversible: true},
 				"a reverted migration becomes pending again")
 
 			requireApplied(t, t.Context(), runner, migrations...)
 			require.True(t, liveTableExists(t, database, test.dialect.Name(), "revert_projects"))
+		})
+	}
+}
+
+// TestForwardOnlyMigrationDirectoryAgainstLiveDatabases proves, against
+// PostgreSQL and MySQL rather than only SQLite, that a migration directory
+// with no .down.sql sources loads, applies forward cleanly, and then makes
+// Revert refuse the whole run by naming the migration that cannot be
+// undone, leaving both tables in place.
+func TestForwardOnlyMigrationDirectoryAgainstLiveDatabases(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		open    func(*testing.T) *sql.DB
+		dialect dialect.Dialect
+	}{
+		{name: "postgresql", open: dbtest.PostgreSQLDB, dialect: dialect.PostgreSQL()},
+		{name: "mysql", open: dbtest.MySQLDB, dialect: dialect.MySQL()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			reversible := filepath.Join(root, "001_users")
+			require.NoError(t, os.MkdirAll(reversible, 0o700))
+			require.NoError(t, os.WriteFile(filepath.Join(reversible, "001_x.up.sql"), []byte(`CREATE TABLE forward_only_users (id INTEGER NOT NULL PRIMARY KEY)`), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(reversible, "001_x.down.sql"), []byte(`DROP TABLE forward_only_users`), 0o600))
+			forwardOnly := filepath.Join(root, "002_audit_log")
+			require.NoError(t, os.MkdirAll(forwardOnly, 0o700))
+			require.NoError(t, os.WriteFile(filepath.Join(forwardOnly, "001_x.up.sql"), []byte(`CREATE TABLE forward_only_audit_log (id INTEGER NOT NULL PRIMARY KEY)`), 0o600))
+
+			migrations, err := migrationdir.Load(root)
+			require.NoError(t, err)
+			require.Len(t, migrations, 2)
+			require.Empty(t, migrations[1].Down, "a migration with no .down.sql sources loads with none, not an error")
+
+			database := test.open(t)
+			runner, err := migrate.NewWithHistoryTable(database, test.dialect, "forward_only_history")
+			require.NoError(t, err)
+			applied, err := runner.Apply(t.Context(), migrate.AllPending(), migrations...)
+			require.NoError(t, err)
+			require.Len(t, applied, 2, "forward operations work normally on a directory with no reverse sources")
+			require.True(t, liveTableExists(t, database, test.dialect.Name(), "forward_only_users"))
+			require.True(t, liveTableExists(t, database, test.dialect.Name(), "forward_only_audit_log"))
+
+			_, err = runner.Revert(t.Context(), migrate.Steps(2), migrations...)
+			require.ErrorContains(t, err, `migration "002_audit_log" has no reverse SQL source`)
+			require.True(t, liveTableExists(t, database, test.dialect.Name(), "forward_only_users"),
+				"a run refused before touching the database changes nothing")
+			require.True(t, liveTableExists(t, database, test.dialect.Name(), "forward_only_audit_log"))
+
+			entries, err := runner.Status(t.Context(), migrations...)
+			require.NoError(t, err)
+			require.Contains(t, entries, migrate.StatusEntry{ID: "001_users", State: migrate.StatusApplied, Reversible: true})
+			require.Contains(t, entries, migrate.StatusEntry{ID: "002_audit_log", State: migrate.StatusApplied, Reversible: false})
 		})
 	}
 }

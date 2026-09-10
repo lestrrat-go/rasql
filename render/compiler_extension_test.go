@@ -1,17 +1,17 @@
 package render_test
 
 import (
+	"database/sql"
 	"errors"
 	"testing"
 
-	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/dynamic"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
+	_ "modernc.org/sqlite"
 )
 
 type compilerDialect struct {
@@ -165,6 +165,21 @@ func (wrappedCompiler) CompilePagination(dialect.Emitter, dialect.Pagination) er
 
 type testCompiler struct {
 	offsetErr error
+}
+
+type sqlitePaginationCompiler struct{ calls int }
+
+func (*sqlitePaginationCompiler) CompileExpression(dialect.Emitter, query.Expression) (bool, error) {
+	return false, nil
+}
+
+func (c *sqlitePaginationCompiler) CompilePagination(emitter dialect.Emitter, pagination dialect.Pagination) error {
+	c.calls++
+	if !pagination.HasLimit {
+		return nil
+	}
+	emitter.WriteSQL(" LIMIT ")
+	return emitter.Argument(pagination.Limit)
 }
 
 type identifierExpression struct{}
@@ -513,43 +528,53 @@ func TestCompilerExtensionReturnsPaginationErrorsAndPreservesNil(t *testing.T) {
 	require.Equal(t, stockSQL.Args(), nilProviderSQL.Args())
 }
 
-func TestCompilerExtensionExecutesRawDynamicAndTypedSelects(t *testing.T) {
-	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+func TestCompilerExtensionExecutesCanonicalSelect(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
-	db, err := rasql.New(database, compilerDialect{Dialect: dialect.SQLite(), compiler: testCompiler{}})
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE users (email TEXT NOT NULL)`)
 	require.NoError(t, err)
-	table := query.MustTableRef(schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "email", Type: schema.TextType{}}}})
-	statement, err := query.NewSelect(table, table.Column("email"))
+	_, err = database.ExecContext(t.Context(),
+		`INSERT INTO users (email) VALUES ('a@example.com'), ('b@example.com'), ('c@example.com')`)
 	require.NoError(t, err)
-	statement, err = statement.WithLimit(2)
+	compiler := &sqlitePaginationCompiler{}
+	db, err := rasql.New(database, compilerDialect{Dialect: dialect.SQLite(), compiler: compiler})
 	require.NoError(t, err)
-	expectedSQL := `SELECT "users"."email" FROM "users" FETCH FIRST ? ROWS ONLY`
-	for range 3 {
-		mock.ExpectQuery(expectedSQL).WithArgs(2).WillReturnRows(sqlmock.NewRows([]string{"email"}).AddRow("a@example.com"))
-	}
-	mock.ExpectClose()
-	raw, err := dynamic.Query(t.Context(), db, statement)
-	require.NoError(t, err)
-	for _, rowErr := range raw {
-		require.NoError(t, rowErr)
-	}
-	dynamicRows, err := dynamic.SelectFrom(table).Select("email").Limit(2).Query(t.Context(), db)
-	require.NoError(t, err)
-	for _, rowErr := range dynamicRows {
-		require.NoError(t, rowErr)
-	}
 	type user struct {
 		Email string `rasql:"email"`
 	}
-	users, err := rasql.TableOf[user](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "email", Type: schema.TextType{}}}})
+	table, err := rasql.ReadTableOf[user](schema.TableDef{
+		Name: "users", Columns: []schema.ColumnDef{{Name: "email", Type: schema.TextType{}}},
+	})
 	require.NoError(t, err)
-	typedRows, err := rasql.DecodeFrom[user](users).Project(users.Column("email")).Limit(2).Query(t.Context(), db)
+	source, err := rasql.SourceOf(table, "")
 	require.NoError(t, err)
-	for _, rowErr := range typedRows {
+	email, err := rasql.BindColumn[user, string](source, "email", "")
+	require.NoError(t, err)
+	resultSchema, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "email", Type: schema.TextType{}})
+	require.NoError(t, err)
+	dynamicProjection, err := rasql.DynamicProjection[user](resultSchema)
+	require.NoError(t, err)
+	projection, err := rasql.NewProjection(
+		[]rasql.ProjectionItem{rasql.Item("email", email.Expr(), schema.TextType{}, "")},
+		dynamicProjection.Decoder(),
+	)
+	require.NoError(t, err)
+	statement, err := rasql.Select(source.Source(), projection).OrderBy(rasql.AscExpr(email.Expr())).Limit(2)
+	require.NoError(t, err)
+	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+	require.NoError(t, err)
+	executor, err := rasql.AsExecutor(db, profile)
+	require.NoError(t, err)
+	typedRows, err := rasql.Rows(t.Context(), executor, statement)
+	require.NoError(t, err)
+	var emails []string
+	for row, rowErr := range typedRows {
 		require.NoError(t, rowErr)
+		emails = append(emails, row.Email)
 	}
-	require.NoError(t, database.Close())
-	require.NoError(t, mock.ExpectationsWereMet())
+	require.Equal(t, []string{"a@example.com", "b@example.com"}, emails)
+	require.Equal(t, 1, compiler.calls)
 }
 
 type unknownExpression struct{}
