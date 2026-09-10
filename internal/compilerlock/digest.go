@@ -6,10 +6,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"path"
 	"sort"
 
 	"github.com/lestrrat-go/rasql/internal/compilerir"
+	"github.com/lestrrat-go/rasql/internal/sourcefile"
 )
 
 func BuildDigests(in DigestInputs) (Digests, error) {
@@ -140,9 +140,8 @@ func ValidateDigest(s string) error {
 	}
 	return nil
 }
+// NormalizePath is a call-through to sourcefile.NormalizePath, kept so existing callers within
+// this package do not need to import sourcefile directly for it.
 func NormalizePath(p string) (string, error) {
-	if p == "" || path.IsAbs(p) || path.Clean(p) != p || p == ".." || len(p) >= 3 && p[:3] == "../" || len(p) >= 2 && p[1] == ':' || bytes.Contains([]byte(p), []byte{'\\'}) {
-		return "", fmt.Errorf("compilerlock: invalid relative path %q", p)
-	}
-	return p, nil
+	return sourcefile.NormalizePath(p)
 }

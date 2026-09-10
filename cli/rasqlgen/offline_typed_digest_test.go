@@ -17,6 +17,7 @@ import (
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/internal/schemasource"
 	"github.com/lestrrat-go/rasql/internal/scratchmod"
+	"github.com/lestrrat-go/rasql/internal/sourcefile"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 
@@ -274,7 +275,7 @@ func (knownPostgreSQLProfiles) Resolve(context.Context, *sql.DB, schemasource.En
 
 type knownPostgreSQLMigrations struct{}
 
-func (knownPostgreSQLMigrations) Apply(context.Context, *sql.DB, engineprofile.Profile, []compilerlock.SourceFileSnapshot) error {
+func (knownPostgreSQLMigrations) Apply(context.Context, *sql.DB, engineprofile.Profile, []sourcefile.SourceFileSnapshot) error {
 	return nil
 }
 
@@ -290,13 +291,13 @@ type knownPostgreSQLAnalyzer struct {
 }
 
 func (a knownPostgreSQLAnalyzer) Analyze(context.Context, schemasource.AnalysisRequest) (schemasource.AnalysisResult, error) {
-	snapshot, err := compilerlock.SnapshotSourceFile(a.root, a.query.SQLPath)
+	snapshot, err := sourcefile.SnapshotSourceFile(a.root, a.query.SQLPath)
 	if err != nil {
 		return schemasource.AnalysisResult{}, err
 	}
 	query := a.query
-	query.SQLSHA256 = snapshot.Record().SHA256
-	return schemasource.AnalysisResult{Queries: []compilerir.QueryAnalysis{query}, Snapshots: []compilerlock.SourceFileSnapshot{snapshot}}, nil
+	query.SQLSHA256 = snapshot.SHA256()
+	return schemasource.AnalysisResult{Queries: []compilerir.QueryAnalysis{query}, Snapshots: []sourcefile.SourceFileSnapshot{snapshot}}, nil
 }
 
 func updateTypedQueryConfig(t *testing.T, path string, change func(map[string]any)) {

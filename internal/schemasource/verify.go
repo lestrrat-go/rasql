@@ -9,12 +9,13 @@ import (
 	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/compilerlock"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
+	"github.com/lestrrat-go/rasql/internal/sourcefile"
 )
 
 func (r Result) Clone() Result {
 	x := r
 	x.Catalog = r.Catalog.Clone()
-	x.Snapshots = append([]compilerlock.SourceFileSnapshot(nil), r.Snapshots...)
+	x.Snapshots = append([]sourcefile.SourceFileSnapshot(nil), r.Snapshots...)
 	x.Unresolved = append([]catalogread.UnresolvedFact(nil), r.Unresolved...)
 	x.Queries = append([]compilerir.QueryAnalysis(nil), r.Queries...)
 	for i := range x.Queries {

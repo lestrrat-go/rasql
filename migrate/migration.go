@@ -115,6 +115,17 @@ func (m Migration) Validate() error {
 	return m.validate()
 }
 
+// Checksum returns the value this migration would record in the history table if applied: the
+// hash of its execution mode and its forward Statements alone. Down is deliberately excluded, so
+// correcting or adding a reverse script never changes the checksum of an already-applied
+// migration. Checksum validates m first, returning the same error Validate would.
+func (m Migration) Checksum() (string, error) {
+	if err := m.validate(); err != nil {
+		return "", err
+	}
+	return checksumMode(m.Mode, m.Statements), nil
+}
+
 func (m Migration) validate() error {
 	if m.Mode != ExecutionModeAtomic && m.Mode != ExecutionModeNonTransactional {
 		return fmt.Errorf("migrate: migration %q has invalid execution mode %q", m.ID, m.Mode)
