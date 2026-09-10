@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/lestrrat-go/rasql/stmt"
 )
 
@@ -261,7 +260,7 @@ func NewOperationStatements(sqls []stmt.Statement) ([]stmt.Statement, error) {
 			}
 			copied[j] = cloned
 		}
-		out[i] = stmt.New(sqltext.Text(statement.SQL()), copied...)
+		out[i] = stmt.New(statement.Text(), copied...)
 	}
 	return out, nil
 }

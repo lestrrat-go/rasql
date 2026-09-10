@@ -532,7 +532,7 @@ func TestPageFingerprint(t *testing.T) {
 		keys := []*pageKey[int]{&pageKey[int]{direction: PageAscending, term: OrderTerm{source: "items"}}}
 		first, err := pageFingerprint("sqlite", "SELECT id FROM items WHERE category = ? ORDER BY id", mustRuntimeSchema(t, ResultColumn{Name: "id", Type: schema.IntegerType{}}), statement, keys, []int{0})
 		require.NoError(t, err)
-		changed := stmt.New(sqltext.Text(statement.SQL()), "music", int64(7), int64(99))
+		changed := stmt.New(statement.Text(), "music", int64(7), int64(99))
 		second, err := pageFingerprint("sqlite", "SELECT id FROM items WHERE category = ? ORDER BY id", mustRuntimeSchema(t, ResultColumn{Name: "id", Type: schema.IntegerType{}}), changed, keys, []int{0})
 		require.NoError(t, err)
 		require.NotEqual(t, first, second)

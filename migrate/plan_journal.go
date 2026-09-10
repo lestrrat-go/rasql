@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/lestrrat-go/rasql/migrate/changeplan"
-	"github.com/lestrrat-go/rasql/sqltext"
 )
 
 type planJournalIdentity struct {
@@ -28,7 +27,7 @@ func journalMigration(prepared preparedChangePlan, operation preparedPlanOperati
 	statements := operation.operation.Statements()
 	legacy := make([]Statement, len(statements))
 	for index, statement := range statements {
-		legacy[index] = Statement{Source: journalIdentity(prepared, operation, index).source, SQL: sqltext.Text(statement.SQL())}
+		legacy[index] = Statement{Source: journalIdentity(prepared, operation, index).source, SQL: statement.Text()}
 	}
 	return preparedMigration{
 		id:         journalIdentity(prepared, operation, 0).id,

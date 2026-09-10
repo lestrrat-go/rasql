@@ -29,6 +29,15 @@ func (s Statement) SQL() string {
 	return s.sql
 }
 
+// Text returns the rendered SQL as sqltext.Text, which New takes when a caller
+// rebuilds a statement from this one. An explicit sqltext.Text conversion
+// marks SQL that a program assembled itself, and rasql's own rendered text is
+// not that, so a rebuild reads as a rebuild rather than as a fresh claim about
+// text nobody parsed.
+func (s Statement) Text() sqltext.Text {
+	return sqltext.Text(s.sql)
+}
+
 // Args returns an inspection copy of the bound arguments in placeholder order.
 // It also clones direct []byte values and []byte values inside sql.NamedArg.
 func (s Statement) Args() []any {

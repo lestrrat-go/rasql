@@ -20,7 +20,6 @@ import (
 	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/schema"
-	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/lestrrat-go/rasql/stmt"
 )
 
@@ -646,7 +645,7 @@ func cloneStatements(in []stmt.Statement) []stmt.Statement {
 				copied[j] = nil
 			}
 		}
-		out[i] = stmt.New(sqltext.Text(source.SQL()), copied...)
+		out[i] = stmt.New(source.Text(), copied...)
 	}
 	return out
 }
