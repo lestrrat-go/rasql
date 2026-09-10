@@ -432,8 +432,6 @@ func TestResolvedAdjacentColumnRenameMatrix(t *testing.T) {
 }
 
 func TestTableRenameBindingFromLock(t *testing.T) {
-	lock, err := os.ReadFile("testdata/external/lock.json")
-	require.NoError(t, err)
 	baseProfile := sourceRepairProfile(t)
 	lockProfileValue := engineprofile.Profile{
 		ID: baseProfile.ID(), Engine: baseProfile.Engine(),
@@ -442,14 +440,11 @@ func TestTableRenameBindingFromLock(t *testing.T) {
 	}
 	lockProfile, err := NewProfile(sourceRepairProfileSource{value: lockProfileValue})
 	require.NoError(t, err)
-	baseline, err := CatalogFromLock(lock)
-	require.NoError(t, err)
+	baseline := fixtureTasksCatalog(t, "tasks")
 	tasks, ok := baseline.ObjectID(schema.ObjectTable, "main", "tasks")
 	require.True(t, ok)
 	resolvedBaseline := baseline
-	mutatedLock := bytes.Replace(lock, []byte(`"name": "tasks"`), []byte(`"name": "accounts"`), 1)
-	after, err := CatalogFromLock(mutatedLock)
-	require.NoError(t, err)
+	after := fixtureTasksCatalog(t, "accounts")
 	resultDigest, err := CatalogDigest(after)
 	require.NoError(t, err)
 	operation, err := NewOperation("rename", OperationRenameTable, nil, []ObjectID{tasks}, nil, nil,
@@ -465,10 +460,10 @@ func TestTableRenameBindingFromLock(t *testing.T) {
 	require.NoError(t, err)
 	history, err := NewHistoryIdentity("main", "schema_migrations")
 	require.NoError(t, err)
-	_, err = FromLock(lock, lockProfile, history, resolved)
+	_, err = FromBaseline(baseline, lockProfile, history, resolved)
 	require.NoError(t, err)
 	resolved.decisions[0].from = "tasks"
-	_, err = FromLock(lock, lockProfile, history, resolved)
+	_, err = FromBaseline(baseline, lockProfile, history, resolved)
 	require.ErrorIs(t, err, ErrInvalidDecision)
 }
 

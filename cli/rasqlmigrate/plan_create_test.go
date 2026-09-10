@@ -3,22 +3,21 @@ package rasqlmigrate
 import (
 	"bytes"
 	"database/sql"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/lestrrat-go/rasql/cli/rasqlgen"
 	"github.com/stretchr/testify/require"
 )
 
 // TestRunSQLiteChangePlanCreateFlow drives "plan create" the way a user
-// would: rasql schema update produces -lock against an empty database, a
-// hand-written migration directory holds the pending change, and plan
-// create turns the two into a plan file with no changeplan Go in sight.
-// TestRunSQLiteNonemptyChangePlanFlow builds its plan by calling changeplan
-// directly; this test exists to prove the CLI producer reaches the same
-// place a real user's schema change would.
+// would: a first migration is applied for real with "migrate apply" to give
+// -dsn a non-empty baseline, a second, still-pending migration directory
+// holds the schema change, and plan create turns the two into a plan file --
+// reading its baseline catalog live from -dsn -- with no changeplan Go in
+// sight. TestRunSQLiteNonemptyChangePlanFlow builds its plan by calling
+// changeplan directly; this test exists to prove the CLI producer reaches
+// the same place a real user's schema change would.
 func TestRunSQLiteChangePlanCreateFlow(t *testing.T) {
 	root := t.TempDir()
 	dsn := filepath.Join(root, "application.sqlite")
@@ -26,22 +25,20 @@ func TestRunSQLiteChangePlanCreateFlow(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, database.Close())
 
-	configPath := filepath.Join(root, "rasql.json")
-	configBytes, err := json.Marshal(map[string]any{
-		"engine":  map[string]string{"dialect": "sqlite", "profile": "sqlite-3.35"},
-		"schema":  map[string]string{"kind": "live", "identity": "cli-plan-create"},
-		"package": "store",
-		"output":  "internal/store",
-	})
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(configPath, configBytes, 0o600))
-	var setupOutput, setupDiagnostics bytes.Buffer
-	require.NoError(t, rasqlgen.RunTopLevelContext(t.Context(),
-		[]string{"schema", "update", "-config", configPath, "-dsn", dsn}, &setupOutput, &setupDiagnostics),
-		setupDiagnostics.String())
-	lockPath := filepath.Join(root, "rasql.lock.json")
+	migrationsRoot := filepath.Join(root, "migrations")
+	baseDir := filepath.Join(migrationsRoot, "0000_create_accounts")
+	require.NoError(t, os.MkdirAll(baseDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(baseDir, "0001.up.sql"),
+		[]byte("CREATE TABLE accounts (id INTEGER NOT NULL PRIMARY KEY)\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(baseDir, "0001.down.sql"),
+		[]byte("DROP TABLE accounts\n"), 0o600))
 
-	migrationsDir := filepath.Join(root, "migrations", "0001_create_users")
+	var setupOutput, setupDiagnostics bytes.Buffer
+	require.NoError(t, Run([]string{
+		"apply", "-dir", migrationsRoot, "-dialect", "sqlite", "-dsn", dsn,
+	}, &setupOutput, &setupDiagnostics), setupDiagnostics.String())
+
+	migrationsDir := filepath.Join(migrationsRoot, "0001_create_users")
 	require.NoError(t, os.MkdirAll(migrationsDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(migrationsDir, "0001.up.sql"),
 		[]byte("CREATE TABLE users (id INTEGER NOT NULL PRIMARY KEY)\n"), 0o600))
@@ -52,8 +49,7 @@ func TestRunSQLiteChangePlanCreateFlow(t *testing.T) {
 	var output, diagnostics bytes.Buffer
 	require.NoError(t, Run([]string{
 		"plan", "create",
-		"-lock", lockPath,
-		"-dir", filepath.Join(root, "migrations"),
+		"-dir", migrationsRoot,
 		"-dialect", "sqlite",
 		"-dsn", dsn,
 		"-output", planPath,
@@ -61,8 +57,8 @@ func TestRunSQLiteChangePlanCreateFlow(t *testing.T) {
 	require.Equal(t, "created "+planPath+"\n", output.String())
 
 	// plan create ran the migration for real against -dsn to observe its
-	// result; undo it by hand so the database is back at -lock's baseline,
-	// the same way TestRunSQLiteNonemptyChangePlanFlow drops the table it
+	// result; undo it by hand so the database is back at its baseline, the
+	// same way TestRunSQLiteNonemptyChangePlanFlow drops the table it
 	// creates before treating the database as a fresh apply target.
 	database, err = sql.Open("sqlite", dsn)
 	require.NoError(t, err)
@@ -75,8 +71,7 @@ func TestRunSQLiteChangePlanCreateFlow(t *testing.T) {
 	output.Reset()
 	err = Run([]string{
 		"plan", "create",
-		"-lock", lockPath,
-		"-dir", filepath.Join(root, "migrations"),
+		"-dir", migrationsRoot,
 		"-dialect", "sqlite",
 		"-dsn", dsn,
 		"-output", planPath,
@@ -105,6 +100,9 @@ func TestRunSQLiteChangePlanCreateFlow(t *testing.T) {
 	require.NoError(t, database.QueryRowContext(t.Context(),
 		"SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'users'").Scan(&tables))
 	require.Equal(t, 1, tables)
+	require.NoError(t, database.QueryRowContext(t.Context(),
+		"SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'accounts'").Scan(&tables))
+	require.Equal(t, 1, tables)
 }
 
 func TestRunChangePlanCreateSelectorFlags(t *testing.T) {
@@ -115,8 +113,8 @@ func TestRunChangePlanCreateSelectorFlags(t *testing.T) {
 		want string
 	}{
 		{name: "missing everything", args: []string{"plan", "create"},
-			want: "plan create requires -lock, -dir, -dialect, -dsn, and -output"},
-		{name: "positional", args: []string{"plan", "create", "-lock", "a", "-dir", "b", "-dialect", "sqlite",
+			want: "plan create requires -dir, -dialect, -dsn, and -output"},
+		{name: "positional", args: []string{"plan", "create", "-dir", "b", "-dialect", "sqlite",
 			"-dsn", "c", "-output", "d", "extra"}, want: "plan create accepts no positional arguments"},
 	}
 	for _, test := range tests {

@@ -1,6 +1,7 @@
 package conformance
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -15,8 +16,9 @@ import (
 	"testing"
 
 	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/cli/rasqlgen"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/internal/compilerlock"
+	"github.com/lestrrat-go/rasql/internal/gensum"
 	"github.com/lestrrat-go/rasql/internal/scratchmod"
 	"github.com/stretchr/testify/require"
 )
@@ -50,7 +52,6 @@ type profileManifest struct {
 	Engine                  string                          `json:"engine"`
 	Profile                 string                          `json:"profile"`
 	PortableSignatureDigest string                          `json:"portable_signature_digest"`
-	LockSHA256              string                          `json:"lock_sha256"`
 	CompileRender           map[string]profileCompileRender `json:"compile_render"`
 }
 
@@ -321,149 +322,151 @@ func TestCompileRenderManifestMutations(t *testing.T) {
 	}
 }
 
+// fixtureConfig is the subset of a fixture's rasql.json TestGeneratedQueryProvenance reads
+// straight from the config rather than from a decoded lock: the settings-digest inputs (package,
+// output, emitter, prune) and each declared query's own fields.
+type fixtureConfig struct {
+	Package string         `json:"package"`
+	Output  string         `json:"output"`
+	Emitter string         `json:"emitter"`
+	Prune   *bool          `json:"prune"`
+	Queries []fixtureQuery `json:"queries"`
+}
+
+type fixtureQuery struct {
+	ID          string         `json:"id"`
+	Input       string         `json:"input"`
+	Function    string         `json:"function"`
+	Output      string         `json:"output"`
+	Operation   string         `json:"operation"`
+	Cardinality string         `json:"cardinality"`
+	Parameters  []fixtureValue `json:"parameters"`
+	Results     []fixtureValue `json:"results"`
+}
+
+type fixtureValue struct {
+	Name string `json:"name"`
+}
+
+func readFixtureConfig(t *testing.T, root string) fixtureConfig {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, "rasql.json"))
+	require.NoError(t, err)
+	var cfg fixtureConfig
+	require.NoError(t, json.Unmarshal(data, &cfg))
+	return cfg
+}
+
+func (cfg fixtureConfig) queryByID(id string) (fixtureQuery, bool) {
+	for _, query := range cfg.Queries {
+		if query.ID == id {
+			return query, true
+		}
+	}
+	return fixtureQuery{}, false
+}
+
+func fixtureValueNames(values []fixtureValue) []string {
+	names := make([]string, len(values))
+	for index, value := range values {
+		names[index] = value.Name
+	}
+	return names
+}
+
+// TestGeneratedQueryProvenance asserts what the settings-digest inputs and the generated Go files
+// themselves say about each fixture's three queries: the package, output directory, emitter, and
+// prune setting rasql.json declares; the exact function, result, and decoder names the compact
+// emitter produced; and that rasql.sum's recorded query checksum matches the query file's current
+// bytes. It carries no assertion about PostgreSQL's live-catalog type promotion (declared
+// certainty upgraded to known, with native type facts attached): that claim has no offline
+// substitute and lives in TestGeneratedQueryProvenanceNativeTypesLive instead, guarded by
+// internal/dbtest.
 func TestGeneratedQueryProvenance(t *testing.T) {
 	for _, engine := range []string{"sqlite", "postgresql", "mysql"} {
 		t.Run(engine, func(t *testing.T) {
 			root := filepath.Join("testdata", engine)
-			lockBytes, err := os.ReadFile(filepath.Join(root, "rasql.lock.json"))
+			cfg := readFixtureConfig(t, root)
+			require.Equal(t, "store", cfg.Package)
+			require.Equal(t, "internal/store", cfg.Output)
+			require.Equal(t, "compact", cfg.Emitter)
+			require.Nil(t, cfg.Prune, "unset means the compact default, prune true, applies")
+			require.Len(t, cfg.Queries, 3)
+
+			sumData, err := os.ReadFile(filepath.Join(root, cfg.Output, "rasql.sum"))
 			require.NoError(t, err)
-			lock, err := compilerlock.Decode(lockBytes)
+			sum, err := gensum.Parse(sumData)
 			require.NoError(t, err)
-			require.Len(t, lock.Queries, 3)
-			manifestLock, err := os.ReadFile(filepath.Join(root, "d4-manifest.json"))
-			require.NoError(t, err)
-			var manifest profileManifest
-			require.NoError(t, json.Unmarshal(manifestLock, &manifest))
-			lockDigest := sha256.Sum256(lockBytes)
-			require.Equal(t, hex.EncodeToString(lockDigest[:]), manifest.LockSHA256)
-			require.Equal(t, "store", lock.Generation.Package)
-			require.Equal(t, "internal/store", lock.Generation.Output)
-			require.Equal(t, "compact", lock.Generation.Emitter)
-			require.True(t, lock.Generation.Prune)
-			require.Equal(t, []compilerlock.QueryNameRecord{
-				{ID: "maybe_overdue_task", Function: "MaybeOverdueTask", Result: "maybe_overdue_taskResult", Projection: "maybe_overdue_taskProjection", Decoder: "maybe_overdue_taskDecoder", File: "maybe_overdue_task_gen.go"},
-				{ID: "overdue_task", Function: "OverdueTask", Result: "overdue_taskResult", Projection: "overdue_taskProjection", Decoder: "overdue_taskDecoder", File: "overdue_task_gen.go"},
-				{ID: "overdue_tasks", Function: "OverdueTasks", Result: "overdue_tasksResult", Projection: "overdue_tasksProjection", Decoder: "overdue_tasksDecoder", File: "overdue_tasks_gen.go"},
-			}, lock.Generation.Queries)
-			wantParameters, wantResults := expectedProvenanceValues(engine)
-			want := []struct{ id, cardinality, file string }{{"maybe_overdue_task", "maybe", "maybe_overdue_task_gen.go"}, {"overdue_task", "one", "overdue_task_gen.go"}, {"overdue_tasks", "many", "overdue_tasks_gen.go"}}
-			for index, expected := range want {
-				query := lock.Queries[index]
-				require.Equal(t, expected.id, string(query.ID))
+
+			want := []struct{ id, function, file, cardinality string }{
+				{"maybe_overdue_task", "MaybeOverdueTask", "maybe_overdue_task_gen.go", "maybe"},
+				{"overdue_task", "OverdueTask", "overdue_task_gen.go", "one"},
+				{"overdue_tasks", "OverdueTasks", "overdue_tasks_gen.go", "many"},
+			}
+			for _, expected := range want {
+				query, ok := cfg.queryByID(expected.id)
+				require.True(t, ok, expected.id)
+				require.Equal(t, expected.function, query.Function)
+				require.Equal(t, expected.file, query.Output)
 				require.Equal(t, expected.cardinality, query.Cardinality)
 				require.Equal(t, "select", query.Operation)
-				require.Equal(t, "queries/"+strings.TrimSuffix(expected.file, "_gen.go")+".sql", query.SQL.Path)
-				require.Equal(t, wantParameters, query.Parameters)
-				require.Equal(t, wantResults, query.Results)
-				require.Equal(t, wantParameters, query.Evidence.Parameters)
-				require.Equal(t, wantResults, query.Evidence.Results)
-				require.Equal(t, lock.Engine.Dialect, query.Evidence.Dialect)
-				require.Equal(t, lock.Engine.Profile, query.Evidence.Profile)
-				require.Equal(t, []string{"projectID", "open", "cutoff"}, []string{query.Parameters[0].Name, query.Parameters[1].Name, query.Parameters[2].Name})
-				require.Equal(t, []string{"id", "project_id", "assignee_id", "title", "is_open", "due_on", "created_at"}, valueNames(query.Results))
-				data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(query.SQL.Path)))
+				require.Equal(t, "queries/"+expected.id+".sql", query.Input)
+				require.Equal(t, []string{"projectID", "open", "cutoff"}, fixtureValueNames(query.Parameters))
+				require.Equal(t, []string{"id", "project_id", "assignee_id", "title", "is_open", "due_on", "created_at"}, fixtureValueNames(query.Results))
+
+				source, err := os.ReadFile(filepath.Join(root, cfg.Output, expected.file))
 				require.NoError(t, err)
-				digest := sha256.Sum256(data)
-				require.Equal(t, hex.EncodeToString(digest[:]), query.SQL.SHA256)
+				text := string(source)
+				require.Contains(t, text, "func "+expected.function+"(")
+				require.Contains(t, text, "type "+expected.id+"Result struct")
+				require.Contains(t, text, "type "+expected.id+"Decoder struct")
+
+				queryData, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(query.Input)))
+				require.NoError(t, err)
+				digest := sha256.Sum256(queryData)
+				recordedPath := "internal/conformance/" + filepath.ToSlash(root) + "/" + query.Input
+				value, ok := gensumEntryValue(sum.Queries, recordedPath)
+				require.True(t, ok, recordedPath)
+				require.Equal(t, "sha256:"+hex.EncodeToString(digest[:]), value)
 			}
-			require.Equal(t, lock.Digests.Queries, manifestDigest(t, engine, "typed_query_digest"))
-			require.Equal(t, lock.Digests.Queries, manifestDigest(t, engine, "rendered_sql_digest"))
 		})
 	}
 }
 
-func expectedProvenanceValues(engine string) ([]compilerlock.ValueRecord, []compilerlock.ValueRecord) {
-	parameters := []compilerlock.ValueRecord{
-		{Name: "projectID", Scalar: "integer", Nullable: false, TypeCertainty: "declared", NullabilityCertainty: "declared", LogicalKind: "integer"},
-		{Name: "open", Scalar: "boolean", Nullable: false, TypeCertainty: "declared", NullabilityCertainty: "declared", LogicalKind: "boolean"},
-		{Name: "cutoff", Scalar: "time", Nullable: false, TypeCertainty: "declared", NullabilityCertainty: "declared", LogicalKind: "time"},
-	}
-	results := []compilerlock.ValueRecord{
-		{Name: "id", Scalar: "integer", Nullable: false, TypeCertainty: "declared", NullabilityCertainty: "declared", LogicalKind: "integer"},
-		{Name: "project_id", Scalar: "integer", Nullable: false, TypeCertainty: "declared", NullabilityCertainty: "declared", LogicalKind: "integer"},
-		{Name: "assignee_id", Scalar: "integer", Nullable: true, TypeCertainty: "declared", NullabilityCertainty: "declared", LogicalKind: "integer"},
-		{Name: "title", Scalar: "text", Nullable: false, TypeCertainty: "declared", NullabilityCertainty: "declared", LogicalKind: "text"},
-		{Name: "is_open", Scalar: "boolean", Nullable: false, TypeCertainty: "declared", NullabilityCertainty: "declared", LogicalKind: "boolean"},
-		{Name: "due_on", Scalar: "time", Nullable: true, TypeCertainty: "declared", NullabilityCertainty: "declared", LogicalKind: "time"},
-		{Name: "created_at", Scalar: "time", Nullable: false, TypeCertainty: "declared", NullabilityCertainty: "declared", LogicalKind: "time"},
-	}
-	if engine != "postgresql" {
-		return parameters, results
-	}
-	native := func(name string) *compilerlock.NativeTypeRecord {
-		return &compilerlock.NativeTypeRecord{Dialect: "postgresql", Name: name, Kind: "builtin"}
-	}
-	integer := func() *compilerlock.IntegerTypeFactsRecord {
-		return &compilerlock.IntegerTypeFactsRecord{DisplayWidth: compilerlock.OptionalIntRecord{}}
-	}
-	parameters[0].TypeCertainty = "known"
-	parameters[0].Native = native("int4")
-	parameters[0].Integer = integer()
-	parameters[1].TypeCertainty = "known"
-	parameters[1].Native = native("bool")
-	parameters[2].TypeCertainty = "known"
-	parameters[2].Native = native("date")
-	for index := range results {
-		value := &results[index]
-		switch value.Scalar {
-		case "integer":
-			value.TypeCertainty = "known"
-			value.Native = native("int4")
-			value.Integer = integer()
-		case "boolean":
-			value.TypeCertainty = "known"
-			value.Native = native("bool")
-		default:
-			value.TypeCertainty = "known"
-			value.Native = native(map[string]string{"text": "varchar", "time": "date"}[value.Scalar])
+func gensumEntryValue(entries []gensum.Entry, name string) (string, bool) {
+	for _, entry := range entries {
+		if entry.Name == name {
+			return entry.Value, true
 		}
 	}
-	results[6].Native = native("timestamp")
-	return parameters, results
+	return "", false
 }
 
-func valueNames(values []compilerlock.ValueRecord) []string {
-	result := make([]string, len(values))
-	for index, value := range values {
-		result[index] = value.Name
-	}
-	return result
-}
-
-func manifestDigest(t *testing.T, engine, key string) string {
-	t.Helper()
-	data, err := os.ReadFile(filepath.Join("testdata", engine, "d4-manifest.json"))
-	require.NoError(t, err)
-	var manifest map[string]any
-	require.NoError(t, json.Unmarshal(data, &manifest))
-	value, ok := manifest[key].(string)
-	require.True(t, ok)
-	return value
-}
-
+// TestGeneratedQueryProvenanceMutations proves that codegen check -- run offline, against
+// rasql.sum, with no database -- catches a fixture's rasql.json and its query files drifting out
+// of step with the generated store. Every query-declaration mutation (cardinality, a parameter's
+// type, either value list's order, the output file it renders to) changes the settings line, since
+// settingsSnapshot.Queries carries the whole declared query list; only editing a query's own SQL
+// file changes the queries line. This replaces the old lock-backed generate -check invocation
+// (decision 11): T14 deletes -check from generate, so a mutation test still calling it that way
+// would have nothing left to call.
 func TestGeneratedQueryProvenanceMutations(t *testing.T) {
-	cli := buildRasqlCLI(t)
 	for _, engine := range []string{"sqlite", "postgresql", "mysql"} {
 		for _, queryID := range []string{"overdue_task", "maybe_overdue_task", "overdue_tasks"} {
-			for _, mutation := range []struct{ name, diagnostic string }{
-				{"cardinality", "generate: generated package is stale: queries\n"}, {"parameter type", "generate: generated package is stale: queries\n"},
-				{"parameter order", "generate: generated package is stale: queries\n"}, {"result order", "generate: generated package is stale: queries\n"},
-				{"output path", "generate: generated package is stale: generation\n"},
-			} {
-				t.Run(engine+"/"+queryID+"/"+mutation.name, func(t *testing.T) {
-					root := filepath.Join(t.TempDir(), "fixture")
-					require.NoError(t, copyTree(filepath.Join("testdata", engine), root))
-					mutateFixtureConfig(t, filepath.Join(root, "rasql.json"), queryID, mutation.name)
-					runProvenanceMutationCheck(t, root, cli, mutation.diagnostic)
+			for _, mutation := range []string{"cardinality", "parameter type", "parameter order", "result order", "output path"} {
+				t.Run(engine+"/"+queryID+"/"+mutation, func(t *testing.T) {
+					_, root := copyFixtureAsModule(t, engine)
+					mutateFixtureConfig(t, filepath.Join(root, "rasql.json"), queryID, mutation)
+					runProvenanceMutationCheck(t, root, "check: generate: generated package is stale: settings (no database was consulted)")
 				})
 			}
 			t.Run(engine+"/"+queryID+"/sql byte", func(t *testing.T) {
-				root := filepath.Join(t.TempDir(), "fixture")
-				require.NoError(t, copyTree(filepath.Join("testdata", engine), root))
+				_, root := copyFixtureAsModule(t, engine)
 				path := filepath.Join(root, "queries", queryID+".sql")
 				data := mustReadFile(t, path)
 				require.NoError(t, os.WriteFile(path, append(data, '\n'), 0o600))
-				runProvenanceMutationCheck(t, root, cli, "generate: generated package is stale: queries\n")
+				recordedPath := "internal/conformance/testdata/" + engine + "/queries/" + queryID + ".sql"
+				runProvenanceMutationCheck(t, root, "check: generate: generated package is stale: queries: "+recordedPath+" (no database was consulted)")
 			})
 		}
 	}
@@ -516,16 +519,17 @@ func buildRasqlCLI(t *testing.T) string {
 	return binary
 }
 
-func runProvenanceMutationCheck(t *testing.T, root, cli, diagnostic string) {
+// runProvenanceMutationCheck runs codegen check in-process against root's rasql.json, exactly as
+// rasqlgen.RunContext lets any caller in this module do, and requires the returned error's message
+// to equal diagnostic and its mapped exit code to be 1 -- the same contract cmd/rasql applies to
+// turn this error into a process exit.
+func runProvenanceMutationCheck(t *testing.T, root, diagnostic string) {
 	t.Helper()
-	command := exec.Command(cli, "generate", "-check", "-config", filepath.Join(root, "rasql.json"))
-	command.Dir = root
-	command.Env = offlineBuildEnv(filepath.Join(filepath.Dir(root), "a6-mutation-cache"))
-	output, err := command.CombinedOutput()
-	exitErr, ok := err.(*exec.ExitError)
-	require.True(t, ok, string(output))
-	require.Equal(t, 1, exitErr.ExitCode(), string(output))
-	require.Equal(t, diagnostic, string(output))
+	var output, diagnostics bytes.Buffer
+	err := rasqlgen.RunContext(t.Context(), []string{"check", "-config", filepath.Join(root, "rasql.json")}, &output, &diagnostics)
+	require.Error(t, err)
+	require.Equal(t, 1, rasqlgen.ExitCode(err))
+	require.Equal(t, diagnostic, err.Error())
 }
 
 func runGeneratedProfile(t *testing.T, tc profileCase, records string) {

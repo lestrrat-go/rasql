@@ -25,11 +25,11 @@ func TestPlanCommitPublicationPublishesLockAfterGeneratedFiles(t *testing.T) {
 	plan, err := store.PlanContext(t.Context())
 	require.NoError(t, err)
 
-	lockPath := filepath.Join(root, "rasql.lock.json")
+	lockPath := filepath.Join(root, "rasql.sum")
 	lockSource := []byte(`{"format":1}` + "\n")
 	called := false
 	publication := Publication{
-		FinalFiles: []FinalFile{{Path: "rasql.lock.json", Source: lockSource, Mode: 0o600}},
+		FinalFiles: []FinalFile{{Path: "rasql.sum", Source: lockSource, Mode: 0o600}},
 		BeforeWrite: func(_ context.Context, got []PublicationEntry) error {
 			called = true
 			got[0].Path = "changed"
@@ -44,6 +44,32 @@ func TestPlanCommitPublicationPublishesLockAfterGeneratedFiles(t *testing.T) {
 	require.NoError(t, plan.CommitPublication(t.Context(), publication))
 	require.True(t, called)
 	require.Equal(t, lockSource, mustReadPublicationFile(t, lockPath))
+	require.FileExists(t, filepath.Join(dir, "users_gen.go"))
+}
+
+// TestPublicationAcceptsNilAfterVerify proves a publication with no AfterVerify still commits and
+// verifies: AfterVerify is optional, unlike BeforeWrite.
+func TestPublicationAcceptsNilAfterVerify(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "store")
+	store := compactStore(t, dir, schema.MustTableDef("users", schema.Integer("id"), schema.PrimaryKey("id")))
+	store.Root = root
+	plan, err := store.PlanContext(t.Context())
+	require.NoError(t, err)
+
+	sumPath := filepath.Join(root, "rasql.sum")
+	sumSource := []byte("rasql.sum v1\n")
+	called := false
+	publication := Publication{
+		FinalFiles: []FinalFile{{Path: "rasql.sum", Source: sumSource, Mode: 0o600}},
+		BeforeWrite: func(context.Context, []PublicationEntry) error {
+			called = true
+			return nil
+		},
+	}
+	require.NoError(t, plan.CommitPublication(t.Context(), publication))
+	require.True(t, called)
+	require.Equal(t, sumSource, mustReadPublicationFile(t, sumPath))
 	require.FileExists(t, filepath.Join(dir, "users_gen.go"))
 }
 
@@ -75,7 +101,7 @@ func TestPlanCommitPublicationReportsSortedClonedStates(t *testing.T) {
 	require.NoError(t, err)
 	var got []PublicationEntry
 	publication := Publication{
-		FinalFiles: []FinalFile{{Path: "rasql.lock.json", Source: []byte("lock\n"), Mode: 0o600}},
+		FinalFiles: []FinalFile{{Path: "rasql.sum", Source: []byte("lock\n"), Mode: 0o600}},
 		BeforeWrite: func(_ context.Context, entries []PublicationEntry) error {
 			got = append([]PublicationEntry(nil), entries...)
 			entries[0].Path = "mutated"
@@ -93,7 +119,7 @@ func TestPlanCommitPublicationReportsSortedClonedStates(t *testing.T) {
 		expected[filepath.ToSlash(path)] = PublicationEntry{Path: filepath.ToSlash(path), Old: PublicationState{Present: true, SHA256: mustSHA256File(t, file.Path)}, Desired: PublicationState{Present: true, SHA256: hex.EncodeToString(digest[:])}}
 	}
 	digest := sha256.Sum256([]byte("lock\n"))
-	expected["rasql.lock.json"] = PublicationEntry{Path: "rasql.lock.json", Desired: PublicationState{Present: true, SHA256: hex.EncodeToString(digest[:])}}
+	expected["rasql.sum"] = PublicationEntry{Path: "rasql.sum", Desired: PublicationState{Present: true, SHA256: hex.EncodeToString(digest[:])}}
 	require.Len(t, got, len(expected))
 	for i := 1; i < len(got); i++ {
 		require.LessOrEqual(t, got[i-1].Path, got[i].Path)
@@ -119,7 +145,7 @@ func TestPlanCommitPublicationRefusesChangedOrphanBytes(t *testing.T) {
 	require.NoError(t, err)
 	changed := []byte(genfile.Marker + "\n\npackage store\n// changed\n")
 	err = plan.CommitPublication(t.Context(), Publication{
-		FinalFiles: []FinalFile{{Path: "rasql.lock.json", Source: []byte("lock\n")}},
+		FinalFiles: []FinalFile{{Path: "rasql.sum", Source: []byte("lock\n")}},
 		BeforeWrite: func(context.Context, []PublicationEntry) error {
 			return os.WriteFile(orphan, changed, 0o600)
 		},
@@ -127,31 +153,6 @@ func TestPlanCommitPublicationRefusesChangedOrphanBytes(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Equal(t, changed, mustReadPublicationFile(t, orphan))
-}
-
-func TestPlanCommitPublicationRecoversMarkerOwnedMissingAndPresent(t *testing.T) {
-	root := t.TempDir()
-	dir := filepath.Join(root, "store")
-	old := []byte(genfile.Marker + "\n\npackage store\n")
-	require.NoError(t, os.MkdirAll(dir, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "old_gen.go"), old, 0o600))
-	store := pruningStore(t, dir, schema.MustTableDef("users", schema.Integer("id"), schema.PrimaryKey("id")))
-	store.Root = root
-	plan, err := store.PlanContext(t.Context())
-	require.NoError(t, err)
-	hash := sha256.Sum256(old)
-	missingHash := sha256.Sum256([]byte("already gone"))
-	publication := Publication{
-		FinalFiles: []FinalFile{{Path: "rasql.lock.json", Source: []byte("lock\n"), Mode: 0o600}},
-		RecoveryDeletions: []RecoveryDeletion{
-			{Path: "store/old_gen.go", OldSHA256: hex.EncodeToString(hash[:])},
-			{Path: "store/missing_gen.go", OldSHA256: hex.EncodeToString(missingHash[:])},
-		},
-		BeforeWrite: func(context.Context, []PublicationEntry) error { return nil },
-		AfterVerify: func(context.Context, []PublicationEntry) error { return nil },
-	}
-	require.NoError(t, plan.CommitPublication(t.Context(), publication))
-	require.NoFileExists(t, filepath.Join(dir, "old_gen.go"))
 }
 
 func TestPlanCommitPublicationCancellationDoesNotWrite(t *testing.T) {
@@ -164,7 +165,7 @@ func TestPlanCommitPublicationCancellationDoesNotWrite(t *testing.T) {
 	cancel()
 	called := false
 	err = plan.CommitPublication(ctx, Publication{
-		FinalFiles:  []FinalFile{{Path: "rasql.lock.json", Source: []byte("lock\n"), Mode: 0o600}},
+		FinalFiles:  []FinalFile{{Path: "rasql.sum", Source: []byte("lock\n"), Mode: 0o600}},
 		BeforeWrite: func(context.Context, []PublicationEntry) error { called = true; return nil },
 		AfterVerify: func(context.Context, []PublicationEntry) error { return nil },
 	})
@@ -203,9 +204,9 @@ func TestPlanCommitPublicationOrderIncludesRecoveryBeforeAggregators(t *testing.
 		sequence = append(sequence, "final:"+name)
 		return oldFinal(root, name, source, mode)
 	}
-	publication := Publication{FinalFiles: []FinalFile{{Path: "rasql.lock.json", Source: []byte("lock\n"), Mode: 0o600}}, BeforeWrite: func(context.Context, []PublicationEntry) error { sequence = append(sequence, "before"); return nil }, AfterVerify: func(context.Context, []PublicationEntry) error { sequence = append(sequence, "after"); return nil }}
+	publication := Publication{FinalFiles: []FinalFile{{Path: "rasql.sum", Source: []byte("lock\n"), Mode: 0o600}}, BeforeWrite: func(context.Context, []PublicationEntry) error { sequence = append(sequence, "before"); return nil }, AfterVerify: func(context.Context, []PublicationEntry) error { sequence = append(sequence, "after"); return nil }}
 	require.NoError(t, plan.CommitPublication(t.Context(), publication))
-	require.Equal(t, []string{"before", "write:q_gen.go", "write:users_gen.go", "delete:old_gen.go", "write:schema_gen.go", "write:schema_gen_test.go", "final:rasql.lock.json", "after"}, sequence)
+	require.Equal(t, []string{"before", "write:q_gen.go", "write:users_gen.go", "delete:old_gen.go", "write:schema_gen.go", "write:schema_gen_test.go", "final:rasql.sum", "after"}, sequence)
 }
 
 func TestPlanCommitPublicationFaultsStopAtTheInjectedPhase(t *testing.T) {
@@ -221,9 +222,9 @@ func TestPlanCommitPublicationFaultsStopAtTheInjectedPhase(t *testing.T) {
 		{name: "orphan delete", phase: "delete", failName: "old_gen.go", wantPrefix: []string{"before", "write:q_gen.go", "write:users_gen.go", "delete:old_gen.go"}},
 		{name: "first aggregator", phase: "write", failName: "schema_gen.go", wantPrefix: []string{"before", "write:q_gen.go", "write:users_gen.go", "delete:old_gen.go", "write:schema_gen.go"}},
 		{name: "second aggregator", phase: "write", failName: "schema_gen_test.go", wantPrefix: []string{"before", "write:q_gen.go", "write:users_gen.go", "delete:old_gen.go", "write:schema_gen.go", "write:schema_gen_test.go"}},
-		{name: "final write", phase: "final", failName: "rasql.lock.json", wantPrefix: []string{"before", "write:q_gen.go", "write:users_gen.go", "delete:old_gen.go", "write:schema_gen.go", "write:schema_gen_test.go", "final:rasql.lock.json"}},
-		{name: "verify", phase: "verify", wantPrefix: []string{"before", "write:q_gen.go", "write:users_gen.go", "delete:old_gen.go", "write:schema_gen.go", "write:schema_gen_test.go", "final:rasql.lock.json", "verify"}},
-		{name: "after verify", phase: "after", wantPrefix: []string{"before", "write:q_gen.go", "write:users_gen.go", "delete:old_gen.go", "write:schema_gen.go", "write:schema_gen_test.go", "final:rasql.lock.json", "verify", "after"}},
+		{name: "final write", phase: "final", failName: "rasql.sum", wantPrefix: []string{"before", "write:q_gen.go", "write:users_gen.go", "delete:old_gen.go", "write:schema_gen.go", "write:schema_gen_test.go", "final:rasql.sum"}},
+		{name: "verify", phase: "verify", wantPrefix: []string{"before", "write:q_gen.go", "write:users_gen.go", "delete:old_gen.go", "write:schema_gen.go", "write:schema_gen_test.go", "final:rasql.sum", "verify"}},
+		{name: "after verify", phase: "after", wantPrefix: []string{"before", "write:q_gen.go", "write:users_gen.go", "delete:old_gen.go", "write:schema_gen.go", "write:schema_gen_test.go", "final:rasql.sum", "verify", "after"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -238,7 +239,7 @@ func TestPlanCommitPublicationFaultsStopAtTheInjectedPhase(t *testing.T) {
 			queryPath := filepath.Join(root, "q.sql")
 			require.NoError(t, os.WriteFile(queryPath, []byte("SELECT 1"), 0o600))
 			oldLock := []byte("old lock\n")
-			lockPath := filepath.Join(root, "rasql.lock.json")
+			lockPath := filepath.Join(root, "rasql.sum")
 			require.NoError(t, os.WriteFile(lockPath, oldLock, 0o600))
 			store := pruningStore(t, dir, users)
 			store.Root = root
@@ -256,8 +257,8 @@ func TestPlanCommitPublicationFaultsStopAtTheInjectedPhase(t *testing.T) {
 				desiredFiles[filepath.Base(file.Path)] = file.Source
 			}
 			oldFiles["old_gen.go"] = oldOrphan
-			oldFiles["rasql.lock.json"] = oldLock
-			desiredFiles["rasql.lock.json"] = []byte("new lock\n")
+			oldFiles["rasql.sum"] = oldLock
+			desiredFiles["rasql.sum"] = []byte("new lock\n")
 			var sequence []string
 			beforeState, afterState := false, false
 			verifyRecorded := false
@@ -297,7 +298,7 @@ func TestPlanCommitPublicationFaultsStopAtTheInjectedPhase(t *testing.T) {
 				return oldVerify(root, name, desired)
 			}
 			publication := Publication{
-				FinalFiles: []FinalFile{{Path: "rasql.lock.json", Source: []byte("new lock\n"), Mode: 0o600}},
+				FinalFiles: []FinalFile{{Path: "rasql.sum", Source: []byte("new lock\n"), Mode: 0o600}},
 				BeforeWrite: func(context.Context, []PublicationEntry) error {
 					sequence = append(sequence, "before")
 					beforeState = true
@@ -322,7 +323,7 @@ func TestPlanCommitPublicationFaultsStopAtTheInjectedPhase(t *testing.T) {
 			require.Equal(t, test.phase == "after", afterState)
 			for name, old := range oldFiles {
 				path := filepath.Join(dir, name)
-				if name == "rasql.lock.json" {
+				if name == "rasql.sum" {
 					path = lockPath
 				}
 				if _, statErr := os.Stat(path); statErr == nil {
@@ -347,16 +348,16 @@ func TestPlanCommitPublicationRejectsUnsafeFinalTargetsBeforeCallback(t *testing
 		path  func(root, dir string) string
 		setup func(t *testing.T, root, dir, target string)
 	}{
-		{name: "existing symlink", path: func(root, dir string) string { return "rasql.lock.json" }, setup: func(t *testing.T, root, dir, target string) {
+		{name: "existing symlink", path: func(root, dir string) string { return "rasql.sum" }, setup: func(t *testing.T, root, dir, target string) {
 			outside := filepath.Join(root, "outside.json")
 			require.NoError(t, os.WriteFile(outside, []byte("outside\n"), 0o600))
 			require.NoError(t, os.Symlink(outside, target))
 		}},
-		{name: "existing directory", path: func(root, dir string) string { return "rasql.lock.json" }, setup: func(t *testing.T, root, dir, target string) {
+		{name: "existing directory", path: func(root, dir string) string { return "rasql.sum" }, setup: func(t *testing.T, root, dir, target string) {
 			require.NoError(t, os.Mkdir(target, 0o700))
 		}},
 		{name: "generated collision", path: func(root, dir string) string { return "store/users_gen.go" }, setup: func(t *testing.T, root, dir, target string) {}},
-		{name: "parent escapes root", path: func(root, dir string) string { return "link/rasql.lock.json" }, setup: func(t *testing.T, root, dir, target string) {
+		{name: "parent escapes root", path: func(root, dir string) string { return "link/rasql.sum" }, setup: func(t *testing.T, root, dir, target string) {
 			if err := os.Symlink(t.TempDir(), filepath.Join(root, "link")); err != nil {
 				t.Skipf("symlink unavailable: %v", err)
 			}
@@ -413,14 +414,14 @@ func TestPlanCommitPublicationRefusesFinalParentRetarget(t *testing.T) {
 	}
 	called := false
 	err = plan.CommitPublication(t.Context(), Publication{
-		FinalFiles:  []FinalFile{{Path: "final/rasql.lock.json", Source: []byte("lock\n")}},
+		FinalFiles:  []FinalFile{{Path: "final/rasql.sum", Source: []byte("lock\n")}},
 		BeforeWrite: func(context.Context, []PublicationEntry) error { called = true; return nil },
 		AfterVerify: func(context.Context, []PublicationEntry) error { return nil },
 	})
 	require.Error(t, err)
 	require.False(t, called)
-	require.NoFileExists(t, filepath.Join(finalDir, "rasql.lock.json"))
-	require.NoFileExists(t, filepath.Join(finalDir+".old", "rasql.lock.json"))
+	require.NoFileExists(t, filepath.Join(finalDir, "rasql.sum"))
+	require.NoFileExists(t, filepath.Join(finalDir+".old", "rasql.sum"))
 }
 
 func mustReadPublicationFile(t *testing.T, path string) []byte {

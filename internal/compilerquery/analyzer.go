@@ -9,10 +9,10 @@ import (
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
-	"github.com/lestrrat-go/rasql/internal/compilerlock"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/internal/queryevidence"
 	"github.com/lestrrat-go/rasql/internal/schemasource"
+	"github.com/lestrrat-go/rasql/internal/sourcefile"
 	"github.com/lestrrat-go/rasql/namedsql"
 )
 
@@ -41,9 +41,9 @@ func (a analyzer) Analyze(ctx context.Context, request schemasource.AnalysisRequ
 		return schemasource.AnalysisResult{}, err
 	}
 	queries := make([]compilerir.QueryAnalysis, 0, len(a.config.Queries))
-	snapshots := make([]compilerlock.SourceFileSnapshot, 0, len(a.config.Queries))
+	snapshots := make([]sourcefile.SourceFileSnapshot, 0, len(a.config.Queries))
 	for _, query := range a.config.Queries {
-		snapshot, err := compilerlock.SnapshotSourceFile(a.config.ModuleRoot, query.Input)
+		snapshot, err := sourcefile.SnapshotSourceFile(a.config.ModuleRoot, query.Input)
 		if err != nil {
 			return schemasource.AnalysisResult{}, err
 		}

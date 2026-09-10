@@ -6,9 +6,10 @@ project, prints each task's owner and due date, counts the tasks that are past
 that date, offers a form to add a task, and offers a button to close one.
 
 The database is PostgreSQL. The schema lives in `db/migrations` and is applied
-by `rasql migrate apply`. The checked-in lock and query inputs drive offline
-`rasql generate` and `rasql check`; a separate schema refresh captures a new
-database snapshot.
+by `rasql migrate apply`. `rasql codegen generate -dsn` then reads that
+database and writes `internal/store` and `rasql.sum`; `rasql codegen check`
+proves the checked-in files still match their inputs, with a database or
+without one.
 
 Taskboard is a module of its own, `example.com/taskboard`, so it reaches
 [rasql](https://github.com/lestrrat-go/rasql) only through the public API a
@@ -43,9 +44,9 @@ replace github.com/lestrrat-go/rasql => ../..
 The scripts differ for the same reason: they run the `rasql` command out of
 that checkout rather than one `go install` put on the PATH. `scripts/rasql.sh`
 is a whole file the walkthrough never shows: it builds `../../cmd/rasql` and
-runs the result. `scripts/generate.sh`, `scripts/migrate.sh`, and
-`scripts/refresh-schema.sh` each add a line to run from the module root and
-call `scripts/rasql.sh` instead of naming `rasql` directly.
+runs the result. `scripts/generate.sh` and `scripts/migrate.sh` each add a
+line to run from the module root and call `scripts/rasql.sh` instead of
+naming `rasql` directly.
 
 `internal/store/docs_examples_test.go` is a compile-only source for short API
 snippets in rasql's reference documentation. It calls the same generated store
@@ -60,7 +61,7 @@ walkthrough steps or the application binary.
 - `internal/taskboard` holds the view model the page is drawn from.
 - `internal/web` holds the handler and the page template.
 - `cmd/taskboard` opens the database and runs the server.
-- `rasql.json` holds the engine, migration snapshot, and typed query.
+- `rasql.json` holds the dialect, the migration directory, and the typed query.
 - `scripts` wraps the `rasql` calls, so a step is run rather than retyped.
 - `walkthrough` is the nine chapters that produced all of the above, and
   `walkthrough/steps.bundle` is the repository they were followed in, one commit
@@ -115,16 +116,17 @@ INSERT INTO projects (name) VALUES ('Website refresh'), ('Billing cleanup');"
 
 ## Regenerate the store
 
-`internal/store`'s generated files and `rasql.lock.json` are checked in. Normal
-generation is offline:
+`internal/store`'s generated files and `rasql.sum` are checked in. Applying
+`db/migrations` to the database `TASKBOARD_DSN` names and reading it back is
+what regenerates them:
 
 ```sh
 ./scripts/generate.sh
 ```
 
-`./scripts/rasql.sh check` reports stale inputs without writing. To refresh the
-lock from a disposable PostgreSQL database, set `TASKBOARD_SCHEMA_DSN` and run
-`./scripts/refresh-schema.sh`.
+`./scripts/rasql.sh codegen check` proves the checked-in files match their
+inputs without opening a database. `./scripts/rasql.sh codegen check -dsn
+"$TASKBOARD_DSN"` proves they match the database too.
 
 ## Run the tests
 

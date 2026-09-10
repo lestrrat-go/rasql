@@ -123,7 +123,7 @@ func copyFile(source, destination string) error {
 func withoutTaskboardTestDSNs(environment []string) []string {
 	result := make([]string, 0, len(environment))
 	for _, value := range environment {
-		if strings.HasPrefix(value, "TASKBOARD_SCHEMA_DSN=") || strings.HasPrefix(value, "TASKBOARD_DSN=") || strings.HasPrefix(value, "TASKBOARD_TEST_DSN=") {
+		if strings.HasPrefix(value, "TASKBOARD_DSN=") || strings.HasPrefix(value, "TASKBOARD_TEST_DSN=") {
 			continue
 		}
 		result = append(result, value)

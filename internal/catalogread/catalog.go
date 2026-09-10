@@ -21,6 +21,10 @@ type Scope struct {
 	Include, Exclude []schema.ObjectName
 	IncludeViews     bool
 	HistoryTable     schema.ObjectName
+	// Namespaces restricts the read to the named schemas (PostgreSQL) or
+	// databases (MySQL). It is enumerated only when Include is empty; a
+	// schema-qualified Include is refused alongside it, see validateScope.
+	Namespaces []string
 }
 type UnresolvedFact struct {
 	Object             schema.ObjectName
@@ -169,6 +173,9 @@ func readQueryer(ctx context.Context, queryer inspect.Queryer, p engineprofile.P
 }
 
 func catalogNames(ctx context.Context, ins inspect.Inspector, scope Scope) ([]inspect.ObjectName, error) {
+	if len(scope.Include) == 0 && len(scope.Namespaces) > 0 {
+		return namespacedNames(ctx, ins, scope.Namespaces)
+	}
 	if len(scope.Include) == 0 {
 		return ins.ObjectNames(ctx)
 	}
@@ -182,6 +189,35 @@ func catalogNames(ctx context.Context, ins inspect.Inspector, scope Scope) ([]in
 		} else {
 			current, err = ins.ObjectNames(ctx)
 		}
+		if err != nil {
+			return nil, err
+		}
+		for _, n := range current {
+			key := n.Schema + "\x00" + n.Name
+			if !seen[key] {
+				seen[key] = true
+				names = append(names, n)
+			}
+		}
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if names[i].Schema != names[j].Schema {
+			return names[i].Schema < names[j].Schema
+		}
+		return names[i].Name < names[j].Name
+	})
+	return names, nil
+}
+
+// namespacedNames enumerates every table and view in each of namespaces,
+// deduplicated and sorted the same way catalogNames sorts an Include-scoped
+// read. A namespace is a schema on PostgreSQL and a database on MySQL,
+// which is exactly what ins.ObjectNamesIn already selects on per engine.
+func namespacedNames(ctx context.Context, ins inspect.Inspector, namespaces []string) ([]inspect.ObjectName, error) {
+	var names []inspect.ObjectName
+	seen := make(map[string]bool)
+	for _, ns := range namespaces {
+		current, err := ins.ObjectNamesIn(ctx, ns)
 		if err != nil {
 			return nil, err
 		}
@@ -226,6 +262,23 @@ func validateScope(s Scope, normalizeSQLite bool) error {
 			return fmt.Errorf("duplicate object %s", objectKey(x))
 		}
 		seen[key] = true
+	}
+	if len(s.Namespaces) > 0 {
+		seenNamespace := map[string]bool{}
+		for _, ns := range s.Namespaces {
+			if ns == "" {
+				return fmt.Errorf("namespace must not be blank")
+			}
+			if seenNamespace[ns] {
+				return fmt.Errorf("duplicate namespace %s", ns)
+			}
+			seenNamespace[ns] = true
+		}
+		for _, x := range s.Include {
+			if x.Schema != "" {
+				return fmt.Errorf("namespaces and a schema-qualified include must not be combined")
+			}
+		}
 	}
 	return nil
 }

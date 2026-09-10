@@ -1,14 +1,12 @@
 {
   "format": "rasql.d4.engine-manifest.v1",
   "portable_signature_digest": "84323fa2347731b0388181443d158e8f333649177acd057a2c828e42d6f24fbb",
-  "migration_digest": "240fee8dd670fbc08696627255c7bddb42feba46469be0870fca2d24541b5992",
   "seed_digest": "fefa40b6a93ad8ad121314b89400da4fb316f572f70c27a3afb5594675c9cef1",
   "typed_query_digest": "0a507bf5c425d0736035505a3537c0d476ef795b320381f908cae08010fea25e",
   "rendered_sql_digest": "0a507bf5c425d0736035505a3537c0d476ef795b320381f908cae08010fea25e",
   "engine": "mysql",
   "profile": "mysql-8.4",
   "observed_server_version": "8.4.11",
-  "lock_sha256": "c769a3919f01d85bff9e32bd326bba6e0306d0cd928448b92e520eb1fbc12f53",
   "generated_files": 9,
   "generated_bytes": 55744,
   "compile_render": {

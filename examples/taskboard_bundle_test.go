@@ -28,7 +28,6 @@ var bundleDivergences = map[string]struct{}{
 	"internal/store/docs_examples_test.go": {},
 	"scripts/generate.sh":                  {},
 	"scripts/migrate.sh":                   {},
-	"scripts/refresh-schema.sh":            {},
 	"scripts/rasql.sh":                     {},
 }
 
@@ -55,7 +54,7 @@ func TestWalkthroughBundleMatchesSample(t *testing.T) {
 	require.Contains(t, string(goMod), "replace github.com/lestrrat-go/rasql => ../rasql\n")
 	_, err = os.Stat(filepath.Join(clone, "scripts", "rasql.sh"))
 	require.ErrorIs(t, err, os.ErrNotExist)
-	for _, script := range []string{"generate.sh", "migrate.sh", "refresh-schema.sh"} {
+	for _, script := range []string{"generate.sh", "migrate.sh"} {
 		source, readErr := os.ReadFile(filepath.Join(clone, "scripts", script))
 		require.NoError(t, readErr)
 		require.Contains(t, string(source), "rasql ", "%s must invoke the installed rasql command", script)

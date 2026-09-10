@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"unicode"
 
 	"github.com/lestrrat-go/rasql/internal/compilerconfig"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
@@ -35,11 +34,8 @@ const maxConfigBytes = 1 << 20
 // config is the project's generation settings, read from JSON.
 //
 // It holds what stays the same from run to run. Credentials remain on the
-// command line, and -check selects what one run does.
+// command line.
 type config struct {
-	// Engine and Schema select the lock-backed schema workflow.
-	Engine *schemaEngineConfig `json:"engine"`
-	Schema *schemaSourceConfig `json:"schema"`
 	// Package is the generated package name.
 	Package string `json:"package"`
 
@@ -52,8 +48,17 @@ type config struct {
 	Root string `json:"root"`
 
 	// Dialect is the SQL dialect: postgresql (or postgres), mysql, or
-	// sqlite.
+	// sqlite. Required for generate and check.
 	Dialect string `json:"dialect"`
+
+	// Migrations is a directory in internal/migrationdir layout, resolved
+	// against this file's own directory. Present means rasql manages these
+	// migrations for this store: generate refuses to run while any of them
+	// is pending, -scratch builds a database from them, and rasql.sum
+	// records their checksums. Empty means generate reads whatever -dsn or
+	// -scratch already holds, with no migration directory of its own.
+	Migrations string `json:"migrations"`
+
 	Emitter string `json:"emitter"`
 
 	// Prune allows a run to delete a generated file it no longer writes.
@@ -70,20 +75,6 @@ type config struct {
 	// Mappings names explicit semantic, Go, codec, and NULL mappings.
 	// It remains raw until package validation has supplied the generated package name.
 	Mappings json.RawMessage `json:"mappings"`
-}
-
-type schemaEngineConfig struct {
-	Dialect string `json:"dialect"`
-	Profile string `json:"profile"`
-}
-
-type schemaSourceConfig struct {
-	Kind        string            `json:"kind"`
-	Identity    string            `json:"identity"`
-	Paths       []string          `json:"paths"`
-	Inputs      []string          `json:"inputs"`
-	Command     []string          `json:"command"`
-	Environment map[string]string `json:"environment"`
 }
 
 func (c config) mappings() (compilerir.MappingConfig, error) {
@@ -263,15 +254,6 @@ func loadConfig(path string) (config, error) {
 	return loaded, nil
 }
 
-func (c config) compilerQueries(root string) compilerquery.Config {
-	queries := make([]compilerquery.QueryConfig, len(c.Queries))
-	for i, query := range c.Queries {
-		queries[i] = compilerquery.QueryConfig{ID: query.ID, Input: query.Input, Engine: query.Engine, Function: query.Function, Output: query.Output, Operation: query.Operation, Cardinality: query.Cardinality, Parameters: query.Parameters, Results: query.Results}
-	}
-	mappings, _ := c.mappings()
-	return compilerquery.Config{ModuleRoot: root, Mappings: mappings, Queries: queries}
-}
-
 // derivedQueryOutput names the generated file for a query that states none:
 // the input's base name with its extension replaced by _gen.go, so
 // queries/user_by_email.sql becomes user_by_email_gen.go beside the rest of
@@ -281,21 +263,3 @@ func derivedQueryOutput(input string) string {
 	return base[:len(base)-len(filepath.Ext(base))] + "_gen.go"
 }
 
-// snakeCase names the generated file for a query that states its template
-// inline and names no output: the function name lowered, with an underscore
-// before each word after the first, so UserByEmail becomes user_by_email and
-// UserByID becomes user_by_id.
-func snakeCase(name string) string {
-	runes := []rune(name)
-	var result strings.Builder
-	result.Grow(len(name) + 4)
-	for index, current := range runes {
-		if index > 0 && unicode.IsUpper(current) &&
-			(!unicode.IsUpper(runes[index-1]) ||
-				(index+1 < len(runes) && unicode.IsLower(runes[index+1]))) {
-			result.WriteByte('_')
-		}
-		result.WriteRune(unicode.ToLower(current))
-	}
-	return result.String()
-}

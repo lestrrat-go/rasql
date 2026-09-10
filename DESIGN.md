@@ -78,11 +78,11 @@ Inspectors use a small adapter for each database metadata surface. They normaliz
 
 ## Code generation workflow
 
-`rasql codegen generate` opens the database, calls `catalog.FromDatabase`, and passes the descriptors to `generate.Store`. A checked-in `rasql.json` at the module root carries the package name, the output directory, the dialect, the table selection, the row-type names, the static queries, and the pruning policy, and every one of those has a matching flag that overrides it for one run. A `go:generate` directive in a hand-written file of the generated package puts the run behind `go generate ./...`.
+`rasql codegen generate` opens the database, reads its catalog through `internal/schemasource` and `internal/catalogread`, and passes the descriptors to `generate.Store`. A checked-in `rasql.json` at the module root carries the dialect, the package name, the output directory, the migration directory, the table selection, the row-type names, the static queries, and the pruning policy; none of those has a matching flag, so a one-off override means editing the file.
 
-Two inputs are deliberately kept off that file. The DSN stays on the command line or in the environment, because the file is checked in and a connection string carries a credential. `-check`, which reports drift without writing, stays a flag because it selects what one run does rather than what the project is.
+Two inputs are deliberately kept off that file. The DSN stays on the command line or in the environment, because the file is checked in and a connection string carries a credential; `-scratch` and `-timeout` stay flags for the same reason, since each selects what one run does rather than what the project is. `rasql codegen check`, which reports drift without writing, is a separate command rather than a flag on `generate`.
 
-The generator CLI exposes `generate` and nothing else, and a project owns no generator program. The command is thin: every decision about what the generated package contains belongs to `catalog` and `generate`.
+The generator CLI exposes `generate` and `check` and nothing else, and a project owns no generator program. The command is thin: every decision about what the generated package contains belongs to `internal/schemasource`, `internal/catalogread`, and `generate`.
 
 ## Errors and observability
 

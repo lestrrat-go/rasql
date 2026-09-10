@@ -10,7 +10,7 @@ import (
 	"sort"
 
 	"github.com/lestrrat-go/rasql/internal/catalogread"
-	"github.com/lestrrat-go/rasql/internal/compilerlock"
+	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/dsnredact"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/internal/migrationdir"
@@ -22,8 +22,13 @@ import (
 
 // defaultPlanHistoryTable matches the default rasqlgen and migrate history
 // table name, so a plan created without -history-table lines up with the
-// catalog scope rasql schema update already excluded when it wrote -lock.
+// catalog scope plan create already excludes when it reads -dsn's baseline.
 const defaultPlanHistoryTable = "rasql_schema_migrations"
+
+// liveBaselineSourceIdentity names the catalog source plan create's baseline
+// read assigns object IDs under, since that baseline comes from -dsn itself
+// rather than from a compiler lock's own recorded source identity.
+const liveBaselineSourceIdentity = "live"
 
 // changePlanProfile adapts an observed engineprofile.Profile to
 // changeplan.ProfileSource. plan_test.go reuses it for the same purpose.
@@ -40,20 +45,20 @@ func (p changePlanProfile) Limits() changeplan.EngineLimits             { return
 // SQL diff, and per-operation result digests) comes from real inspection of
 // -dsn, not from Go the caller writes.
 //
-// -dsn names a scratch database that already matches -lock's catalog; plan
-// create runs every migration in -dir that database's migration history
-// table has not recorded, for real, to observe each operation's resulting
-// catalog. It never rolls a migration back afterward: MySQL commits DDL
-// implicitly regardless, so a rollback would silently lie about what ran.
-// A plan's baseline is verified against whatever database -dsn names again
-// at check/apply time, so -dsn here may be a disposable copy of the schema
-// rather than the database the plan will eventually be applied to.
+// -dsn names a scratch database; plan create reads its baseline catalog from
+// that database before running anything else, then runs every migration in
+// -dir that database's migration history table has not recorded, for real,
+// to observe each operation's resulting catalog. It never rolls a migration
+// back afterward: MySQL commits DDL implicitly regardless, so a rollback
+// would silently lie about what ran. A plan's baseline is verified against
+// whatever database -dsn names again at check/apply time, so -dsn here may
+// be a disposable copy of the schema rather than the database the plan will
+// eventually be applied to.
 func runChangePlanCreate(args []string) error {
 	flags := newFlagSet("plan create")
-	lockFile := addUniqueStringFlag(flags, "lock", "compiler lock file describing the plan's baseline catalog")
 	directory := addUniqueStringFlag(flags, "dir", "directory that holds pending migration directories")
 	dialectName := flags.String("dialect", "", "postgresql, mysql, or sqlite")
-	dsn := flags.String("dsn", "", "connection string for a scratch database matching -lock; unrecorded migrations are applied to it for real and not rolled back")
+	dsn := flags.String("dsn", "", "connection string for a scratch database; unrecorded migrations are applied to it for real and not rolled back")
 	historyTable := flags.String("history-table", "", "migration history table name")
 	output := addUniqueStringFlag(flags, "output", "destination migration plan file")
 	if err := flags.Parse(args); err != nil {
@@ -62,8 +67,8 @@ func runChangePlanCreate(args []string) error {
 	if len(flags.Args()) != 0 {
 		return errors.New("plan create accepts no positional arguments")
 	}
-	if lockFile.value == "" || directory.value == "" || *dialectName == "" || *dsn == "" || output.value == "" {
-		return errors.New("plan create requires -lock, -dir, -dialect, -dsn, and -output")
+	if directory.value == "" || *dialectName == "" || *dsn == "" || output.value == "" {
+		return errors.New("plan create requires -dir, -dialect, -dsn, and -output")
 	}
 	if _, err := os.Stat(output.value); err == nil {
 		return fmt.Errorf("plan create: -output %q already exists; move it aside before creating a new plan there", output.value)
@@ -74,7 +79,7 @@ func runChangePlanCreate(args []string) error {
 	if table == "" {
 		table = defaultPlanHistoryTable
 	}
-	plan, err := buildChangePlan(context.Background(), lockFile.value, directory.value, *dialectName, *dsn, table)
+	plan, err := buildChangePlan(context.Background(), directory.value, *dialectName, *dsn, table)
 	if err != nil {
 		return dsnredact.Error(err, *dsn)
 	}
@@ -85,19 +90,7 @@ func runChangePlanCreate(args []string) error {
 	return nil
 }
 
-func buildChangePlan(ctx context.Context, lockPath, directory, dialectName, dsn, historyTable string) (changeplan.Plan, error) {
-	lockBytes, err := os.ReadFile(lockPath)
-	if err != nil {
-		return changeplan.Plan{}, fmt.Errorf("plan create: read -lock: %w", err)
-	}
-	lock, err := compilerlock.Decode(lockBytes)
-	if err != nil {
-		return changeplan.Plan{}, fmt.Errorf("plan create: decode -lock: %w", err)
-	}
-	baseline, err := changeplan.CatalogFromLock(lockBytes)
-	if err != nil {
-		return changeplan.Plan{}, fmt.Errorf("plan create: baseline catalog: %w", err)
-	}
+func buildChangePlan(ctx context.Context, directory, dialectName, dsn, historyTable string) (changeplan.Plan, error) {
 	migrations, err := migrationdir.Load(directory)
 	if err != nil {
 		return changeplan.Plan{}, err
@@ -135,27 +128,23 @@ func buildChangePlan(ctx context.Context, lockPath, directory, dialectName, dsn,
 		return changeplan.Plan{}, errors.New("plan create: -dir has no pending migrations")
 	}
 
-	profile, err := engineprofile.Discover(ctx, database, engine, lock.Engine.Profile)
+	profile, err := engineprofile.DiscoverBuiltin(ctx, database, engine)
 	if err != nil {
 		return changeplan.Plan{}, fmt.Errorf("plan create: discover engine profile: %w", err)
 	}
 	source := changePlanProfile{profile}
-	// pendingMigrations calls Status just below, which creates historyTable
+	// pendingMigrations calls Status just above, which creates historyTable
 	// (and, on MySQL always and on PostgreSQL sometimes, its "_progress"
 	// companion) for real as a side effect. Both must stay out of the
-	// catalog plan create observes, the same way rasqlgen's own schema
-	// update scope keeps historyTable out of -lock's.
+	// catalog plan create reads as its baseline, the same way rasqlgen's own
+	// catalog scope keeps historyTable out of a generated store.
 	scope := catalogread.Scope{
 		HistoryTable: schema.ObjectName{Name: historyTable},
 		Exclude:      []schema.ObjectName{{Name: historyTable + "_progress"}},
 	}
 
-	current, err := catalogObjectsFromLive(ctx, database, profile, scope, baseline)
+	baseline, current, err := liveBaselineCatalog(ctx, database, profile, scope)
 	if err != nil {
-		return changeplan.Plan{}, err
-	}
-	if err := requireCatalogMatches(baseline, current, "the live -dsn catalog does not match -lock; "+
-		"run rasql schema update or apply pending schema changes first"); err != nil {
 		return changeplan.Plan{}, err
 	}
 
@@ -225,7 +214,7 @@ func buildChangePlan(ctx context.Context, lockPath, directory, dialectName, dsn,
 	if err != nil {
 		return changeplan.Plan{}, err
 	}
-	return changeplan.FromLock(lockBytes, source, history, resolved)
+	return changeplan.FromBaseline(baseline, source, history, resolved)
 }
 
 // operationKindFor chooses the one changeplan operation kind a directory
@@ -299,53 +288,77 @@ func catalogObjectValues(objects map[objectKey]changeplan.CatalogObject) []chang
 	return values
 }
 
-// catalogObjectsFromLive reads every catalog object -dsn currently holds and
-// pairs each with the ID -lock already assigned it, so later steps can carry
-// that same ID forward instead of minting a new one for an unchanged table.
-func catalogObjectsFromLive(
+// liveBaselineCatalog reads every catalog object -dsn currently holds, before
+// any pending migration runs, and assigns each one an object ID with
+// compilerir.AssignObjectIDs under the "live" source identity: there is no
+// lock to carry an existing ID forward from, so every baseline object's ID
+// is instead a deterministic hash of its kind, schema, and name. It returns
+// both the assembled baseline Catalog and the same objects keyed the way
+// observeMigration's "before" state needs them.
+func liveBaselineCatalog(
 	ctx context.Context,
 	database *sql.DB,
 	profile engineprofile.Profile,
 	scope catalogread.Scope,
-	baseline changeplan.Catalog,
-) (map[objectKey]changeplan.CatalogObject, error) {
+) (changeplan.Catalog, map[objectKey]changeplan.CatalogObject, error) {
 	read, err := catalogread.Read(ctx, database, profile, scope)
 	if err != nil {
-		return nil, fmt.Errorf("plan create: read live catalog: %w", err)
+		return changeplan.Catalog{}, nil, fmt.Errorf("plan create: read live catalog: %w", err)
+	}
+	physical, diagnostics := compilerir.PhysicalFromTableDefs(changePlanEngineIdentity(profile), read.Tables)
+	if err := changePlanCatalogError("convert", diagnostics); err != nil {
+		return changeplan.Catalog{}, nil, err
+	}
+	assigned, diagnostics := compilerir.AssignObjectIDs(physical, compilerir.IdentityInput{SourceIdentity: liveBaselineSourceIdentity})
+	if err := changePlanCatalogError("assign identity", diagnostics); err != nil {
+		return changeplan.Catalog{}, nil, err
+	}
+	baseline, err := changeplan.NewCatalogFromPhysical(assigned, liveBaselineSourceIdentity)
+	if err != nil {
+		return changeplan.Catalog{}, nil, fmt.Errorf("plan create: baseline catalog: %w", err)
 	}
 	objects := make(map[objectKey]changeplan.CatalogObject, len(read.Tables))
 	for _, table := range read.Tables {
 		id, ok := baseline.ObjectID(table.EffectiveKind(), table.Schema, table.Name)
 		if !ok {
-			return nil, fmt.Errorf("plan create: live table %q is absent from -lock; run rasql schema update first", table.QualifiedName())
+			return changeplan.Catalog{}, nil, fmt.Errorf("plan create: live table %q missing from its own assigned baseline", table.QualifiedName())
 		}
 		object, err := changeplan.NewCatalogObject(id, table)
 		if err != nil {
-			return nil, err
+			return changeplan.Catalog{}, nil, err
 		}
 		objects[keyForTable(table)] = object
 	}
-	return objects, nil
+	return baseline, objects, nil
 }
 
-// requireCatalogMatches confirms observed reproduces baseline's digest
-// exactly, so every later step's result digest is measured against a catalog
-// changeplan.FromLock will accept as this plan's baseline.
-func requireCatalogMatches(baseline changeplan.Catalog, observed map[objectKey]changeplan.CatalogObject, hint string) error {
-	observedCatalog, err := changeplan.NewCatalogLike(baseline, catalogObjectValues(observed))
-	if err != nil {
-		return err
+// changePlanEngineIdentity mirrors the EngineIdentity migrate itself builds
+// from a profile (migrate/plan_catalog.go's planCompilerEngine) and the one
+// changeplan builds internally (migrate/changeplan/catalog.go's
+// engineIdentity), neither of which is exported: plan create needs the same
+// mapping to build a compilerir.PhysicalCatalog before assigning it live
+// object IDs.
+func changePlanEngineIdentity(profile engineprofile.Profile) compilerir.EngineIdentity {
+	dialectNames := map[engineprofile.EngineID]string{
+		engineprofile.PostgreSQL: "postgresql",
+		engineprofile.MySQL:      "mysql",
+		engineprofile.SQLite:     "sqlite",
 	}
-	observedDigest, err := changeplan.CatalogDigest(observedCatalog)
-	if err != nil {
-		return err
+	version := ""
+	if profile.Version.Known {
+		version = fmt.Sprintf("%d.%d.%d", profile.Version.Major, profile.Version.Minor, profile.Version.Patch)
 	}
-	baselineDigest, err := changeplan.CatalogDigest(baseline)
-	if err != nil {
-		return err
-	}
-	if observedDigest != baselineDigest {
-		return fmt.Errorf("plan create: %s", hint)
+	return compilerir.EngineIdentity{Dialect: dialectNames[profile.Engine], Version: version, Profile: profile.ID}
+}
+
+// changePlanCatalogError reports the first error-level diagnostic, prefixed
+// with the stage that produced it, or nil when every diagnostic is at most a
+// warning.
+func changePlanCatalogError(stage string, diagnostics []compilerir.Diagnostic) error {
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Level == compilerir.DiagnosticError {
+			return fmt.Errorf("plan create: %s live catalog: %s", stage, diagnostic.Message)
+		}
 	}
 	return nil
 }

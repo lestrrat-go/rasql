@@ -147,6 +147,38 @@ func TestProfileValidationExactCases(t *testing.T) {
 	}
 }
 
+func TestDiscoverBuiltinSelectsSpecForObservedVersion(t *testing.T) {
+	tests := []struct {
+		name    string
+		engine  EngineID
+		version Version
+		wantID  string
+	}{
+		{name: "postgresql 15 is unsupported", engine: PostgreSQL, version: Version{Known: true, Major: 15}},
+		{name: "postgresql 16.0 selects postgresql-16", engine: PostgreSQL, version: Version{Known: true, Major: 16}, wantID: "postgresql-16"},
+		{name: "postgresql 17.4 selects postgresql-17", engine: PostgreSQL, version: Version{Known: true, Major: 17, Minor: 4}, wantID: "postgresql-17"},
+		{name: "postgresql 18 is unsupported", engine: PostgreSQL, version: Version{Known: true, Major: 18}},
+		{name: "mysql 8.3 is unsupported", engine: MySQL, version: Version{Known: true, Major: 8, Minor: 3}},
+		{name: "mysql 8.5 is unsupported", engine: MySQL, version: Version{Known: true, Major: 8, Minor: 5}},
+		{name: "mysql 8.4.11 selects mysql-8.4", engine: MySQL, version: Version{Known: true, Major: 8, Minor: 4, Patch: 11}, wantID: "mysql-8.4"},
+		{name: "sqlite 3.34 is unsupported", engine: SQLite, version: Version{Known: true, Major: 3, Minor: 34}},
+		{name: "sqlite 3.35 selects sqlite-3.35", engine: SQLite, version: Version{Known: true, Major: 3, Minor: 35}, wantID: "sqlite-3.35"},
+		{name: "sqlite 3.53 selects sqlite-3.35", engine: SQLite, version: Version{Known: true, Major: 3, Minor: 53}, wantID: "sqlite-3.35"},
+		{name: "unknown version is unsupported", engine: PostgreSQL, version: Version{}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			spec, ok := specForObservation(ObservedIdentity{Engine: tc.engine, Version: tc.version})
+			if tc.wantID == "" {
+				require.False(t, ok)
+				return
+			}
+			require.True(t, ok)
+			require.Equal(t, tc.wantID, spec.id)
+		})
+	}
+}
+
 func TestObserveRejectsInvalidQueryersAndEngines(t *testing.T) {
 	var queryer Queryer
 	for _, engine := range []EngineID{PostgreSQL, MySQL, SQLite, 0, Custom, EngineID(255)} {

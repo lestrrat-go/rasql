@@ -1,7 +1,6 @@
 package schemasource
 
 import (
-	"errors"
 	"strings"
 	"testing"
 
@@ -44,13 +43,3 @@ func TestReplaceKeywordDatabaseEscapesGeneratedName(t *testing.T) {
 	}
 }
 
-func TestRedactErrorPreservesCause(t *testing.T) {
-	cause := errors.New("contains secret")
-	got := redactError(cause, "secret")
-	if !errors.Is(got, cause) {
-		t.Fatalf("redacted error lost cause: %v", got)
-	}
-	if strings.Contains(got.Error(), "secret") {
-		t.Fatalf("error leaked secret: %v", got)
-	}
-}

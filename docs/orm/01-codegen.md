@@ -1,30 +1,41 @@
 # `rasql codegen`
 
 `rasql codegen` writes the typed store package from live database metadata. It
-reads that metadata with `catalog.FromDatabase` and writes deterministic Go
-source through `generate.Store`. The standalone `rasqlgen` binary accepts the
-same command under its own name.
+reads a database through `internal/schemasource` and `internal/catalogread`
+and writes deterministic Go source through `generate.Store`. The standalone
+`rasqlgen` binary accepts the same command under its own name.
 
-There is one command, `generate`, and one settings file. A project needs no
-generator program of its own.
+There are two commands, `generate` and `check`, and one settings file. A
+project needs no generator program of its own.
 
 ## Run the command
 
-Run it from the module root whenever the source database changes:
+Run `generate` from the module root whenever the source database changes:
 
 ```sh
 go get github.com/lestrrat-go/rasql/cmd/rasql@latest
 go run github.com/lestrrat-go/rasql/cmd/rasql codegen generate -dsn "$DATABASE_URL"
 ```
 
-The command opens the database itself, so the project needs no driver import
-of its own for generation.
-
-Add `-check` to report whether the checked-in package is current instead of
-writing it, which is what a CI job runs:
+The command opens the database itself, applies no migrations to it, and
+writes the store package beside one small text file, `rasql.sum`. A project
+whose `rasql.json` names a `migrations` directory can instead build a
+throwaway database from `-dsn`, apply those migrations into it, generate, and
+drop it, with `-scratch`:
 
 ```sh
-go run github.com/lestrrat-go/rasql/cmd/rasql codegen generate -dsn "$DATABASE_URL" -check
+go run github.com/lestrrat-go/rasql/cmd/rasql codegen generate -dsn "$DATABASE_URL" -scratch
+```
+
+`check` reports whether the checked-in package is current instead of writing
+it, which is what a CI job runs. With no `-dsn` it reads `rasql.sum` and
+recomputes every line from the working tree, consulting no database; with
+`-dsn` it regenerates in memory against the database and compares, which also
+catches a generated file hand-edited since the last run:
+
+```sh
+go run github.com/lestrrat-go/rasql/cmd/rasql codegen check
+go run github.com/lestrrat-go/rasql/cmd/rasql codegen check -dsn "$DATABASE_URL"
 ```
 
 A `go:generate` directive in a hand-written file of the generated package puts
@@ -63,14 +74,21 @@ module root. Write it once and check it in:
 
 `package` names the generated package and `output` names its directory,
 resolved against the module root unless `root` names a different base.
-`dialect` is `postgresql` (or `postgres`), `mysql`, or `sqlite`.
+`dialect` is `postgresql` (or `postgres`), `mysql`, or `sqlite`, required for
+`generate` and `check`.
+
+`migrations` names a directory in `internal/migrationdir` layout, resolved
+against `rasql.json`'s own directory. Present means rasql manages these
+migrations for this store: `generate` refuses to run while any of them is
+pending, naming `rasql migrate apply` as the fix; `-scratch` applies every one
+of them into the throwaway database it builds; and `rasql.sum` records each
+migration's checksum. Leave it out for a project that points `-dsn` at
+whatever database it already has, migrated or not.
 
 `tables.namespaces` selects PostgreSQL schemas, MySQL databases, or attached
 SQLite databases. `tables.include_objects` and `tables.exclude_objects` use
 exact `{schema, name}` identities, which lets one package include same-named
-tables from multiple namespaces. The command-line equivalents are
-`-namespaces`, `-include-objects`, and `-exclude-objects`; object flags accept
-`namespace.table` or an unqualified table. `tables.include` names the only
+tables from multiple namespaces. `tables.include` names the only
 tables to generate, and `tables.exclude` names tables to skip. A sweep
 otherwise covers every visible base table.
 `tables.history_table` names the migration history table to skip when it is
@@ -141,24 +159,45 @@ value. Code generation refuses incomplete native metadata before it writes
 generated files, and diff-live preserves native DDL only for the inspected
 engine while returning a typed error for another dialect.
 
+## Typed SQL declarations
+
+A query entry can also state its shape explicitly instead of leaving it to
+the analyzer: an `id`, `input`, `engine`, `function`, `operation`, and
+`cardinality`. Parameters and results are ordered declarations; each value
+states `name`, `scalar`, and `nullable`.
+
+```json
+"queries": [{
+  "id": "user_by_id",
+  "input": "queries/user_by_id.sql",
+  "engine": "postgresql",
+  "function": "UserByID",
+  "operation": "select",
+  "cardinality": "maybe",
+  "parameters": [{"name": "id", "scalar": "integer", "nullable": false}],
+  "results": [{"name": "id", "scalar": "integer", "nullable": false}]
+}]
+```
+
+`select` queries generate constructors returning `rasql.Query[R]`; use
+`rasql.All`, `rasql.Maybe`, or `rasql.One` according to the declared
+cardinality. DML with `exec` generates a `(rasql.MutationPlan, error)`
+constructor for `rasql.ExecMutation`.
+
 ## What stays on the command line
 
 `-dsn` is never read from the settings file, because that file is checked in
 and a connection string carries a credential. Keep it in an environment
-variable or a secret store.
-
-`-check` stays a flag too, since it selects what one run does rather than what
-the project is, and so does `-timeout`, which bounds the whole run and
-defaults to 30 seconds.
+variable or a secret store. `-scratch` and `-timeout`, which bounds the whole
+run and defaults to 30 seconds, stay on the command line for the same reason:
+they select what one run does, not what the project is.
 
 `-config` reads a settings file somewhere other than `rasql.json` at the
-module root. A project with no settings file at all is fine, as long as the
-flags say everything.
+module root.
 
-Every setting in the file has a matching flag: `-package`, `-output`, `-root`,
-`-dialect`, `-include`, `-exclude`, `-history-table`, and `-prune`. A flag you
-type wins over the file, so a one-off run needs no edit to it. The two list
-flags take comma-separated names.
+Every other setting -- `package`, `output`, `dialect`, `migrations`, `tables`,
+and `queries` -- lives only in `rasql.json`. There is no per-setting flag to
+override one for a single run; edit the file.
 
 ## Next
 
@@ -189,40 +228,3 @@ source: [examples/rasqlgen_binding_example_test.go](https://github.com/lestrrat-
 [The generated store](02-generated-store.md) says what the command writes and
 what each generated member is for. [Typed queries](03-typed-queries.md) reads
 rows through the generated table.
-
-## Offline generation
-
-Declare one engine and one schema source in `rasql.json`, then run
-`rasql schema update --dsn <bootstrap>` to materialize the source and write
-`rasql.lock.json` plus generated Go. The lock is derived evidence; migration
-files or the declared external or live source remains authoritative.
-
-After the lock is checked in, `rasql generate` and `rasql check` read the lock
-and config without opening a database or running a materializer. `check` reports
-drift without changing files. Use `rasql schema verify --dsn <dsn>` when live
-engine evidence must be checked again.
-
-### Typed SQL declarations
-
-Schema lock mode accepts query entries with an `id`, `input`, `engine`,
-`function`, `operation`, and `cardinality`. Parameters and results are ordered
-declarations; each value states `name`, `scalar`, and `nullable`.
-
-```json
-"queries": [{
-  "id": "user_by_id",
-  "input": "queries/user_by_id.sql",
-  "engine": "postgresql",
-  "function": "UserByID",
-  "operation": "select",
-  "cardinality": "maybe",
-  "parameters": [{"name": "id", "scalar": "integer", "nullable": false}],
-  "results": [{"name": "id", "scalar": "integer", "nullable": false}]
-}]
-```
-
-`select` queries generate constructors returning `rasql.Query[R]`; use
-`rasql.All`, `rasql.Maybe`, or `rasql.One` according to the declared
-cardinality. DML with `exec` generates a `(rasql.MutationPlan, error)`
-constructor for `rasql.ExecMutation`. The analyzer records SQL snapshots and
-engine evidence in the lock, and offline generation uses only those records.

@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lestrrat-go/rasql/internal/compilerlock"
+	"github.com/lestrrat-go/rasql/internal/gensum"
 	"github.com/lestrrat-go/rasql/internal/scratchmod"
 	"github.com/stretchr/testify/require"
 )
@@ -76,6 +76,10 @@ func TestGeneratedFootprintBuild(t *testing.T) {
 	// caches stay separate rather than being collapsed into one.
 	for _, engine := range []string{"sqlite", "postgresql", "mysql"} {
 		t.Run(engine, func(t *testing.T) {
+			dsn, ok := footprintLiveDSN(engine)
+			if !ok {
+				t.Skipf("%s is not reachable: %s unset", engine, footprintDSNEnvironment(engine))
+			}
 			copyRoot := filepath.Join(t.TempDir(), "fixture")
 			require.NoError(t, copyTree(filepath.Join("testdata", engine), copyRoot))
 			manifest := readFootprintManifest(t, filepath.Join(copyRoot, "d4-manifest.json"))
@@ -84,7 +88,11 @@ func TestGeneratedFootprintBuild(t *testing.T) {
 			removeGeneratedOutput(t, copyRoot)
 			require.NoError(t, writeBuildModule(t, copyRoot, repoRoot))
 			config := filepath.Join(copyRoot, "rasql.json")
-			generate := exec.Command(cli, "generate", "-config", config)
+			generateArgs := []string{"codegen", "generate", "-config", config, "-scratch"}
+			if dsn != "" {
+				generateArgs = append(generateArgs, "-dsn", dsn)
+			}
+			generate := exec.Command(cli, generateArgs...)
 			generate.Dir = copyRoot
 			generate.Env = offlineBuildEnv(filepath.Join(t.TempDir(), "generate-cache"))
 			generationStarted := time.Now()
@@ -95,7 +103,11 @@ func TestGeneratedFootprintBuild(t *testing.T) {
 			assertGeneratedFiles(t, copyRoot, original)
 			require.Equal(t, manifest.GeneratedFiles, files)
 			require.Equal(t, manifest.GeneratedBytes, bytes)
-			check := exec.Command(cli, "check", "-config", config)
+			checkArgs := []string{"codegen", "check", "-config", config, "-scratch"}
+			if dsn != "" {
+				checkArgs = append(checkArgs, "-dsn", dsn)
+			}
+			check := exec.Command(cli, checkArgs...)
 			check.Dir = copyRoot
 			check.Env = offlineBuildEnv(filepath.Join(t.TempDir(), "check-cache"))
 			checkOutput, checkErr := check.CombinedOutput()
@@ -170,29 +182,63 @@ func readFootprintManifest(t *testing.T, path string) footprintManifest {
 
 func removeGeneratedOutput(t *testing.T, root string) {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(root, "rasql.lock.json"))
-	require.NoError(t, err)
-	lock, err := compilerlock.Decode(data)
-	require.NoError(t, err)
-	require.NoError(t, os.RemoveAll(filepath.Join(root, lock.Generation.Output)))
+	require.NoError(t, os.RemoveAll(filepath.Join(root, configOutputDir(t, root))))
 }
 
+// expectedGeneratedFiles names every file generate is expected to (re)write, read from the
+// fixture's own checked-in rasql.sum rather than rasql.lock.json: one entry per output line,
+// joined onto the configured output directory. rasql.sum's output entries are already complete --
+// including schema_gen.go and schema_gen_test.go, which the old lock's Generation.Objects and
+// Generation.Queries lists did not carry and this function once added by hand.
 func expectedGeneratedFiles(t *testing.T, root string) map[string]struct{} {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(root, "rasql.lock.json"))
+	output := configOutputDir(t, root)
+	sumData, err := os.ReadFile(filepath.Join(root, output, "rasql.sum"))
 	require.NoError(t, err)
-	lock, err := compilerlock.Decode(data)
+	sum, err := gensum.Parse(sumData)
 	require.NoError(t, err)
-	files := make(map[string]struct{}, len(lock.Generation.Objects)+2)
-	for _, object := range lock.Generation.Objects {
-		files[filepath.ToSlash(filepath.Join(lock.Generation.Output, object.File))] = struct{}{}
+	files := make(map[string]struct{}, len(sum.Outputs))
+	for _, entry := range sum.Outputs {
+		files[filepath.ToSlash(filepath.Join(output, entry.Name))] = struct{}{}
 	}
-	for _, query := range lock.Generation.Queries {
-		files[filepath.ToSlash(filepath.Join(lock.Generation.Output, query.File))] = struct{}{}
-	}
-	files[filepath.ToSlash(filepath.Join(lock.Generation.Output, "schema_gen.go"))] = struct{}{}
-	files[filepath.ToSlash(filepath.Join(lock.Generation.Output, "schema_gen_test.go"))] = struct{}{}
 	return files
+}
+
+// configOutputDir reads the "output" field straight out of a fixture's rasql.json, which is what
+// both the offline lock-backed config and the new dialect/migrations config name their generated
+// output directory with; the field's name and meaning are unchanged between the two shapes.
+func configOutputDir(t *testing.T, root string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, "rasql.json"))
+	require.NoError(t, err)
+	var cfg struct {
+		Output string `json:"output"`
+	}
+	require.NoError(t, json.Unmarshal(data, &cfg))
+	require.NotEmpty(t, cfg.Output)
+	return cfg.Output
+}
+
+// footprintLiveDSN reports the DSN internal/dbtest would use for engine, or ok=false when the
+// engine needs no DSN (SQLite always runs, over a scratch database -scratch builds itself) or
+// when the relevant live DSN environment variable is unset, in which case the caller skips the
+// subtest by name rather than treating an absent server as a failure.
+func footprintLiveDSN(engine string) (dsn string, ok bool) {
+	if engine == "sqlite" {
+		return "", true
+	}
+	value := os.Getenv(footprintDSNEnvironment(engine))
+	if value == "" {
+		return "", false
+	}
+	return value, true
+}
+
+func footprintDSNEnvironment(engine string) string {
+	if engine == "postgresql" {
+		return "RASQL_TEST_POSTGRES_DSN"
+	}
+	return "RASQL_TEST_MYSQL_DSN"
 }
 
 func generatedFootprint(t *testing.T, root string, expected map[string]struct{}) (int, int64) {
@@ -220,6 +266,12 @@ func generatedFootprint(t *testing.T, root string, expected map[string]struct{})
 		if info.IsDir() {
 			return nil
 		}
+		// rasql.sum lives beside the generated Go files but never lists itself
+		// (internal/gensum's own contract), so it is neither part of expected
+		// nor counted in the footprint's file or byte totals.
+		if info.Name() == "rasql.sum" {
+			return nil
+		}
 		relative, err := filepath.Rel(root, path)
 		if err != nil {
 			return err
@@ -240,7 +292,7 @@ func generatedFootprint(t *testing.T, root string, expected map[string]struct{})
 func offlineBuildEnv(cache string) []string {
 	blocked := map[string]struct{}{
 		"RASQL_TEST_POSTGRES_DSN": {}, "RASQL_TEST_MYSQL_DSN": {},
-		"TASKBOARD_SCHEMA_DSN": {}, "TASKBOARD_DSN": {}, "TASKBOARD_TEST_DSN": {},
+		"TASKBOARD_DSN": {}, "TASKBOARD_TEST_DSN": {},
 		"GOPROXY": {}, "GOSUMDB": {}, "GOTOOLCHAIN": {}, "GOFLAGS": {}, "GOCACHE": {}, "GOWORK": {},
 	}
 	env := make([]string, 0, len(os.Environ())+5)

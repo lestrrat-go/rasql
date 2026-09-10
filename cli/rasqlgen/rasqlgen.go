@@ -19,7 +19,7 @@ func ExitCode(err error) int {
 	if err == nil || errors.Is(err, flag.ErrHelp) {
 		return 0
 	}
-	if errors.Is(err, generate.ErrStale) || errors.Is(err, ErrDrift) {
+	if errors.Is(err, generate.ErrStale) {
 		return 1
 	}
 	return 2
@@ -63,32 +63,6 @@ func RunContext(ctx context.Context, args []string, output, diagnostics io.Write
 			flagStream = output
 		}
 		_, _ = flagStream.Write(flagPrinted.Bytes())
-	}
-	return err
-}
-
-// RunTopLevel dispatches the schema, generate, and check commands exposed by
-// the unified rasql binary.
-func RunTopLevel(args []string, output, diagnostics io.Writer) error {
-	return RunTopLevelContext(context.Background(), args, output, diagnostics)
-}
-
-// RunTopLevelContext dispatches unified rasql schema commands with context.
-func RunTopLevelContext(ctx context.Context, args []string, output, diagnostics io.Writer) error {
-	if output == nil || diagnostics == nil {
-		return errors.New("rasqlgen: command output must not be nil")
-	}
-	var printed bytes.Buffer
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	err := command{program: "rasql", flagSetPrefix: "rasql ", output: output, diagnostics: &printed, ctx: ctx}.run(args)
-	if printed.Len() > 0 {
-		stream := diagnostics
-		if errors.Is(err, flag.ErrHelp) {
-			stream = output
-		}
-		_, _ = stream.Write(printed.Bytes())
 	}
 	return err
 }
@@ -148,24 +122,7 @@ func (c command) run(args []string) error {
 	case "generate":
 		return c.runGenerate(args[1:])
 	case "check":
-		return c.runGenerate(append([]string{"-check"}, args[1:]...))
-	case "schema":
-		if c.program != "rasql" {
-			return fmt.Errorf("unknown %s command %q; expected generate", c.program, args[0])
-		}
-		if len(args) < 2 {
-			return fmt.Errorf("usage: %s schema <update|import|verify> [flags]", c.program)
-		}
-		switch args[1] {
-		case "update":
-			return c.runSchemaUpdate(args[2:])
-		case "import":
-			return c.runSchemaImport(args[2:])
-		case "verify":
-			return c.runSchemaVerify(args[2:])
-		default:
-			return fmt.Errorf("unknown %s schema command %q; expected update, import, or verify", c.program, args[1])
-		}
+		return c.runCheck(args[1:])
 	default:
 		return fmt.Errorf("unknown %s command %q; expected generate", c.program, args[0])
 	}
@@ -175,15 +132,8 @@ func (c command) printUsage() {
 	_, _ = fmt.Fprintf(c.output, "Usage: %s <command> [flags]\n", c.program)
 	_, _ = fmt.Fprintln(c.output)
 	_, _ = fmt.Fprintln(c.output, "Commands:")
-	generateDescription := "Generate the store package from a live database"
-	if c.program == "rasql" {
-		generateDescription = "Generate the store package from a live database or schema lock"
-	}
-	_, _ = fmt.Fprintln(c.output, "  generate  "+generateDescription)
+	_, _ = fmt.Fprintln(c.output, "  generate  Generate the store package from a database")
 	_, _ = fmt.Fprintln(c.output, "  check     Check generated output without writing")
-	if c.program == "rasql" {
-		_, _ = fmt.Fprintln(c.output, "  schema    Update, import, or verify the declared schema")
-	}
 	_, _ = fmt.Fprintln(c.output)
 	_, _ = fmt.Fprintln(c.output, "Settings live in rasql.json at the module root: the package name, the output")
 	_, _ = fmt.Fprintln(c.output, "directory, the dialect, the table selection, row-type names, and static queries.")

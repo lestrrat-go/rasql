@@ -66,7 +66,7 @@ type Store struct {
 	Prune bool
 }
 
-// TypedQuery describes lock-backed native SQL for offline generation.
+// TypedQuery describes one compiled native SQL statement for generation.
 type TypedQuery struct {
 	Function      string
 	Output        string

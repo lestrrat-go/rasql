@@ -83,12 +83,36 @@ Run the unit and integration checks from the project root:
 ```sh
 go test ./...
 go test -race ./...
-env -u TASKBOARD_SCHEMA_DSN -u TASKBOARD_DSN -u TASKBOARD_TEST_DSN \
-  ./scripts/generate.sh
-env -u TASKBOARD_SCHEMA_DSN -u TASKBOARD_DSN -u TASKBOARD_TEST_DSN \
-  ./scripts/generate.sh -check
 ```
 
 The live PostgreSQL command is opt-in through `TASKBOARD_TEST_DSN`; it must
 point to a newly created disposable database. The application never drops or
 reuses a shared database.
+
+Two more commands gate a change before it ships. The first needs no
+database at all:
+
+```sh
+env -u TASKBOARD_DSN -u TASKBOARD_TEST_DSN rasql codegen check
+```
+
+```text
+internal/store is up to date; no database was consulted
+```
+
+The second needs `TASKBOARD_DSN`, and proves the checked-in store still
+matches what the database holds today: regenerating it changes nothing.
+
+```sh
+./scripts/generate.sh
+git diff --exit-code
+```
+
+```text
+migration apply completed: 0 applied
+generated internal/store
+```
+
+A clean `git diff` after that run is the whole point: if the database and
+the checked-in files had drifted apart, regenerating would have rewritten
+something for the reviewer to see.

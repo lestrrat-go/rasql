@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"go/build"
@@ -473,10 +472,10 @@ func (p Plan) commit(ctx context.Context, publication *Publication) error {
 	}
 	var published *preparedPublication
 	if publication != nil {
-		if publication.BeforeWrite == nil || publication.AfterVerify == nil {
-			return errors.New("generate: publication callbacks are required")
+		if publication.BeforeWrite == nil {
+			return errors.New("generate: publication BeforeWrite callback is required")
 		}
-		published, err = preparePublication(ctx, *publication, p.root, realDir, handles)
+		published, err = preparePublication(ctx, *publication, p.root, handles)
 		if err != nil {
 			return err
 		}
@@ -494,37 +493,6 @@ func (p Plan) commit(ctx context.Context, publication *Publication) error {
 			for _, deletion := range deletions {
 				if matchDestinations(final.destination, deletion.destination) != distinctDestinations {
 					return fmt.Errorf("generate: final publication file %s collides with generated orphan %s", final.file.Path, deletion.orphan)
-				}
-			}
-		}
-		for i := 0; i < len(published.deletions); i++ {
-			recovery := published.deletions[i]
-			merged := false
-			for _, orphan := range deletions {
-				if matchDestinations(recovery.destination, orphan.destination) == distinctDestinations {
-					continue
-				}
-				published.deletions = append(published.deletions[:i], published.deletions[i+1:]...)
-				i--
-				merged = true
-				break
-			}
-			if merged {
-				continue
-			}
-			for _, write := range writes {
-				if matchDestinations(recovery.destination, write.destination) != distinctDestinations {
-					return fmt.Errorf("generate: recovery deletion %s collides with generated destination %s", recovery.Path, write.file.Path)
-				}
-			}
-			for _, final := range published.files {
-				if matchDestinations(recovery.destination, final.destination) != distinctDestinations {
-					return fmt.Errorf("generate: recovery deletion %s collides with final file %s", recovery.Path, final.file.Path)
-				}
-			}
-			for j := i + 1; j < len(published.deletions); j++ {
-				if matchDestinations(recovery.destination, published.deletions[j].destination) != distinctDestinations {
-					return fmt.Errorf("generate: duplicate recovery deletion %s", recovery.Path)
 				}
 			}
 		}
@@ -547,10 +515,9 @@ func (p Plan) commit(ctx context.Context, publication *Publication) error {
 		}
 	}
 
-	// Step 3: delete this run's leftovers when Prune is set, plus any
-	// publication recovery entries explicitly requested by the caller.
-	if p.prune || published != nil {
-		if err := deletePublicationOrphans(ctx, dir, orphans, published); err != nil {
+	// Step 3: delete this run's leftovers when Prune is set.
+	if p.prune {
+		if err := deletePublicationOrphans(ctx, dir, orphans); err != nil {
 			return err
 		}
 	}
@@ -603,24 +570,17 @@ type FinalFile struct {
 	Mode   fs.FileMode
 }
 
-// RecoveryDeletion removes a previously generated file after confirming its
-// marker and exact recorded identity. Missing marker-only entries are safe to
-// replay and are treated as already complete.
-type RecoveryDeletion struct {
-	Path      string
-	OldSHA256 string
-}
-
-// Publication describes non-generated files and recovery deletions committed
-// with a generated package. Final files are published after aggregators.
+// Publication describes non-generated files committed with a generated
+// package. Final files are published after aggregators. BeforeWrite is
+// required. AfterVerify is optional; a nil AfterVerify makes
+// CommitPublication's post-verification step a no-op.
 type Publication struct {
-	FinalFiles        []FinalFile
-	RecoveryDeletions []RecoveryDeletion
-	BeforeWrite       func(context.Context, []PublicationEntry) error
-	AfterVerify       func(context.Context, []PublicationEntry) error
+	FinalFiles  []FinalFile
+	BeforeWrite func(context.Context, []PublicationEntry) error
+	AfterVerify func(context.Context, []PublicationEntry) error
 }
 
-// CommitPublication commits generated files and a lock/recovery publication
+// CommitPublication commits generated files and a final-file publication
 // as one guarded sequence.
 func (p Plan) CommitPublication(ctx context.Context, publication Publication) error {
 	publication = clonePublication(publication)
@@ -640,10 +600,9 @@ func contextError(ctx context.Context) error {
 }
 
 type preparedPublication struct {
-	files     []preparedFinalFile
-	deletions []preparedRecoveryDeletion
-	entries   []PublicationEntry
-	checks    []publicationCheck
+	files   []preparedFinalFile
+	entries []PublicationEntry
+	checks  []publicationCheck
 }
 
 type publicationCheck struct {
@@ -660,14 +619,6 @@ type preparedFinalFile struct {
 	destination string
 }
 
-type preparedRecoveryDeletion struct {
-	RecoveryDeletion
-	root        *os.Root
-	name        string
-	info        fs.FileInfo
-	destination string
-}
-
 func (p Publication) before(ctx context.Context, entries []PublicationEntry) error {
 	if err := contextError(ctx); err != nil {
 		return err
@@ -678,19 +629,20 @@ func (p Publication) before(ctx context.Context, entries []PublicationEntry) err
 	return p.BeforeWrite(ctx, clonePublicationEntries(entries))
 }
 
+// after runs the publication's AfterVerify callback, if any. AfterVerify is optional: a
+// publication with none set still commits and verifies, and after is then a no-op.
 func (p Publication) after(ctx context.Context, entries []PublicationEntry) error {
 	if err := contextError(ctx); err != nil {
 		return err
 	}
 	if p.AfterVerify == nil {
-		return errors.New("generate: publication AfterVerify callback is required")
+		return nil
 	}
 	return p.AfterVerify(ctx, clonePublicationEntries(entries))
 }
 
 func clonePublication(publication Publication) Publication {
 	publication.FinalFiles = cloneFinalFiles(publication.FinalFiles)
-	publication.RecoveryDeletions = append([]RecoveryDeletion(nil), publication.RecoveryDeletions...)
 	return publication
 }
 
@@ -713,7 +665,7 @@ func cloneFinalFile(file FinalFile) FinalFile {
 	return file
 }
 
-func preparePublication(ctx context.Context, publication Publication, rootPath, ownPath string, handles destinationDirectories) (*preparedPublication, error) {
+func preparePublication(ctx context.Context, publication Publication, rootPath string, handles destinationDirectories) (*preparedPublication, error) {
 	if err := contextError(ctx); err != nil {
 		return nil, err
 	}
@@ -756,29 +708,6 @@ func preparePublication(ctx context.Context, publication Publication, rootPath, 
 		entry.old = old
 		prepared.files = append(prepared.files, entry)
 	}
-	for _, deletion := range publication.RecoveryDeletions {
-		if err := validatePublicationPath(rootPath, deletion.Path); err != nil {
-			return nil, err
-		}
-		absolute := filepath.Join(rootPath, filepath.FromSlash(deletion.Path))
-		resolved, parentInfo, err := resolvePublication(absolute)
-		if err != nil {
-			return nil, err
-		}
-		root, err := handles.open(filepath.Dir(resolved), parentInfo)
-		if err != nil {
-			return nil, err
-		}
-		if filepath.Dir(resolved) != ownPath {
-			return nil, fmt.Errorf("generate: recovery deletion %s is outside the planned generated directory", deletion.Path)
-		}
-		info, err := readRecoveryMarker(root, filepath.Dir(resolved), filepath.Base(resolved), deletion)
-		if err != nil {
-			return nil, err
-		}
-		prepared.deletions = append(prepared.deletions, preparedRecoveryDeletion{RecoveryDeletion: deletion, root: root, name: filepath.Base(resolved), info: info, destination: resolved})
-	}
-	sort.Slice(prepared.deletions, func(i, j int) bool { return prepared.deletions[i].destination < prepared.deletions[j].destination })
 	return prepared, nil
 }
 
@@ -831,26 +760,6 @@ func publicationEntries(p Plan, writes []commitWrite, orphans []validatedOrphan,
 		}
 		entries = append(entries, PublicationEntry{Path: filepath.ToSlash(path), Old: old, Desired: PublicationState{Present: false}})
 		final.checks = append(final.checks, publicationCheck{root: dir, name: orphan.name, desired: PublicationState{Present: false}})
-	}
-	for _, deletion := range final.deletions {
-		path, err := filepath.Rel(p.root, deletion.destination)
-		if err != nil {
-			return nil, err
-		}
-		old := PublicationState{Present: deletion.info != nil}
-		if deletion.info != nil {
-			file, err := deletion.root.Open(deletion.name)
-			if err != nil {
-				return nil, err
-			}
-			old.SHA256, err = hashReader(file)
-			_ = file.Close()
-			if err != nil {
-				return nil, err
-			}
-		}
-		entries = append(entries, PublicationEntry{Path: filepath.ToSlash(path), Old: old, Desired: PublicationState{Present: false}})
-		final.checks = append(final.checks, publicationCheck{root: deletion.root, name: deletion.name, desired: PublicationState{Present: false}})
 	}
 	for _, file := range final.files {
 		desired := sha256.Sum256(finalBytes(*file.file))
@@ -913,12 +822,11 @@ func (p *preparedPublication) write(ctx context.Context) error {
 }
 
 type publicationDeletion struct {
-	path     string
-	orphan   *validatedOrphan
-	recovery *preparedRecoveryDeletion
+	path   string
+	orphan *validatedOrphan
 }
 
-func deletePublicationOrphans(ctx context.Context, dir *os.Root, orphans []validatedOrphan, publication *preparedPublication) error {
+func deletePublicationOrphans(ctx context.Context, dir *os.Root, orphans []validatedOrphan) error {
 	deletions := make([]publicationDeletion, 0, len(orphans))
 	for i := range orphans {
 		deletions = append(deletions, publicationDeletion{
@@ -926,52 +834,17 @@ func deletePublicationOrphans(ctx context.Context, dir *os.Root, orphans []valid
 			orphan: &orphans[i],
 		})
 	}
-	if publication != nil {
-		for i := range publication.deletions {
-			deletion := &publication.deletions[i]
-			deletions = append(deletions, publicationDeletion{
-				path:     deletion.destination,
-				recovery: deletion,
-			})
-		}
-	}
 	sort.SliceStable(deletions, func(i, j int) bool { return deletions[i].path < deletions[j].path })
 	for _, deletion := range deletions {
 		if err := contextError(ctx); err != nil {
 			return err
 		}
-		if deletion.orphan != nil {
-			if err := deletion.orphan.confirm(dir); err != nil {
-				return err
-			}
-			if err := removeGeneratedFile(dir, deletion.orphan.name); err != nil {
-				return fmt.Errorf("generate: delete %s: %w", deletion.orphan.orphan, err)
-			}
-			continue
-		}
-		if deletion.recovery.info == nil {
-			continue
-		}
-		if err := deletion.recovery.confirm(); err != nil {
+		if err := deletion.orphan.confirm(dir); err != nil {
 			return err
 		}
-		if err := removeGeneratedFile(deletion.recovery.root, deletion.recovery.name); err != nil {
-			return fmt.Errorf("generate: delete %s: %w", deletion.recovery.Path, err)
+		if err := removeGeneratedFile(dir, deletion.orphan.name); err != nil {
+			return fmt.Errorf("generate: delete %s: %w", deletion.orphan.orphan, err)
 		}
-	}
-	return nil
-}
-
-func (d *preparedRecoveryDeletion) confirm() error {
-	info, err := readRecoveryMarker(d.root, d.root.Name(), d.name, d.RecoveryDeletion)
-	if err != nil {
-		return err
-	}
-	if info == nil {
-		return fmt.Errorf("generate: recovery deletion %s changed before deletion", d.Path)
-	}
-	if !os.SameFile(d.info, info) {
-		return fmt.Errorf("generate: recovery deletion %s changed before deletion", d.Path)
 	}
 	return nil
 }
@@ -1040,46 +913,6 @@ func hashReader(reader io.Reader) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("%x", hash.Sum(nil)), nil
-}
-
-func readRecoveryMarker(root *os.Root, dirPath, name string, deletion RecoveryDeletion) (fs.FileInfo, error) {
-	if len(deletion.OldSHA256) != sha256.Size*2 {
-		return nil, fmt.Errorf("generate: recovery deletion %s requires a lowercase SHA-256", deletion.Path)
-	}
-	if _, err := hex.DecodeString(deletion.OldSHA256); err != nil || deletion.OldSHA256 != strings.ToLower(deletion.OldSHA256) {
-		return nil, fmt.Errorf("generate: recovery deletion %s requires a lowercase SHA-256", deletion.Path)
-	}
-	_, lstatErr := root.Lstat(name)
-	if lstatErr != nil {
-		if errors.Is(lstatErr, fs.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, lstatErr
-	}
-	info, err := readOrphanMarker(root, dirPath, name)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	if info == nil {
-		return nil, fmt.Errorf("generate: refusing recovery deletion %s: it is not a generated file", deletion.Path)
-	}
-	expected := deletion.OldSHA256
-	file, openErr := root.Open(name)
-	if openErr != nil {
-		return nil, openErr
-	}
-	actual, hashErr := hashReader(file)
-	_ = file.Close()
-	if hashErr != nil || actual != expected {
-		if hashErr != nil {
-			return nil, hashErr
-		}
-		return nil, fmt.Errorf("generate: refusing recovery deletion %s: file hash differs", deletion.Path)
-	}
-	return info, nil
 }
 
 func writePublicationFile(root *os.Root, name string, source []byte, requestedMode fs.FileMode) error {

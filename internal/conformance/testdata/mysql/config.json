@@ -1,7 +1,0 @@
-{
-  "engine": "mysql",
-  "profile": "mysql-8.4",
-  "dsn_env": "RASQL_TEST_MYSQL_DSN",
-  "driver": "github.com/go-sql-driver/mysql",
-  "transaction_mode": "explicit-transaction-v1"
-}

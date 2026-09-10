@@ -3,7 +3,6 @@ package changeplan
 import (
 	"bytes"
 	"encoding/json"
-	"os"
 	"testing"
 
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
@@ -276,11 +275,8 @@ func TestResultDigestWireIsRequiredStrictAndIdentityBound(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestFromLockRevalidatesResolvedResultDigest(t *testing.T) {
-	lock, err := os.ReadFile("testdata/external/lock.json")
-	require.NoError(t, err)
-	baseline, err := CatalogFromLock(lock)
-	require.NoError(t, err)
+func TestFromBaselineRevalidatesResolvedResultDigest(t *testing.T) {
+	baseline := resultDigestLockBaseline(t)
 	tasks, ok := baseline.ObjectID(schema.ObjectTable, "main", "tasks")
 	require.True(t, ok)
 	afterObject, err := NewCatalogObject(tasks, schema.TableDef{Schema: "main", Name: "tasks", Columns: []schema.ColumnDef{
@@ -297,11 +293,11 @@ func TestFromLockRevalidatesResolvedResultDigest(t *testing.T) {
 	resolved, err := NewResolvedChanges(baseline, []ResolvedCatalogStep{mustResultStep(t, operation.ID(), after)}, nil,
 		[]Operation{operation}, nil, nil)
 	require.NoError(t, err)
-	validPlan, err := FromLock(lock, lockProfileForResultDigest(t), mustHistory(t), resolved)
+	validPlan, err := FromBaseline(baseline, resultDigestLockProfile(t), mustHistory(t), resolved)
 	require.NoError(t, err)
 	require.Equal(t, digest, validPlan.Operations()[0].ResultDigest())
 	resolved.operations[0].resultDigest = Digest{7}
-	_, err = FromLock(lock, lockProfileForResultDigest(t), mustHistory(t), resolved)
+	_, err = FromBaseline(baseline, resultDigestLockProfile(t), mustHistory(t), resolved)
 	require.ErrorIs(t, err, ErrInvalidPlan)
 	resolved.operations[0].resultDigest = digest
 	changedObject, err := NewCatalogObject(tasks, schema.TableDef{Schema: "main", Name: "tasks", Columns: []schema.ColumnDef{
@@ -312,15 +308,12 @@ func TestFromLockRevalidatesResolvedResultDigest(t *testing.T) {
 	changedAfter, err := NewCatalogLike(baseline, []CatalogObject{changedObject})
 	require.NoError(t, err)
 	resolved.steps[0].after = changedAfter
-	_, err = FromLock(lock, lockProfileForResultDigest(t), mustHistory(t), resolved)
+	_, err = FromBaseline(baseline, resultDigestLockProfile(t), mustHistory(t), resolved)
 	require.ErrorIs(t, err, ErrInvalidPlan)
 }
 
-func TestFromLockReverseSourceOrderResultDigestsRoundTrip(t *testing.T) {
-	lock, err := os.ReadFile("testdata/external/lock.json")
-	require.NoError(t, err)
-	baseline, err := CatalogFromLock(lock)
-	require.NoError(t, err)
+func TestFromBaselineReverseSourceOrderResultDigestsRoundTrip(t *testing.T) {
+	baseline := resultDigestLockBaseline(t)
 	tasks, ok := baseline.ObjectID(schema.ObjectTable, "main", "tasks")
 	require.True(t, ok)
 	makeAfter := func(columns ...schema.ColumnDef) Catalog {
@@ -352,7 +345,7 @@ func TestFromLockReverseSourceOrderResultDigestsRoundTrip(t *testing.T) {
 	for _, operation := range resolved.Operations() {
 		require.Equal(t, goldenLockResultDigests[operation.ID()], operation.ResultDigest().String())
 	}
-	plan, err := FromLock(lock, lockProfileForResultDigest(t), mustHistory(t), resolved)
+	plan, err := FromBaseline(baseline, resultDigestLockProfile(t), mustHistory(t), resolved)
 	require.NoError(t, err)
 	byID := make(map[OperationID]Digest)
 	for _, operation := range plan.Operations() {
@@ -376,7 +369,7 @@ func TestFromLockReverseSourceOrderResultDigestsRoundTrip(t *testing.T) {
 	require.Equal(t, goldenLockResultDigests[second.ID()], decodedByID[second.ID()].String())
 }
 
-func lockProfileForResultDigest(t *testing.T) Profile {
+func resultDigestLockProfile(t *testing.T) Profile {
 	t.Helper()
 	base := sourceRepairProfile(t)
 	value := engineprofile.Profile{ID: "sqlite-3.35", Engine: engineprofile.SQLite,
@@ -384,6 +377,15 @@ func lockProfileForResultDigest(t *testing.T) Profile {
 	profile, err := NewProfile(sourceRepairProfileSource{value: value})
 	require.NoError(t, err)
 	return profile
+}
+
+// resultDigestLockBaseline builds the same "tasks" baseline catalog the
+// retired testdata/external/lock.json fixture always described (see
+// fixtureTasksPhysicalCatalog), so every golden result digest below, computed
+// long before internal/compilerlock was deleted, still holds.
+func resultDigestLockBaseline(t *testing.T) Catalog {
+	t.Helper()
+	return fixtureTasksCatalog(t, "tasks")
 }
 
 func mustHistory(t *testing.T) HistoryIdentity {

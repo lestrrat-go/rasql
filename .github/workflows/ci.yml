@@ -46,12 +46,20 @@ jobs:
           RASQL_CONFORMANCE_COMMIT: ${{ github.sha }}
         run: go test -p 1 -count=1 -v ./...
       - run: go vet ./...
-      # The sample runs on PostgreSQL, so its tests and its generated-store
-      # check both need a live server and run in the "integration" job. This
-      # job has no database, and builds it.
+      # The sample runs on PostgreSQL, so its tests need a live server and run
+      # in the "integration" job. This job has no database, and builds the
+      # module and checks its generated store against its checked-in inputs,
+      # neither of which needs one.
       - name: Sample module
         working-directory: sample/taskboard
         run: go build ./...
+      - name: Check the sample's generated store
+        working-directory: sample/taskboard
+        run: |
+          unset TASKBOARD_DSN TASKBOARD_TEST_DSN
+          test -z "${TASKBOARD_DSN-}"
+          test -z "${TASKBOARD_TEST_DSN-}"
+          ./scripts/rasql.sh codegen check
 
   windows-plan-lock:
     name: Windows plan lock
@@ -106,7 +114,7 @@ jobs:
         # accepts -- and it reads the flags it allows for their effective
         # value, since go's own parsing lets a later assignment overturn an
         # earlier one.
-        run: go test -p 1 -count=1 -v ./catalog/... ./cli/rasqlgen/... ./cli/rasqlmigrate/... ./generate/... ./inspect/... ./internal/engineprofile/... ./internal/rowvalue/... ./migrate/... ./render/... .
+        run: go test -p 1 -count=1 -v ./catalog/... ./cli/rasqlgen/... ./cli/rasqlmigrate/... ./examples/... ./generate/... ./inspect/... ./internal/catalogread/... ./internal/engineprofile/... ./internal/rowvalue/... ./internal/schemasource/... ./migrate/... ./render/... .
 
       - name: Run D4 conformance matrix
         env:
@@ -125,28 +133,23 @@ jobs:
             .tmp/d4-conformance.json
           if-no-files-found: error
 
-      # sample/taskboard is a module of its own. Its offline check reads the
-      # checked-in lock and generated files without a database. Its live tests
-      # use the migrated database below.
+      # sample/taskboard is a module of its own. Its offline check ran in the
+      # "check" job, without a database; its live check and its tests use the
+      # migrated database below.
       - name: Create the sample's databases
         run: |
           docker compose exec -T postgres psql -U rasql -d postgres \
             -c 'CREATE DATABASE taskboard;'
-
-      - name: Check the sample's generated store
-        working-directory: sample/taskboard
-        run: |
-          unset TASKBOARD_SCHEMA_DSN TASKBOARD_DSN TASKBOARD_TEST_DSN
-          test -z "${TASKBOARD_SCHEMA_DSN-}"
-          test -z "${TASKBOARD_DSN-}"
-          test -z "${TASKBOARD_TEST_DSN-}"
-          ./scripts/rasql.sh check
 
       - name: Migrate the sample's test database
         working-directory: sample/taskboard
         env:
           TASKBOARD_DSN: postgres://rasql:rasql@127.0.0.1:5432/taskboard?sslmode=disable
         run: ./scripts/migrate.sh apply
+
+      - name: Check the sample's generated store against the database
+        working-directory: sample/taskboard
+        run: ./scripts/rasql.sh codegen check -dsn "postgres://rasql:rasql@127.0.0.1:5432/taskboard?sslmode=disable"
 
       - name: Run the sample's tests against a live database
         working-directory: sample/taskboard

@@ -56,7 +56,7 @@ func TestRunHelp(t *testing.T) {
 	err := RunLegacy([]string{"-h"}, &output)
 	require.ErrorIs(t, err, flag.ErrHelp)
 	require.Contains(t, output.String(), "Usage: rasqlgen <command> [flags]")
-	require.Contains(t, output.String(), "generate  Generate the store package from a live database")
+	require.Contains(t, output.String(), "generate  Generate the store package from a database")
 	require.Contains(t, output.String(), "Settings live in rasql.json at the module root")
 	require.NotContains(t, output.String(), "bootstrap")
 	require.NotContains(t, output.String(), "init")

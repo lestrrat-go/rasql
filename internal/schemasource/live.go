@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,10 +17,8 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/catalogread"
-	"github.com/lestrrat-go/rasql/internal/compilerlock"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/migrate"
-	"github.com/lestrrat-go/rasql/sqltext"
 	_ "modernc.org/sqlite"
 )
 
@@ -173,12 +170,6 @@ func replaceKeywordDatabase(s, name string) string {
 	return s + " dbname=" + quoted
 }
 
-type defaultProfiles struct{}
-
-func (defaultProfiles) Resolve(ctx context.Context, db *sql.DB, e EngineConfig) (engineprofile.Profile, error) {
-	id := engineID(e.Dialect)
-	return engineprofile.Discover(ctx, db, id, e.Profile)
-}
 func engineID(s string) engineprofile.EngineID {
 	switch strings.ToLower(s) {
 	case "postgresql", "postgres":
@@ -196,19 +187,36 @@ func (defaultCatalogs) Read(ctx context.Context, db catalogread.DB, p engineprof
 	return catalogread.Read(ctx, db, p, s)
 }
 
+func dialectFor(e engineprofile.EngineID) dialect.Dialect {
+	return map[engineprofile.EngineID]dialect.Dialect{engineprofile.PostgreSQL: dialect.PostgreSQL(), engineprofile.MySQL: dialect.MySQL(), engineprofile.SQLite: dialect.SQLite()}[e]
+}
+
 type defaultMigrations struct{}
 
-func (defaultMigrations) Apply(ctx context.Context, db *sql.DB, p engineprofile.Profile, s []compilerlock.SourceFileSnapshot) error {
-	d := map[engineprofile.EngineID]dialect.Dialect{engineprofile.PostgreSQL: dialect.PostgreSQL(), engineprofile.MySQL: dialect.MySQL(), engineprofile.SQLite: dialect.SQLite()}[p.Engine]
-	r, e := migrate.New(db, d)
+// Apply applies migrations to db, in order, the migrations loaded through internal/migrationdir
+// and carrying their own IDs, modes, and reverse sources.
+func (defaultMigrations) Apply(ctx context.Context, db *sql.DB, p engineprofile.Profile, migrations []migrate.Migration) error {
+	r, e := migrate.New(db, dialectFor(p.Engine))
 	if e != nil {
 		return e
 	}
-	ms := make([]migrate.Migration, len(s))
-	for i, x := range s {
-		ms[i] = migrate.Migration{ID: fmt.Sprintf("%06d_%s", i, strings.ReplaceAll(filepath.Base(x.Path()), ".", "_")), Statements: []migrate.Statement{{Source: x.Path(), SQL: sqltext.Text(x.Bytes())}}}
-	}
-	_, e = r.Apply(ctx, migrate.AllPending(), ms...)
+	_, e = r.Apply(ctx, migrate.AllPending(), migrations...)
 	return e
+}
+
+// Status reports migrations' state without applying or creating anything beyond what
+// migrate.Runner.Status itself creates; see Read's doc comment for the one residual case.
+func (defaultMigrations) Status(ctx context.Context, db *sql.DB, p engineprofile.Profile, migrations []migrate.Migration) ([]migrate.StatusEntry, error) {
+	r, e := migrate.New(db, dialectFor(p.Engine))
+	if e != nil {
+		return nil, e
+	}
+	return r.Status(ctx, migrations...)
+}
+
+type defaultProfileDiscoverer struct{}
+
+func (defaultProfileDiscoverer) Discover(ctx context.Context, db *sql.DB, d string) (engineprofile.Profile, error) {
+	return engineprofile.DiscoverBuiltin(ctx, db, engineID(d))
 }
 func errorsJoin(a, b error) error { return errors.Join(a, b) }
