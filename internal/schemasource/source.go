@@ -17,6 +17,7 @@ import (
 	"github.com/lestrrat-go/rasql/internal/compilerlock"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/internal/sourcefile"
+	"github.com/lestrrat-go/rasql/migrate"
 )
 
 type EngineConfig struct{ Dialect, Profile string }
@@ -74,10 +75,25 @@ type ProcessRunner interface {
 	Run(context.Context, ProcessRequest) (ProcessResult, error)
 }
 type MigrationApplier interface {
-	Apply(context.Context, *sql.DB, engineprofile.Profile, []sourcefile.SourceFileSnapshot) error
+	// Apply applies every migration derived from snaps (Materialize's flat-file sources) unless
+	// migrations is non-empty, in which case migrations is applied directly and snaps is ignored;
+	// Read always supplies migrations and leaves snaps empty.
+	Apply(ctx context.Context, db *sql.DB, p engineprofile.Profile, snaps []sourcefile.SourceFileSnapshot, migrations []migrate.Migration) error
+	// Status reports each migration's state in the database, the way migrate.Runner.Status does,
+	// without applying anything.
+	Status(ctx context.Context, db *sql.DB, p engineprofile.Profile, migrations []migrate.Migration) ([]migrate.StatusEntry, error)
 }
 type ProfileResolver interface {
 	Resolve(context.Context, *sql.DB, EngineConfig) (engineprofile.Profile, error)
+}
+
+// ProfileDiscoverer resolves an engine profile from the connected server
+// alone, with no caller-supplied override. Read uses it instead of
+// ProfileResolver: the read path has no engine.profile config key to
+// override with (design decision: engine.profile is derived from the
+// server only), so its seam takes a dialect rather than an EngineConfig.
+type ProfileDiscoverer interface {
+	Discover(ctx context.Context, db *sql.DB, dialect string) (engineprofile.Profile, error)
 }
 type CatalogReader interface {
 	Read(context.Context, catalogread.DB, engineprofile.Profile, catalogread.Scope) (catalogread.Result, error)
@@ -103,6 +119,8 @@ type Dependencies struct {
 	Profiles   ProfileResolver
 	Catalogs   CatalogReader
 	Analyzer   Analyzer
+	// Discoverer is used only by Read; Materialize keeps using Profiles.
+	Discoverer ProfileDiscoverer
 }
 
 func ValidateRequest(r Request) error {
@@ -190,7 +208,7 @@ func validEnvKey(s string) bool {
 }
 
 func DefaultDependencies() Dependencies {
-	return Dependencies{Factory: defaultFactory{}, Opener: sqlOpener{}, Processes: commandRunner{}, Migrations: defaultMigrations{}, Profiles: defaultProfiles{}, Catalogs: defaultCatalogs{}}
+	return Dependencies{Factory: defaultFactory{}, Opener: sqlOpener{}, Processes: commandRunner{}, Migrations: defaultMigrations{}, Profiles: defaultProfiles{}, Catalogs: defaultCatalogs{}, Discoverer: defaultProfileDiscoverer{}}
 }
 
 func Materialize(ctx context.Context, req Request, deps Dependencies) (Result, error) {
@@ -246,7 +264,7 @@ func Materialize(ctx context.Context, req Request, deps Dependencies) (Result, e
 			return err
 		}
 		if req.Source.Kind == "migrations" {
-			if err = deps.Migrations.Apply(ctx, db, profile, snaps); err != nil {
+			if err = deps.Migrations.Apply(ctx, db, profile, snaps, nil); err != nil {
 				return err
 			}
 		}

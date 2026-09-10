@@ -18,6 +18,7 @@ import (
 	"github.com/lestrrat-go/rasql/internal/schemasource"
 	"github.com/lestrrat-go/rasql/internal/scratchmod"
 	"github.com/lestrrat-go/rasql/internal/sourcefile"
+	"github.com/lestrrat-go/rasql/migrate"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 
@@ -275,8 +276,12 @@ func (knownPostgreSQLProfiles) Resolve(context.Context, *sql.DB, schemasource.En
 
 type knownPostgreSQLMigrations struct{}
 
-func (knownPostgreSQLMigrations) Apply(context.Context, *sql.DB, engineprofile.Profile, []sourcefile.SourceFileSnapshot) error {
+func (knownPostgreSQLMigrations) Apply(context.Context, *sql.DB, engineprofile.Profile, []sourcefile.SourceFileSnapshot, []migrate.Migration) error {
 	return nil
+}
+
+func (knownPostgreSQLMigrations) Status(context.Context, *sql.DB, engineprofile.Profile, []migrate.Migration) ([]migrate.StatusEntry, error) {
+	return nil, nil
 }
 
 type knownPostgreSQLCatalogs struct{}

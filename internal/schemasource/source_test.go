@@ -14,6 +14,7 @@ import (
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/internal/schemasource"
 	"github.com/lestrrat-go/rasql/internal/sourcefile"
+	"github.com/lestrrat-go/rasql/migrate"
 )
 
 type fakeFactory struct {
@@ -56,11 +57,21 @@ func (f *fakeCatalog) Read(context.Context, catalogread.DB, engineprofile.Profil
 	return f.result, f.err
 }
 
-type fakeMigration struct{ calls int }
+type fakeMigration struct {
+	calls       int
+	statusCalls int
+	statuses    []migrate.StatusEntry
+	statusErr   error
+}
 
-func (f *fakeMigration) Apply(context.Context, *sql.DB, engineprofile.Profile, []sourcefile.SourceFileSnapshot) error {
+func (f *fakeMigration) Apply(context.Context, *sql.DB, engineprofile.Profile, []sourcefile.SourceFileSnapshot, []migrate.Migration) error {
 	f.calls++
 	return nil
+}
+
+func (f *fakeMigration) Status(context.Context, *sql.DB, engineprofile.Profile, []migrate.Migration) ([]migrate.StatusEntry, error) {
+	f.statusCalls++
+	return f.statuses, f.statusErr
 }
 
 type fakeProcess struct {
