@@ -67,12 +67,40 @@ func TestDocExamplesMatchSource(t *testing.T) {
 // come from a file the compiler sees.
 var goFence = regexp.MustCompile("(?ms)^```go$\n(.*?)\n^```$")
 
-// TestDocGoBlocksComeFromExamples holds every Go block in the documentation to
-// a file the compiler and `go test` see. A snippet written straight into a page
-// answers to nothing and drifts from the API it describes, so the fence has to
-// sit inside an include block rather than be maintained by hand.
+// maxSnippetLines is the longest a hand-written Go block may be before it counts
+// as a worked example rather than a snippet. A few lines naming a call and its
+// arguments are what a paragraph needs to point at something concrete, and
+// holding those to a file under examples/ costs more than it protects. A block
+// past this length carries enough behavior to be worth compiling.
+const maxSnippetLines = 6
+
+// isHandWrittenSnippet reports whether a Go block short enough to be a snippet,
+// and not a whole file, may stand outside an include block. A block carrying a
+// package clause is a complete example whatever its length, so it never counts.
+func isHandWrittenSnippet(body string) bool {
+	lines := strings.Split(strings.TrimSpace(body), "\n")
+	if len(lines) > maxSnippetLines {
+		return false
+	}
+	for _, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "package ") {
+			return false
+		}
+	}
+	return true
+}
+
+// TestDocGoBlocksComeFromExamples holds every worked Go example in the
+// documentation to a file the compiler and `go test` see. A whole example
+// written straight into a page answers to nothing and drifts from the API it
+// describes, so its fence has to sit inside an include block rather than be
+// maintained by hand.
 //
-// The walkthrough's chapters are the one place a Go block may stand outside an
+// A short snippet is exempt. A page often needs to show the shape of one call
+// before the worked example arrives, and isHandWrittenSnippet decides which
+// blocks are short enough to write inline.
+//
+// The walkthrough's chapters are the other place a Go block may stand outside an
 // include block, because most of them show the Taskboard project as it stood at
 // an earlier step and no current file holds those versions. They answer to the
 // recorded repository instead, which TestWalkthroughGoBlocksComeFromSteps
@@ -88,10 +116,13 @@ func TestDocGoBlocksComeFromExamples(t *testing.T) {
 
 		text := string(contents)
 		included := includeBlock.FindAllStringIndex(text, -1)
-		for _, fence := range goFence.FindAllStringIndex(text, -1) {
+		for _, fence := range goFence.FindAllStringSubmatchIndex(text, -1) {
+			if isHandWrittenSnippet(text[fence[2]:fence[3]]) {
+				continue
+			}
 			require.True(t, fenceWithinInclude(fence, included),
-				"%s holds a hand-written Go block at line %d; move the code into an example under examples/ and include it with <!-- INCLUDE(examples/…) -->",
-				page, strings.Count(text[:fence[0]], "\n")+1)
+				"%s holds a hand-written Go example at line %d; move the code into an example under examples/ and include it with <!-- INCLUDE(examples/…) -->, or shorten it to a snippet of at most %d lines",
+				page, strings.Count(text[:fence[0]], "\n")+1, maxSnippetLines)
 		}
 	}
 }
@@ -453,6 +484,41 @@ func TestRegionExtraction(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.Equal(t, fixture.extract, extract)
+		})
+	}
+}
+
+// TestHandWrittenSnippet pins the line where a snippet a page may write by hand
+// becomes a worked example that has to come from a file under examples/.
+func TestHandWrittenSnippet(t *testing.T) {
+	for _, fixture := range []struct {
+		name    string
+		body    string
+		snippet bool
+	}{
+		{
+			name:    "one call",
+			body:    "foo := schema.MustTableDef(\"table_name\", /* columns .... */)",
+			snippet: true,
+		},
+		{
+			name:    "exactly the limit",
+			body:    strings.TrimSuffix(strings.Repeat("column := users.ID()\n", maxSnippetLines), "\n"),
+			snippet: true,
+		},
+		{
+			name:    "one line past the limit",
+			body:    strings.TrimSuffix(strings.Repeat("column := users.ID()\n", maxSnippetLines+1), "\n"),
+			snippet: false,
+		},
+		{
+			name:    "short whole file",
+			body:    "package examples_test\n\nfunc Example() {}",
+			snippet: false,
+		},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			require.Equal(t, fixture.snippet, isHandWrittenSnippet(fixture.body))
 		})
 	}
 }
