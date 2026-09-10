@@ -15,14 +15,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPostgreSQLSavepointScope(t *testing.T) {
-	database := dbtest.PostgreSQLDB(t)
-	testLiveSavepoint(t, database, dialect.PostgreSQL(), "postgresql-17")
-}
+func TestLiveSavepointScope(t *testing.T) {
+	t.Run("PostgreSQL", func(t *testing.T) {
+		database := dbtest.PostgreSQLDB(t)
+		testLiveSavepoint(t, database, dialect.PostgreSQL(), "postgresql-17")
+	})
 
-func TestMySQLSavepointScope(t *testing.T) {
-	database := dbtest.MySQLDB(t)
-	testLiveSavepoint(t, database, dialect.MySQL(), "mysql-8.4")
+	t.Run("MySQL", func(t *testing.T) {
+		database := dbtest.MySQLDB(t)
+		testLiveSavepoint(t, database, dialect.MySQL(), "mysql-8.4")
+	})
 }
 
 func testLiveSavepoint(t *testing.T, database *sql.DB, d dialect.Dialect, profileID string) {

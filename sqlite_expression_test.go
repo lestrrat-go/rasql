@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"testing"
 
+	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
@@ -12,7 +13,101 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// TestSQLiteRunsMatchAndBM25AgainstALiveDatabase proves the two rasql gaps
+func TestSQLiteComposableExpressionsInTransaction(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = database.Close() })
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE accounts (id INTEGER PRIMARY KEY, balance INTEGER NOT NULL)`)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), `INSERT INTO accounts (id, balance) VALUES (1, 10), (2, 20)`)
+	require.NoError(t, err)
+	db, err := rasql.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	tx, err := db.Begin(t.Context(), nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+	require.NoError(t, err)
+	executor, err := rasql.AsExecutor(tx, profile)
+	require.NoError(t, err)
+
+	table := query.MustTableRef(schema.MustTableDef("accounts", schema.Integer("id"), schema.Integer("balance")))
+	id, balance := table.Column("id"), table.Column("balance")
+	update, err := query.NewUpdate(table, query.Set(balance, query.Add(balance, 1)))
+	require.NoError(t, err)
+	update, err = update.WithWhere(query.Equal(id, 1))
+	require.NoError(t, err)
+	require.NoError(t, executeUpdate(t, executor, update))
+
+	label := query.SearchedCase(query.When(query.GreaterThan(balance, 10), "large")).Else("small")
+	fragment := query.TrustedSQL("{} + {} + {}", query.IdentifierHole(query.Ident("balance")), query.Hole(4), query.Hole(5))
+	selectStatement, err := query.NewSelect(table,
+		id,
+		query.Project(label).As("label"),
+		query.Project(query.CastAs(balance, schema.IntegerType{})).As("cast_balance"),
+		query.Project(fragment).As("fragment_total"),
+	)
+	require.NoError(t, err)
+	rendered, err := render.Select(dialect.SQLite(), selectStatement)
+	require.NoError(t, err)
+	require.Equal(t, []any{10, "large", "small", 4, 5}, rendered.Args())
+	rows, err := tx.QueryRendered(t.Context(), rendered)
+	require.NoError(t, err)
+	defer func() { _ = rows.Close() }()
+	type result struct {
+		id            int64
+		label         string
+		castBalance   int64
+		fragmentTotal int64
+	}
+	var results []result
+	for rows.Next() {
+		var current result
+		require.NoError(t, rows.Scan(&current.id, &current.label, &current.castBalance, &current.fragmentTotal))
+		results = append(results, current)
+	}
+	require.NoError(t, rows.Err())
+	require.Equal(t, []result{{1, "large", 11, 20}, {2, "large", 20, 29}}, results)
+
+	windowStatement, err := query.NewSelect(table,
+		query.Project(query.OverWindow(query.Func("row_number"), query.Window(nil, query.Asc(id)))).As("row_number"))
+	require.NoError(t, err)
+	windowRendered, err := render.Select(dialect.SQLite(), windowStatement)
+	require.NoError(t, err)
+	windowRows, err := tx.QueryRendered(t.Context(), windowRendered)
+	require.NoError(t, err)
+	defer func() { _ = windowRows.Close() }()
+	var windowResults []int64
+	for windowRows.Next() {
+		var rowNumber int64
+		require.NoError(t, windowRows.Scan(&rowNumber))
+		windowResults = append(windowResults, rowNumber)
+	}
+	require.NoError(t, windowRows.Err())
+	require.Equal(t, []int64{1, 2}, windowResults)
+	require.NoError(t, tx.Commit())
+
+	var stored int64
+	require.NoError(t, database.QueryRowContext(t.Context(), `SELECT balance FROM accounts WHERE id = 1`).Scan(&stored))
+	require.Equal(t, int64(11), stored)
+}
+
+func executeUpdate(t *testing.T, executor rasql.Executor, statement query.Update) error {
+	t.Helper()
+	return rasqlExec(t, executor, statement)
+}
+
+func rasqlExec(t *testing.T, executor rasql.Executor, statement query.WriteStatement) error {
+	t.Helper()
+	plan, err := rasql.NewStatementPlan(statement)
+	if err != nil {
+		return err
+	}
+	_, err = rasql.ExecMutation(t.Context(), executor, plan)
+	return err
+}
+
+// TestSQLiteRunsMatchAndBM25 proves the two rasql gaps
 // this change closes — MATCH and a table's own bare identifier in expression
 // position — against a real SQLite database, not a fixture asserting rasql's
 // own output back to itself. It is the shape CLAUDE.md's "Verifying live
@@ -25,7 +120,7 @@ import (
 // docs/core/08-inspection-facts.md's "SQLite virtual tables" section — so
 // the fixture creates it with a raw CREATE VIRTUAL TABLE statement, exactly
 // as an application using rasql alongside FTS5 has to.
-func TestSQLiteRunsMatchAndBM25AgainstALiveDatabase(t *testing.T) {
+func TestSQLiteRunsMatchAndBM25(t *testing.T) {
 	database, records, recordsFTS := fts5MatchFixture(t)
 
 	// The statement mirrors the motivating query in the package documentation:
@@ -166,4 +261,53 @@ func fts5MatchFixture(t *testing.T) (*sql.DB, query.TableRef, query.TableRef) {
 	recordsFTS, err := query.NewTableRef(recordsFTSDefinition)
 	require.NoError(t, err)
 	return database, records, recordsFTS
+}
+
+func TestSQLiteConditionalUpsert(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = database.Close() })
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE items (id INTEGER PRIMARY KEY, version INTEGER NOT NULL, payload TEXT NOT NULL)`)
+	require.NoError(t, err)
+	db, err := rasql.New(database, dialect.SQLite())
+	require.NoError(t, err)
+	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+	require.NoError(t, err)
+	executor, err := rasql.AsExecutor(db, profile)
+	require.NoError(t, err)
+	table := query.MustTableRef(schema.MustTableDef("items", schema.Integer("id"), schema.Integer("version"), schema.Text("payload")))
+	id, version, payload := table.Column("id"), table.Column("version"), table.Column("payload")
+	seed, err := query.NewInsert(table, query.Set(id, 1), query.Set(version, 2), query.Set(payload, "v2"))
+	require.NoError(t, err)
+	seedPlan, err := rasql.NewStatementPlan(seed)
+	require.NoError(t, err)
+	_, err = rasql.ExecMutation(t.Context(), executor, seedPlan)
+	require.NoError(t, err)
+
+	upsert := func(versionValue int, payloadValue string) {
+		insert, buildErr := query.NewInsert(table, query.Set(id, 1), query.Set(version, versionValue), query.Set(payload, payloadValue))
+		require.NoError(t, buildErr)
+		statement, buildErr := query.NewUpsert(insert, []query.ColumnRef{id}, []query.Assignment{
+			query.Set(version, query.Excluded(version)), query.Set(payload, query.Excluded(payload)),
+		})
+		require.NoError(t, buildErr)
+		statement, buildErr = statement.WithUpdateWhere(query.LessThan(version, query.Excluded(version)))
+		require.NoError(t, buildErr)
+		statement, buildErr = statement.WithConflictWhere(query.GreaterThan(version, 0))
+		require.NoError(t, buildErr)
+		plan, planErr := rasql.NewStatementPlan(statement)
+		require.NoError(t, planErr)
+		_, execErr := rasql.ExecMutation(t.Context(), executor, plan)
+		require.NoError(t, execErr)
+	}
+	upsert(1, "v1")
+	var storedVersion int
+	var storedPayload string
+	require.NoError(t, database.QueryRowContext(t.Context(), `SELECT version, payload FROM items WHERE id = 1`).Scan(&storedVersion, &storedPayload))
+	require.Equal(t, 2, storedVersion)
+	require.Equal(t, "v2", storedPayload)
+	upsert(3, "v3")
+	require.NoError(t, database.QueryRowContext(t.Context(), `SELECT version, payload FROM items WHERE id = 1`).Scan(&storedVersion, &storedPayload))
+	require.Equal(t, 3, storedVersion)
+	require.Equal(t, "v3", storedPayload)
 }

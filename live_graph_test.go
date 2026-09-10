@@ -41,14 +41,16 @@ func (d graphLiveChildDecoder) DecodeRow(source rasql.ScanSource, row *graphLive
 	return source.Scan(&row.ID, &row.ParentID, &row.Rank)
 }
 
-func TestPostgreSQLGraphActualExecution(t *testing.T) {
-	database := dbtest.PostgreSQLDB(t)
-	testLiveGraph(t, database, dialect.PostgreSQL(), "postgresql-17")
-}
+func TestGraphLiveExecution(t *testing.T) {
+	t.Run("PostgreSQL", func(t *testing.T) {
+		database := dbtest.PostgreSQLDB(t)
+		testLiveGraph(t, database, dialect.PostgreSQL(), "postgresql-17")
+	})
 
-func TestMySQLGraphActualExecution(t *testing.T) {
-	database := dbtest.MySQLDB(t)
-	testLiveGraph(t, database, dialect.MySQL(), "mysql-8.4")
+	t.Run("MySQL", func(t *testing.T) {
+		database := dbtest.MySQLDB(t)
+		testLiveGraph(t, database, dialect.MySQL(), "mysql-8.4")
+	})
 }
 
 func testLiveGraph(t *testing.T, database *sql.DB, d dialect.Dialect, profileID string) {

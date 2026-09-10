@@ -75,7 +75,7 @@ func TestSelectAcceptsDistinctStatements(t *testing.T) {
 // WithDistinct. It also proves that an ORDER BY term outside the projections
 // of a distinct statement validates: rasql does not implement the refusal
 // PostgreSQL (42P10) and MySQL (3065) apply, and leaves it to the database.
-// TestSelectRendersDistinctStatement and distinct_order_integration_test.go
+// TestSelectRendersDistinctStatement and live_select_integration_test.go
 // prove the rendering and the server-side behavior this decision relies on.
 func TestSelectAcceptsDistinctWithGroupingAndPaging(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())
@@ -414,7 +414,7 @@ func TestSelectAcceptsSubqueryPredicates(t *testing.T) {
 
 // TestSelectRejectsMisplacedAggregates covers the placement rules that make an
 // aggregate legal SQL. Every rejected shape below rendered SQL that a supported
-// database refuses or answers meaninglessly; TestSQLiteRefusesMisplacedAggregates
+// database refuses or answers meaninglessly; TestSQLiteAggregates/"refuses a misplaced aggregate"
 // in the root package runs the SQLite half against a real database.
 func TestSelectRejectsMisplacedAggregates(t *testing.T) {
 	users, err := query.NewTableRef(usersTable())

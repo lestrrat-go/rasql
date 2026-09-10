@@ -4,7 +4,9 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/schema"
@@ -193,136 +195,174 @@ func contractors(t *testing.T) rasql.Table[staffRow] {
 }
 
 func TestTable(t *testing.T) {
-	t.Run("Column resolves and rejects names", func(t *testing.T) {
-		table, err := rasql.TableOf[staffRow](staffDefinition())
-		require.NoError(t, err)
+	t.Run("describes a table", func(t *testing.T) {
+		t.Run("Column resolves and rejects names", func(t *testing.T) {
+			table, err := rasql.TableOf[staffRow](staffDefinition())
+			require.NoError(t, err)
 
-		column := table.Column("email")
-		require.Equal(t, "email", column.Name())
-		require.Equal(t, "staff", column.Source().Qualifier())
+			column := table.Column("email")
+			require.Equal(t, "email", column.Name())
+			require.Equal(t, "staff", column.Source().Qualifier())
 
-		require.ErrorContains(t, table.Column("missing").Validate(), "missing")
-	})
+			require.ErrorContains(t, table.Column("missing").Validate(), "missing")
+		})
 
-	t.Run("Ref exposes the validated definition", func(t *testing.T) {
-		table, err := rasql.TableOf[staffRow](staffDefinition())
-		require.NoError(t, err)
-		require.Equal(t, "staff", table.Ref().Name())
-		require.Equal(t, staffDefinition().Columns, table.Ref().Definition().Columns)
-		require.Equal(t, []string{"id"}, table.Ref().Definition().PrimaryKey)
-	})
+		t.Run("Ref exposes the validated definition", func(t *testing.T) {
+			table, err := rasql.TableOf[staffRow](staffDefinition())
+			require.NoError(t, err)
+			require.Equal(t, "staff", table.Ref().Name())
+			require.Equal(t, staffDefinition().Columns, table.Ref().Definition().Columns)
+			require.Equal(t, []string{"id"}, table.Ref().Definition().PrimaryKey)
+		})
 
-	t.Run("NewTable rejects an invalid definition", func(t *testing.T) {
-		_, err := rasql.TableOf[staffRow](schema.TableDef{})
-		require.Error(t, err)
-		require.Panics(t, func() {
-			rasql.MustTableOf[staffRow](schema.TableDef{})
+		t.Run("NewTable rejects an invalid definition", func(t *testing.T) {
+			_, err := rasql.TableOf[staffRow](schema.TableDef{})
+			require.Error(t, err)
+			require.Panics(t, func() {
+				rasql.MustTableOf[staffRow](schema.TableDef{})
+			})
 		})
 	})
-}
 
-func TestColumnOf(t *testing.T) {
-	t.Run("zero ColumnRef for a nil table", func(t *testing.T) {
-		require.Equal(t, query.ColumnRef{}, rasql.ColumnOf[staffRow](nil, "id"))
+	t.Run("binds a column", func(t *testing.T) {
+		t.Run("zero ColumnRef for a nil table", func(t *testing.T) {
+			require.Equal(t, query.ColumnRef{}, rasql.ColumnOf[staffRow](nil, "id"))
+		})
+
+		// A wrapper reaches every Table method through its embedded Table[T], so
+		// neither of the next two values is the nil interface, and both would
+		// dereference a nil embedded field if ColumnOf compared against nil.
+		// The zero wrapper is also what a generated As returns beside its error,
+		// so a caller who ignores that error and takes a column reference lands
+		// here.
+		t.Run("zero ColumnRef for a typed nil wrapper pointer", func(t *testing.T) {
+			require.Equal(t, query.ColumnRef{}, rasql.ColumnOf[staffRow]((*staffTable)(nil), "id"))
+		})
+
+		t.Run("zero ColumnRef for a zero wrapper value", func(t *testing.T) {
+			require.Equal(t, query.ColumnRef{}, rasql.ColumnOf[staffRow](staffTable{}, "id"))
+		})
+
+		t.Run("keeps name and source for a column the table does not have", func(t *testing.T) {
+			table, err := rasql.TableOf[staffRow](staffDefinition())
+			require.NoError(t, err)
+
+			column := rasql.ColumnOf(table, "missing")
+			require.Equal(t, "missing", column.Name())
+			require.Equal(t, query.Relation(table.Ref()), column.Source())
+
+			_, err = query.NewSelect(table.Ref(), column)
+			require.ErrorContains(t, err, `references unknown column "missing"`)
+		})
+
+		t.Run("a zero generated-shape wrapper's accessor fails at Build, not a panic", func(t *testing.T) {
+			var zero staffTable
+			var err error
+			require.NotPanics(t, func() {
+				_, err = render.SelectFrom(dbForBuild(t).Dialect(), staff(t).Ref()).
+					Select("id").
+					Where(query.Equal(zero.ID(), 1)).
+					Build()
+			})
+			require.ErrorContains(t, err, "query table: table must not be nil")
+		})
 	})
 
-	// A wrapper reaches every Table method through its embedded Table[T], so
-	// neither of the next two values is the nil interface, and both would
-	// dereference a nil embedded field if ColumnOf compared against nil.
-	// The zero wrapper is also what a generated As returns beside its error,
-	// so a caller who ignores that error and takes a column reference lands
-	// here.
-	t.Run("zero ColumnRef for a typed nil wrapper pointer", func(t *testing.T) {
-		require.Equal(t, query.ColumnRef{}, rasql.ColumnOf[staffRow]((*staffTable)(nil), "id"))
-	})
+	t.Run("aliases a source", func(t *testing.T) {
+		t.Run("qualifies every column accessor under the alias", func(t *testing.T) {
+			manager, err := staff(t).As("manager")
+			require.NoError(t, err)
 
-	t.Run("zero ColumnRef for a zero wrapper value", func(t *testing.T) {
-		require.Equal(t, query.ColumnRef{}, rasql.ColumnOf[staffRow](staffTable{}, "id"))
-	})
+			require.Equal(t, "manager", manager.Ref().Qualifier())
+			require.Equal(t, "manager", manager.ID().Source().Qualifier())
+			require.Equal(t, "manager", manager.ManagerID().Source().Qualifier())
+			require.Equal(t, "manager", manager.Email().Source().Qualifier())
+		})
 
-	t.Run("keeps name and source for a column the table does not have", func(t *testing.T) {
-		table, err := rasql.TableOf[staffRow](staffDefinition())
-		require.NoError(t, err)
+		t.Run("rejects an invalid alias", func(t *testing.T) {
+			_, err := staff(t).As("not an identifier")
+			require.Error(t, err)
+		})
 
-		column := rasql.ColumnOf(table, "missing")
-		require.Equal(t, "missing", column.Name())
-		require.Equal(t, query.Relation(table.Ref()), column.Source())
+		t.Run("self-join renders the alias qualifier", func(t *testing.T) {
+			employees := staff(t)
+			manager, err := employees.As("manager")
+			require.NoError(t, err)
 
-		_, err = query.NewSelect(table.Ref(), column)
-		require.ErrorContains(t, err, `references unknown column "missing"`)
-	})
-
-	t.Run("a zero generated-shape wrapper's accessor fails at Build, not a panic", func(t *testing.T) {
-		var zero staffTable
-		var err error
-		require.NotPanics(t, func() {
-			_, err = render.SelectFrom(dbForBuild(t).Dialect(), staff(t).Ref()).
-				Select("id").
-				Where(query.Equal(zero.ID(), 1)).
+			statement, err := render.SelectFrom(dbForBuild(t).Dialect(), employees.Ref()).
+				Select("id", "manager_id", "email").
+				Join(query.InnerJoin(query.Relation(manager.Ref()), query.Equal(employees.ManagerID(), manager.ID()))).
+				Order(query.Asc(manager.Email())).
 				Build()
+			require.NoError(t, err)
+			require.Equal(
+				t,
+				`SELECT "staff"."id", "staff"."manager_id", "staff"."email" FROM "staff" `+
+					`INNER JOIN "staff" AS "manager" ON ("staff"."manager_id" = "manager"."id") `+
+					`ORDER BY "manager"."email"`,
+				statement.SQL(),
+			)
 		})
-		require.ErrorContains(t, err, "query table: table must not be nil")
+
+		t.Run("left join keeps the alias qualifier", func(t *testing.T) {
+			employees := staff(t)
+			manager, err := employees.As("manager")
+			require.NoError(t, err)
+
+			statement, err := render.SelectFrom(dbForBuild(t).Dialect(), employees.Ref()).
+				Select("id", "manager_id", "email").
+				Join(query.LeftJoin(query.Relation(manager.Ref()), query.Equal(employees.ManagerID(), manager.ID()))).
+				Build()
+			require.NoError(t, err)
+			require.Contains(t, statement.SQL(), `LEFT JOIN "staff" AS "manager" ON ("staff"."manager_id" = "manager"."id")`)
+		})
 	})
-}
 
-func TestAs(t *testing.T) {
-	t.Run("qualifies every column accessor under the alias", func(t *testing.T) {
-		manager, err := staff(t).As("manager")
-		require.NoError(t, err)
+	t.Run("a select builder rejects a foreign column", func(t *testing.T) {
+		contractorID := contractors(t).Column("id")
 
-		require.Equal(t, "manager", manager.Ref().Qualifier())
-		require.Equal(t, "manager", manager.ID().Source().Qualifier())
-		require.Equal(t, "manager", manager.ManagerID().Source().Qualifier())
-		require.Equal(t, "manager", manager.Email().Source().Qualifier())
+		_, err := render.SelectFrom(dbForBuild(t).Dialect(), staff(t).Ref()).
+			Select("id").
+			Where(query.Equal(contractorID, 1)).
+			Build()
+		require.ErrorContains(t, err, "contractors")
 	})
 
-	t.Run("rejects an invalid alias", func(t *testing.T) {
-		_, err := staff(t).As("not an identifier")
+	t.Run("a nil table reports errors", func(t *testing.T) {
+		requireNilTableRejected[rasql.Table[staffRow]](t, "nil interface", nil)
+
+		failed, err := rasql.TableOf[staffRow](schema.TableDef{})
 		require.Error(t, err)
+		require.Nil(t, failed)
+		requireNilTableRejected(t, "nil table from a failed NewTable", failed)
+
+		requireNilTableRejected[*staffTable](t, "typed nil wrapper pointer", nil)
+		requireNilTableRejected(t, "zero generated wrapper by value", staffTable{})
+		requireNilTableRejected(t, "pointer to a zero generated wrapper", &staffTable{})
+		requireNilTableRejected(t, "zero wrapper around a wrapper", auditedStaffTable{})
+		requireNilTableRejected(t, "zero wrapper around a wrapper pointer", pointerStaffTable{})
+		requireNilTableRejected(t, "wrapper holding a nil wrapper pointer", staffTable{Table: (*staffTable)(nil)})
+		requireNilTableRejected(t, "zero wrapper reachable from itself", recursiveStaffTable{recursiveStaffTable: nil})
+		requireNilTableRejected(t, "zero wrapper beside a second wrapper", twoCandidateStaffTable{})
+
+		t.Run("a generated As reports the error behind the zero wrapper it returns", func(t *testing.T) {
+			var wrapper staffTable
+			aliased, err := wrapper.As("alias")
+			require.ErrorContains(t, err, "must not be nil")
+			require.Equal(t, staffTable{}, aliased)
+		})
 	})
 
-	t.Run("self-join renders the alias qualifier", func(t *testing.T) {
-		employees := staff(t)
-		manager, err := employees.As("manager")
+	t.Run("a usable table is accepted", func(t *testing.T) {
+		table, err := rasql.TableOf[staffRow](staffDefinition())
 		require.NoError(t, err)
 
-		statement, err := render.SelectFrom(dbForBuild(t).Dialect(), employees.Ref()).
-			Select("id", "manager_id", "email").
-			Join(query.InnerJoin(query.Relation(manager.Ref()), query.Equal(employees.ManagerID(), manager.ID()))).
-			Order(query.Asc(manager.Email())).
-			Build()
-		require.NoError(t, err)
-		require.Equal(
-			t,
-			`SELECT "staff"."id", "staff"."manager_id", "staff"."email" FROM "staff" `+
-				`INNER JOIN "staff" AS "manager" ON ("staff"."manager_id" = "manager"."id") `+
-				`ORDER BY "manager"."email"`,
-			statement.SQL(),
-		)
+		requireTableUsable(t, "typed table", table)
+		requireTableUsable(t, "wrapper around a typed table", staff(t))
+		requireTableUsable(t, "wrapper around a usable wrapper", auditedStaffTable{staffTable: staff(t)})
+		requireTableUsable(t, "pointer to a usable wrapper", &staffTable{Table: table})
+		requireTableUsable(t, "table with its own Ref and a nil embedded table", selfMethodStaffTable{source: table.Ref()})
 	})
-
-	t.Run("left join keeps the alias qualifier", func(t *testing.T) {
-		employees := staff(t)
-		manager, err := employees.As("manager")
-		require.NoError(t, err)
-
-		statement, err := render.SelectFrom(dbForBuild(t).Dialect(), employees.Ref()).
-			Select("id", "manager_id", "email").
-			Join(query.LeftJoin(query.Relation(manager.Ref()), query.Equal(employees.ManagerID(), manager.ID()))).
-			Build()
-		require.NoError(t, err)
-		require.Contains(t, statement.SQL(), `LEFT JOIN "staff" AS "manager" ON ("staff"."manager_id" = "manager"."id")`)
-	})
-}
-
-func TestTypedSelectBuilderRejectsForeignColumn(t *testing.T) {
-	contractorID := contractors(t).Column("id")
-
-	_, err := render.SelectFrom(dbForBuild(t).Dialect(), staff(t).Ref()).
-		Select("id").
-		Where(query.Equal(contractorID, 1)).
-		Build()
-	require.ErrorContains(t, err, "contractors")
 }
 
 // nilTableEntryPoint is one exported entry point that takes a
@@ -469,135 +509,163 @@ func requireTableUsable[Wrapper rasql.Table[staffRow]](t *testing.T, name string
 	})
 }
 
-func TestNilTableReportsErrors(t *testing.T) {
-	requireNilTableRejected[rasql.Table[staffRow]](t, "nil interface", nil)
+func TestTableGuard(t *testing.T) {
+	t.Run("keeps unrelated panics", func(t *testing.T) {
+		// The guard reads a nil pointer dereference from tableRow, and then from
+		// Ref, as signs of a missing table, so every other panic from an
+		// implementation must reach the caller unchanged instead of being reported
+		// as a nil table. This case's own Ref panics with a plain string, so
+		// it stays distinguishable from a nil dereference regardless of probe order.
+		buggy := buggyStaffTable{Table: nil}
 
-	failed, err := rasql.TableOf[staffRow](schema.TableDef{})
-	require.Error(t, err)
-	require.Nil(t, failed)
-	requireNilTableRejected(t, "nil table from a failed NewTable", failed)
-
-	requireNilTableRejected[*staffTable](t, "typed nil wrapper pointer", nil)
-	requireNilTableRejected(t, "zero generated wrapper by value", staffTable{})
-	requireNilTableRejected(t, "pointer to a zero generated wrapper", &staffTable{})
-	requireNilTableRejected(t, "zero wrapper around a wrapper", auditedStaffTable{})
-	requireNilTableRejected(t, "zero wrapper around a wrapper pointer", pointerStaffTable{})
-	requireNilTableRejected(t, "wrapper holding a nil wrapper pointer", staffTable{Table: (*staffTable)(nil)})
-	requireNilTableRejected(t, "zero wrapper reachable from itself", recursiveStaffTable{recursiveStaffTable: nil})
-	requireNilTableRejected(t, "zero wrapper beside a second wrapper", twoCandidateStaffTable{})
-
-	t.Run("a generated As reports the error behind the zero wrapper it returns", func(t *testing.T) {
-		var wrapper staffTable
-		aliased, err := wrapper.As("alias")
-		require.ErrorContains(t, err, "must not be nil")
-		require.Equal(t, staffTable{}, aliased)
-	})
-}
-
-func TestUsableTableIsAccepted(t *testing.T) {
-	table, err := rasql.TableOf[staffRow](staffDefinition())
-	require.NoError(t, err)
-
-	requireTableUsable(t, "typed table", table)
-	requireTableUsable(t, "wrapper around a typed table", staff(t))
-	requireTableUsable(t, "wrapper around a usable wrapper", auditedStaffTable{staffTable: staff(t)})
-	requireTableUsable(t, "pointer to a usable wrapper", &staffTable{Table: table})
-	requireTableUsable(t, "table with its own Ref and a nil embedded table", selfMethodStaffTable{source: table.Ref()})
-}
-
-func TestTableGuardKeepsUnrelatedPanics(t *testing.T) {
-	// The guard reads a nil pointer dereference from tableRow, and then from
-	// Ref, as signs of a missing table, so every other panic from an
-	// implementation must reach the caller unchanged instead of being reported
-	// as a nil table. This case's own Ref panics with a plain string, so
-	// it stays distinguishable from a nil dereference regardless of probe order.
-	buggy := buggyStaffTable{Table: nil}
-
-	require.PanicsWithValue(t, staffTableBug, func() {
-		rasql.ColumnOf[staffRow](buggy, "id")
-	})
-	require.PanicsWithValue(t, staffTableBug, func() {
-		_, _ = rasql.As[staffRow](buggy, "alias")
-	})
-	require.PanicsWithValue(t, staffTableBug, func() {
-		_, _ = rasql.SourceOf[staffRow](buggy, "")
-	})
-
-	// The nil-dereference subclass needs its own coverage: a string panic and a
-	// nil-dereference panic are recovered and classified differently, so a fix
-	// that keeps the string case passing could still relabel this one. Here the
-	// embedded table is VALID, so tableRow succeeds and the guard never probes
-	// this Ref at all; the panic below comes straight from it.
-	table, err := rasql.TableOf[staffRow](staffDefinition())
-	require.NoError(t, err)
-	buggyNilDeref := nilDereferenceStaffTable{Table: table}
-
-	requirePanicsWithNilDereference(t, func() {
-		_, _ = rasql.As[staffRow](buggyNilDeref, "alias")
-	})
-	requirePanicsWithNilDereference(t, func() {
-		_, _ = rasql.SourceOf[staffRow](buggyNilDeref, "")
-	})
-}
-
-// TestTableGuardDoesNotRelabelACallersOwnNilDereference discriminates the
-// defect a neutral audit confirmed in the Ref-only probe: a caller type
-// that embeds a VALID rasql.Table[T] but also declares its own Ref that
-// dereferences an unrelated nil pointer used to be misreported as "table must
-// not be nil" instead of letting its own panic propagate. Probing tableRow
-// first fixes this, because tableRow is unexported and a type outside this
-// package can never intercept it, so it always reaches the embedded table.
-func TestTableGuardDoesNotRelabelACallersOwnNilDereference(t *testing.T) {
-	table, err := rasql.TableOf[staffRow](staffDefinition())
-	require.NoError(t, err)
-	buggy := nilDereferenceStaffTable{Table: table}
-
-	t.Run("SourceOf", func(t *testing.T) {
-		requirePanicsWithNilDereference(t, func() {
-			_, _ = rasql.SourceOf[staffRow](buggy, "")
-		})
-	})
-
-	t.Run("As", func(t *testing.T) {
-		requirePanicsWithNilDereference(t, func() {
-			_, _ = rasql.As[staffRow](buggy, "alias")
-		})
-	})
-
-	t.Run("NewCreatePlan", func(t *testing.T) {
-		requirePanicsWithNilDereference(t, func() {
-			_, _ = rasql.NewCreatePlan[staffRow](buggy)
-		})
-	})
-}
-
-// TestTableGuardDoesNotRelabelAFabricatedNilDereference discriminates the
-// defect a neutral audit confirmed in the text-only classifier: fabricatedNilDereference
-// implements runtime.Error and its Error method returns exactly the runtime's
-// nil-dereference text, but it is declared outside rasql and never comes from an
-// actual nil dereference. Its embedded rasql.Table[staffRow] is nil, so tableRow
-// nil-dereferences and the guard proceeds to probe Ref, which is where
-// this fabricated value is panicked. A classifier matching only the
-// runtime.Error interface and the message text would swallow this as "table
-// must not be nil"; the concrete type's package is what tells the two apart.
-func TestTableGuardDoesNotRelabelAFabricatedNilDereference(t *testing.T) {
-	buggy := fabricatedRuntimeErrorStaffTable{}
-
-	t.Run("ColumnOf", func(t *testing.T) {
-		require.PanicsWithValue(t, fabricatedNilDereference{}, func() {
+		require.PanicsWithValue(t, staffTableBug, func() {
 			rasql.ColumnOf[staffRow](buggy, "id")
 		})
-	})
-
-	t.Run("As", func(t *testing.T) {
-		require.PanicsWithValue(t, fabricatedNilDereference{}, func() {
+		require.PanicsWithValue(t, staffTableBug, func() {
 			_, _ = rasql.As[staffRow](buggy, "alias")
 		})
-	})
-
-	t.Run("SourceOf", func(t *testing.T) {
-		require.PanicsWithValue(t, fabricatedNilDereference{}, func() {
+		require.PanicsWithValue(t, staffTableBug, func() {
 			_, _ = rasql.SourceOf[staffRow](buggy, "")
 		})
+
+		// The nil-dereference subclass needs its own coverage: a string panic and a
+		// nil-dereference panic are recovered and classified differently, so a fix
+		// that keeps the string case passing could still relabel this one. Here the
+		// embedded table is VALID, so tableRow succeeds and the guard never probes
+		// this Ref at all; the panic below comes straight from it.
+		table, err := rasql.TableOf[staffRow](staffDefinition())
+		require.NoError(t, err)
+		buggyNilDeref := nilDereferenceStaffTable{Table: table}
+
+		requirePanicsWithNilDereference(t, func() {
+			_, _ = rasql.As[staffRow](buggyNilDeref, "alias")
+		})
+		requirePanicsWithNilDereference(t, func() {
+			_, _ = rasql.SourceOf[staffRow](buggyNilDeref, "")
+		})
+	})
+
+	// TestTableGuard/"never relabels a caller's own nil dereference" discriminates the
+	// defect a neutral audit confirmed in the Ref-only probe: a caller type
+	// that embeds a VALID rasql.Table[T] but also declares its own Ref that
+	// dereferences an unrelated nil pointer used to be misreported as "table must
+	// not be nil" instead of letting its own panic propagate. Probing tableRow
+	// first fixes this, because tableRow is unexported and a type outside this
+	// package can never intercept it, so it always reaches the embedded table.
+	t.Run("never relabels a caller's own nil dereference", func(t *testing.T) {
+		table, err := rasql.TableOf[staffRow](staffDefinition())
+		require.NoError(t, err)
+		buggy := nilDereferenceStaffTable{Table: table}
+
+		t.Run("SourceOf", func(t *testing.T) {
+			requirePanicsWithNilDereference(t, func() {
+				_, _ = rasql.SourceOf[staffRow](buggy, "")
+			})
+		})
+
+		t.Run("As", func(t *testing.T) {
+			requirePanicsWithNilDereference(t, func() {
+				_, _ = rasql.As[staffRow](buggy, "alias")
+			})
+		})
+
+		t.Run("NewCreatePlan", func(t *testing.T) {
+			requirePanicsWithNilDereference(t, func() {
+				_, _ = rasql.NewCreatePlan[staffRow](buggy)
+			})
+		})
+	})
+
+	// TestTableGuard/"never relabels a fabricated nil dereference" discriminates the
+	// defect a neutral audit confirmed in the text-only classifier: fabricatedNilDereference
+	// implements runtime.Error and its Error method returns exactly the runtime's
+	// nil-dereference text, but it is declared outside rasql and never comes from an
+	// actual nil dereference. Its embedded rasql.Table[staffRow] is nil, so tableRow
+	// nil-dereferences and the guard proceeds to probe Ref, which is where
+	// this fabricated value is panicked. A classifier matching only the
+	// runtime.Error interface and the message text would swallow this as "table
+	// must not be nil"; the concrete type's package is what tells the two apart.
+	t.Run("never relabels a fabricated nil dereference", func(t *testing.T) {
+		buggy := fabricatedRuntimeErrorStaffTable{}
+
+		t.Run("ColumnOf", func(t *testing.T) {
+			require.PanicsWithValue(t, fabricatedNilDereference{}, func() {
+				rasql.ColumnOf[staffRow](buggy, "id")
+			})
+		})
+
+		t.Run("As", func(t *testing.T) {
+			require.PanicsWithValue(t, fabricatedNilDereference{}, func() {
+				_, _ = rasql.As[staffRow](buggy, "alias")
+			})
+		})
+
+		t.Run("SourceOf", func(t *testing.T) {
+			require.PanicsWithValue(t, fabricatedNilDereference{}, func() {
+				_, _ = rasql.SourceOf[staffRow](buggy, "")
+			})
+		})
+	})
+}
+
+type viewCapabilityRow struct {
+	ID int64 `rasql:"id"`
+}
+
+func TestTableCapabilities(t *testing.T) {
+	t.Run("constructors require write capabilities", func(t *testing.T) {
+		view := schema.TableDef{
+			Name:       "active_users",
+			Kind:       schema.ObjectView,
+			Operations: schema.OperationRead,
+			Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		}
+		read, err := rasql.ReadTableOf[viewCapabilityRow](view)
+		require.NoError(t, err)
+		require.NotNil(t, read)
+		_, err = rasql.TableOf[viewCapabilityRow](view)
+		require.ErrorContains(t, err, "does not support operation")
+		require.Panics(t, func() { rasql.MustTableOf[viewCapabilityRow](view) })
+
+		writableView := view
+		writableView.Operations = schema.OperationRead | schema.OperationInsert | schema.OperationUpdate | schema.OperationDelete
+		table, err := rasql.TableOf[viewCapabilityRow](writableView)
+		require.NoError(t, err)
+		require.NotNil(t, table)
+	})
+
+	// TestTableCapabilities/"a forged writable handle rejects every mutation" proves that a Table[T] handle
+	// which bypassed TableOf, and whose schema does not support a given
+	// mutation, is refused for every mutation kind: insert, update, delete and
+	// DDL alike. TableFrom is the entry point that skips TableOf's own check,
+	// which is exactly how a forged handle reaches NewCreatePlan, NewPatchPlan,
+	// NewDeletePlan or CreateTable without ever passing through TableOf, so each
+	// constructor is required to check the capability again itself.
+	t.Run("a forged writable handle rejects every mutation", func(t *testing.T) {
+		database, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		t.Cleanup(func() { mock.ExpectClose(); require.NoError(t, database.Close()) })
+		db, err := rasql.New(database, dialect.SQLite())
+		require.NoError(t, err)
+		view := schema.TableDef{Name: "active_users", Kind: schema.ObjectView, Operations: schema.OperationRead, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}}
+		table := rasql.TableFrom[viewCapabilityRow](view)
+		id := query.TypedColumnOf[viewCapabilityRow, int64](table.Column("id"))
+		for name, call := range map[string]func() error{
+			"insert": func() error {
+				_, err := rasql.NewCreatePlan(table, rasql.SetField[viewCapabilityRow, int64](id, 1))
+				return err
+			},
+			"update": func() error {
+				_, err := rasql.NewPatchPlan(table, query.EqualValue(id, int64(1)), rasql.SetField[viewCapabilityRow, int64](id, 1))
+				return err
+			},
+			"delete": func() error {
+				_, err := rasql.NewDeletePlan(table, query.EqualValue(id, int64(1)))
+				return err
+			},
+			"ddl": func() error { return rasql.CreateTable(t.Context(), db, table) },
+		} {
+			t.Run(name, func(t *testing.T) { require.ErrorContains(t, call(), "does not support") })
+		}
 	})
 }

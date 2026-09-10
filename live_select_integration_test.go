@@ -1,5 +1,3 @@
-//go:build unix
-
 package rasql_test
 
 import (
@@ -47,7 +45,7 @@ type aggregateOrderingCase struct {
 // ONLY_FULL_GROUP_BY in its default sql_mode, so each case records the answer
 // its own server gives. Validation refuses that statement for every dialect
 // regardless, since only PostgreSQL's answer is portable.
-// TestSQLiteOrdersAnAggregateStatement covers the same two shapes against
+// TestSQLiteAggregates/"orders an aggregate statement" covers the same two shapes against
 // SQLite, which runs both. Each case skips when its server is unavailable; CI's
 // integration job runs both.
 // The test also covers the grouped shapes GROUP BY and HAVING exist for, and a
@@ -167,7 +165,7 @@ func testAggregateOrdering(t *testing.T, database *sql.DB, test aggregateOrderin
 	})
 
 	t.Run("the database runs a grouped mixed projection", func(t *testing.T) {
-		// TestSQLiteRunsGroupedStatements proves the same shape against
+		// TestSQLiteAggregates/"runs grouped statements" proves the same shape against
 		// SQLite; this proves it against the two servers SQLite cannot speak
 		// for.
 		email := table.Column("email")
@@ -252,5 +250,270 @@ func testAggregateOrdering(t *testing.T, database *sql.DB, test aggregateOrderin
 		_, err := counted.Order(query.Asc(id)).Build()
 		var validationErr *query.ValidationError
 		require.ErrorAs(t, err, &validationErr)
+	})
+}
+
+// distinctOrderCase describes one live server the ORDER BY-vs-DISTINCT
+// decision at query/select.go's WithDistinct is proved against.
+type distinctOrderCase struct {
+	name    string
+	open    func(*testing.T) *sql.DB
+	dialect dialect.Dialect
+}
+
+// TestDistinctOrderAgainstLiveDatabases proves the reason rasql leaves an
+// unprojected ORDER BY on a distinct statement to the database rather than
+// refusing it in Go: PostgreSQL and MySQL both refuse the shape at the
+// server, with SQLSTATE 42P10 and error 3065 ER_FIELD_IN_ORDER_NOT_SELECT,
+// so a rasql-rendered statement never reaches a silently wrong answer on
+// either of them. TestSQLiteDistinct/"an unprojected distinct order is answered arbitrarily" covers
+// the third dialect, which runs the same shape instead of refusing it. Each
+// case skips when its server is unavailable; CI's integration job runs both.
+func TestDistinctOrderAgainstLiveDatabases(t *testing.T) {
+	for _, test := range []distinctOrderCase{
+		{name: "postgresql", open: dbtest.PostgreSQLDB, dialect: dialect.PostgreSQL()},
+		{name: "mysql", open: dbtest.MySQLDB, dialect: dialect.MySQL()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			testDistinctOrder(t, test.open(t), test)
+		})
+	}
+}
+
+func testDistinctOrder(t *testing.T, database *sql.DB, test distinctOrderCase) {
+	db, err := rasql.New(database, test.dialect)
+	require.NoError(t, err)
+	type record struct {
+		ID   int64  `rasql:"id"`
+		City string `rasql:"city"`
+		Age  int64  `rasql:"age"`
+	}
+	// A per-run unique name keeps this test from ever dropping a table it did
+	// not create, for the reason testDatabaseIntegration records.
+	tableName := dbtest.UniqueName(t, "rasql_distinct_order_records")
+	definition := schema.TableDef{
+		Name: tableName,
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "city", Type: schema.TextType{}},
+			{Name: "age", Type: schema.IntegerType{}},
+		},
+		PrimaryKey: []string{"id"},
+	}
+	records, err := rasql.TableOf[record](definition)
+	require.NoError(t, err)
+
+	_, err = database.ExecContext(t.Context(), "DROP TABLE IF EXISTS "+tableName)
+	require.NoError(t, err)
+	defer func() {
+		_, err := database.ExecContext(t.Context(), "DROP TABLE IF EXISTS "+tableName)
+		require.NoError(t, err)
+	}()
+	require.NoError(t, rasql.CreateTable(t.Context(), db, records))
+
+	profileID := "postgresql-17"
+	if test.dialect.Name() == "mysql" {
+		profileID = "mysql-8.4"
+	}
+	profile, err := rasql.DiscoverEngineProfile(t.Context(), db, profileID)
+	require.NoError(t, err)
+	executor, err := rasql.AsExecutor(db, profile)
+	require.NoError(t, err)
+	recordID := query.TypedColumnOf[record, int64](records.Column("id"))
+	recordCity := query.TypedColumnOf[record, string](records.Column("city"))
+	recordAge := query.TypedColumnOf[record, int64](records.Column("age"))
+	for _, fixture := range []record{
+		{ID: 1, City: "tokyo", Age: 30},
+		{ID: 2, City: "osaka", Age: 20},
+		{ID: 3, City: "tokyo", Age: 10},
+	} {
+		plan, err := rasql.NewCreatePlan(records,
+			rasql.SetField(recordID, fixture.ID),
+			rasql.SetField(recordCity, fixture.City),
+			rasql.SetField(recordAge, fixture.Age),
+		)
+		require.NoError(t, err)
+		_, err = rasql.ExecMutation(t.Context(), executor, plan)
+		require.NoError(t, err)
+	}
+
+	table, err := query.NewTableRef(definition)
+	require.NoError(t, err)
+	city := table.Column("city")
+	age := table.Column("age")
+
+	t.Run("the server refuses ORDER BY on a column the distinct projections do not select", func(t *testing.T) {
+		// query.Select places no Go-side rule here (see the WithDistinct doc
+		// comment at query/select.go), so the builder renders this statement
+		// and lets the server report its own error rather than refusing it
+		// before rendering, the way it does for a misplaced aggregate.
+		statement, err := query.NewSelect(table, city)
+		require.NoError(t, err)
+		statement, err = statement.WithDistinct()
+		require.NoError(t, err)
+		statement, err = statement.WithOrder(query.Asc(age))
+		require.NoError(t, err)
+		rendered, err := render.Select(test.dialect, statement)
+		require.NoError(t, err, "rendering succeeds; the database is what refuses the statement")
+
+		rows, err := database.QueryContext(t.Context(), rendered.SQL(), rendered.Args()...)
+		if err == nil {
+			_ = rows.Close()
+		}
+		require.Error(t, err, "%s must refuse ORDER BY on a column outside the distinct projections", test.name)
+	})
+
+	t.Run("the database runs a distinct statement ordered by a projected column", func(t *testing.T) {
+		statement, err := query.NewSelect(table, city)
+		require.NoError(t, err)
+		statement, err = statement.WithDistinct()
+		require.NoError(t, err)
+		statement, err = statement.WithOrder(query.Asc(city))
+		require.NoError(t, err)
+		rendered, err := render.Select(test.dialect, statement)
+		require.NoError(t, err)
+
+		var cities []string
+		rows, err := database.QueryContext(t.Context(), rendered.SQL(), rendered.Args()...)
+		require.NoError(t, err)
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var c string
+			require.NoError(t, rows.Scan(&c))
+			cities = append(cities, c)
+		}
+		require.NoError(t, rows.Err())
+		require.Equal(t, []string{"osaka", "tokyo"}, cities)
+	})
+}
+
+// orderResultAliasCase describes one live server decision 2 of
+// order-by-alias-design.md is proved against: PostgreSQL and MySQL both
+// refuse ORDER BY on a result name more than one projection reports, which is
+// the premise query/validate.go's validateOrderResultAlias rests on.
+type orderResultAliasCase struct {
+	name    string
+	open    func(*testing.T) *sql.DB
+	dialect dialect.Dialect
+	// ambiguousError is the substring the server's own error carries for
+	// "ORDER BY id is ambiguous", stated once per engine because the two
+	// engines word it differently.
+	ambiguousError string
+}
+
+// TestOrderResultAliasAgainstLiveDatabases proves both halves of decision 2:
+// a rasql-rendered statement ordering by a projection's result alias returns
+// rows in the order that alias sorts by, and the ambiguous statement rasql's
+// own validation refuses in Go is a statement the server itself would also
+// have refused, with the exact wording query/validate.go's error message
+// tells a reader to expect. Each case skips when its server is unavailable;
+// CI's integration job runs both.
+func TestOrderResultAliasAgainstLiveDatabases(t *testing.T) {
+	for _, test := range []orderResultAliasCase{
+		{
+			name:           "postgresql",
+			open:           dbtest.PostgreSQLDB,
+			dialect:        dialect.PostgreSQL(),
+			ambiguousError: "is ambiguous",
+		},
+		{
+			name:           "mysql",
+			open:           dbtest.MySQLDB,
+			dialect:        dialect.MySQL(),
+			ambiguousError: "ambiguous",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			testOrderResultAlias(t, test.open(t), test)
+		})
+	}
+}
+
+func testOrderResultAlias(t *testing.T, database *sql.DB, test orderResultAliasCase) {
+	db, err := rasql.New(database, test.dialect)
+	require.NoError(t, err)
+	type record struct {
+		ID   int64  `rasql:"id"`
+		City string `rasql:"city"`
+	}
+	// A per-run unique name keeps this test from ever dropping a table it did
+	// not create, for the reason dbtest.UniqueName's own doc records.
+	tableName := dbtest.UniqueName(t, "rasql_order_result_alias_records")
+	definition := schema.TableDef{
+		Name: tableName,
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "city", Type: schema.TextType{}},
+		},
+		PrimaryKey: []string{"id"},
+	}
+	records, err := rasql.TableOf[record](definition)
+	require.NoError(t, err)
+
+	_, err = database.ExecContext(t.Context(), "DROP TABLE IF EXISTS "+tableName)
+	require.NoError(t, err)
+	defer func() {
+		_, err := database.ExecContext(t.Context(), "DROP TABLE IF EXISTS "+tableName)
+		require.NoError(t, err)
+	}()
+	require.NoError(t, rasql.CreateTable(t.Context(), db, records))
+
+	profileID := "postgresql-17"
+	if test.dialect.Name() == "mysql" {
+		profileID = "mysql-8.4"
+	}
+	profile, err := rasql.DiscoverEngineProfile(t.Context(), db, profileID)
+	require.NoError(t, err)
+	executor, err := rasql.AsExecutor(db, profile)
+	require.NoError(t, err)
+	recordID := query.TypedColumnOf[record, int64](records.Column("id"))
+	recordCity := query.TypedColumnOf[record, string](records.Column("city"))
+	for _, fixture := range []record{
+		{ID: 1, City: "tokyo"},
+		{ID: 2, City: "osaka"},
+		{ID: 3, City: "tokyo"},
+	} {
+		plan, err := rasql.NewCreatePlan(records, rasql.SetField(recordID, fixture.ID), rasql.SetField(recordCity, fixture.City))
+		require.NoError(t, err)
+		_, err = rasql.ExecMutation(t.Context(), executor, plan)
+		require.NoError(t, err)
+	}
+
+	table, err := query.NewTableRef(definition)
+	require.NoError(t, err)
+	location := table.Column("city").As("location")
+
+	t.Run("the database runs a statement ordered by the projection's result alias", func(t *testing.T) {
+		statement, err := query.NewSelect(table, location)
+		require.NoError(t, err)
+		statement, err = statement.WithOrder(query.AscResult(location))
+		require.NoError(t, err)
+		rendered, err := render.Select(test.dialect, statement)
+		require.NoError(t, err)
+
+		var cities []string
+		rows, err := database.QueryContext(t.Context(), rendered.SQL(), rendered.Args()...)
+		require.NoError(t, err)
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var c string
+			require.NoError(t, rows.Scan(&c))
+			cities = append(cities, c)
+		}
+		require.NoError(t, rows.Err())
+		require.Equal(t, []string{"osaka", "tokyo", "tokyo"}, cities)
+	})
+
+	t.Run("the server refuses the ambiguous statement rasql's own validation also refuses", func(t *testing.T) {
+		// rasql will not build this statement at all: query.NewSelect followed
+		// by WithOrder(query.AscResult(city.As("id"))) fails validation in Go,
+		// with the same word "ambiguous" this test's raw SQL proves the server
+		// itself uses (query/order_result_alias_test.go pins the Go-side
+		// refusal).
+		// Sent as raw SQL because there is no rasql statement to render.
+		ambiguous := "SELECT id, city AS id FROM " + tableName + " ORDER BY id"
+		_, err := database.ExecContext(t.Context(), ambiguous)
+		require.Error(t, err, "%s must refuse an ORDER BY term naming a result more than one projection reports", test.name)
+		require.ErrorContains(t, err, test.ambiguousError)
 	})
 }
