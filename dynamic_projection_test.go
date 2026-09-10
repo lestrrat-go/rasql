@@ -1,4 +1,4 @@
-package rasql
+package rasql_test
 
 import (
 	"context"
@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/stmt"
 	"github.com/stretchr/testify/require"
@@ -27,7 +27,7 @@ type dynamicProjectionRow struct {
 	dynamicProjectionEmbedded
 	ID       int64                 `rasql:"id"`
 	Nickname *string               `rasql:"nickname"`
-	Total    Nullable[int64]       `rasql:"total"`
+	Total    rasql.Nullable[int64] `rasql:"total"`
 	Code     dynamicProjectionCode `rasql:"code"`
 }
 
@@ -39,25 +39,25 @@ type dynamicProjectionCode struct {
 type dynamicProjectionAggregateRow struct {
 	UserID int64
 	Name   string
-	Total  Nullable[int64]
+	Total  rasql.Nullable[int64]
 }
 
 type dynamicProjectionAggregateDecoder struct {
-	schema ResultSchema
+	schema rasql.ResultSchema
 }
 
-func (d dynamicProjectionAggregateDecoder) ResultSchema() ResultSchema { return d.schema }
-func (dynamicProjectionAggregateDecoder) Presence() []Presence         { return nil }
-func (d dynamicProjectionAggregateDecoder) DecodeRow(source ScanSource, result *dynamicProjectionAggregateRow) error {
+func (d dynamicProjectionAggregateDecoder) ResultSchema() rasql.ResultSchema { return d.schema }
+func (dynamicProjectionAggregateDecoder) Presence() []rasql.Presence         { return nil }
+func (d dynamicProjectionAggregateDecoder) DecodeRow(source rasql.ScanSource, result *dynamicProjectionAggregateRow) error {
 	var total any
 	if err := source.Scan(&result.UserID, &result.Name, &total); err != nil {
 		return err
 	}
 	if total == nil {
-		result.Total = Nullable[int64]{}
+		result.Total = rasql.Nullable[int64]{}
 		return nil
 	}
-	if err := ScanValue(&result.Total.Value, total); err != nil {
+	if err := rasql.ScanValue(&result.Total.Value, total); err != nil {
 		return err
 	}
 	result.Total.Valid = true
@@ -79,22 +79,22 @@ func (d *dynamicProjectionCode) Scan(value any) error {
 
 var _ sql.Scanner = (*dynamicProjectionCode)(nil)
 
-func dynamicProjectionSchema(t *testing.T) ResultSchema {
+func dynamicProjectionSchema(t *testing.T) rasql.ResultSchema {
 	t.Helper()
-	s, err := NewResultSchema(
-		ResultColumn{Name: "id", Type: schema.IntegerType{}},
-		ResultColumn{Name: "name", Type: schema.TextType{}},
-		ResultColumn{Name: "nickname", Type: schema.TextType{}, Nullable: true},
-		ResultColumn{Name: "total", Type: schema.IntegerType{}, Nullable: true},
-		ResultColumn{Name: "code", Type: schema.TextType{}, Nullable: true},
+	s, err := rasql.NewResultSchema(
+		rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}},
+		rasql.ResultColumn{Name: "name", Type: schema.TextType{}},
+		rasql.ResultColumn{Name: "nickname", Type: schema.TextType{}, Nullable: true},
+		rasql.ResultColumn{Name: "total", Type: schema.IntegerType{}, Nullable: true},
+		rasql.ResultColumn{Name: "code", Type: schema.TextType{}, Nullable: true},
 	)
 	require.NoError(t, err)
 	return s
 }
 
-func dynamicProjectionNativeQuery[R any](t *testing.T, projection Projection[R], sqlText string) Query[R] {
+func dynamicProjectionNativeQuery[R any](t *testing.T, projection rasql.Projection[R], sqlText string) rasql.Query[R] {
 	t.Helper()
-	q, err := Native(NativeStatement{Engine: "sqlite", SQL: sqlText}, projection, Many)
+	q, err := rasql.Native(rasql.NativeStatement{Engine: "sqlite", SQL: sqlText}, projection, rasql.Many)
 	require.NoError(t, err)
 	return q
 }
@@ -102,7 +102,7 @@ func dynamicProjectionNativeQuery[R any](t *testing.T, projection Projection[R],
 func TestDynamicProjection(t *testing.T) {
 	t.Run("construction and returned column binding", func(t *testing.T) {
 		schemaValue := dynamicProjectionSchema(t)
-		projection, err := DynamicProjection[dynamicProjectionRow](schemaValue)
+		projection, err := rasql.DynamicProjection[dynamicProjectionRow](schemaValue)
 		require.NoError(t, err)
 		require.NoError(t, projection.Validate())
 		columns := projection.Schema().Columns()
@@ -124,14 +124,14 @@ func TestDynamicProjection(t *testing.T) {
 				rows := &dynamicProjectionRows{columns: tc.columns, values: [][]any{{int64(1), "Ada", nil, nil, "A"}}}
 				executor := dynamicProjectionExecutorFor(t, rows)
 				q := dynamicProjectionNativeQuery(t, projection, "SELECT 1")
-				seq, err := Rows(t.Context(), executor, q)
+				seq, err := rasql.Rows(t.Context(), executor, q)
 				require.NoError(t, err)
 				var got []error
 				for _, err := range seq {
 					got = append(got, err)
 				}
 				require.Len(t, got, 1)
-				var planErr *PlanError
+				var planErr *rasql.PlanError
 				require.ErrorAs(t, got[0], &planErr)
 				require.Equal(t, tc.wantErr, planErr.Code)
 				require.Zero(t, rows.nextCalls)
@@ -147,7 +147,7 @@ func TestDynamicProjection(t *testing.T) {
 			}
 			executor := dynamicProjectionExecutorFor(t, rows)
 			q := dynamicProjectionNativeQuery(t, projection, "SELECT 1")
-			values, err := All(t.Context(), executor, q)
+			values, err := rasql.All(t.Context(), executor, q)
 			require.NoError(t, err)
 			require.Len(t, values, 1)
 			require.Equal(t, "Ada", values[0].Name)
@@ -161,12 +161,12 @@ func TestDynamicProjection(t *testing.T) {
 
 	t.Run("empty rows retain the schema and finish", func(t *testing.T) {
 		schemaValue := dynamicProjectionSchema(t)
-		projection, err := DynamicProjection[dynamicProjectionRow](schemaValue)
+		projection, err := rasql.DynamicProjection[dynamicProjectionRow](schemaValue)
 		require.NoError(t, err)
 		rows := &dynamicProjectionRows{columns: []string{"id", "name", "nickname", "total", "code"}}
 
 		query := dynamicProjectionNativeQuery(t, projection, "SELECT 1")
-		values, err := All(t.Context(), dynamicProjectionExecutorFor(t, rows), query)
+		values, err := rasql.All(t.Context(), dynamicProjectionExecutorFor(t, rows), query)
 		require.NoError(t, err)
 		require.Empty(t, values)
 		require.Equal(t, schemaValue.Columns(), projection.Schema().Columns())
@@ -176,7 +176,7 @@ func TestDynamicProjection(t *testing.T) {
 
 	t.Run("a columns error finishes the rows", func(t *testing.T) {
 		schemaValue := dynamicProjectionSchema(t)
-		projection, err := DynamicProjection[dynamicProjectionRow](schemaValue)
+		projection, err := rasql.DynamicProjection[dynamicProjectionRow](schemaValue)
 		require.NoError(t, err)
 		columnErr := errors.New("columns unavailable")
 		rows := &dynamicProjectionRows{
@@ -185,7 +185,7 @@ func TestDynamicProjection(t *testing.T) {
 		}
 
 		query := dynamicProjectionNativeQuery(t, projection, "SELECT 1")
-		sequence, err := Rows(t.Context(), dynamicProjectionExecutorFor(t, rows), query)
+		sequence, err := rasql.Rows(t.Context(), dynamicProjectionExecutorFor(t, rows), query)
 		require.NoError(t, err)
 		var yielded []error
 		for _, err := range sequence {
@@ -202,7 +202,7 @@ func TestDynamicProjection(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, database.Close()) })
 		database.SetMaxOpenConns(1)
-		db, err := New(database, dialect.SQLite())
+		db, err := rasql.New(database, dialect.SQLite())
 		require.NoError(t, err)
 		for _, statement := range []string{
 			"CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
@@ -213,135 +213,139 @@ func TestDynamicProjection(t *testing.T) {
 			_, err = database.ExecContext(t.Context(), statement)
 			require.NoError(t, err)
 		}
-		resultSchema, err := NewResultSchema(
-			ResultColumn{Name: "user_id", Type: schema.IntegerType{}},
-			ResultColumn{Name: "name", Type: schema.TextType{}},
-			ResultColumn{Name: "total", Type: schema.IntegerType{}, Nullable: true},
+		resultSchema, err := rasql.NewResultSchema(
+			rasql.ResultColumn{Name: "user_id", Type: schema.IntegerType{}},
+			rasql.ResultColumn{Name: "name", Type: schema.TextType{}},
+			rasql.ResultColumn{Name: "total", Type: schema.IntegerType{}, Nullable: true},
 		)
 		require.NoError(t, err)
 		decoder := dynamicProjectionAggregateDecoder{schema: resultSchema}
-		items := []ProjectionItem{
-			{expression: query.Bind(nil), column: ResultColumn{Name: "user_id", Type: schema.IntegerType{}}},
-			{expression: query.Bind(nil), column: ResultColumn{Name: "name", Type: schema.TextType{}}},
-			{expression: query.Bind(nil), column: ResultColumn{Name: "total", Type: schema.IntegerType{}, Nullable: true}},
+		// sqlText below is Native, so these expressions are never rendered and each
+		// item is here only for its column metadata. SumExpr mirrors the SUM in
+		// sqlText because NullItem takes a NullExpr and every public way to build
+		// one without a bound column is an aggregate.
+		items := []rasql.ProjectionItem{
+			rasql.Item("user_id", rasql.Value(int64(0)), schema.IntegerType{}, ""),
+			rasql.Item("name", rasql.Value(""), schema.TextType{}, ""),
+			rasql.NullItem("total", rasql.SumExpr(rasql.Value(int64(0))), schema.IntegerType{}, ""),
 		}
-		staticProjection, err := NewProjection(items, decoder)
+		staticProjection, err := rasql.NewProjection(items, decoder)
 		require.NoError(t, err)
-		dynamicProjection, err := DynamicProjection[dynamicProjectionAggregateRow](resultSchema)
+		dynamicProjection, err := rasql.DynamicProjection[dynamicProjectionAggregateRow](resultSchema)
 		require.NoError(t, err)
 		sqlText := "SELECT u.id AS user_id, u.name AS name, SUM(o.amount) AS total FROM users u LEFT JOIN orders o ON o.user_id = u.id GROUP BY u.id ORDER BY u.id"
-		profile, err := EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
 		require.NoError(t, err)
-		executor, err := AsExecutor(db, profile)
+		executor, err := rasql.AsExecutor(db, profile)
 		require.NoError(t, err)
 		staticQuery := dynamicProjectionNativeQuery(t, staticProjection, sqlText)
 		dynamicQuery := dynamicProjectionNativeQuery(t, dynamicProjection, sqlText)
-		staticValues, err := All(t.Context(), executor, staticQuery)
+		staticValues, err := rasql.All(t.Context(), executor, staticQuery)
 		require.NoError(t, err)
-		dynamicValues, err := All(t.Context(), executor, dynamicQuery)
+		dynamicValues, err := rasql.All(t.Context(), executor, dynamicQuery)
 		require.NoError(t, err)
 		require.Equal(t, staticValues, dynamicValues)
-		require.Equal(t, []dynamicProjectionAggregateRow{{UserID: 1, Name: "Ada", Total: Nullable[int64]{Value: 12, Valid: true}}, {UserID: 2, Name: "Bob"}}, dynamicValues)
+		require.Equal(t, []dynamicProjectionAggregateRow{{UserID: 1, Name: "Ada", Total: rasql.Nullable[int64]{Value: 12, Valid: true}}, {UserID: 2, Name: "Bob"}}, dynamicValues)
 	})
 
 	t.Run("null scanner domain and incompatible values", func(t *testing.T) {
-		schemaValue, err := NewResultSchema(
-			ResultColumn{Name: "id", Type: schema.IntegerType{}},
-			ResultColumn{Name: "code", Type: schema.TextType{}, Nullable: true},
+		schemaValue, err := rasql.NewResultSchema(
+			rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}},
+			rasql.ResultColumn{Name: "code", Type: schema.TextType{}, Nullable: true},
 		)
 		require.NoError(t, err)
 		type row struct {
 			ID   int64                 `rasql:"id"`
 			Code dynamicProjectionCode `rasql:"code"`
 		}
-		projection, err := DynamicProjection[row](schemaValue)
+		projection, err := rasql.DynamicProjection[row](schemaValue)
 		require.NoError(t, err)
 		t.Run("null reaches scanner", func(t *testing.T) {
 			rows := &dynamicProjectionRows{columns: []string{"id", "code"}, values: [][]any{{int64(1), nil}}}
-			values, err := All(t.Context(), dynamicProjectionExecutorFor(t, rows), dynamicProjectionNativeQuery(t, projection, "SELECT 1"))
+			values, err := rasql.All(t.Context(), dynamicProjectionExecutorFor(t, rows), dynamicProjectionNativeQuery(t, projection, "SELECT 1"))
 			require.NoError(t, err)
 			require.Equal(t, row{ID: 1}, values[0])
 		})
 		t.Run("scanner failure preserves cause and closes once", func(t *testing.T) {
 			cause := errors.New("scanner source failure")
 			rows := &dynamicProjectionRows{columns: []string{"id", "code"}, values: [][]any{{int64(1), cause}}}
-			_, err := All(t.Context(), dynamicProjectionExecutorFor(t, rows), dynamicProjectionNativeQuery(t, projection, "SELECT 1"))
+			_, err := rasql.All(t.Context(), dynamicProjectionExecutorFor(t, rows), dynamicProjectionNativeQuery(t, projection, "SELECT 1"))
 			require.ErrorIs(t, err, cause)
 			require.Equal(t, 1, rows.closeCalls)
 			require.Equal(t, 1, rows.finishCalls)
 		})
 		t.Run("incompatible schema fails at construction", func(t *testing.T) {
-			badSchema, err := NewResultSchema(ResultColumn{Name: "id", Type: schema.TextType{}})
+			badSchema, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "id", Type: schema.TextType{}})
 			require.NoError(t, err)
-			_, err = DynamicProjection[struct {
+			_, err = rasql.DynamicProjection[struct {
 				ID int64 `rasql:"id"`
 			}](badSchema)
-			var planErr *PlanError
+			var planErr *rasql.PlanError
 			require.ErrorAs(t, err, &planErr)
 			require.Equal(t, "invalid_projection", planErr.Code)
 		})
 		t.Run("NULL into non-null field is a decode error", func(t *testing.T) {
-			nonNullable, err := NewResultSchema(ResultColumn{Name: "id", Type: schema.IntegerType{}})
+			nonNullable, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}})
 			require.NoError(t, err)
-			idProjection, err := DynamicProjection[struct {
+			idProjection, err := rasql.DynamicProjection[struct {
 				ID int64 `rasql:"id"`
 			}](nonNullable)
 			require.NoError(t, err)
 			rows := &dynamicProjectionRows{columns: []string{"id"}, values: [][]any{{nil}}}
-			_, err = All(t.Context(), dynamicProjectionExecutorFor(t, rows), dynamicProjectionNativeQuery(t, idProjection, "SELECT 1"))
-			require.ErrorIs(t, err, ErrUnexpectedNull)
+			_, err = rasql.All(t.Context(), dynamicProjectionExecutorFor(t, rows), dynamicProjectionNativeQuery(t, idProjection, "SELECT 1"))
+			require.ErrorIs(t, err, rasql.ErrUnexpectedNull)
 			require.Equal(t, 1, rows.closeCalls)
 		})
 		t.Run("incompatible returned value preserves decode failure", func(t *testing.T) {
-			textSchema, err := NewResultSchema(ResultColumn{Name: "code", Type: schema.TextType{}})
+			textSchema, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "code", Type: schema.TextType{}})
 			require.NoError(t, err)
-			textProjection, err := DynamicProjection[struct {
+			textProjection, err := rasql.DynamicProjection[struct {
 				Code string `rasql:"code"`
 			}](textSchema)
 			require.NoError(t, err)
 			rows := &dynamicProjectionRows{columns: []string{"code"}, values: [][]any{{int64(9)}}}
-			_, err = All(t.Context(), dynamicProjectionExecutorFor(t, rows), dynamicProjectionNativeQuery(t, textProjection, "SELECT 1"))
-			var decodeErr *DecodeError
+			_, err = rasql.All(t.Context(), dynamicProjectionExecutorFor(t, rows), dynamicProjectionNativeQuery(t, textProjection, "SELECT 1"))
+			var decodeErr *rasql.DecodeError
 			require.ErrorAs(t, err, &decodeErr)
 			require.Equal(t, "code", decodeErr.Column)
-			require.Equal(t, CodecID(""), decodeErr.Codec)
+			require.Equal(t, rasql.CodecID(""), decodeErr.Codec)
 			require.Equal(t, 1, rows.closeCalls)
 		})
 	})
 
 	t.Run("rejects tagged unexported fields", func(t *testing.T) {
-		schemaValue, err := NewResultSchema(ResultColumn{Name: "code", Type: schema.TextType{}})
+		schemaValue, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "code", Type: schema.TextType{}})
 		require.NoError(t, err)
-		_, err = DynamicProjection[struct {
+		_, err = rasql.DynamicProjection[struct {
 			code string `rasql:"code"`
 		}](schemaValue)
-		var planErr *PlanError
+		var planErr *rasql.PlanError
 		require.ErrorAs(t, err, &planErr)
 		require.Equal(t, "invalid_projection", planErr.Code)
 		require.Equal(t, "decoder", planErr.Path)
 	})
 
 	t.Run("reordered columns use bound codec positions", func(t *testing.T) {
-		schemaValue, err := NewResultSchema(
-			ResultColumn{Name: "id", Type: schema.IntegerType{}, Codec: "dynamic_int"},
-			ResultColumn{Name: "name", Type: schema.TextType{}, Codec: "dynamic_text"},
+		schemaValue, err := rasql.NewResultSchema(
+			rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}, Codec: "dynamic_int"},
+			rasql.ResultColumn{Name: "name", Type: schema.TextType{}, Codec: "dynamic_text"},
 		)
 		require.NoError(t, err)
-		projection, err := DynamicProjection[struct {
+		projection, err := rasql.DynamicProjection[struct {
 			ID   int64  `rasql:"id"`
 			Name string `rasql:"name"`
 		}](schemaValue)
 		require.NoError(t, err)
 		rows := &dynamicProjectionRows{columns: []string{"name", "id"}, values: [][]any{{"Ada", int64(42)}}}
 		executor := dynamicProjectionExecutorFor(t, rows)
-		codecs, err := NewCodecRegistry(map[CodecID]ValueCodec{
+		codecs, err := rasql.NewCodecRegistry(map[rasql.CodecID]rasql.ValueCodec{
 			"dynamic_int":  dynamicProjectionCodec{},
 			"dynamic_text": dynamicProjectionCodec{},
 		})
 		require.NoError(t, err)
-		executor, err = WithCodecs(executor, codecs)
+		executor, err = rasql.WithCodecs(executor, codecs)
 		require.NoError(t, err)
-		values, err := All(t.Context(), executor, dynamicProjectionNativeQuery(t, projection, "SELECT 1"))
+		values, err := rasql.All(t.Context(), executor, dynamicProjectionNativeQuery(t, projection, "SELECT 1"))
 		require.NoError(t, err)
 		require.Len(t, values, 1)
 		require.Equal(t, int64(42), values[0].ID)
@@ -349,9 +353,9 @@ func TestDynamicProjection(t *testing.T) {
 	})
 
 	t.Run("cancellation and reuse", func(t *testing.T) {
-		schemaValue, err := NewResultSchema(ResultColumn{Name: "id", Type: schema.IntegerType{}})
+		schemaValue, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}})
 		require.NoError(t, err)
-		projection, err := DynamicProjection[struct {
+		projection, err := rasql.DynamicProjection[struct {
 			ID int64 `rasql:"id"`
 		}](schemaValue)
 		require.NoError(t, err)
@@ -359,7 +363,7 @@ func TestDynamicProjection(t *testing.T) {
 		q := dynamicProjectionNativeQuery(t, projection, "SELECT 1")
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
-		_, err = All(ctx, executor, q)
+		_, err = rasql.All(ctx, executor, q)
 		require.ErrorIs(t, err, context.Canceled)
 
 		var calls atomic.Int64
@@ -367,9 +371,9 @@ func TestDynamicProjection(t *testing.T) {
 			calls.Add(1)
 			return &dynamicProjectionRows{columns: []string{"id"}, values: [][]any{{int64(9)}}}
 		}}
-		profile, err := EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
 		require.NoError(t, err)
-		profiled, err := WithEngineProfile(reusable, profile)
+		profiled, err := rasql.WithEngineProfile(reusable, profile)
 		require.NoError(t, err)
 		var wg sync.WaitGroup
 		errs := make(chan error, 100)
@@ -377,7 +381,7 @@ func TestDynamicProjection(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				values, err := All(t.Context(), profiled, q)
+				values, err := rasql.All(t.Context(), profiled, q)
 				if err != nil {
 					errs <- err
 					return
@@ -407,9 +411,9 @@ func TestDynamicProjection(t *testing.T) {
 	// nothing in dynamic_projection_internal_test.go called it with one, so this check
 	// had no test at all until this one.
 	t.Run("rejects a non-struct result type", func(t *testing.T) {
-		result, err := NewResultSchema(ResultColumn{Name: "id", Type: schema.IntegerType{}})
+		result, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}})
 		require.NoError(t, err)
-		_, err = DynamicProjection[int64](result)
+		_, err = rasql.DynamicProjection[int64](result)
 		require.ErrorContains(t, err, "must be a struct")
 	})
 }
@@ -428,18 +432,18 @@ type dynamicProjectionExecutor struct {
 	rows    []*dynamicProjectionRows
 }
 
-func dynamicProjectionExecutorFor(t *testing.T, rows *dynamicProjectionRows) Executor {
+func dynamicProjectionExecutorFor(t *testing.T, rows *dynamicProjectionRows) rasql.Executor {
 	t.Helper()
 	executor := &dynamicProjectionExecutor{dialect: dialect.SQLite(), factory: func() *dynamicProjectionRows { return rows }}
-	profile, err := EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
 	require.NoError(t, err)
-	profiled, err := WithEngineProfile(executor, profile)
+	profiled, err := rasql.WithEngineProfile(executor, profile)
 	require.NoError(t, err)
 	return profiled
 }
 
 func (e *dynamicProjectionExecutor) Dialect() dialect.Dialect { return e.dialect }
-func (e *dynamicProjectionExecutor) Query(ctx context.Context, _ stmt.Statement) (ResultRows, error) {
+func (e *dynamicProjectionExecutor) Query(ctx context.Context, _ stmt.Statement) (rasql.ResultRows, error) {
 	rows := e.factory()
 	rows.ctx = ctx
 	e.mu.Lock()
@@ -546,5 +550,5 @@ func dynamicProjectionAssign(destination, value any) error {
 	return fmt.Errorf("cannot assign %T to %T", value, destination)
 }
 
-var _ Executor = (*dynamicProjectionExecutor)(nil)
-var _ ResultRows = (*dynamicProjectionRows)(nil)
+var _ rasql.Executor = (*dynamicProjectionExecutor)(nil)
+var _ rasql.ResultRows = (*dynamicProjectionRows)(nil)
