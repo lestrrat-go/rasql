@@ -1,0 +1,265 @@
+package rasql_test
+
+import (
+	"context"
+	"database/sql"
+	"testing"
+
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/inspect"
+	"github.com/lestrrat-go/rasql/internal/dbtest"
+	"github.com/lestrrat-go/rasql/query"
+	"github.com/stretchr/testify/require"
+)
+
+// TestGeneratedColumnWriteAgainstLiveDatabases proves, against real
+// PostgreSQL and MySQL servers, the claim
+// TestInsertOmitsGeneratedColumn/TestUpdateOmitsGeneratedColumn in
+// typed_mutation_test.go only ever prove against a mocked
+// driver: that rasql.Insert into a table with a generated column succeeds,
+// because typedInsertMany leaves the generated column out of the statement
+// it builds, rather than being refused by the server the way it would be if
+// the column reached the INSERT column list. #149 added that exclusion
+// specifically to prevent a live INSERT from failing this way; until now
+// nothing exercised it against a real engine.
+//
+// Each subtest inspects the table it just created with a raw CREATE TABLE,
+// rather than hand-building a schema.TableDef, so the descriptor Insert
+// builds its statement from is the same one this PR's inspection changes
+// actually produce -- proving the inspect and typed-write halves of
+// generated-column support work together, not merely each in isolation.
+func TestGeneratedColumnWriteAgainstLiveDatabases(t *testing.T) {
+	for _, test := range []struct {
+		name                  string
+		open                  func(*testing.T) *sql.DB
+		dialect               dialect.Dialect
+		createTableQuery      string
+		selectFahrenheitQuery string
+	}{
+		{
+			name:    "postgresql",
+			open:    dbtest.PostgreSQLDB,
+			dialect: dialect.PostgreSQL(),
+			createTableQuery: "CREATE TABLE live_write_measurements (" +
+				"id BIGINT PRIMARY KEY, " +
+				"celsius BIGINT NOT NULL, " +
+				"fahrenheit BIGINT GENERATED ALWAYS AS (celsius * 9 / 5 + 32) STORED" +
+				")",
+			selectFahrenheitQuery: "SELECT fahrenheit FROM live_write_measurements WHERE id = $1",
+		},
+		{
+			name:    "mysql",
+			open:    dbtest.MySQLDB,
+			dialect: dialect.MySQL(),
+			createTableQuery: "CREATE TABLE live_write_measurements (" +
+				"id BIGINT PRIMARY KEY, " +
+				"celsius BIGINT NOT NULL, " +
+				"fahrenheit BIGINT GENERATED ALWAYS AS (celsius * 9 / 5 + 32) STORED" +
+				") ENGINE=InnoDB",
+			selectFahrenheitQuery: "SELECT fahrenheit FROM live_write_measurements WHERE id = ?",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			database := test.open(t)
+
+			// render.CreateTable refuses to build DDL for a generated
+			// column (see UnsupportedGeneratedColumnError), so the table
+			// is created directly rather than through rasql.CreateTable.
+			_, err := database.ExecContext(ctx, test.createTableQuery)
+			require.NoError(t, err, "create live table with a generated column")
+
+			inspector, err := inspect.New(database, test.dialect)
+			require.NoError(t, err, "create inspector")
+			definition, err := inspector.Table(ctx, "live_write_measurements")
+			require.NoError(t, err, "inspect the table this subtest just created")
+
+			db, err := rasql.New(database, test.dialect)
+			require.NoError(t, err, "create rasql db")
+			type measurement struct {
+				ID         int64 `rasql:"id"`
+				Celsius    int64 `rasql:"celsius"`
+				Fahrenheit int64 `rasql:"fahrenheit"`
+			}
+			measurements, err := rasql.TableOf[measurement](definition)
+			require.NoError(t, err, "build a typed table from the inspected descriptor")
+
+			profileID := "postgresql-17"
+			if test.dialect.Name() == "mysql" {
+				profileID = "mysql-8.4"
+			}
+			profile, err := rasql.DiscoverEngineProfile(ctx, db, profileID)
+			require.NoError(t, err, "discover engine profile")
+			executor, err := rasql.AsExecutor(db, profile)
+			require.NoError(t, err, "build executor")
+
+			id := query.TypedColumnOf[measurement, int64](measurements.Column("id"))
+			celsius := query.TypedColumnOf[measurement, int64](measurements.Column("celsius"))
+
+			// The point under test: this must succeed. NewCreatePlan treats a
+			// generated column as omissible and there is no field here that
+			// sets fahrenheit at all, so if the generated column ever again
+			// had to be named explicitly to build a valid plan, this would
+			// fail before the server saw a statement. Reaching ExecMutation
+			// puts the server itself -- not a mock -- in the position to
+			// refuse the statement if the column reached the INSERT list.
+			plan, err := rasql.NewCreatePlan(measurements, rasql.SetField(id, int64(1)), rasql.SetField(celsius, int64(20)))
+			require.NoError(t, err, "create plan must accept a table with a generated column when nothing sets it")
+			_, err = rasql.ExecMutation(ctx, executor, plan)
+			require.NoError(t, err, "insert into a table with a generated column must succeed: the generated column must not reach the INSERT statement")
+
+			// Read the row back directly, bypassing the typed read path,
+			// to confirm a row genuinely landed and that the server, not
+			// the value this test supplied, computed the generated column:
+			// the 999 above must not have reached the database at all.
+			var storedFahrenheit int64
+			err = database.QueryRowContext(ctx, test.selectFahrenheitQuery, int64(1)).Scan(&storedFahrenheit)
+			require.NoError(t, err, "read the inserted row back directly")
+			require.Equal(t, int64(68), storedFahrenheit, "the server, not the caller, must have computed the generated column")
+		})
+	}
+}
+
+func TestIdentityColumnWriteAgainstLiveDatabases(t *testing.T) {
+	// TestIdentityColumnWriteAgainstLiveDatabases/"an always-identity column" proves, against a
+	// real PostgreSQL server, that rasql.Insert into a table with an ALWAYS
+	// identity primary key succeeds and the server assigns the key --
+	// typedInsertMany leaves the column out of the INSERT column list, rather
+	// than being refused by the server the way it would be if the column
+	// reached the statement (PostgreSQL: "cannot insert a non-DEFAULT value").
+	// The descriptor driving Insert comes from inspect.Table, the same
+	// descriptor a real caller would build from a live database, not a
+	// hand-built schema.TableDef, so this exercises the inspect and typed-write
+	// halves of identity support together.
+	t.Run("an always-identity column", func(t *testing.T) {
+		ctx := context.Background()
+		database := dbtest.PostgreSQLDB(t)
+
+		// render.CreateTable does render an ALWAYS identity column on
+		// PostgreSQL (see render/identity_render_integration_test.go), but the
+		// table is created directly here to keep this test focused on the
+		// typed write path rather than also depending on render's behavior.
+		_, err := database.ExecContext(ctx, "CREATE TABLE live_write_members (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, name TEXT NOT NULL)")
+		require.NoError(t, err, "create live table with an ALWAYS identity column")
+
+		inspector, err := inspect.New(database, dialect.PostgreSQL())
+		require.NoError(t, err, "create inspector")
+		definition, err := inspector.Table(ctx, "live_write_members")
+		require.NoError(t, err, "inspect the table this test just created")
+
+		db, err := rasql.New(database, dialect.PostgreSQL())
+		require.NoError(t, err, "create rasql db")
+		type member struct {
+			ID   int64  `rasql:"id"`
+			Name string `rasql:"name"`
+		}
+		members, err := rasql.TableOf[member](definition)
+		require.NoError(t, err, "build a typed table from the inspected descriptor")
+
+		profile, err := rasql.DiscoverEngineProfile(ctx, db, "postgresql-17")
+		require.NoError(t, err, "discover engine profile")
+		executor, err := rasql.AsExecutor(db, profile)
+		require.NoError(t, err, "build executor")
+
+		id := query.TypedColumnOf[member, int64](members.Column("id"))
+		name := query.TypedColumnOf[member, string](members.Column("name"))
+
+		// An ALWAYS identity column cannot be assigned at all: NewCreatePlan
+		// refuses a field naming it before any statement is built, which is a
+		// stronger guarantee than the reflected write path had -- there, a
+		// supplied value (999, chosen far outside the range a fresh sequence
+		// would ever produce) was silently dropped rather than refused.
+		_, err = rasql.NewCreatePlan(members, rasql.SetField(id, int64(999)), rasql.SetField(name, "Ada"))
+		require.Error(t, err, "a field naming an ALWAYS identity column must be refused before it reaches a statement")
+
+		// The point under test: this must succeed with no field for id at all,
+		// and the server, not the caller, must assign the key.
+		plan, err := rasql.NewCreatePlan(members, rasql.SetField(name, "Ada"))
+		require.NoError(t, err, "create plan must accept a table with an ALWAYS identity column when nothing sets it")
+		_, err = rasql.ExecMutation(ctx, executor, plan)
+		require.NoError(t, err, "insert into a table with an ALWAYS identity column must succeed: the identity column must not reach the INSERT statement")
+
+		var assignedID int64
+		err = database.QueryRowContext(ctx, "SELECT id FROM live_write_members WHERE name = $1", "Ada").Scan(&assignedID)
+		require.NoError(t, err, "read the inserted row back directly")
+		require.NotEqual(t, int64(999), assignedID, "the server, not the caller, must have assigned the identity column")
+		require.Equal(t, int64(1), assignedID, "a fresh table's default identity sequence starts at 1")
+	})
+
+	// TestIdentityColumnWriteAgainstLiveDatabases/"a by-default identity column keeps an explicit value"
+	// proves, against real PostgreSQL and MySQL servers, that rasql.Insert
+	// into a table with a BY DEFAULT identity column (PostgreSQL's own
+	// GENERATED BY DEFAULT AS IDENTITY, and MySQL's AUTO_INCREMENT, which is
+	// BY DEFAULT-shaped) keeps an explicit value rather than the server
+	// overwriting it -- the one place the two identity generations differ in
+	// the typed write path (see the comment on the Identity == IdentityAlways
+	// check in typedInsertMany).
+	t.Run("a by-default identity column keeps an explicit value", func(t *testing.T) {
+		for _, test := range []struct {
+			name             string
+			open             func(*testing.T) *sql.DB
+			dialect          dialect.Dialect
+			createTableQuery string
+			selectIDQuery    string
+		}{
+			{
+				name:             "postgresql",
+				open:             dbtest.PostgreSQLDB,
+				dialect:          dialect.PostgreSQL(),
+				createTableQuery: "CREATE TABLE live_write_legacy_members (id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, name TEXT NOT NULL)",
+				selectIDQuery:    "SELECT id FROM live_write_legacy_members WHERE name = $1",
+			},
+			{
+				name:             "mysql",
+				open:             dbtest.MySQLDB,
+				dialect:          dialect.MySQL(),
+				createTableQuery: "CREATE TABLE live_write_legacy_members (id BIGINT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(120) NOT NULL) ENGINE=InnoDB",
+				selectIDQuery:    "SELECT id FROM live_write_legacy_members WHERE name = ?",
+			},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				ctx := context.Background()
+				database := test.open(t)
+
+				_, err := database.ExecContext(ctx, test.createTableQuery)
+				require.NoError(t, err, "create live table with a BY DEFAULT identity column")
+
+				inspector, err := inspect.New(database, test.dialect)
+				require.NoError(t, err, "create inspector")
+				definition, err := inspector.Table(ctx, "live_write_legacy_members")
+				require.NoError(t, err, "inspect the table this subtest just created")
+
+				db, err := rasql.New(database, test.dialect)
+				require.NoError(t, err, "create rasql db")
+				type member struct {
+					ID   int64  `rasql:"id"`
+					Name string `rasql:"name"`
+				}
+				members, err := rasql.TableOf[member](definition)
+				require.NoError(t, err, "build a typed table from the inspected descriptor")
+
+				profileID := "postgresql-17"
+				if test.dialect.Name() == "mysql" {
+					profileID = "mysql-8.4"
+				}
+				profile, err := rasql.DiscoverEngineProfile(ctx, db, profileID)
+				require.NoError(t, err, "discover engine profile")
+				executor, err := rasql.AsExecutor(db, profile)
+				require.NoError(t, err, "build executor")
+
+				id := query.TypedColumnOf[member, int64](members.Column("id"))
+				name := query.TypedColumnOf[member, string](members.Column("name"))
+				plan, err := rasql.NewCreatePlan(members, rasql.SetField(id, int64(7)), rasql.SetField(name, "Grace"))
+				require.NoError(t, err, "create plan for a BY DEFAULT identity column must accept an explicit value")
+				_, err = rasql.ExecMutation(ctx, executor, plan)
+				require.NoError(t, err, "insert an explicit value into a BY DEFAULT identity column must succeed")
+
+				var keptID int64
+				err = database.QueryRowContext(ctx, test.selectIDQuery, "Grace").Scan(&keptID)
+				require.NoError(t, err, "read the inserted row back directly")
+				require.Equal(t, int64(7), keptID, "a BY DEFAULT identity column must keep the explicit value rather than the server overwriting it")
+			})
+		}
+	})
+}

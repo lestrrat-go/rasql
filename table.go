@@ -452,7 +452,7 @@ const nilDereferenceMessage = "invalid memory address or nil pointer dereference
 // check would fail closed. It would treat that panic as unrelated to a
 // missing table and re-panic it unchanged, which is the behavior this guard
 // had before it existed, rather than risk misclassifying a caller's own panic
-// as a missing table. TestTableGuardKeepsUnrelatedPanics and the guard's other
+// as a missing table. TestTableGuard/"keeps unrelated panics" and the guard's other
 // panic-shape tests would then fail loudly instead of the guard silently
 // drifting.
 func nilPointerDereference(recovered any) bool {

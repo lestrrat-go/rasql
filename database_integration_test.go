@@ -391,7 +391,7 @@ func integrationTable(name string) schema.TableDef {
 // namespace stays out of scope for rasql.CreateTable. SQLite has no server and no
 // DDL statement for a namespace at all (its namespace comes from ATTACH), so
 // its coverage lives in render/schema_test.go's TestSQLiteExecutesQualifiedDDL
-// and sqlite_typed_roundtrip_test.go's TestSQLiteQualifiedTableRoundTrip
+// and sqlite_typed_test.go's TestSQLiteRoundTrip/"a qualified table"
 // instead of here.
 func TestQualifiedDDLIntegration(t *testing.T) {
 	t.Run("postgresql", testQualifiedDDLPostgreSQL)

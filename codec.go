@@ -73,7 +73,7 @@ type DecodeError struct {
 // cause is rasql's own conversion error and rasql controls what it says.
 // A codec's own error text stays out of the message, because a codec is
 // third-party code that may print the value it failed on; that text is still
-// reachable through Unwrap, and TestCodecErrorsHideCodecCauseText holds the
+// reachable through Unwrap, and TestCodecErrors/"codec cause text stays hidden" holds the
 // line. Without the first case a caller sees only `decode column "total" with
 // codec "" failed`, which names neither the type wanted nor the type received.
 func (e *DecodeError) Error() string {
