@@ -1,6 +1,12 @@
 # Schemas
 
-A schema descriptor is the single description of a table that `rasql` uses everywhere. It generates DDL, validates queries, and tells the decoder which columns a result holds. Write it by hand, generate it with [`rasql codegen generate`](../orm/01-codegen.md#run-the-command), or read it out of a live database.
+A schema descriptor is the single description of a table that `rasql` uses everywhere.
+It holds its columns, keys, and constraints, which in turn are used to generate DDL, check queries, and decode result rows.
+You can Write it by hand, or generate it with [`rasql codegen generate`](../orm/01-codegen.md#run-the-command).
+
+```go
+foo := schema.MustTableDef("table_name", /* columns .... */)
+```
 
 Both builders in [Querying](../02-querying.md) stand on a descriptor. `query.MustTableRef` takes one as it is, which is all [the SQL builder](02-sql-builder.md) needs, and `rasql.MustTableOf[T]` binds a Go row type to one for [the typed builder](../orm/03-typed-queries.md).
 
