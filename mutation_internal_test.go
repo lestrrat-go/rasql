@@ -242,9 +242,6 @@ func TestUpdateDefault(t *testing.T) {
 		table, id, name := g5MutationTable(t)
 		plan, err := NewPatchPlan(table, EqualValue(id.Expr(), int64(1)), DefaultField(name), SetField(id, int64(2)))
 		require.NoError(t, err)
-		statement, err := plan.lower()
-		require.NoError(t, err)
-
 		for _, tc := range []struct {
 			name    string
 			dialect dialect.Dialect
@@ -261,9 +258,9 @@ func TestUpdateDefault(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				profile, err := EngineProfileFromVersion(tc.profile, tc.major, tc.minor, 0)
 				require.NoError(t, err)
-				compiler, err := profile.queryCompiler(tc.dialect)
+				compiler, err := profile.Compiler(tc.dialect)
 				require.NoError(t, err)
-				rendered, err := compiler.Write(statement)
+				rendered, err := compiler.Mutation(plan)
 				if tc.fails {
 					require.ErrorIs(t, err, ErrUnsupportedEngineFeature)
 					return
@@ -309,9 +306,10 @@ func TestUpdateDefault(t *testing.T) {
 		require.NoError(t, err)
 		legacyPlan, err := NewPatchPlan(table, legacyPredicate, SetField(name, int64(4)))
 		require.NoError(t, err)
-		_, err = rootPlan.lower()
+		compiler := mutationCompiler(t)
+		_, err = compiler.Mutation(rootPlan)
 		require.NoError(t, err)
-		_, err = legacyPlan.lower()
+		_, err = compiler.Mutation(legacyPlan)
 		require.NoError(t, err)
 	})
 
@@ -329,13 +327,25 @@ func TestUpdateDefault(t *testing.T) {
 		wrongPredicate := query.EqualValue(query.TypedColumnOf[g5MutationRow, int64](other.Column("id")), int64(1))
 		wrongPlan, err := NewPatchPlan(table, wrongPredicate, SetField(name, int64(3)))
 		require.NoError(t, err)
-		_, err = wrongPlan.lower()
+		compiler := mutationCompiler(t)
+		_, err = compiler.Mutation(wrongPlan)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "outside the statement")
 		bad := Predicate{node: query.Equal(id.Expr(), query.Bind(int64(1))), bindErr: errG5Snapshot}
 		plan, err := NewPatchPlan(table, bad, SetField(name, int64(3)))
 		require.ErrorIs(t, err, errG5Snapshot)
-		_, err = plan.lower()
+		_, err = compiler.Mutation(plan)
 		require.ErrorIs(t, err, errG5Snapshot)
 	})
+}
+
+// mutationCompiler renders a plan for one fixed profile, where a test cares
+// only that lowering the plan succeeds or reports an error.
+func mutationCompiler(t *testing.T) Compiler {
+	t.Helper()
+	profile, err := EngineProfileFromVersion("postgresql-17", 17, 0, 0)
+	require.NoError(t, err)
+	compiler, err := profile.Compiler(dialect.PostgreSQL())
+	require.NoError(t, err)
+	return compiler
 }

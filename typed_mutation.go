@@ -273,6 +273,11 @@ func (p CreatePlan[T]) lowerNormalized() (normalizedCreate[T], error) {
 	if p.err != nil {
 		return normalizedCreate[T]{}, p.err
 	}
+	// A plan built through NewCreatePlan always carries a table, so this
+	// catches the zero value, which would otherwise dereference nothing.
+	if isNilTable(p.table) {
+		return normalizedCreate[T]{}, fmt.Errorf("rasql: create plan table must not be nil")
+	}
 	columns := p.table.Ref().Definition().Columns
 	byName := make(map[string]MutationField[T], len(p.fields))
 	for _, field := range p.fields {
@@ -304,6 +309,11 @@ func (p CreatePlan[T]) lowerNormalized() (normalizedCreate[T], error) {
 func (p PatchPlan[T]) lower() (query.Update, error) {
 	if p.err != nil {
 		return query.Update{}, p.err
+	}
+	// A plan built through NewPatchPlan always carries a table, so this
+	// catches the zero value, which would otherwise dereference nothing.
+	if isNilTable(p.table) {
+		return query.Update{}, fmt.Errorf("rasql: patch plan table must not be nil")
 	}
 	columns := p.table.Ref().Definition().Columns
 	byName := make(map[string]MutationField[T], len(p.fields))
