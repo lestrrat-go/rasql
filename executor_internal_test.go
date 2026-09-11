@@ -180,6 +180,16 @@ func runtimePairQuery(t *testing.T, firstCodec, secondCodec string) Query[runtim
 	return Select(relation.Source(), projection)
 }
 
+// testCodec is a pass-through codec, used where a test needs a registry entry
+// rather than any particular conversion.
+type testCodec struct{}
+
+func (testCodec) Encode(value any) (driver.Value, error) { return value, nil }
+func (testCodec) Decode(source any, destination any) error {
+	*destination.(*string) = source.(string)
+	return nil
+}
+
 func runtimeExecutor(t *testing.T, rows [][]any) Executor {
 	t.Helper()
 	raw := &runtimeFakeExecutor{rows: rows, dialect: dialect.SQLite()}
