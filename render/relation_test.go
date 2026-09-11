@@ -191,6 +191,10 @@ func TestReusableResultMetadataAccessorIsolation(t *testing.T) {
 	leftColumns[0].Name = "changed"
 	require.Equal(t, "id", compound.Left().Columns()[0].Name)
 
+	rightColumns := compound.Right().Columns()
+	rightColumns[0].Name = "changed"
+	require.Equal(t, "id", compound.Right().Columns()[0].Name)
+
 	insert, err := query.NewInsertSelect(users, []query.ColumnRef{users.Column("id")}, result)
 	require.NoError(t, err)
 	insertResult, ok := insert.SelectSource()
@@ -200,58 +204,6 @@ func TestReusableResultMetadataAccessorIsolation(t *testing.T) {
 	storedResult, ok := insert.SelectSource()
 	require.True(t, ok)
 	require.Equal(t, "id", storedResult.Columns()[0].Name)
-}
-
-func TestReusableResultPointerTypeIsolation(t *testing.T) {
-	users := query.MustTableRef(schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
-	base, err := query.NewSelect(users, users.Column("id"))
-	require.NoError(t, err)
-	typeMetadata := &schema.IntegerType{Unsigned: true}
-	result, err := query.ResultOf(base, query.ResultColumn{Name: "id", Type: typeMetadata})
-	require.NoError(t, err)
-	typeMetadata.Unsigned = false
-	assertUnsigned := func(columns []query.ResultColumn) {
-		t.Helper()
-		stored, ok := columns[0].Type.(*schema.IntegerType)
-		require.True(t, ok)
-		require.True(t, stored.Unsigned)
-	}
-	assertUnsigned(result.Columns())
-	derived, err := query.Derived(result, "r")
-	require.NoError(t, err)
-	derivedType := derived.Columns()[0].Type.(*schema.IntegerType)
-	derivedType.Unsigned = false
-	assertUnsigned(derived.Columns())
-	cte, err := query.CommonTable("local", result)
-	require.NoError(t, err)
-	cteType := cte.Query().Columns()[0].Type.(*schema.IntegerType)
-	cteType.Unsigned = false
-	assertUnsigned(cte.Query().Columns())
-	ref, err := cte.Ref("")
-	require.NoError(t, err)
-	refType := ref.Columns()[0].Type.(*schema.IntegerType)
-	refType.Unsigned = false
-	assertUnsigned(ref.Columns())
-	compound, err := query.CompoundQuery(result, query.UnionAll, result)
-	require.NoError(t, err)
-	rightType := compound.Right().Columns()[0].Type.(*schema.IntegerType)
-	rightType.Unsigned = false
-	assertUnsigned(compound.Right().Columns())
-	leftType := compound.Left().Columns()[0].Type.(*schema.IntegerType)
-	leftType.Unsigned = false
-	assertUnsigned(compound.Left().Columns())
-	insert, err := query.NewInsertSelect(users, []query.ColumnRef{users.Column("id")}, result)
-	require.NoError(t, err)
-	insertType := mustSelectSource(t, insert).Columns()[0].Type.(*schema.IntegerType)
-	insertType.Unsigned = false
-	assertUnsigned(mustSelectSource(t, insert).Columns())
-}
-
-func mustSelectSource(t *testing.T, insert query.Insert) query.ResultQuery {
-	t.Helper()
-	result, ok := insert.SelectSource()
-	require.True(t, ok)
-	return result
 }
 
 func TestReusableRelationValidationBoundaries(t *testing.T) {

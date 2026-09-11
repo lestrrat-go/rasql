@@ -320,21 +320,9 @@ func writeColumnType(key *writer, columnType schema.ColumnType) error {
 		key.writeString("nil")
 		return nil
 	}
-	value := reflect.ValueOf(columnType)
-	for value.Kind() == reflect.Pointer {
-		if value.IsNil() {
-			key.writeString("nil")
-			return nil
-		}
-		value = value.Elem()
-	}
 	key.writeString("column-type")
-	typed, ok := value.Interface().(schema.ColumnType)
-	if !ok {
-		return planerr.New("internal_plan", "schema.type", "unsupported logical column type")
-	}
-	key.writeString(string(typed.Kind()))
-	switch typed := typed.(type) {
+	key.writeString(string(columnType.Kind()))
+	switch typed := columnType.(type) {
 	case schema.BooleanType, schema.FloatType, schema.BytesType, schema.TimeType, schema.JSONType, schema.UUIDType, schema.OpaqueType:
 		return nil
 	case schema.IntegerType:

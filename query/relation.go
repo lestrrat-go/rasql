@@ -125,12 +125,9 @@ func (q ResultQuery) Columns() []ResultColumn {
 }
 
 func cloneResultColumns(columns []ResultColumn) []ResultColumn {
-	copy := make([]ResultColumn, len(columns))
-	for i, column := range columns {
-		copy[i] = column
-		copy[i].Type = schema.CloneColumnType(column.Type)
-	}
-	return copy
+	clone := make([]ResultColumn, len(columns))
+	copy(clone, columns)
+	return clone
 }
 
 type relationKind uint8
@@ -190,7 +187,7 @@ func (r RelationRef) Columns() []ResultColumn {
 		definition := r.table.Definition()
 		columns := make([]ResultColumn, len(definition.Columns))
 		for i, column := range definition.Columns {
-			columns[i] = ResultColumn{Name: column.Name, Type: schema.CloneColumnType(column.Type), Nullable: column.Nullable}
+			columns[i] = ResultColumn{Name: column.Name, Type: column.Type, Nullable: column.Nullable}
 		}
 		return columns
 	}

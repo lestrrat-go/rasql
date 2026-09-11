@@ -56,6 +56,15 @@ func TestQueryAPI(t *testing.T) {
 		require.Error(t, err)
 	})
 
+	t.Run("a result schema rejects a pointer column type", func(t *testing.T) {
+		_, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "id", Type: &schema.IntegerType{}})
+		var planErr *rasql.PlanError
+		require.ErrorAs(t, err, &planErr)
+		require.Equal(t, "invalid_schema", planErr.Code)
+		require.Equal(t, "columns[0].type", planErr.Path)
+		require.Equal(t, "unsupported column type *schema.IntegerType", planErr.Detail)
+	})
+
 	t.Run("projection validation and presence", func(t *testing.T) {
 		resultSchema, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}})
 		require.NoError(t, err)
