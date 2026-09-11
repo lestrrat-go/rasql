@@ -42,8 +42,7 @@ func TestClassifyOrderingNilAndUnknowns(t *testing.T) {
 	metadata, ok = dberror.Classify(wrapped, testClassifier{ok: true}, second)
 	require.True(t, ok)
 	require.Equal(t, dberror.CheckViolation, metadata.Category)
-	var nilClassifier *testClassifier
-	metadata, ok = dberror.Classify(wrapped, nilClassifier, second)
+	metadata, ok = dberror.Classify(wrapped, nil, second)
 	require.True(t, ok)
 	require.Equal(t, dberror.CheckViolation, metadata.Category)
 

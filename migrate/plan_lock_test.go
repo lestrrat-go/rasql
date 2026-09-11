@@ -31,8 +31,7 @@ func (l *testChangePlanLocker) Acquire(context.Context, string) (ChangePlanLock,
 }
 
 func TestWithChangePlanLockerCopiesRunner(t *testing.T) {
-	var nilLocker *testChangePlanLocker
-	_, err := (Runner{}).WithChangePlanLocker(nilLocker)
+	_, err := (Runner{}).WithChangePlanLocker(nil)
 	require.Error(t, err)
 	locker := &testChangePlanLocker{lock: &testChangePlanLock{}}
 	configured, err := (Runner{}).WithChangePlanLocker(locker)
