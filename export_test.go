@@ -5,7 +5,6 @@ import (
 	"iter"
 
 	"github.com/lestrrat-go/rasql/internal/bindplan"
-	"github.com/lestrrat-go/rasql/internal/graphfingerprint"
 	"github.com/lestrrat-go/rasql/internal/graphkey"
 	"github.com/lestrrat-go/rasql/internal/querycompile"
 	"github.com/lestrrat-go/rasql/query"
@@ -172,9 +171,9 @@ func Q1ColumnCodec[Row, T any](column Column[Row, T]) string { return column.cod
 // Q1ExprSource returns the relation an expression reads from.
 func Q1ExprSource[T any](expression Expr[T]) string { return expression.source }
 
-// Q1ExecutorProfile reports what a cache key records about the engine behind
-// an executor, which nothing public exposes.
-func Q1ExecutorProfile(executor Executor) graphfingerprint.Profile {
+// Q1ExecutorProfile reports what a graph load reads about the engine behind an
+// executor, which nothing public exposes.
+func Q1ExecutorProfile(executor Executor) engineProfileSnapshot {
 	return executorCompilerProfile(executor)
 }
 

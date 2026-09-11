@@ -1,19 +1,22 @@
-// Package graphfingerprint builds the key a compiled graph stage is cached
-// under. Two stages share a key only when everything that could change the
-// rows they return is the same, so the key covers the SQL, the binds, the
-// result columns, the key columns and the engine profile.
+// Package graphfingerprint holds what a graph load's row cache needs: which
+// stage invocations may share rows, and how a cached value or an encoded bind
+// is copied on the way out. Two invocations share rows only when everything
+// that could change the rows they return is the same, so a stage's identity
+// covers the SQL, the binds, the result columns, the key columns and the
+// decoder.
+//
+// The package name is older than what it holds. Nothing here digests anything
+// any more; renaming it to graphcache is a separate change.
 package graphfingerprint
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"database/sql"
 	"database/sql/driver"
 	"encoding/binary"
 	"reflect"
 
 	"github.com/lestrrat-go/rasql/internal/bindplan"
-	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/internal/graphkey"
 	"github.com/lestrrat-go/rasql/internal/planerr"
 	"github.com/lestrrat-go/rasql/query"
@@ -146,27 +149,8 @@ func cloneSlice(value reflect.Value) reflect.Value {
 	return clone
 }
 
-// Profile is what the cache key records about the engine a stage compiled
-// for. Two stages that differ only by engine must not share a key.
-type Profile struct {
-	Dialect      string
-	ID           string
-	Engine       engineprofile.EngineID
-	CustomName   string
-	Version      engineprofile.Version
-	Limits       engineprofile.Limits
-	Capabilities engineprofile.Capabilities
-	MaxBind      int
-}
-
-// Fingerprint identifies one compiled stage under one engine profile.
-type Fingerprint struct {
-	Stage  string
-	Digest [sha256.Size]byte
-}
-
-// Stage is one compiled step of a graph load, described in the terms the cache
-// key is built from.
+// Stage is one compiled step of a graph load, described in the terms its cache
+// identity is built from.
 type Stage struct {
 	Name           string
 	Source         string
@@ -175,8 +159,21 @@ type Stage struct {
 	Compiled       bindplan.Compiled
 	PerParentLimit int
 	BindLimit      int
+	// Node is the plan object the stage reads its decoder out of. Two
+	// invocations that agree on everything else and name the same Node hold the
+	// same decoder value by construction, which is how a decoder carrying a
+	// func still shares rows with itself. Node must be comparable; a caller
+	// passes a pointer.
+	Node any
+	// Decoder is the stage's RowDecoder value. One decoder type with two
+	// configurations decodes two different rows, so two stages share rows only
+	// when their decoders are equal.
+	Decoder any
 }
 
+// writer frames the pieces of a stage's fixed binds into one string. Each
+// piece carries its own length, so two different bind lists can never frame to
+// the same bytes.
 type writer struct{ bytes.Buffer }
 
 func (w *writer) writeBytes(value []byte) {
@@ -194,98 +191,162 @@ func (w *writer) writeBool(value bool) {
 	}
 	_ = w.WriteByte(0)
 }
-func (w *writer) writeU8(value uint8) { _ = w.WriteByte(value) }
-func (w *writer) writeU16(value uint16) {
-	var encoded [2]byte
-	binary.BigEndian.PutUint16(encoded[:], value)
-	_, _ = w.Write(encoded[:])
-}
-func (w *writer) writeU64(value uint64) {
-	var encoded [8]byte
-	binary.BigEndian.PutUint64(encoded[:], value)
-	_, _ = w.Write(encoded[:])
-}
-func (w *writer) writeInt(value int) { w.writeU64(uint64(int64(value))) }
 
-// Invocation builds the key a graph stage is cached under. Any difference that
-// would change the SQL, the binds, the result columns, the key columns or the
-// engine's own limits gives a different key.
-func Invocation(stage Stage, profile Profile) (Fingerprint, error) {
+// stageRecord is everything that decides whether two stage invocations may
+// share cached rows. Stages interns one record per distinct invocation and the
+// row cache keys its entries on a record's index, which is how a decoder value
+// that no map key could carry is still part of a stage's identity.
+type stageRecord struct {
+	node           any
+	name           string
+	source         string
+	sql            string
+	perParentLimit int
+	bindLimit      int
+	columns        []query.ResultColumn
+	keyParts       []keyPartRecord
+	binds          string
+	decoder        any
+}
+
+// keyPartRecord is one column of a stage's key, reduced to the fields that
+// decide whether two key parts read the same value. graphkey.PartSpec carries
+// an extractor func, so a spec is not comparable; these fields are. key is the
+// position of the key the part belongs to, so a stage with one two-column key
+// never matches a stage with two one-column keys.
+type keyPartRecord struct {
+	key        int
+	source     string
+	column     string
+	codec      string
+	nullable   bool
+	columnType schema.ColumnType
+}
+
+// equal reports whether two stage records may share cached rows.
+//
+// Everything but the decoder is compared by value. schema.ColumnType is closed
+// by an unexported method and every one of its ten implementations is a value
+// struct of bool and int fields, so == on a query.ResultColumn and on a
+// keyPartRecord is well defined and needs no enumeration of the ten types.
+//
+// The decoder is compared last, and only when it has to be. Two records built
+// from the same plan node hold the same decoder value by construction, because
+// a node hands back the one RowDecoder its projection holds, so matching on the
+// node skips reflect.DeepEqual entirely. That matters because DeepEqual reports
+// two non-nil func values as unequal even when they are the same function, so a
+// decoder carrying a func, a channel or a touched mutex would otherwise never
+// match itself. Across two different nodes DeepEqual decides, where it can only
+// err toward "unequal" and so cost a cache miss rather than hand back the wrong
+// rows.
+func (r stageRecord) equal(other stageRecord) bool {
+	if r.name != other.name || r.source != other.source || r.sql != other.sql ||
+		r.perParentLimit != other.perParentLimit || r.bindLimit != other.bindLimit ||
+		r.binds != other.binds {
+		return false
+	}
+	if len(r.columns) != len(other.columns) || len(r.keyParts) != len(other.keyParts) {
+		return false
+	}
+	for index, column := range r.columns {
+		if column != other.columns[index] {
+			return false
+		}
+	}
+	for index, part := range r.keyParts {
+		if part != other.keyParts[index] {
+			return false
+		}
+	}
+	if r.node != nil && r.node == other.node {
+		return true
+	}
+	return reflect.DeepEqual(r.decoder, other.decoder)
+}
+
+// Stages interns the stage records of one graph load. The load's row cache keys
+// its entries on a record index and a key tuple, so a stage's identity costs
+// one int in every entry and is compared once per stage invocation rather than
+// once per lookup.
+//
+// A Stages holds one record per distinct stage invocation, which a plan bounds:
+// LoadGraph refuses a cyclic plan, and an invocation happens once per edge per
+// depth the walk reaches. Row count never enters it. A Stages is created per
+// LoadGraph call and dropped with it.
+type Stages struct{ records []stageRecord }
+
+// Index returns the position of the interned record equal to stage, appending a
+// new record when none matches. Two stage invocations that are handed the same
+// index may share cached rows.
+func (s *Stages) Index(stage Stage) (int, error) {
+	record, err := recordOf(stage)
+	if err != nil {
+		return 0, err
+	}
+	for index := range s.records {
+		if s.records[index].equal(record) {
+			return index, nil
+		}
+	}
+	s.records = append(s.records, record)
+	return len(s.records) - 1, nil
+}
+
+func recordOf(stage Stage) (stageRecord, error) {
 	args := stage.Compiled.Statement.Args()
 	if len(args) != len(stage.Compiled.Slots) {
-		return Fingerprint{}, planerr.New("internal_plan", "binds", "statement arguments and bind slots differ")
+		return stageRecord{}, planerr.New("internal_plan", "binds", "statement arguments and bind slots differ")
 	}
 	if len(stage.Keys) == 0 {
-		return Fingerprint{}, planerr.New("internal_plan", "graph.key", "stage key is empty")
+		return stageRecord{}, planerr.New("internal_plan", "graph.key", "stage key is empty")
 	}
-
-	var key writer
-	_, _ = key.Write([]byte("rasql.graph.cache\x01"))
-	key.writeString(profile.Dialect)
-	key.writeString(profile.ID)
-	key.writeU8(uint8(profile.Engine))
-	key.writeString(profile.CustomName)
-	key.writeBool(profile.Version.Known)
-	key.writeU16(profile.Version.Major)
-	key.writeU16(profile.Version.Minor)
-	key.writeU16(profile.Version.Patch)
-	key.writeInt(profile.Limits.MaxBindParameters)
-	capabilities := profile.Capabilities
-	key.writeU8(uint8(capabilities.Returning))
-	key.writeU8(uint8(capabilities.Upsert))
-	for _, value := range []bool{
-		capabilities.ConflictTarget, capabilities.DefaultValues, capabilities.EmptyInsert, capabilities.DefaultValuesUpsert,
-		capabilities.SubqueryLimit, capabilities.WriteSubqueryTarget, capabilities.PartialIndex, capabilities.AggregateFilter,
-		capabilities.QualifiedReference, capabilities.QualifiedIndexTarget, capabilities.QualifiedIndexName, capabilities.MatchOperator,
-		capabilities.SelectForUpdate, capabilities.SelectForShare, capabilities.SelectLockOf, capabilities.SelectLockNoWait,
-		capabilities.SelectLockSkipLocked, capabilities.UpsertConflictWhere, capabilities.UpsertUpdateWhere,
-		capabilities.WindowFunctions, capabilities.LateralJoins, capabilities.Savepoints, capabilities.TransactionalDDL,
-		capabilities.ExplicitNullOrdering, capabilities.TupleComparison,
-	} {
-		key.writeBool(value)
+	record := stageRecord{
+		node:           stage.Node,
+		name:           stage.Name,
+		source:         stage.Source,
+		sql:            stage.Compiled.Statement.SQL(),
+		perParentLimit: stage.PerParentLimit,
+		bindLimit:      stage.BindLimit,
+		columns:        append([]query.ResultColumn(nil), stage.Columns...),
+		decoder:        stage.Decoder,
 	}
-	key.writeU8(uint8(capabilities.PerParentLimit))
-	key.writeU8(uint8(capabilities.UpdateDefault))
-	key.writeString(stage.Name)
-	key.writeString(stage.Source)
-	key.writeString(stage.Compiled.Statement.SQL())
-	key.writeInt(stage.PerParentLimit)
-	key.writeInt(stage.BindLimit)
-	columns := stage.Columns
-	key.writeU64(uint64(len(columns)))
-	for _, column := range columns {
-		key.writeString(column.Name)
-		if err := writeColumnType(&key, column.Type); err != nil {
-			return Fingerprint{}, err
-		}
-		key.writeBool(column.Nullable)
-		key.writeString(column.Codec)
-	}
-	key.writeU64(uint64(len(stage.Keys)))
-	for _, keySpec := range stage.Keys {
+	for keyIndex, keySpec := range stage.Keys {
 		if keySpec == nil || len(keySpec.Parts) == 0 {
-			return Fingerprint{}, planerr.New("internal_plan", "graph.key", "stage key is empty")
+			return stageRecord{}, planerr.New("internal_plan", "graph.key", "stage key is empty")
 		}
-		key.writeU64(uint64(len(keySpec.Parts)))
 		for _, part := range keySpec.Parts {
-			key.writeString(part.Source)
-			key.writeString(part.Column.Name())
-			if err := writeColumnType(&key, part.ColumnType); err != nil {
-				return Fingerprint{}, err
-			}
-			key.writeBool(part.Nullable)
-			writeGoType(&key, part.Type)
-			key.writeString(part.Codec)
+			record.keyParts = append(record.keyParts, keyPartRecord{
+				key:        keyIndex,
+				source:     part.Source,
+				column:     part.Column.Name(),
+				codec:      part.Codec,
+				nullable:   part.Nullable,
+				columnType: part.ColumnType,
+			})
 		}
 	}
-	for index, slot := range stage.Compiled.Slots {
+	binds, err := frameBinds(stage.Compiled, args)
+	if err != nil {
+		return stageRecord{}, err
+	}
+	record.binds = binds
+	return record, nil
+}
+
+// frameBinds renders a stage's fixed binds as one string. A value is
+// canonicalised before it is framed, so a driver that hands back an int32 seven
+// and one that hands back an int64 seven frame alike, and a negative zero does
+// not frame as a positive one.
+func frameBinds(compiled bindplan.Compiled, args []any) (string, error) {
+	var key writer
+	for index, slot := range compiled.Slots {
 		key.writeString(slot.Codec)
 		key.writeBool(slot.PreEncoded)
 		if err := writeValue(&key, args[index], slot.PreEncoded || slot.Codec != ""); err != nil {
-			return Fingerprint{}, err
+			return "", err
 		}
 	}
-	return Fingerprint{Stage: stage.Name, Digest: sha256.Sum256(key.Bytes())}, nil
+	return key.String(), nil
 }
 
 func writeValue(key *writer, value any, rejectConversion bool) error {
@@ -313,60 +374,4 @@ func writeValue(key *writer, value any, rejectConversion bool) error {
 	}
 	key.writeBytes(frame)
 	return nil
-}
-
-func writeColumnType(key *writer, columnType schema.ColumnType) error {
-	if columnType == nil {
-		key.writeString("nil")
-		return nil
-	}
-	key.writeString("column-type")
-	key.writeString(string(columnType.Kind()))
-	switch typed := columnType.(type) {
-	case schema.BooleanType, schema.FloatType, schema.BytesType, schema.TimeType, schema.JSONType, schema.UUIDType, schema.OpaqueType:
-		return nil
-	case schema.IntegerType:
-		key.writeBool(typed.Unsigned)
-		width, stated := typed.DisplayWidth.Value()
-		key.writeBool(stated)
-		if stated {
-			key.writeInt(width)
-		}
-		key.writeBool(typed.ZeroFill)
-	case schema.TextType:
-		width, stated := typed.Width.Value()
-		key.writeBool(stated)
-		if stated {
-			key.writeInt(width)
-		}
-		key.writeBool(typed.Fixed)
-	case schema.DecimalType:
-		key.writeInt(typed.Precision)
-		scale, stated := typed.Scale.Value()
-		key.writeBool(stated)
-		if stated {
-			key.writeInt(scale)
-		}
-		key.writeBool(typed.Unsigned)
-		key.writeBool(typed.ZeroFill)
-	default:
-		return planerr.New("internal_plan", "schema.type", "unsupported logical column type")
-	}
-	return nil
-}
-
-func writeGoType(key *writer, typ reflect.Type) {
-	if typ == nil {
-		key.writeString("nil")
-		return
-	}
-	key.writeU8(uint8(typ.Kind()))
-	if typ.Name() != "" || typ.PkgPath() != "" {
-		key.writeString("named")
-		key.writeString(typ.PkgPath())
-		key.writeString(typ.Name())
-		return
-	}
-	key.writeString("unnamed")
-	key.writeString(typ.String())
 }

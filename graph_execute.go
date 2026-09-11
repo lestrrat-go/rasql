@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"reflect"
 	"slices"
 
 	"github.com/lestrrat-go/rasql/query"
@@ -252,6 +251,7 @@ func expandGraphRoots[R, G any](ctx context.Context, executor Executor, node *gr
 	queue := make([]graphWork, len(rootRows))
 	deferred := make([]graphDeferred, 0)
 	cache := make(map[graphCacheKey]graphCacheEntry)
+	stages := &graphStages{}
 	for i, row := range rootRows {
 		graphs[i] = row.graph.(G)
 		queue[i] = graphWork{node: node, parent: &graphs[i], row: row.row}
@@ -260,7 +260,7 @@ func expandGraphRoots[R, G any](ctx context.Context, executor Executor, node *gr
 		current := queue
 		queue = nil
 		for _, edge := range planEdges(current) {
-			next, err := executeGraphEdge(ctx, executor, edge.edge, edge.parents, rowCount, &deferred, cache)
+			next, err := executeGraphEdge(ctx, executor, edge.edge, edge.parents, rowCount, &deferred, cache, stages)
 			if err != nil {
 				return nil, err
 			}
@@ -297,17 +297,23 @@ type graphDeferred struct {
 	fn    func()
 }
 type graphCacheEntry struct {
-	rows    []graphRow
-	decoder any
+	rows []graphRow
 }
 
+// graphCacheKey names one cached batch: which interned stage invocation
+// produced it, and which parent key tuple it answers.
 type graphCacheKey struct {
-	fingerprint graphCacheFingerprint
-	tuple       string
+	stage int
+	tuple string
 }
 
-func graphCacheKeyFor(fingerprint graphCacheFingerprint, tuple keyTuple) graphCacheKey {
-	return graphCacheKey{fingerprint: fingerprint, tuple: tuple.Identity}
+// graphUncachedStage is the index a stage that carries no usable bind metadata
+// uses. Such a stage gets a map of its own, built for the one edge, so this
+// index never meets a real one.
+const graphUncachedStage = -1
+
+func graphCacheKeyFor(stage int, tuple keyTuple) graphCacheKey {
+	return graphCacheKey{stage: stage, tuple: tuple.Identity}
 }
 
 type graphJunctionRow struct {
@@ -454,9 +460,9 @@ func buildGraphMembership(key *graphKeySpec, tuples []keyTuple) (Predicate, erro
 	return Predicate{node: branches[0]}, nil
 }
 
-func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpec, parents []graphWork, rowCount *int64, deferred *[]graphDeferred, cache map[graphCacheKey]graphCacheEntry) ([]graphWork, error) {
+func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpec, parents []graphWork, rowCount *int64, deferred *[]graphDeferred, cache map[graphCacheKey]graphCacheEntry, stages *graphStages) ([]graphWork, error) {
 	if edge.kind == graphManyThrough {
-		return executeManyThrough(ctx, executor, edge, parents, rowCount, deferred, cache)
+		return executeManyThrough(ctx, executor, edge, parents, rowCount, deferred, cache, stages)
 	}
 	codecs := graphCodecs(executor)
 	tuples := make([]keyTuple, 0, len(parents))
@@ -537,14 +543,15 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 		return nil, planError("bind_limit", "graph."+edge.name, "bind budget cannot fit one key")
 	}
 	batchSize := (budget - fixed) / width
-	fingerprintCompiled := probeCompiled
-	fingerprintCompiled.Statement = basePrepared.statement
-	childFingerprint := graphCacheFingerprint{Stage: "child"}
+	stageCompiled := probeCompiled
+	stageCompiled.Statement = basePrepared.statement
+	childStage := graphUncachedStage
 	if basePrepared.run != nil {
-		childFingerprint, err = graphInvocationFingerprint(graphFingerprintStage{
+		childStage, err = stages.Index(graphStage{
 			Name: "child", Source: probe.sourceName(), Columns: probe.schemaValue().Columns(), Keys: []*graphKeySpec{edge.childKey},
-			Compiled: fingerprintCompiled, PerParentLimit: probeLimit, BindLimit: budget,
-		}, profile)
+			Compiled: stageCompiled, PerParentLimit: probeLimit, BindLimit: budget,
+			Node: edge.child, Decoder: edge.child.query.decoderValue(),
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -556,10 +563,7 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 		}
 		missing := make([]keyTuple, 0, end-start)
 		for _, tuple := range tuples[start:end] {
-			entry, ok := edgeCache[graphCacheKeyFor(childFingerprint, tuple)]
-			if ok && !reflect.DeepEqual(entry.decoder, edge.child.query.decoderValue()) {
-				ok = false
-			}
+			entry, ok := edgeCache[graphCacheKeyFor(childStage, tuple)]
 			if !ok {
 				missing = append(missing, tuple)
 				continue
@@ -582,7 +586,6 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 		} else if len(compiled.Slots) > budget || (profile.MaxBind > 0 && len(compiled.Slots) > profile.MaxBind) {
 			return nil, planError("bind_limit", "graph."+edge.name, "compiled query exceeds bind budget")
 		}
-		fingerprint := childFingerprint
 		if basePrepared.run != nil {
 			compiled, err = graphPreencodeBaseOccurrences(probeCompiled, basePrepared.statement, compiled)
 			if err != nil {
@@ -598,7 +601,7 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 			return nil, err
 		}
 		for _, tuple := range missing {
-			edgeCache[graphCacheKeyFor(fingerprint, tuple)] = graphCacheEntry{decoder: edge.child.query.decoderValue()}
+			edgeCache[graphCacheKeyFor(childStage, tuple)] = graphCacheEntry{}
 		}
 		for _, row := range rows {
 			tuple, present, tupleErr := edge.childKey.Tuple(row.row, graphKeyEncoder{codecs: codecs})
@@ -608,10 +611,9 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 			if !present {
 				return nil, planError("foreign_key_result", "graph."+edge.name, "child key is absent")
 			}
-			entry := edgeCache[graphCacheKeyFor(fingerprint, tuple)]
+			entry := edgeCache[graphCacheKeyFor(childStage, tuple)]
 			entry.rows = append(entry.rows, graphRow{row: row.row})
-			entry.decoder = edge.child.query.decoderValue()
-			edgeCache[graphCacheKeyFor(fingerprint, tuple)] = entry
+			edgeCache[graphCacheKeyFor(childStage, tuple)] = entry
 			if _, ok := groups[tuple.Identity]; !ok {
 				return nil, planError("foreign_key_result", "graph."+edge.name, "child key was not requested")
 			}
@@ -660,7 +662,7 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 	return next, nil
 }
 
-func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeSpec, parents []graphWork, rowCount *int64, deferred *[]graphDeferred, cache map[graphCacheKey]graphCacheEntry) ([]graphWork, error) {
+func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeSpec, parents []graphWork, rowCount *int64, deferred *[]graphDeferred, cache map[graphCacheKey]graphCacheEntry, stages *graphStages) ([]graphWork, error) {
 	codecs := graphCodecs(executor)
 	parentTuples := make([]keyTuple, 0, len(parents))
 	parentKeys := make([]string, len(parents))
@@ -723,15 +725,16 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 	if budget == 0 || budget > profile.MaxBind {
 		budget = profile.MaxBind
 	}
-	fingerprintCompiled := compiled
-	fingerprintCompiled.Statement = junctionPrepared.statement
-	junctionFingerprint := graphCacheFingerprint{Stage: "junction"}
+	stageCompiled := compiled
+	stageCompiled.Statement = junctionPrepared.statement
+	junctionStage := graphUncachedStage
 	if junctionCacheable {
-		junctionFingerprint, err = graphInvocationFingerprint(graphFingerprintStage{
+		junctionStage, err = stages.Index(graphStage{
 			Name: "junction", Source: edge.junction.ref.QualifiedName(), Columns: junctionBase.schemaValue().Columns(),
-			Keys: []*graphKeySpec{edge.junctionParent, edge.junctionChild}, Compiled: fingerprintCompiled,
+			Keys: []*graphKeySpec{edge.junctionParent, edge.junctionChild}, Compiled: stageCompiled,
 			PerParentLimit: edge.options.PerParentLimit, BindLimit: budget,
-		}, profile)
+			Node: edge, Decoder: junctionPlan.decoderValue(),
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -786,10 +789,7 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 		}
 		missing := make([]keyTuple, 0, end-start)
 		for _, tuple := range parentTuples[start:end] {
-			entry, ok := junctionCache[graphCacheKeyFor(junctionFingerprint, tuple)]
-			if ok && !reflect.DeepEqual(entry.decoder, junctionPlan.decoderValue()) {
-				ok = false
-			}
+			_, ok := junctionCache[graphCacheKeyFor(junctionStage, tuple)]
 			if !ok {
 				missing = append(missing, tuple)
 			}
@@ -821,7 +821,7 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 				return nil, err
 			}
 			for _, tuple := range missing {
-				junctionCache[graphCacheKeyFor(junctionFingerprint, tuple)] = graphCacheEntry{decoder: junctionPlan.decoderValue()}
+				junctionCache[graphCacheKeyFor(junctionStage, tuple)] = graphCacheEntry{}
 			}
 			for _, row := range rows {
 				junctionRow, ok := row.row.(graphJunctionRow)
@@ -847,16 +847,14 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 				}
 				junctionRow.parentTuple = parentTuple
 				junctionRow.targetTuple = targetTuple
-				entry := junctionCache[graphCacheKeyFor(junctionFingerprint, parentTuple)]
+				entry := junctionCache[graphCacheKeyFor(junctionStage, parentTuple)]
 				entry.rows = append(entry.rows, graphRow{row: junctionRow})
-				junctionCache[graphCacheKeyFor(junctionFingerprint, parentTuple)] = entry
-				entry.decoder = junctionPlan.decoderValue()
-				junctionCache[graphCacheKeyFor(junctionFingerprint, parentTuple)] = entry
+				junctionCache[graphCacheKeyFor(junctionStage, parentTuple)] = entry
 			}
 		}
 		rows := make([]graphRow, 0)
 		for _, tuple := range parentTuples[start:end] {
-			rows = append(rows, junctionCache[graphCacheKeyFor(junctionFingerprint, tuple)].rows...)
+			rows = append(rows, junctionCache[graphCacheKeyFor(junctionStage, tuple)].rows...)
 		}
 		if err := addJunctionRows(rows); err != nil {
 			return nil, err
@@ -885,14 +883,15 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 			}
 		}
 		fixed = len(compiled.Slots)
-		fingerprintCompiled := compiled
-		fingerprintCompiled.Statement = targetPrepared.statement
-		targetFingerprint := graphCacheFingerprint{Stage: "target"}
+		targetCompiled := compiled
+		targetCompiled.Statement = targetPrepared.statement
+		targetStage := graphUncachedStage
 		if targetCacheable {
-			targetFingerprint, err = graphInvocationFingerprint(graphFingerprintStage{
+			targetStage, err = stages.Index(graphStage{
 				Name: "target", Source: targetBase.sourceName(), Columns: targetBase.schemaValue().Columns(), Keys: []*graphKeySpec{edge.childKey},
-				Compiled: fingerprintCompiled, PerParentLimit: 0, BindLimit: budget,
-			}, profile)
+				Compiled: targetCompiled, PerParentLimit: 0, BindLimit: budget,
+				Node: edge.child, Decoder: edge.child.query.decoderValue(),
+			})
 			if err != nil {
 				return nil, err
 			}
@@ -909,10 +908,7 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 			}
 			missing := make([]keyTuple, 0, end-start)
 			for _, tuple := range targetOrder[start:end] {
-				entry, ok := targetCache[graphCacheKeyFor(targetFingerprint, tuple)]
-				if ok && !reflect.DeepEqual(entry.decoder, edge.child.query.decoderValue()) {
-					ok = false
-				}
+				entry, ok := targetCache[graphCacheKeyFor(targetStage, tuple)]
 				if !ok {
 					missing = append(missing, tuple)
 					continue
@@ -950,7 +946,7 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 				return nil, err
 			}
 			for _, tuple := range missing {
-				targetCache[graphCacheKeyFor(targetFingerprint, tuple)] = graphCacheEntry{decoder: edge.child.query.decoderValue()}
+				targetCache[graphCacheKeyFor(targetStage, tuple)] = graphCacheEntry{}
 			}
 			for _, row := range rows {
 				tuple, present, tupleErr := edge.childKey.Tuple(row.row, graphKeyEncoder{codecs: codecs})
@@ -963,11 +959,9 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 				if _, ok := targetSeen[tuple.Identity]; !ok {
 					return nil, planError("foreign_key_result", "graph."+edge.name, "target key was not requested")
 				}
-				entry := targetCache[graphCacheKeyFor(targetFingerprint, tuple)]
+				entry := targetCache[graphCacheKeyFor(targetStage, tuple)]
 				entry.rows = append(entry.rows, graphRow{row: row.row})
-				targetCache[graphCacheKeyFor(targetFingerprint, tuple)] = entry
-				entry.decoder = edge.child.query.decoderValue()
-				targetCache[graphCacheKeyFor(targetFingerprint, tuple)] = entry
+				targetCache[graphCacheKeyFor(targetStage, tuple)] = entry
 				if _, duplicate := targets[tuple.Identity]; duplicate {
 					return nil, planError("cardinality", "graph."+edge.name, "target returned duplicate rows")
 				}
