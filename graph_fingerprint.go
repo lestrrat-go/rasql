@@ -20,8 +20,6 @@ func graphStageCacheable(compiled compiledQuery) bool {
 	return graphfingerprint.StageCacheable(compiled)
 }
 
-func graphCloneEncoded(value any) any { return graphfingerprint.CloneEncoded(value) }
-
 func graphCloneValue(value any) any { return graphfingerprint.CloneValue(value) }
 
 func graphInvocationFingerprint(stage graphFingerprintStage, profile engineProfileSnapshot) (graphCacheFingerprint, error) {

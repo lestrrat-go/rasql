@@ -13,7 +13,8 @@ import (
 	"time"
 
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/internal/querycompile"
+	"github.com/lestrrat-go/rasql/internal/graphfingerprint"
+	"github.com/lestrrat-go/rasql/internal/graphkey"
 	querypkg "github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/stmt"
@@ -24,21 +25,21 @@ import (
 
 func TestGraphCache(t *testing.T) {
 	t.Run("canonical encoded values", func(t *testing.T) {
-		first, err := normalizeGraphValue(float32(1.25))
+		first, err := graphkey.Normalize(float32(1.25))
 		require.NoError(t, err)
-		second, err := normalizeGraphValue(float64(1.25))
+		second, err := graphkey.Normalize(float64(1.25))
 		require.NoError(t, err)
-		firstFrame, err := frameGraphValue(first)
+		firstFrame, err := graphkey.Frame(first)
 		require.NoError(t, err)
-		secondFrame, err := frameGraphValue(second)
+		secondFrame, err := graphkey.Frame(second)
 		require.NoError(t, err)
 		require.Equal(t, firstFrame, secondFrame)
 
 		stamp := time.Date(2026, 9, 7, 1, 2, 3, 4, time.UTC)
-		stampFrame, err := frameGraphValue(driver.Value(stamp))
+		stampFrame, err := graphkey.Frame(driver.Value(stamp))
 		require.NoError(t, err)
 		require.NotEmpty(t, stampFrame)
-		_, err = frameGraphValue(driver.Value(math.NaN()))
+		_, err = graphkey.Frame(driver.Value(math.NaN()))
 		require.Error(t, err)
 	})
 
@@ -52,7 +53,7 @@ func TestGraphCache(t *testing.T) {
 
 	t.Run("a snapshot copies its bytes", func(t *testing.T) {
 		value := []byte("snapshot")
-		copyValue := graphCloneEncoded(value).([]byte)
+		copyValue := graphfingerprint.CloneEncoded(value).([]byte)
 		value[0] = 'X'
 		require.Equal(t, []byte("snapshot"), copyValue)
 		copyValue[0] = 'Y'
@@ -73,7 +74,7 @@ func TestGraphCache(t *testing.T) {
 		values, err := LoadGraph(t.Context(), executor, plan)
 		require.NoError(t, err)
 		require.Len(t, values, 2)
-		require.Equal(t, int64(2), fixture.executor.statements.Load())
+		require.Equal(t, int64(2), fixture.counter.statements.Load())
 		// Each separately prepared child stage encodes its fixed occurrence once.
 		require.Equal(t, int64(2), codec.enc.Load())
 		require.Equal(t, int64(2), firstMapped.Load())
@@ -100,7 +101,7 @@ func TestGraphCache(t *testing.T) {
 		values, err := LoadGraph(t.Context(), executor, plan)
 		require.NoError(t, err)
 		require.Len(t, values, 2)
-		require.Equal(t, int64(4), fixture.executor.statements.Load())
+		require.Equal(t, int64(4), fixture.counter.statements.Load())
 		require.Equal(t, int64(2), codec.enc.Load())
 		require.Equal(t, int64(2), firstMapped.Load())
 		require.Equal(t, int64(2), secondMapped.Load())
@@ -120,7 +121,7 @@ func TestGraphCache(t *testing.T) {
 		values, err := LoadGraph(t.Context(), fixture.executor, plan)
 		require.NoError(t, err)
 		require.Len(t, values, 2)
-		require.Equal(t, int64(1), fixture.executor.statements.Load())
+		require.Equal(t, int64(1), fixture.counter.statements.Load())
 		require.Zero(t, firstMapped.Load())
 		require.Zero(t, secondMapped.Load())
 
@@ -132,7 +133,7 @@ func TestGraphCache(t *testing.T) {
 		plan = graphCacheParentPlan(t, fixture, first, second, EdgeOptions{})
 		_, err = LoadGraph(t.Context(), fixture.executor, plan)
 		require.NoError(t, err)
-		require.Equal(t, int64(2), fixture.executor.statements.Load())
+		require.Equal(t, int64(2), fixture.counter.statements.Load())
 	})
 
 	t.Run("mapped values and bytes are never reused", func(t *testing.T) {
@@ -143,7 +144,7 @@ func TestGraphCache(t *testing.T) {
 		plan := graphCacheParentPlan(t, fixture, first, second, EdgeOptions{})
 		values, err := LoadGraph(t.Context(), fixture.executor, plan)
 		require.NoError(t, err)
-		require.Equal(t, int64(1), fixture.executor.statements.Load())
+		require.Equal(t, int64(1), fixture.counter.statements.Load())
 		require.Equal(t, int64(4), firstMapped.Load())
 		require.Equal(t, int64(4), secondMapped.Load())
 		require.Len(t, values[0].First.Values, 2)
@@ -170,7 +171,7 @@ func TestGraphCache(t *testing.T) {
 		values, err := LoadGraph(t.Context(), fixture.executor, plan)
 		require.NoError(t, err)
 		require.Len(t, values, 2)
-		require.Equal(t, int64(1), fixture.executor.statements.Load())
+		require.Equal(t, int64(1), fixture.counter.statements.Load())
 		assert.Equal(t, int64(2), mapped.Load(), "each shared target attachment gets a fresh mapper input")
 		for _, value := range values {
 			require.Len(t, value.Children.Values, 1)
@@ -186,7 +187,7 @@ func TestGraphCache(t *testing.T) {
 		predicate := Predicate{node: querypkg.Equal(fixture.childRank.node, fixed), source: fixture.childRank.source}
 		firstQuery := fixture.childQuery.Where(predicate)
 		secondQuery := fixture.childQuery.Where(predicate)
-		compiled, err := compileQuery(fixture.executor.compiler, firstQuery)
+		compiled, err := Q1CompileQuery(graphCacheCompiler(t), firstQuery)
 		require.NoError(t, err)
 		require.Len(t, compiled.Slots, 1)
 		require.Zero(t, compiled.Slots[0].ID)
@@ -196,26 +197,26 @@ func TestGraphCache(t *testing.T) {
 		plan := graphCacheParentPlan(t, fixture, first, second, EdgeOptions{})
 		_, err = LoadGraph(t.Context(), fixture.executor, plan)
 		require.NoError(t, err)
-		require.Equal(t, int64(2), fixture.executor.statements.Load())
+		require.Equal(t, int64(2), fixture.counter.statements.Load())
 		require.Equal(t, int64(2), firstMapped.Load())
 		require.Equal(t, int64(2), secondMapped.Load())
 	})
 
 	t.Run("many-through unequal widths are rejected before execution", func(t *testing.T) {
-		executor, _, _, parentKey, junctionParent, junctionChild, childKey, junction, childPlan := mtFixture(t)
-		wideJunctionParent := GraphKey[mtJunctionRow]{key: &graphKeySpec{Parts: append(append([]*graphKeyPartSpec(nil), junctionParent.key.Parts...), junctionChild.key.Parts[0])}}
+		_, counter, _, parentKey, junctionParent, junctionChild, childKey, junction, childPlan := mtFixture(t)
+		wideJunctionParent := Q1GraphKeyOf[mtJunctionRow](&graphkey.Spec{Parts: append(append([]*graphkey.PartSpec(nil), Q1GraphKeySpec(junctionParent).Parts...), Q1GraphKeySpec(junctionChild).Parts[0])})
 		_, err := ManyThrough("one-to-two", parentKey, wideJunctionParent, junctionChild, childKey, junction, childPlan, EdgeOptions{}, func(*mtParentGraph, LoadedMany[mtChildGraph]) {})
 		var planErr *PlanError
 		require.ErrorAs(t, err, &planErr)
 		require.Equal(t, "invalid_graph_edge", planErr.Code)
 
-		wideParent := GraphKey[mtParentRow]{key: &graphKeySpec{Parts: append(append([]*graphKeyPartSpec(nil), parentKey.key.Parts...), parentKey.key.Parts[0])}}
+		wideParent := Q1GraphKeyOf[mtParentRow](&graphkey.Spec{Parts: append(append([]*graphkey.PartSpec(nil), Q1GraphKeySpec(parentKey).Parts...), Q1GraphKeySpec(parentKey).Parts[0])})
 		_, err = ManyThrough("two-to-one", wideParent, junctionParent, junctionChild, childKey, junction, childPlan, EdgeOptions{}, func(*mtParentGraph, LoadedMany[mtChildGraph]) {})
 		require.ErrorAs(t, err, &planErr)
 		require.Equal(t, "invalid_graph_edge", planErr.Code)
 
-		require.Zero(t, executor.junctionStatements.Load())
-		require.Zero(t, executor.targetStatements.Load())
+		require.Zero(t, counter.junctionStatements.Load())
+		require.Zero(t, counter.targetStatements.Load())
 	})
 }
 
@@ -263,11 +264,9 @@ func (d graphCacheChildDecoder) DecodeRow(source ScanSource, value *graphCacheCh
 
 type graphCacheExecutor struct {
 	Executor
-	compiler   *querycompile.Compiler
 	statements atomic.Int64
 }
 
-func (e *graphCacheExecutor) queryCompiler() *querycompile.Compiler { return e.compiler }
 func (e *graphCacheExecutor) Query(ctx context.Context, statement stmt.Statement) (ResultRows, error) {
 	if strings.Contains(statement.SQL(), "graph_cache_children") {
 		e.statements.Add(1)
@@ -289,7 +288,11 @@ func (*graphCacheCodec) Decode(value any, destination any) error {
 }
 
 type graphCacheFixture struct {
-	executor     *graphCacheExecutor
+	// counter is the decorator that counts statements; executor is the same
+	// decorator wrapped so it carries a compiler, which is what graph calls
+	// need and what a decorator built from outside does not have on its own.
+	counter      *graphCacheExecutor
+	executor     Executor
 	parentSource Source
 	childSource  Source
 	junction     Source
@@ -326,9 +329,9 @@ INSERT INTO graph_cache_junction VALUES (1, 11), (2, 11)`)
 	require.NoError(t, err)
 	base, err := AsExecutor(db, profile)
 	require.NoError(t, err)
-	provider, ok := base.(compilerProvider)
-	require.True(t, ok)
-	executor := &graphCacheExecutor{Executor: base, compiler: provider.queryCompiler()}
+	counter := &graphCacheExecutor{Executor: base}
+	executor, err := WithEngineProfile(counter, profile)
+	require.NoError(t, err)
 	parents, err := SourceOf(MustReadTableOf[graphCacheParentRow](schema.TableDef{
 		Name: "graph_cache_parents", PrimaryKey: []string{"id"},
 		Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
@@ -392,14 +395,14 @@ INSERT INTO graph_cache_junction VALUES (1, 11), (2, 11)`)
 	require.NoError(t, err)
 	throughKey, err := NewGraphKey(KeyPart(junctionChild, func(row graphCacheJunctionRow) int64 { return row.Child }))
 	require.NoError(t, err)
-	return graphCacheFixture{executor: executor, parentSource: parents.Source(), childSource: children.Source(), junction: junction.Source(), parentQuery: parentQuery, childQuery: childQuery, parentKey: parentKey, childKey: childKey, childIDKey: childIDKey, junctionKey: junctionKey, throughKey: throughKey, parentID: parentID.Expr(), childID: childID.Expr(), childParent: childParent.Expr(), childRank: childRank.Expr(), childPayload: childPayload.Expr()}
+	return graphCacheFixture{counter: counter, executor: executor, parentSource: parents.Source(), childSource: children.Source(), junction: junction.Source(), parentQuery: parentQuery, childQuery: childQuery, parentKey: parentKey, childKey: childKey, childIDKey: childIDKey, junctionKey: junctionKey, throughKey: throughKey, parentID: parentID.Expr(), childID: childID.Expr(), childParent: childParent.Expr(), childRank: childRank.Expr(), childPayload: childPayload.Expr()}
 }
 
 func graphCacheDirectKey[R any](column Column[R, int64], extract func(R) int64) GraphKey[R] {
-	return GraphKey[R]{key: &graphKeySpec{Parts: []*graphKeyPartSpec{{
+	return GraphKey[R]{key: &graphkey.Spec{Parts: []*graphkey.PartSpec{{
 		Column: column.ref, Codec: column.codec, Type: reflect.TypeOf(int64(0)),
 		Extract:    func(row any) (any, bool) { return extract(row.(R)), true },
-		ColumnType: graphColumnType(column.ref), Source: column.ref.Source().QualifiedName(),
+		ColumnType: graphkey.ColumnType(column.ref), Source: column.ref.Source().QualifiedName(),
 	}}}}
 }
 
@@ -445,4 +448,14 @@ func graphCacheExecutorWithCodec(t *testing.T, fixture graphCacheFixture, codec 
 	executor, err := WithCodecs(fixture.executor, registry)
 	require.NoError(t, err)
 	return executor
+}
+
+// graphCacheCompiler renders for the engine the fixture runs against.
+func graphCacheCompiler(t *testing.T) Compiler {
+	t.Helper()
+	profile, err := EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+	require.NoError(t, err)
+	compiler, err := profile.Compiler(dialect.SQLite())
+	require.NoError(t, err)
+	return compiler
 }

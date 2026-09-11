@@ -485,7 +485,11 @@ func TestGraphExecution(t *testing.T) {
 
 	t.Run("direct duplicate parents map fresh rows", func(t *testing.T) {
 		fixture := graphCacheFixtureFor(t)
-		executor := &graphDuplicateParentExecutor{Executor: fixture.executor, compiler: fixture.executor.compiler}
+		raw := &graphDuplicateParentExecutor{Executor: fixture.executor}
+		profile, err := EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+		require.NoError(t, err)
+		executor, err := WithEngineProfile(raw, profile)
+		require.NoError(t, err)
 		var mapped atomic.Int64
 		children, err := NewGraphPlan(fixture.childQuery, func(row graphCacheChildRow) graphCacheChild {
 			call := mapped.Add(1)
