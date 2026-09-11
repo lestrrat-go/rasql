@@ -5,6 +5,8 @@ import (
 	"iter"
 
 	"github.com/lestrrat-go/rasql/internal/bindplan"
+	"github.com/lestrrat-go/rasql/internal/graphfingerprint"
+	"github.com/lestrrat-go/rasql/internal/graphkey"
 	"github.com/lestrrat-go/rasql/internal/querycompile"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/stmt"
@@ -151,4 +153,35 @@ func Q1ProjectionExpressions[R any](projection Projection[R]) []query.Expression
 // decoder one that NewPresence would refuse and see where the refusal lands.
 func Q1Presence(component string, columns ...string) Presence {
 	return Presence{component: component, columns: columns}
+}
+
+// Q1GraphKeySpec returns the key spec behind a graph key, and Q1GraphKeyOf
+// builds one from a spec. A key is opaque to a caller, who names columns and
+// lets NewGraphKey assemble them, so a test building a deliberately mismatched
+// key comes through here.
+func Q1GraphKeySpec[R any](key GraphKey[R]) *graphkey.Spec { return key.key }
+
+func Q1GraphKeyOf[R any](spec *graphkey.Spec) GraphKey[R] { return GraphKey[R]{key: spec} }
+
+// Q1ColumnRef and Q1ColumnCodec read what a bound column points at, which the
+// column keeps to itself because a caller uses it rather than inspects it.
+func Q1ColumnRef[Row, T any](column Column[Row, T]) query.ColumnRef { return column.ref }
+
+func Q1ColumnCodec[Row, T any](column Column[Row, T]) string { return column.codec }
+
+// Q1ExprSource returns the relation an expression reads from.
+func Q1ExprSource[T any](expression Expr[T]) string { return expression.source }
+
+// Q1ExecutorProfile reports what a cache key records about the engine behind
+// an executor, which nothing public exposes.
+func Q1ExecutorProfile(executor Executor) graphfingerprint.Profile {
+	return executorCompilerProfile(executor)
+}
+
+// Q1WithoutPredicates drops the predicates from a graph plan's child query,
+// which the loader does when it probes a stage. A caller composes a plan and
+// never takes one apart, so there is no public way to ask for this.
+func Q1WithoutPredicates[R, G any](plan GraphPlan[R, G]) GraphPlan[R, G] {
+	plan.node.query = plan.node.query.withoutPredicates()
+	return plan
 }

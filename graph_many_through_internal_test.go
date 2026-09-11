@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/internal/querycompile"
 	querypkg "github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/stmt"
@@ -52,13 +51,11 @@ func (mtChildDecoder) DecodeRow(source ScanSource, value *mtChildRow) error {
 
 type mtCountingExecutor struct {
 	Executor
-	compiler           *querycompile.Compiler
 	junctionStatements atomic.Int64
 	targetStatements   atomic.Int64
 	rows               atomic.Int64
 }
 
-func (e *mtCountingExecutor) queryCompiler() *querycompile.Compiler { return e.compiler }
 func (e *mtCountingExecutor) Query(ctx context.Context, s stmt.Statement) (ResultRows, error) {
 	rows, err := e.Executor.Query(ctx, s)
 	if err != nil {
@@ -99,33 +96,33 @@ func (e *mtRowsOverride) Query(ctx context.Context, statement stmt.Statement) (R
 
 func TestGraphManyThrough(t *testing.T) {
 	t.Run("rejects duplicate target rows without attaching", func(t *testing.T) {
-		executor, _, parentQuery, parentKey, junctionParent, junctionChild, childKey, junction, childPlan := mtFixture(t)
-		rows := &mtRowsOverride{mtCountingExecutor: executor, values: [][]any{{int64(10), int64(1)}, {int64(10), int64(1)}}}
+		_, counter, parentQuery, parentKey, junctionParent, junctionChild, childKey, junction, childPlan := mtFixture(t)
+		rows := &mtRowsOverride{mtCountingExecutor: counter, values: [][]any{{int64(10), int64(1)}, {int64(10), int64(1)}}}
 		var callbacks atomic.Int64
 		edge, err := ManyThrough("roles", parentKey, junctionParent, junctionChild, childKey, junction, childPlan, EdgeOptions{Order: mtJunctionOrder(junction), PerParentLimit: 2}, func(*mtParentGraph, LoadedMany[mtChildGraph]) { callbacks.Add(1) })
 		require.NoError(t, err)
 		plan, err := NewGraphPlan(parentQuery, func(mtParentRow) mtParentGraph { return mtParentGraph{} }, edge)
 		require.NoError(t, err)
-		_, err = LoadGraph(t.Context(), rows, plan)
+		_, err = LoadGraph(t.Context(), mtProfiled(t, rows), plan)
 		require.Error(t, err)
 		require.Zero(t, callbacks.Load())
 	})
 
 	t.Run("rejects foreign target rows without attaching", func(t *testing.T) {
-		executor, _, parentQuery, parentKey, junctionParent, junctionChild, childKey, junction, childPlan := mtFixture(t)
-		rows := &mtRowsOverride{mtCountingExecutor: executor, values: [][]any{{int64(999), int64(1)}}}
+		_, counter, parentQuery, parentKey, junctionParent, junctionChild, childKey, junction, childPlan := mtFixture(t)
+		rows := &mtRowsOverride{mtCountingExecutor: counter, values: [][]any{{int64(999), int64(1)}}}
 		var callbacks atomic.Int64
 		edge, err := ManyThrough("roles", parentKey, junctionParent, junctionChild, childKey, junction, childPlan, EdgeOptions{Order: mtJunctionOrder(junction), PerParentLimit: 2}, func(*mtParentGraph, LoadedMany[mtChildGraph]) { callbacks.Add(1) })
 		require.NoError(t, err)
 		plan, err := NewGraphPlan(parentQuery, func(mtParentRow) mtParentGraph { return mtParentGraph{} }, edge)
 		require.NoError(t, err)
-		_, err = LoadGraph(t.Context(), rows, plan)
+		_, err = LoadGraph(t.Context(), mtProfiled(t, rows), plan)
 		require.Error(t, err)
 		require.Zero(t, callbacks.Load())
 	})
 
 	t.Run("the cache includes the fixed target filter", func(t *testing.T) {
-		executor, _, parentQuery, parentKey, junctionParent, junctionChild, childKey, junction, childPlan := mtFixture(t)
+		executor, counter, parentQuery, parentKey, junctionParent, junctionChild, childKey, junction, childPlan := mtFixture(t)
 		baseChild := childPlan.node.query.(graphQuery[mtChildRow, mtChildGraph]).value
 		childSource := baseChild.plan.sources[0]
 		active, err := BindColumn[mtChildRow, int64](TypedRelation[mtChildRow]{source: childSource}, "active", "")
@@ -144,11 +141,11 @@ func TestGraphManyThrough(t *testing.T) {
 		require.Len(t, values, 2)
 		require.Len(t, values[0].Active.Values, 1)
 		require.Empty(t, values[0].Inactive.Values)
-		require.Equal(t, int64(2), executor.targetStatements.Load())
+		require.Equal(t, int64(2), counter.targetStatements.Load())
 	})
 
 	t.Run("limits before pair dedup and copies attachments", func(t *testing.T) {
-		executor, _, parentQuery, parentKey, junctionParent, junctionChild, childKey, junction, childPlan := mtFixture(t)
+		executor, counter, parentQuery, parentKey, junctionParent, junctionChild, childKey, junction, childPlan := mtFixture(t)
 		edge1, err := ManyThrough("roles_a", parentKey, junctionParent, junctionChild, childKey, junction, childPlan, EdgeOptions{Order: mtJunctionOrder(junction), PerParentLimit: 2}, func(parent *mtParentGraph, loaded LoadedMany[mtChildGraph]) { parent.Children = loaded })
 		require.NoError(t, err)
 		edge2, err := ManyThrough("roles_b", parentKey, junctionParent, junctionChild, childKey, junction, childPlan, EdgeOptions{Order: mtJunctionOrder(junction), PerParentLimit: 2}, func(parent *mtParentGraph, loaded LoadedMany[mtChildGraph]) { parent.Children = loaded })
@@ -162,23 +159,23 @@ func TestGraphManyThrough(t *testing.T) {
 		require.Len(t, values[0].Children.Values, 1)
 		require.Equal(t, int64(10), values[0].Children.Values[0].ID)
 		require.Equal(t, int64(10), values[1].Children.Values[0].ID)
-		require.Equal(t, int64(1), executor.junctionStatements.Load())
-		require.Equal(t, int64(1), executor.targetStatements.Load())
-		require.Equal(t, int64(6), executor.rows.Load())
+		require.Equal(t, int64(1), counter.junctionStatements.Load())
+		require.Equal(t, int64(1), counter.targetStatements.Load())
+		require.Equal(t, int64(6), counter.rows.Load())
 		values[0].Children.Values[0].ID = 99
 		require.Equal(t, int64(10), values[1].Children.Values[0].ID)
 	})
 
 	t.Run("rejects a foreign junction parent without attaching", func(t *testing.T) {
-		executor, _, parentQuery, parentKey, junctionParent, junctionChild, childKey, junction, childPlan := mtFixture(t)
-		childPlan.node.query = childPlan.node.query.withoutPredicates()
+		_, counter, parentQuery, parentKey, junctionParent, junctionChild, childKey, junction, childPlan := mtFixture(t)
+		childPlan = Q1WithoutPredicates(childPlan)
 		var callbacks atomic.Int64
 		edge, err := ManyThrough("roles", parentKey, junctionParent, junctionChild, childKey, junction, childPlan, EdgeOptions{Order: mtJunctionOrder(junction), PerParentLimit: 2}, func(*mtParentGraph, LoadedMany[mtChildGraph]) { callbacks.Add(1) })
 		require.NoError(t, err)
 		plan, err := NewGraphPlan(parentQuery, func(mtParentRow) mtParentGraph { return mtParentGraph{} }, edge)
 		require.NoError(t, err)
-		rows := &mtRowsOverride{mtCountingExecutor: executor, junctionValues: [][]any{{int64(999), int64(10), int64(1), int64(1)}}}
-		_, err = LoadGraph(t.Context(), rows, plan)
+		rows := &mtRowsOverride{mtCountingExecutor: counter, junctionValues: [][]any{{int64(999), int64(10), int64(1), int64(1)}}}
+		_, err = LoadGraph(t.Context(), mtProfiled(t, rows), plan)
 		var planErr *PlanError
 		require.ErrorAs(t, err, &planErr)
 		require.Equal(t, "foreign_key_result", planErr.Code)
@@ -186,15 +183,15 @@ func TestGraphManyThrough(t *testing.T) {
 	})
 
 	t.Run("a missing target never attaches partially", func(t *testing.T) {
-		executor, _, parentQuery, parentKey, junctionParent, junctionChild, childKey, junction, childPlan := mtFixture(t)
-		childPlan.node.query = childPlan.node.query.withoutPredicates()
+		_, counter, parentQuery, parentKey, junctionParent, junctionChild, childKey, junction, childPlan := mtFixture(t)
+		childPlan = Q1WithoutPredicates(childPlan)
 		var callbacks atomic.Int64
 		edge, err := ManyThrough("roles", parentKey, junctionParent, junctionChild, childKey, junction, childPlan, EdgeOptions{Order: mtJunctionOrder(junction), PerParentLimit: 2}, func(*mtParentGraph, LoadedMany[mtChildGraph]) { callbacks.Add(1) })
 		require.NoError(t, err)
 		plan, err := NewGraphPlan(parentQuery, func(mtParentRow) mtParentGraph { return mtParentGraph{} }, edge)
 		require.NoError(t, err)
-		rows := &mtRowsOverride{mtCountingExecutor: executor, junctionValues: [][]any{{int64(1), int64(999), int64(1), int64(1)}}}
-		_, err = LoadGraph(t.Context(), rows, plan)
+		rows := &mtRowsOverride{mtCountingExecutor: counter, junctionValues: [][]any{{int64(1), int64(999), int64(1), int64(1)}}}
+		_, err = LoadGraph(t.Context(), mtProfiled(t, rows), plan)
 		var planErr *PlanError
 		require.ErrorAs(t, err, &planErr)
 		require.Equal(t, "foreign_key_result", planErr.Code)
@@ -220,8 +217,8 @@ func TestGraphManyThrough(t *testing.T) {
 					require.Len(t, value.Children.Values, 1, "parent %d", index)
 					require.Equal(t, "loaded", value.Children.Values[0].Marker)
 				}
-				require.Equal(t, int64(1), fixture.executor.junctionStatements.Load())
-				require.Equal(t, int64(1), fixture.executor.childStatements.Load())
+				require.Equal(t, int64(1), fixture.counter.junctionStatements.Load())
+				require.Equal(t, int64(1), fixture.counter.childStatements.Load())
 			})
 		}
 	})
@@ -264,8 +261,8 @@ func TestGraphManyThrough(t *testing.T) {
 		values, err := LoadGraph(t.Context(), fixture.executor, plan)
 		require.NoError(t, err)
 		require.Len(t, values, 2)
-		require.Equal(t, int64(2), fixture.executor.junctionStatements.Load())
-		require.Equal(t, int64(2), fixture.executor.childStatements.Load())
+		require.Equal(t, int64(2), fixture.counter.junctionStatements.Load())
+		require.Equal(t, int64(2), fixture.counter.childStatements.Load())
 		for _, value := range values {
 			require.Len(t, value.Children.Values, 1)
 		}
@@ -279,15 +276,15 @@ func TestGraphManyThrough(t *testing.T) {
 		}
 		kind := fixture.kind.Expr()
 		options := EdgeOptions{
-			BindLimit: executorCompilerProfile(fixture.executor).MaxBind + 100,
+			BindLimit: Q1ExecutorProfile(fixture.executor).MaxBind + 100,
 			Where:     Predicate{node: querypkg.In(kind.node, fixedValues...), source: kind.source},
 		}
 		plan := graphWidthPlan(t, fixture, 1, 2, options, "loaded")
 		values, err := LoadGraph(t.Context(), fixture.executor, plan)
 		require.NoError(t, err)
 		require.Len(t, values, 1000)
-		require.Equal(t, int64(3), fixture.executor.junctionStatements.Load())
-		require.Equal(t, int64(3), fixture.executor.childStatements.Load())
+		require.Equal(t, int64(3), fixture.counter.junctionStatements.Load())
+		require.Equal(t, int64(3), fixture.counter.childStatements.Load())
 	})
 }
 
@@ -299,7 +296,7 @@ func (r *mtCountingRows) Next() bool {
 	return true
 }
 
-func mtFixture(t *testing.T) (*mtCountingExecutor, *sql.DB, Query[mtParentRow], GraphKey[mtParentRow], GraphKey[mtJunctionRow], GraphKey[mtJunctionRow], GraphKey[mtChildRow], Source, GraphPlan[mtChildRow, mtChildGraph]) {
+func mtFixture(t *testing.T) (Executor, *mtCountingExecutor, Query[mtParentRow], GraphKey[mtParentRow], GraphKey[mtJunctionRow], GraphKey[mtJunctionRow], GraphKey[mtChildRow], Source, GraphPlan[mtChildRow, mtChildGraph]) {
 	t.Helper()
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
@@ -315,9 +312,10 @@ func mtFixture(t *testing.T) (*mtCountingExecutor, *sql.DB, Query[mtParentRow], 
 	require.NoError(t, err)
 	base, err := AsExecutor(db, profile)
 	require.NoError(t, err)
-	provider, ok := base.(compilerProvider)
-	require.True(t, ok)
-	executor := &mtCountingExecutor{Executor: base, compiler: provider.queryCompiler()}
+	counter := &mtCountingExecutor{Executor: base}
+	// WithEngineProfile re-attaches the compiler the decorator does not carry.
+	executor, err := WithEngineProfile(counter, profile)
+	require.NoError(t, err)
 	parents := MustReadTableOf[mtParentRow](schema.TableDef{Name: "mt_parents", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}})
 	children := MustReadTableOf[mtChildRow](schema.TableDef{Name: "mt_children", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "active", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}})
 	junctions := MustReadTableOf[mtJunctionRow](schema.TableDef{Name: "mt_junctions", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "parent", Type: schema.IntegerType{}}, {Name: "target", Type: schema.IntegerType{}}, {Name: "rank", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}})
@@ -363,7 +361,7 @@ func mtFixture(t *testing.T) (*mtCountingExecutor, *sql.DB, Query[mtParentRow], 
 	require.NoError(t, err)
 	_ = jid
 	_ = jrank
-	return executor, database, parentQuery, parentKey, junctionParent, junctionChild, childKey, junctionSource.source, childPlan
+	return executor, counter, parentQuery, parentKey, junctionParent, junctionChild, childKey, junctionSource.source, childPlan
 }
 
 func mtJunctionOrder(source Source) []OrderTerm {
@@ -405,12 +403,10 @@ func (d graphWidthChildDecoder) DecodeRow(source ScanSource, value *graphWidthCh
 
 type graphWidthExecutor struct {
 	Executor
-	compiler           *querycompile.Compiler
 	junctionStatements atomic.Int64
 	childStatements    atomic.Int64
 }
 
-func (e *graphWidthExecutor) queryCompiler() *querycompile.Compiler { return e.compiler }
 func (e *graphWidthExecutor) Query(ctx context.Context, statement stmt.Statement) (ResultRows, error) {
 	if strings.Contains(statement.SQL(), "r4_width_junctions") {
 		e.junctionStatements.Add(1)
@@ -425,7 +421,10 @@ func (e *graphWidthExecutor) Exec(ctx context.Context, statement stmt.Statement)
 }
 
 type graphWidthFixture struct {
-	executor                               *graphWidthExecutor
+	// counter is the decorator that counts statements; executor is the same
+	// decorator wrapped so it carries a compiler.
+	counter                                *graphWidthExecutor
+	executor                               Executor
 	parents                                Source
 	children                               Source
 	junction                               Source
@@ -473,9 +472,9 @@ CREATE TABLE r4_width_junctions (parent_id INTEGER NOT NULL, parent_tenant INTEG
 	require.NoError(t, err)
 	base, err := AsExecutor(db, profile)
 	require.NoError(t, err)
-	provider, ok := base.(compilerProvider)
-	require.True(t, ok)
-	executor := &graphWidthExecutor{Executor: base, compiler: provider.queryCompiler()}
+	counter := &graphWidthExecutor{Executor: base}
+	executor, err := WithEngineProfile(counter, profile)
+	require.NoError(t, err)
 	parents, err := SourceOf(MustReadTableOf[graphWidthParentRow](schema.TableDef{
 		Name: "r4_width_parents", PrimaryKey: []string{"id"},
 		Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}}},
@@ -524,7 +523,7 @@ CREATE TABLE r4_width_junctions (parent_id INTEGER NOT NULL, parent_tenant INTEG
 	childProjection, err := NewProjection([]ProjectionItem{Item("id", childID.Expr(), schema.IntegerType{}, ""), Item("tenant", childTenant.Expr(), schema.IntegerType{}, "")}, graphWidthChildDecoder{schema: childSchema})
 	require.NoError(t, err)
 	return graphWidthFixture{
-		executor: executor, parents: parents.Source(), children: children.Source(), junction: junction.Source(),
+		counter: counter, executor: executor, parents: parents.Source(), children: children.Source(), junction: junction.Source(),
 		parentQuery: Select(parents.Source(), parentProjection).OrderBy(AscExpr(parentID.Expr())),
 		childQuery:  Select(children.Source(), childProjection).OrderBy(AscExpr(childID.Expr())),
 		parentID:    parentID, parentTenant: parentTenant, childID: childID, childTenant: childTenant,
@@ -569,4 +568,15 @@ func graphWidthPlan(t *testing.T, fixture graphWidthFixture, parentWidth, childW
 	plan, err := NewGraphPlan(fixture.parentQuery, func(graphWidthParentRow) graphWidthParent { return graphWidthParent{} }, edge)
 	require.NoError(t, err)
 	return plan
+}
+
+// mtProfiled re-attaches the compiler a decorator does not carry, which is how
+// a wrapper sits in the chain from outside the package.
+func mtProfiled(t *testing.T, executor Executor) Executor {
+	t.Helper()
+	profile, err := EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+	require.NoError(t, err)
+	profiled, err := WithEngineProfile(executor, profile)
+	require.NoError(t, err)
+	return profiled
 }
