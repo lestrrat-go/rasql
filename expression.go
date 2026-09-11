@@ -10,6 +10,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/internal/graphkey"
 	"github.com/lestrrat-go/rasql/internal/mutationcolumn"
+	"github.com/lestrrat-go/rasql/internal/planerr"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 )
@@ -354,7 +355,7 @@ func snapshotError(err error) error {
 	if errors.As(err, &planErr) && planErr.Code == "unsnapshotable_bind" {
 		return err
 	}
-	return &PlanError{Code: "unsnapshotable_bind", Path: "bind", Detail: err.Error(), cause: err}
+	return planerr.Wrap("unsnapshotable_bind", "bind", err.Error(), err)
 }
 
 func adoptBind[T any](value T, allowSnapshotter bool) (any, bindValueCopy, error) {

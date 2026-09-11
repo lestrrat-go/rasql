@@ -11,6 +11,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
+	"github.com/lestrrat-go/rasql/internal/planerr"
 	"github.com/lestrrat-go/rasql/internal/querycompile"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
@@ -235,7 +236,7 @@ func TestQueryComposition(t *testing.T) {
 		base := q2AcceptanceQuery(t)
 		bad := base
 		bad.plan = clonePlan(base.plan)
-		bad.plan.projection[0].bindErr = &PlanError{Code: "unsnapshotable_bind", Path: "bind", Detail: "bad bind", cause: q2AcceptanceBindCause{}}
+		bad.plan.projection[0].bindErr = planerr.Wrap("unsnapshotable_bind", "bind", "bad bind", q2AcceptanceBindCause{})
 		count := CountQuery(bad, true)
 		err := count.Validate()
 		var planErr *PlanError

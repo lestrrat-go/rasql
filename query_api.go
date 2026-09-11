@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/lestrrat-go/rasql/internal/planerr"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 )
@@ -37,22 +38,12 @@ func (n *Nullable[T]) nullableValue() any { return &n.Value }
 func (n *Nullable[T]) nullableClear()     { var zero T; n.Value = zero; n.Valid = false }
 func (n *Nullable[T]) nullableValid()     { n.Valid = true }
 
-// PlanError identifies an invalid immutable query plan.
-type PlanError struct {
-	Code, Path, Detail string
-	cause              error
-}
+// PlanError identifies an invalid immutable query plan. Its fields and methods
+// are unchanged; the type itself lives in internal/planerr so that code under
+// internal/ can raise the error this package returns.
+type PlanError = planerr.Error
 
-func (e *PlanError) Error() string {
-	if e.Path == "" {
-		return e.Code + ": " + e.Detail
-	}
-	return e.Code + " at " + e.Path + ": " + e.Detail
-}
-func (e *PlanError) Unwrap() error { return e.cause }
-func planError(code, path, detail string) *PlanError {
-	return &PlanError{Code: code, Path: path, Detail: detail}
-}
+func planError(code, path, detail string) *PlanError { return planerr.New(code, path, detail) }
 
 type ResultSchema struct{ columns []ResultColumn }
 
@@ -365,9 +356,7 @@ func (p QueryPlan) Validate() error {
 	}
 	for i, item := range p.projection {
 		if item.bindErr != nil {
-			result := planError("unsnapshotable_bind", fmt.Sprintf("plan.projection[%d]", i), item.bindErr.Error())
-			result.cause = item.bindErr
-			return result
+			return planerr.Wrap("unsnapshotable_bind", fmt.Sprintf("plan.projection[%d]", i), item.bindErr.Error(), item.bindErr)
 		}
 		if err := validateQ1Expression(item.expression, allowed, fmt.Sprintf("plan.projection[%d]", i)); err != nil {
 			return err
@@ -407,9 +396,7 @@ func (p QueryPlan) Validate() error {
 			return planError("invalid_projection", fmt.Sprintf("plan.predicates[%d]", i), "predicate is zero")
 		}
 		if predicate.bindErr != nil {
-			result := planError("unsnapshotable_bind", fmt.Sprintf("plan.predicates[%d]", i), predicate.bindErr.Error())
-			result.cause = predicate.bindErr
-			return result
+			return planerr.Wrap("unsnapshotable_bind", fmt.Sprintf("plan.predicates[%d]", i), predicate.bindErr.Error(), predicate.bindErr)
 		}
 		if err := validateQ1Expression(predicate.node, allowed, fmt.Sprintf("plan.predicates[%d]", i)); err != nil {
 			return err
@@ -465,9 +452,7 @@ func validateQ1Expression(expression query.Expression, allowed map[string]struct
 		}
 	case query.Value:
 		if token, ok := node.Argument().(bindToken); ok && token.err != nil {
-			result := planError("unsnapshotable_bind", path, token.err.Error())
-			result.cause = token.err
-			return result
+			return planerr.Wrap("unsnapshotable_bind", path, token.err.Error(), token.err)
 		}
 	case query.Binary:
 		if err := validateQ1Expression(node.Left(), allowed, path+".left"); err != nil {
@@ -625,6 +610,7 @@ func (q Query[R]) Having(p Predicate) Query[R] {
 	q.plan.having = append(q.plan.having, p)
 	return q
 }
+
 // Correlated names the enclosing query's sources this query is allowed to
 // read, which is what makes it a correlated subquery. It has to be called
 // before Where, because Where validates the predicate it is given and nothing
