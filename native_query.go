@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/lestrrat-go/rasql/internal/planerr"
 	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/lestrrat-go/rasql/stmt"
 )
@@ -94,9 +95,7 @@ func newNativeQueryPlan(statement NativeStatement) (*nativeQueryPlan, error) {
 		}
 		snapshot, copier, err := adoptBind(value, true)
 		if err != nil {
-			result := planError("unsnapshotable_bind", fmt.Sprintf("native.args[%d]", i), err.Error())
-			result.cause = err
-			return nil, result
+			return nil, planerr.Wrap("unsnapshotable_bind", fmt.Sprintf("native.args[%d]", i), err.Error(), err)
 		}
 		args[i] = bindToken{id: bindID(atomic.AddUint64(&nextBindID, 1)), value: snapshot, codec: arg.Codec, copy: copier}
 	}

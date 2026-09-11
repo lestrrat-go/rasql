@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/lestrrat-go/rasql/internal/cursorcodec"
+	"github.com/lestrrat-go/rasql/internal/planerr"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/stmt"
@@ -60,7 +61,7 @@ func preparePageAfter[R any](executor Executor, q Query[R], spec PageSpec[R], po
 			continue
 		}
 		if _, err := cursorCodec(executor, key.codec); err != nil {
-			return result, &PlanError{Code: "codec_unavailable", Path: fmt.Sprintf("page.order[%d].codec", i), Detail: err.Error(), cause: err}
+			return result, planerr.Wrap("codec_unavailable", fmt.Sprintf("page.order[%d].codec", i), err.Error(), err)
 		}
 	}
 	ordered, err := q.withKeysetOrder(pageTerms(spec.keys))

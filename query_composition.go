@@ -8,6 +8,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
+	"github.com/lestrrat-go/rasql/internal/planerr"
 	"github.com/lestrrat-go/rasql/internal/querycompile"
 	"github.com/lestrrat-go/rasql/internal/sqlscan"
 	"github.com/lestrrat-go/rasql/query"
@@ -257,7 +258,7 @@ func compositionResultQuery[R any](q Query[R]) (query.ResultQuery, error) {
 		if errors.Is(err, sqlscan.ErrNotSelect) {
 			return query.ResultQuery{}, planError("unsupported_feature", "native", err.Error())
 		}
-		return query.ResultQuery{}, &PlanError{Code: "invalid_query", Path: "native.sql", Detail: err.Error(), cause: err}
+		return query.ResultQuery{}, planerr.Wrap("invalid_query", "native.sql", err.Error(), err)
 	}
 	return query.ResultOf(body, q.Schema().Columns()...)
 }
@@ -552,14 +553,14 @@ func mapCompileError(err error) error {
 		return err
 	}
 	if errors.Is(err, sqlscan.ErrInvalidPlaceholder) {
-		return &PlanError{Code: "invalid_query", Path: "native.sql", Detail: err.Error(), cause: err}
+		return planerr.Wrap("invalid_query", "native.sql", err.Error(), err)
 	}
 	if errors.Is(err, render.ErrNativeEngineMismatch) {
-		return &PlanError{Code: "engine_mismatch", Path: "native.engine", Detail: err.Error(), cause: err}
+		return planerr.Wrap("engine_mismatch", "native.engine", err.Error(), err)
 	}
 	var validationErr *query.ValidationError
 	if errors.As(err, &validationErr) {
-		return &PlanError{Code: "invalid_query", Path: validationErr.Path, Detail: validationErr.Message, cause: err}
+		return planerr.Wrap("invalid_query", validationErr.Path, validationErr.Message, err)
 	}
 	var profileErr *engineprofile.ProfileError
 	if errors.As(err, &profileErr) {
@@ -570,9 +571,9 @@ func mapCompileError(err error) error {
 		if errors.Is(err, engineprofile.ErrBindLimit) {
 			code, path = "bind_limit", "args"
 		}
-		return &PlanError{Code: code, Path: path, Detail: err.Error(), cause: err}
+		return planerr.Wrap(code, path, err.Error(), err)
 	}
-	return &PlanError{Code: "unsupported_feature", Path: "compiler", Detail: err.Error(), cause: err}
+	return planerr.Wrap("unsupported_feature", "compiler", err.Error(), err)
 }
 
 func bindCopyError(index int, err error) error {
@@ -580,7 +581,7 @@ func bindCopyError(index int, err error) error {
 	if errors.As(err, &planErr) && planErr.Code == "unsnapshotable_bind" {
 		return err
 	}
-	return &PlanError{Code: "unsnapshotable_bind", Path: fmt.Sprintf("args[%d]", index), Detail: err.Error(), cause: err}
+	return planerr.Wrap("unsnapshotable_bind", fmt.Sprintf("args[%d]", index), err.Error(), err)
 }
 
 func unwrapBindTokens(statement stmt.Statement) (compiledQuery, error) {
