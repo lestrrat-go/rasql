@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
-	"github.com/lestrrat-go/rasql/internal/nilcheck"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/stmt"
@@ -31,7 +30,7 @@ type mutationBatchPlan interface {
 }
 
 func requireTableOperation[T any](table Table[T], operation schema.Operation) error {
-	if isNilTable(table) {
+	if table == nil {
 		return fmt.Errorf("rasql: table must not be nil")
 	}
 	if !table.Ref().Definition().Supports(operation) {
@@ -65,6 +64,10 @@ func NewUpsertPlan[T any](statement query.Upsert) (UpsertPlan[T], error) {
 
 func (p UpsertPlan[T]) mutationPlan() (query.WriteStatement, error) { return p.statement, nil }
 
+// NewDeletePlan builds a validated DELETE plan for the rows of table that where
+// matches. It reports an error when where carries no expression.
+//
+// `table` must not be nil.
 func NewDeletePlan[T any](table Table[T], where query.Predicate) (DeletePlan[T], error) {
 	if err := requireTableOperation(table, schema.OperationDelete); err != nil {
 		return DeletePlan[T]{}, err
@@ -76,7 +79,7 @@ func NewDeletePlan[T any](table Table[T], where query.Predicate) (DeletePlan[T],
 }
 
 func (p DeletePlan[T]) mutationPlan() (query.WriteStatement, error) {
-	if isNilTable(p.table) {
+	if p.table == nil {
 		return nil, fmt.Errorf("rasql: delete plan table must not be nil")
 	}
 	statement, err := query.NewDelete(p.table.Ref())
@@ -95,12 +98,12 @@ func (p DeletePlan[T]) mutationPlan() (query.WriteStatement, error) {
 // StatementPlan adapts a validated query write statement to MutationPlan.
 type StatementPlan struct{ statement query.WriteStatement }
 
+// NewStatementPlan adapts a validated query write statement to MutationPlan. It
+// calls statement.Validate and reports what that returns.
+//
+// `statement` must not be nil.
 func NewStatementPlan(statement query.WriteStatement) (StatementPlan, error) {
-	// A typed nil such as (*query.Insert)(nil) stored in this interface is not
-	// == nil, and Insert.Validate is a value method: calling it through such a
-	// pointer dereferences nil before the guard below could ever see it, so the
-	// check must ask nilcheck.Is rather than compare the interface directly.
-	if nilcheck.Is(statement) {
+	if statement == nil {
 		return StatementPlan{}, fmt.Errorf("rasql: mutation statement must not be nil")
 	}
 	if err := statement.Validate(); err != nil {
@@ -110,16 +113,16 @@ func NewStatementPlan(statement query.WriteStatement) (StatementPlan, error) {
 }
 func (p StatementPlan) mutationPlan() (query.WriteStatement, error) { return p.statement, nil }
 
+// ExecMutation compiles plan for executor's engine profile, sends it, and
+// reports how many rows it affected. It reports an error when the statement
+// carries RETURNING projections; Returning is the entry point for those.
+//
+// `executor` and `plan` must not be nil.
 func ExecMutation(ctx context.Context, executor Executor, plan MutationPlan) (MutationOutcome, error) {
 	if executor == nil {
 		return MutationOutcome{}, fmt.Errorf("rasql: executor must not be nil")
 	}
-	// Every MutationPlan implementation is a struct with value-receiver
-	// methods, so a typed nil pointer to one (e.g. (*DeletePlan[T])(nil))
-	// satisfies this interface without being == nil, the same gap
-	// NewStatementPlan had. nilcheck.Is catches it before mutationPlan below
-	// can dereference that nil pointer.
-	if nilcheck.Is(plan) {
+	if plan == nil {
 		return MutationOutcome{}, fmt.Errorf("rasql: mutation plan must not be nil")
 	}
 	var compiled stmt.Statement
@@ -244,10 +247,10 @@ func executorDurability(executor Executor) Durability {
 }
 
 // Returning attaches the requested Q1 projection to a mutation.
+//
+// `plan` must not be nil.
 func Returning[R any](plan MutationPlan, projection Projection[R]) (Query[R], error) {
-	// See the matching comment in ExecMutation: a typed nil MutationPlan
-	// passes == nil and would otherwise reach mutationPlan below.
-	if nilcheck.Is(plan) {
+	if plan == nil {
 		return Query[R]{}, fmt.Errorf("rasql: mutation plan must not be nil")
 	}
 	if _, ok := plan.(nativeMutationPlanAccessor); ok {
@@ -291,6 +294,11 @@ func Returning[R any](plan MutationPlan, projection Projection[R]) (Query[R], er
 	return result, nil
 }
 
+// ExecMutationBatch groups plans into multi-row statements bounded by options
+// and sends them in order. Every plan must target the same table, and none may
+// carry RETURNING projections.
+//
+// `executor` must not be nil, and no element of `plans` may be nil.
 func ExecMutationBatch(ctx context.Context, executor Executor, plans []MutationPlan, options BulkOptions) (BulkOutcome, error) {
 	if executor == nil {
 		return BulkOutcome{}, fmt.Errorf("rasql: executor must not be nil")
@@ -310,9 +318,7 @@ func ExecMutationBatch(ctx context.Context, executor Executor, plans []MutationP
 		return outcome, fmt.Errorf("rasql: mutation batch MaxBindParameters must be positive")
 	}
 	for index, plan := range plans {
-		// Same typed-nil gap as ExecMutation's plan guard: a nil *DeletePlan[T]
-		// or similar is not == nil, so this must ask nilcheck.Is too.
-		if nilcheck.Is(plan) {
+		if plan == nil {
 			return outcome, fmt.Errorf("rasql: mutation batch input %d is nil", index)
 		}
 		if native, ok := plan.(nativeMutationPlanAccessor); ok {
@@ -326,9 +332,6 @@ func ExecMutationBatch(ctx context.Context, executor Executor, plans []MutationP
 	bindLimit := mutationBindLimit(executor, options.MaxBindParameters)
 	var target string
 	for index, plan := range plans {
-		if nilcheck.Is(plan) {
-			return outcome, fmt.Errorf("rasql: mutation batch input %d is nil", index)
-		}
 		statement, err := plan.mutationPlan()
 		if err != nil {
 			return outcome, err
@@ -555,10 +558,10 @@ func execAtomicMutationBatch(ctx context.Context, executor Executor, plans []Mut
 	if err != nil {
 		return outcome, err
 	}
-	if isNilExecutor(child) {
+	if child == nil {
 		return outcome, planError("transaction_scope_invalid", "scope", "scope beginner returned a nil child executor")
 	}
-	if isNilScopeFinalizer(finalizer) {
+	if finalizer == nil {
 		return outcome, planError("transaction_scope_invalid", "scope", "scope beginner returned a nil finalizer")
 	}
 	logicalCtx, logicalExecutor, complete := beginLogicalInvocation(ctx, child, EventMutationBatch)

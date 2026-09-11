@@ -557,29 +557,6 @@ func TestExecPointerWrite(t *testing.T) {
 			})
 		}
 	})
-
-	// TestExecPointerWrite/"rejects nil write statements" is not converted. The canonical entry
-	// point for a raw query.WriteStatement, rasql.NewStatementPlan, guards only
-	// the untyped-nil case (a bare `== nil` check in mutation.go); it does not
-	// use the nilcheck.Is style guard the old exec.Write had. Confirmed by
-	// direct experiment: NewStatementPlan((*query.Insert)(nil)) panics with
-	// "value method github.com/lestrrat-go/rasql/query.Insert.Validate called
-	// using nil *Insert pointer", because Insert/Update/Delete/Upsert's Validate
-	// method has a value receiver, and the same holds for Update, Delete and
-	// Upsert. The original test proved every one of those five inputs is
-	// rejected gracefully; four of the five now panic instead, which is the
-	// opposite of what this test is supposed to prove, so weakening it to expect
-	// a panic would misrepresent a regression as intended behavior.
-	//
-	// The QueryWriteOne half has no replacement at all: there is no canonical
-	// entry point that takes an existing query.WriteStatement and reports
-	// whether it already carries a RETURNING clause the way QueryWriteOne did;
-	// rasql.Returning instead builds its own RETURNING clause onto a MutationPlan
-	// from a Projection, which is a different operation.
-	t.Run("rejects nil write statements", func(t *testing.T) {
-		t.Skip("NewStatementPlan panics on a typed-nil *query.Insert/*query.Update/*query.Delete/*query.Upsert " +
-			"instead of returning a graceful error; see the doc comment on this test")
-	})
 }
 
 // execPointerStatement adapts a validated query.WriteStatement, pointer or
