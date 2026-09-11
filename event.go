@@ -172,15 +172,22 @@ type eventCompilerCodecScopedEvidenceExecutor struct {
 	eventCompilerCodecScopedExecutor
 }
 
+// WithEventObservers wraps executor so every observer sees the start and the
+// terminal event of each scope, statement and mutation batch it runs, and
+// handler receives the extension errors those observers raise. It returns
+// executor unchanged when observers is empty.
+//
+// `executor` must not be nil; `handler` must not be nil when any observer is
+// given, and no element of `observers` may be nil.
 func WithEventObservers(executor Executor, handler ExtensionErrorHandler, observers ...EventObserver) (Executor, error) {
-	if isNilExecutor(executor) {
+	if executor == nil {
 		return nil, fmt.Errorf("executor must not be nil")
 	}
 	if len(observers) > 0 && handler == nil {
 		return nil, fmt.Errorf("rasql: extension error handler must not be nil when observers are supplied")
 	}
 	for _, observer := range observers {
-		if observer == nil || isNilEventObserver(observer) {
+		if observer == nil {
 			return nil, fmt.Errorf("rasql: event observer must not be nil")
 		}
 	}
@@ -189,10 +196,6 @@ func WithEventObservers(executor Executor, handler ExtensionErrorHandler, observ
 	}
 	base := eventExecutor{Executor: executor, handler: handler, observers: append([]EventObserver(nil), observers...), parentID: "", statement: &atomic.Int64{}}
 	return wrapEventExecutor(base), nil
-}
-
-func isNilEventObserver(observer EventObserver) bool {
-	return observer == nil
 }
 
 func (e eventScopedExecutor) BeginScope(ctx context.Context, opts *sql.TxOptions) (Executor, ScopeFinalizer, error) {
@@ -212,7 +215,7 @@ func (e eventScopedExecutor) BeginScope(ctx context.Context, opts *sql.TxOptions
 		e.complete(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
 		return nil, nil, err
 	}
-	if isNilExecutor(child) || isNilScopeFinalizer(finalizer) {
+	if child == nil || finalizer == nil {
 		err := planError("transaction_scope_invalid", "scope", "begin returned a nil child or finalizer")
 		e.complete(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
 		return nil, nil, err
@@ -240,7 +243,7 @@ func (e eventScopedExecutor) BeginSavepoint(ctx context.Context) (Executor, Scop
 		e.complete(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
 		return nil, nil, err
 	}
-	if isNilExecutor(child) || isNilScopeFinalizer(finalizer) {
+	if child == nil || finalizer == nil {
 		err := planError("transaction_scope_invalid", "scope", "begin returned a nil child or finalizer")
 		e.complete(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
 		return nil, nil, err

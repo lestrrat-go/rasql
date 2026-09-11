@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"reflect"
 	"time"
 
 	"github.com/lestrrat-go/rasql/internal/querycompile"
@@ -338,8 +337,10 @@ func atomicCleanupContext(ctx context.Context) (context.Context, context.CancelF
 
 // Within owns one transaction on a regular executor and one savepoint on a
 // transaction executor. Cleanup runs with a detached thirty-second bound.
+//
+// `executor` and `fn` must not be nil.
 func Within(ctx context.Context, executor Executor, opts *sql.TxOptions, fn Scope) (err error) {
-	if isNilExecutor(executor) {
+	if executor == nil {
 		return unsupportedScopeError()
 	}
 	if fn == nil {
@@ -365,10 +366,10 @@ func Within(ctx context.Context, executor Executor, opts *sql.TxOptions, fn Scop
 	if err != nil {
 		return err
 	}
-	if isNilExecutor(child) {
+	if child == nil {
 		return planError("transaction_scope_invalid", "scope", "scope beginner returned a nil child executor")
 	}
-	if isNilScopeFinalizer(finalizer) {
+	if finalizer == nil {
 		return planError("transaction_scope_invalid", "scope", "scope beginner returned a nil finalizer")
 	}
 	callbackCtx := ctx
@@ -396,19 +397,6 @@ func Within(ctx context.Context, executor Executor, opts *sql.TxOptions, fn Scop
 		return errors.Join(result.err, cleanupErr)
 	}
 	return finalizer.Commit(cleanupCtx)
-}
-
-func isNilScopeFinalizer(finalizer ScopeFinalizer) bool {
-	if finalizer == nil {
-		return true
-	}
-	value := reflect.ValueOf(finalizer)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return value.IsNil()
-	default:
-		return false
-	}
 }
 
 type scopeCallbackResult struct {

@@ -5,6 +5,10 @@ import (
 	"fmt"
 )
 
+// PageGraphAfter pages plan's root query by spec, then runs the child query of
+// every edge plan names for the rows that page holds.
+//
+// `executor` must not be nil.
 func PageGraphAfter[R, G any](ctx context.Context, executor Executor, plan GraphPlan[R, G], spec PageSpec[R], policy PagePolicy, request PageRequest) (Page[G], error) {
 	var result Page[G]
 	_, err := prepareGraphPlan(executor, plan)

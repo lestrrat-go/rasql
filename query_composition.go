@@ -131,6 +131,11 @@ func compoundOperand[R any](q Query[R]) (query.ResultQuery, error) {
 	return query.ResultOf(body, q.Schema().Columns()...)
 }
 
+// With returns a copy of q carrying each CTE in ctes. It reports an error for a
+// zero CTE plan, for a name another CTE on q already holds, and for a native
+// query, which carries its own SQL and composes with nothing.
+//
+// No element of `ctes` may be nil.
 func With[R any](q Query[R], ctes ...CTEPlan) (Query[R], error) {
 	if err := rejectNativeComposition(q); err != nil {
 		return Query[R]{}, err
@@ -143,10 +148,6 @@ func With[R any](q Query[R], ctes ...CTEPlan) (Query[R], error) {
 	seen := make(map[string]struct{}, len(ctes))
 	for i, plan := range ctes {
 		if plan == nil {
-			return Query[R]{}, planError("invalid_cte", fmt.Sprintf("ctes[%d]", i), "must not be nil")
-		}
-		value := reflect.ValueOf(plan)
-		if (value.Kind() == reflect.Pointer || value.Kind() == reflect.Interface) && value.IsNil() {
 			return Query[R]{}, planError("invalid_cte", fmt.Sprintf("ctes[%d]", i), "must not be nil")
 		}
 		cte := plan.ctePlan()

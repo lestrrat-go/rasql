@@ -289,6 +289,11 @@ func (q graphQuery[R, G]) run(ctx context.Context, executor Executor, count func
 	return prepared.run(ctx, executor, count)
 }
 
+// NewGraphPlan builds a validated graph plan whose root rows come from q, mapped
+// to G by mapper, with one child load per edge. It reports an error for a zero
+// edge, an unnamed edge and a duplicate edge name.
+//
+// `mapper` must not be nil, and no element of `edges` may be nil.
 func NewGraphPlan[R, G any](q Query[R], mapper func(R) G, edges ...GraphEdge[R, G]) (GraphPlan[R, G], error) {
 	if err := q.Validate(); err != nil {
 		return GraphPlan[R, G]{}, err
@@ -300,7 +305,7 @@ func NewGraphPlan[R, G any](q Query[R], mapper func(R) G, edges ...GraphEdge[R, 
 	seen := make(map[string]struct{}, len(edges))
 	node.edges = make([]*graphEdgeSpec, len(edges))
 	for i, edge := range edges {
-		if edge == nil || (reflect.ValueOf(edge).Kind() == reflect.Pointer && reflect.ValueOf(edge).IsNil()) {
+		if edge == nil {
 			return GraphPlan[R, G]{}, planError("invalid_graph_plan", fmt.Sprintf("edges[%d]", i), "must not be nil")
 		}
 		spec := edge.graphEdge()

@@ -3,7 +3,6 @@ package rasql
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"strings"
 
 	"github.com/lestrrat-go/rasql/dialect"
@@ -85,7 +84,7 @@ func (p EngineProfile) Version() EngineVersion           { return p.profile.Vers
 func (p EngineProfile) Capabilities() EngineCapabilities { return p.profile.Capabilities }
 func (p EngineProfile) Limits() EngineLimits             { return p.profile.Limits }
 func (p EngineProfile) queryCompiler(d dialect.Dialect) (*querycompile.Compiler, error) {
-	if p.profile.ID == "" || d == nil || (reflect.ValueOf(d).Kind() == reflect.Pointer && reflect.ValueOf(d).IsNil()) {
+	if p.profile.ID == "" || d == nil {
 		return nil, ErrInvalidEngineProfile
 	}
 	if p.profile.Engine != engineForDialect(d) {

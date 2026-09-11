@@ -213,12 +213,6 @@ func TestQueryComposition(t *testing.T) {
 		_, err := rasql.With(base, zero)
 		q2RequirePlanCode(t, err, "invalid_cte")
 
-		var typedNil *rasql.TypedCTE[q2AcceptanceRow]
-		require.NotPanics(t, func() {
-			_, err = rasql.With(base, typedNil)
-		})
-		q2RequirePlanCode(t, err, "invalid_cte")
-
 		valid, err := rasql.CTEOf("items", base)
 		require.NoError(t, err)
 		_, err = valid.Source("")
