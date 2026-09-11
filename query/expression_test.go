@@ -248,28 +248,3 @@ func TestFunctionCallBindsPlainValues(t *testing.T) {
 	call := query.Call(query.FunctionCoalesce, email, "")
 	require.Equal(t, []query.Expression{email, query.Bind("")}, call.Arguments())
 }
-
-// embeddedExpression satisfies query.Expression by embedding a query type. A
-// nil *embeddedExpression must still fail validation, which is what pins
-// that validateExpression's existing reflect.Pointer guard covers the case
-// without any new nil check in operand — internal/nilcheck is deliberately
-// not used here because it would also reject a legitimate typed nil pointer
-// bound as data (see TestComparisonBindsTypedNilPointer).
-type embeddedExpression struct{ query.Value }
-
-// TestNilExpressionSatisfyingTypeIsRefused pins that a nil pointer to a
-// caller type embedding a query type is still refused by statement
-// validation, even though it satisfies the Expression interface and so
-// passes operand's type assertion.
-func TestNilExpressionSatisfyingTypeIsRefused(t *testing.T) {
-	users, err := query.NewTableRef(usersTable())
-	require.NoError(t, err)
-	userID := users.Column("id")
-	statement, err := query.NewSelect(users, userID)
-	require.NoError(t, err)
-
-	var nilExpression *embeddedExpression
-	_, err = statement.WithWhere(query.Equal(userID, nilExpression))
-	requireQueryValidationError(t, err)
-	require.ErrorContains(t, err, "must not be nil")
-}

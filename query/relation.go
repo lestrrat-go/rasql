@@ -2,7 +2,6 @@ package query
 
 import (
 	"fmt"
-	"reflect"
 	"strings"
 	"sync/atomic"
 
@@ -73,8 +72,10 @@ type ResultQuery struct {
 
 // ResultOf makes body reusable as a relation after validating its output
 // metadata against the body's projection count.
+//
+// `body` must not be nil.
 func ResultOf(body QueryBody, columns ...ResultColumn) (ResultQuery, error) {
-	if body == nil || (reflect.ValueOf(body).Kind() == reflect.Pointer && reflect.ValueOf(body).IsNil()) {
+	if body == nil {
 		return ResultQuery{}, fmt.Errorf("result query body must not be nil")
 	}
 	if err := body.Validate(); err != nil {
@@ -102,9 +103,6 @@ func ResultOf(body QueryBody, columns ...ResultColumn) (ResultQuery, error) {
 			return ResultQuery{}, fmt.Errorf("result columns count %d does not match SELECT projection count %d", len(columns), len(typed.projections))
 		}
 	case *Select:
-		if typed == nil {
-			return ResultQuery{}, fmt.Errorf("result query body must not be nil")
-		}
 		if len(typed.projections) != len(columns) {
 			return ResultQuery{}, fmt.Errorf("result columns count %d does not match SELECT projection count %d", len(columns), len(typed.projections))
 		}
@@ -113,9 +111,6 @@ func ResultOf(body QueryBody, columns ...ResultColumn) (ResultQuery, error) {
 			return ResultQuery{}, fmt.Errorf("result columns count %d does not match compound output count %d", len(columns), len(typed.left.columns))
 		}
 	case *Compound:
-		if typed == nil {
-			return ResultQuery{}, fmt.Errorf("result query body must not be nil")
-		}
 		if len(typed.left.columns) != len(columns) {
 			return ResultQuery{}, fmt.Errorf("result columns count %d does not match compound output count %d", len(columns), len(typed.left.columns))
 		}
