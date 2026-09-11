@@ -153,8 +153,7 @@ func TestPageAfter(t *testing.T) {
 		schemaValue, err := NewResultSchema(ResultColumn{Name: "value", Type: schema.IntegerType{}})
 		require.NoError(t, err)
 		query, spec := r5LifecycleQuery(t, r5LifecycleDecoder{schema: schemaValue})
-		executor := runtimeExecutor(t, [][]any{{int64(1)}, {int64(2)}, {int64(3)}})
-		raw := executor.(profiledExecutor).Executor.(*runtimeFakeExecutor)
+		executor, raw := runtimeExecutor(t, [][]any{{int64(1)}, {int64(2)}, {int64(3)}})
 		page, err := PageAfter(t.Context(), executor, query, spec, PagePolicy{DefaultLimit: 1, MaxLimit: 4}, PageRequest{Limit: 1})
 		require.NoError(t, err)
 		require.Equal(t, []int64{1}, []int64{page.Values[0].ID})
@@ -171,8 +170,7 @@ func TestPageAfter(t *testing.T) {
 		schemaValue, err := NewResultSchema(ResultColumn{Name: "value", Type: schema.IntegerType{}})
 		require.NoError(t, err)
 		query, spec := r5LifecycleQuery(t, r5LifecycleDecoder{schema: schemaValue, err: decodeErr})
-		executor := runtimeExecutor(t, [][]any{{int64(1)}})
-		raw := executor.(profiledExecutor).Executor.(*runtimeFakeExecutor)
+		executor, raw := runtimeExecutor(t, [][]any{{int64(1)}})
 		_, err = PageAfter(t.Context(), executor, query, spec, PagePolicy{DefaultLimit: 1, MaxLimit: 4}, PageRequest{Limit: 1})
 		require.ErrorIs(t, err, decodeErr)
 		require.ErrorIs(t, raw.last.lastFinish, decodeErr)
@@ -343,9 +341,9 @@ func r5LifecycleExecutorWithRows(t *testing.T, rows *runtimeFakeRows) Executor {
 	t.Helper()
 	profile, err := EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
 	require.NoError(t, err)
-	compiler, err := profile.queryCompiler(dialect.SQLite())
+	executor, err := WithEngineProfile(&r5LifecycleExecutor{rows: rows}, profile)
 	require.NoError(t, err)
-	return profiledExecutor{Executor: &r5LifecycleExecutor{rows: rows}, compiler: compiler}
+	return executor
 }
 
 type r5LifecycleRow struct{ ID int64 }
@@ -510,8 +508,7 @@ func TestPreparedPage(t *testing.T) {
 		schemaValue, err := NewResultSchema(ResultColumn{Name: "value", Type: schema.IntegerType{}})
 		require.NoError(t, err)
 		query, spec := r5LifecycleQuery(t, r5LifecycleDecoder{schema: schemaValue})
-		executor := runtimeExecutor(t, [][]any{{int64(1)}, {int64(2)}, {int64(3)}})
-		raw := executor.(profiledExecutor).Executor.(*runtimeFakeExecutor)
+		executor, raw := runtimeExecutor(t, [][]any{{int64(1)}, {int64(2)}, {int64(3)}})
 
 		prepared, err := preparePageAfter(executor, query, spec, PagePolicy{DefaultLimit: 1, MaxLimit: 4}, PageRequest{Limit: 1})
 		require.NoError(t, err)
@@ -536,8 +533,7 @@ func TestPreparedPage(t *testing.T) {
 		schemaValue, err := NewResultSchema(ResultColumn{Name: "value", Type: schema.IntegerType{}})
 		require.NoError(t, err)
 		query, spec := r5LifecycleQuery(t, r5LifecycleDecoder{schema: schemaValue})
-		executor := runtimeExecutor(t, [][]any{{int64(1)}, {int64(2)}})
-		raw := executor.(profiledExecutor).Executor.(*runtimeFakeExecutor)
+		executor, raw := runtimeExecutor(t, [][]any{{int64(1)}, {int64(2)}})
 		prepared, err := preparePageAfter(executor, query, spec, PagePolicy{DefaultLimit: 2, MaxLimit: 4}, PageRequest{Limit: 2})
 		require.NoError(t, err)
 		mapperErr := errors.New("mapper identity")
