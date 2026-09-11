@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"reflect"
 	"strings"
 	"time"
 
@@ -74,8 +73,14 @@ type Profile struct {
 	profile engineprofile.Profile
 }
 
+// NewProfile snapshots source by calling each of its five accessors exactly once, then validates the result.
+// It returns an error wrapping ErrInvalidPlan when the engine is Custom and the ID is not "custom:" followed
+// by a name, and whatever error engineprofile.New reports for any other invalid identity, version,
+// capability or bind limit.
+//
+// `source` must not be nil.
 func NewProfile(source ProfileSource) (Profile, error) {
-	if nilProfileSource(source) {
+	if source == nil {
 		return Profile{}, fmt.Errorf("%w: profile source is nil", ErrInvalidPlan)
 	}
 	id := source.ID()
@@ -100,19 +105,6 @@ func newProfile(id string, engine engineprofile.EngineID, customName string, ver
 		return Profile{}, err
 	}
 	return Profile{profile: value}, nil
-}
-
-func nilProfileSource(source ProfileSource) bool {
-	if source == nil {
-		return true
-	}
-	value := reflect.ValueOf(source)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return value.IsNil()
-	default:
-		return false
-	}
 }
 
 func (p Profile) ID() string                       { return p.profile.ID }

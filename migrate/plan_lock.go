@@ -9,13 +9,15 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"time"
 )
 
 const changePlanLockReleaseTimeout = 5 * time.Second
 
+// ChangePlanLocker acquires the lock that serializes plan apply against one history table, named by
+// Acquire's string argument. Returning a nil lock and a nil error makes plan apply fail with a
+// *ChangePlanLockError whose Stage reports ChangePlanLockAcquire.
 type ChangePlanLocker interface {
 	Acquire(context.Context, string) (ChangePlanLock, error)
 }
@@ -57,8 +59,13 @@ func (e *ChangePlanLockError) Stage() ChangePlanLockStage {
 	return e.stage
 }
 
+// WithChangePlanLocker returns a copy of r whose SQLite plan apply takes its lock by calling locker.Acquire
+// with the history table name, instead of creating the ".rasql-plan-lock-" sidecar file beside the database
+// file. A nil locker produces a *ChangePlanLockError whose Stage reports ChangePlanLockValidate.
+//
+// `locker` must not be nil.
 func (r Runner) WithChangePlanLocker(locker ChangePlanLocker) (Runner, error) {
-	if nilInterface(locker) {
+	if locker == nil {
 		return Runner{}, &ChangePlanLockError{stage: ChangePlanLockValidate, cause: errors.New("locker is nil")}
 	}
 	r.changePlanLocker = locker
@@ -71,7 +78,7 @@ func (r Runner) acquireSQLiteChangePlanLock(ctx context.Context, connection *sql
 		if err != nil {
 			return nil, &ChangePlanLockError{stage: ChangePlanLockAcquire, cause: err}
 		}
-		if nilInterface(lock) {
+		if lock == nil {
 			return nil, &ChangePlanLockError{stage: ChangePlanLockAcquire, cause: errors.New("locker returned a nil lock")}
 		}
 		return lock, nil
@@ -137,7 +144,7 @@ func sqliteMainFilename(ctx context.Context, connection *sql.Conn) (string, erro
 }
 
 func releaseChangePlanLock(lock ChangePlanLock, operationErr error) error {
-	if nilInterface(lock) {
+	if lock == nil {
 		return operationErr
 	}
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), changePlanLockReleaseTimeout)
@@ -146,19 +153,6 @@ func releaseChangePlanLock(lock ChangePlanLock, operationErr error) error {
 		return errors.Join(operationErr, &ChangePlanLockError{stage: ChangePlanLockRelease, cause: err})
 	}
 	return operationErr
-}
-
-func nilInterface(value any) bool {
-	if value == nil {
-		return true
-	}
-	rv := reflect.ValueOf(value)
-	switch rv.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return rv.IsNil()
-	default:
-		return false
-	}
 }
 
 func framedPlanHash(domain string, components ...[]byte) string {

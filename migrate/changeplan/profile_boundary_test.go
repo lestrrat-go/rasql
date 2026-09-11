@@ -41,14 +41,6 @@ func (s *countingProfileSource) calls() []int {
 	return []int{s.idCalls, s.engineCalls, s.versionCalls, s.capsCalls, s.limitsCalls}
 }
 
-type nilProfileSource struct{}
-
-func (*nilProfileSource) ID() string                                  { panic("typed nil was called") }
-func (*nilProfileSource) Engine() changeplan.EngineID                 { panic("typed nil was called") }
-func (*nilProfileSource) Version() changeplan.EngineVersion           { panic("typed nil was called") }
-func (*nilProfileSource) Capabilities() changeplan.EngineCapabilities { panic("typed nil was called") }
-func (*nilProfileSource) Limits() changeplan.EngineLimits             { panic("typed nil was called") }
-
 func TestProfileSnapshotsSourceExactlyOnce(t *testing.T) {
 	value := testProfile(t)
 	source := &countingProfileSource{value: engineprofile.Profile{
@@ -68,11 +60,10 @@ func TestProfileSnapshotsSourceExactlyOnce(t *testing.T) {
 	require.Equal(t, value.Limits(), profile.Limits())
 }
 
-func TestProfileRejectsTypedNilBeforeAccessors(t *testing.T) {
-	var source *nilProfileSource
-	_, err := changeplan.NewProfile(source)
+func TestProfileRejectsNilSourceBeforeAccessors(t *testing.T) {
+	_, err := changeplan.NewProfile(nil)
 	require.Error(t, err)
-	_, err = changeplan.ProfileDigest(source)
+	_, err = changeplan.ProfileDigest(nil)
 	require.Error(t, err)
 }
 
@@ -106,9 +97,6 @@ func TestFromBaselineRejectsInvalidSources(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, []int{1, 1, 1, 1, 1}, source.calls())
 
-	var nilSource *nilProfileSource
-	_, err = changeplan.FromBaseline(baseline, nilSource, history, changeplan.ResolvedChanges{})
-	require.Error(t, err)
 	_, err = changeplan.FromBaseline(changeplan.Catalog{}, testProfileSource{value: engineprofile.Profile{}}, history, changeplan.ResolvedChanges{})
 	require.Error(t, err)
 }

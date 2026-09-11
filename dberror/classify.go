@@ -1,8 +1,6 @@
 // Package dberror provides optional, portable database error categories.
 package dberror
 
-import "reflect"
-
 // Category identifies a database error's portable meaning.
 type Category uint8
 
@@ -50,12 +48,16 @@ type Classifier interface {
 
 // Classify asks classifiers in order and returns the first recognized category.
 // It preserves err unchanged; callers can still inspect its original chain.
+//
+// A nil classifier in classifiers is skipped and the next one is asked. A non-nil
+// interface value holding a nil pointer is not skipped, and Classify calls its
+// Classify method.
 func Classify(err error, classifiers ...Classifier) (Metadata, bool) {
 	if err == nil {
 		return Metadata{}, false
 	}
 	for _, classifier := range classifiers {
-		if nilClassifier(classifier) {
+		if classifier == nil {
 			continue
 		}
 		metadata, ok := classifier.Classify(err)
@@ -64,17 +66,4 @@ func Classify(err error, classifiers ...Classifier) (Metadata, bool) {
 		}
 	}
 	return Metadata{}, false
-}
-
-func nilClassifier(classifier Classifier) bool {
-	if classifier == nil {
-		return true
-	}
-	value := reflect.ValueOf(classifier)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return value.IsNil()
-	default:
-		return false
-	}
 }
