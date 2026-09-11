@@ -7,7 +7,6 @@ import (
 
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
-	"github.com/lestrrat-go/rasql/stmt"
 )
 
 type LoadedMany[T any] struct {
@@ -69,8 +68,6 @@ type graphQueryOps interface {
 	mapRow(any) any
 	sourceName() string
 	hasPredicates() bool
-	decoderValue() any
-	schemaValue() ResultSchema
 	withoutPredicates() graphQueryOps
 	withMembership(Predicate) graphQueryOps
 	withOptions(options EdgeOptions, key *graphKeySpec, limit int) (graphQueryOps, error)
@@ -80,9 +77,7 @@ type graphRow struct {
 	graph any
 }
 type graphPreparedQuery struct {
-	statement stmt.Statement
-	compiled  compiledQuery
-	run       func(context.Context, Executor, func() (int64, error)) ([]graphRow, error)
+	run func(context.Context, Executor, func() (int64, error)) ([]graphRow, error)
 }
 
 type graphQuery[R, G any] struct {
@@ -116,7 +111,7 @@ func (q graphQuery[R, G]) prepareCompiledMode(executor Executor, compiled compil
 	if err != nil {
 		return graphPreparedQuery{}, err
 	}
-	return graphPreparedQuery{statement: prepared.statement, compiled: compiled, run: func(ctx context.Context, executor Executor, count func() (int64, error)) ([]graphRow, error) {
+	return graphPreparedQuery{run: func(ctx context.Context, executor Executor, count func() (int64, error)) ([]graphRow, error) {
 		seq, err := rowsPrepared(ctx, executor, prepared)
 		if err != nil {
 			return nil, err
@@ -167,9 +162,7 @@ func (q graphQuery[R, G]) sourceName() string {
 	}
 	return q.value.plan.sources[0].ref.QualifiedName()
 }
-func (q graphQuery[R, G]) hasPredicates() bool       { return len(q.value.plan.where) > 0 }
-func (q graphQuery[R, G]) decoderValue() any         { return q.value.Projection().Decoder() }
-func (q graphQuery[R, G]) schemaValue() ResultSchema { return q.value.Schema() }
+func (q graphQuery[R, G]) hasPredicates() bool { return len(q.value.plan.where) > 0 }
 func (q graphQuery[R, G]) withoutPredicates() graphQueryOps {
 	value := q.value
 	value.plan = clonePlan(value.plan)

@@ -123,7 +123,7 @@ func TestGraphManyThrough(t *testing.T) {
 		require.Zero(t, callbacks.Load())
 	})
 
-	t.Run("the cache includes the fixed target filter", func(t *testing.T) {
+	t.Run("sibling through edges keep their own target filter", func(t *testing.T) {
 		executor, counter, parentQuery, parentKey, junctionParent, junctionChild, childKey, junction, childPlan := mtFixture(t)
 		baseChild := rasql.Q1GraphChildQuery[mtChildRow, mtChildGraph, mtChildRow, mtChildGraph](childPlan)
 		childSource := rasql.Q1PlanSources(baseChild.Plan())[0]
@@ -161,9 +161,9 @@ func TestGraphManyThrough(t *testing.T) {
 		require.Len(t, values[0].Children.Values, 1)
 		require.Equal(t, int64(10), values[0].Children.Values[0].ID)
 		require.Equal(t, int64(10), values[1].Children.Values[0].ID)
-		require.Equal(t, int64(1), counter.junctionStatements.Load())
-		require.Equal(t, int64(1), counter.targetStatements.Load())
-		require.Equal(t, int64(6), counter.rows.Load())
+		require.Equal(t, int64(2), counter.junctionStatements.Load())
+		require.Equal(t, int64(2), counter.targetStatements.Load())
+		require.Equal(t, int64(12), counter.rows.Load())
 		values[0].Children.Values[0].ID = 99
 		require.Equal(t, int64(10), values[1].Children.Values[0].ID)
 	})
@@ -225,7 +225,7 @@ func TestGraphManyThrough(t *testing.T) {
 		}
 	})
 
-	t.Run("legacy fixed values do not share the through cache", func(t *testing.T) {
+	t.Run("legacy fixed values execute through a many-through edge", func(t *testing.T) {
 		fixture := graphWidthFixtureFor(t, 2, true)
 		parentKey, err := rasql.NewGraphKey(rasql.KeyPart(fixture.parentID, func(row graphWidthParentRow) int64 { return row.ID }))
 		require.NoError(t, err)
@@ -277,7 +277,7 @@ func TestGraphManyThrough(t *testing.T) {
 		}
 		kind := fixture.kind.Expr()
 		options := rasql.EdgeOptions{
-			BindLimit: rasql.Q1ExecutorProfile(fixture.executor).MaxBind + 100,
+			BindLimit: rasql.Q1ExecutorMaxBind(fixture.executor) + 100,
 			Where:     rasql.InValues(kind, int64(1), fixedRest...),
 		}
 		plan := graphWidthPlan(t, fixture, 1, 2, options, "loaded")
