@@ -2,6 +2,7 @@ package rasql
 
 import (
 	"github.com/lestrrat-go/rasql/internal/bindplan"
+	"github.com/lestrrat-go/rasql/internal/querycompile"
 	"github.com/lestrrat-go/rasql/query"
 )
 
@@ -67,3 +68,9 @@ func Q1PartitionLimitToken[R any](q Query[R]) (bindplan.Token, bool) {
 func Q1WithPartitionLimit[R any](q Query[R], partition []GroupKey, order []OrderTerm, limit int) (Query[R], error) {
 	return q.withPartitionLimit(partition, order, limit)
 }
+
+// Q1CompilerFor wraps a compiler built directly from a profile and dialect,
+// including pairings EngineProfile.Compiler refuses, such as a custom profile
+// speaking a standard dialect. A test that checks what the compiler does with
+// such a pairing has no other way to build one.
+func Q1CompilerFor(c *querycompile.Compiler) Compiler { return Compiler{compiler: c} }
