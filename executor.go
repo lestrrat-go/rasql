@@ -53,7 +53,7 @@ func (b *executorBusy) acquire() bool {
 }
 func (b *executorBusy) release() { <-b.token }
 
-func (e dbExecutor) scopeIsTransaction() bool { return e.db.IsTransaction() }
+func (e dbExecutor) IsTransaction() bool { return e.db.IsTransaction() }
 
 func (e dbExecutor) Dialect() dialect.Dialect { return e.db.Dialect() }
 func (e dbExecutor) Query(ctx context.Context, statement stmt.Statement) (ResultRows, error) {
@@ -96,7 +96,7 @@ func (e dbExecutor) executionDurability() executionDurabilityEvidence {
 	return executionDurabilityPending
 }
 
-func (e dbExecutor) beginScope(ctx context.Context, opts *sql.TxOptions) (Executor, scopeFinalizer, error) {
+func (e dbExecutor) BeginScope(ctx context.Context, opts *sql.TxOptions) (Executor, ScopeFinalizer, error) {
 	db, finalizer, err := e.db.BeginScope(ctx, opts)
 	if err != nil {
 		return nil, nil, err
@@ -105,7 +105,7 @@ func (e dbExecutor) beginScope(ctx context.Context, opts *sql.TxOptions) (Execut
 	return child, guardedScopeFinalizer{ScopeFinalizer: finalizer, busy: child.busy}, nil
 }
 
-func (e dbExecutor) beginSavepoint(ctx context.Context) (Executor, scopeFinalizer, error) {
+func (e dbExecutor) BeginSavepoint(ctx context.Context) (Executor, ScopeFinalizer, error) {
 	if e.busy != nil && !e.busy.acquire() {
 		return nil, nil, planError("transaction_concurrent_use", "executor", "transaction executor is already in use")
 	}
@@ -228,7 +228,7 @@ func WithEngineProfile(executor Executor, profile EngineProfile) (Executor, erro
 	base := profiledExecutor{Executor: executor, compiler: c}
 	logical, hasLogical := executor.(logicalInvocationProvider)
 	_ = logical
-	if _, scope := executor.(transactionBeginner); scope {
+	if _, scope := executor.(ScopeBeginner); scope {
 		if _, evidence := executor.(executionDurabilityProvider); evidence {
 			if _, codecs := executor.(CodecProvider); codecs {
 				if hasLogical {

@@ -217,3 +217,67 @@ func Q1GraphChildQuery[R, G, CR, CG any](plan GraphPlan[R, G]) Query[CR] {
 func Q1TypedRelation[R any](source Source) TypedRelation[R] {
 	return TypedRelation[R]{source: source}
 }
+
+// Q1QueryCompilerOf returns the query compiler an executor carries, or nil when
+// it carries none. The compiler is an unexported type behind an unexported
+// interface, so no public call can name it; a caller sees only that compiled
+// queries keep working across a wrapper, and these tests need the identity of
+// the compiler itself to show that a wrapper reused one rather than built a
+// second.
+func Q1QueryCompilerOf(executor Executor) any {
+	provider, ok := executor.(compilerProvider)
+	if !ok {
+		return nil
+	}
+	compiler := provider.queryCompiler()
+	if compiler == nil {
+		return nil
+	}
+	return compiler
+}
+
+// Q1DurabilityOf reports the durability evidence an executor carries and
+// whether it carries any. executionDurabilityEvidence is deliberately
+// unexported so that an executor written outside this package cannot claim a
+// statement was committed, which leaves no public route to read it either.
+func Q1DurabilityOf(executor Executor) (int, bool) {
+	provider, ok := executor.(executionDurabilityProvider)
+	if !ok {
+		return Q1DurabilityUnknown, false
+	}
+	return int(provider.executionDurability()), true
+}
+
+// The durability an executor reports, as Q1DurabilityOf returns it.
+var (
+	Q1DurabilityUnknown   = int(executionDurabilityUnknown)
+	Q1DurabilityPending   = int(executionDurabilityPending)
+	Q1DurabilityCommitted = int(executionDurabilityCommitted)
+)
+
+// Q1ForwardsLogicalInvocation reports whether an executor forwards a logical
+// invocation to its observers. The interface that carries one is unexported
+// because a logical invocation is this package's own grouping of the events a
+// batch emits, and an executor from outside has nothing to contribute to it.
+func Q1ForwardsLogicalInvocation(executor Executor) bool {
+	_, ok := executor.(logicalInvocationProvider)
+	return ok
+}
+
+// Q1LogicalInvocation is an open logical invocation a test has to close.
+type Q1LogicalInvocation struct {
+	completion logicalInvocationCompletion
+}
+
+// Complete closes the invocation, as the batch that opened it would.
+func (i Q1LogicalInvocation) Complete() {
+	i.completion.completeLogicalInvocation(nil, 0, false)
+}
+
+// Q1BeginLogicalInvocation starts a logical invocation and returns the child
+// executor it hands the batch. A batch opens and closes one itself, so a
+// caller never holds the child, and these tests check what that child kept.
+func Q1BeginLogicalInvocation(ctx context.Context, executor Executor, kind EventKind) (context.Context, Executor, Q1LogicalInvocation) {
+	callCtx, child, completion := beginLogicalInvocation(ctx, executor, kind)
+	return callCtx, child, Q1LogicalInvocation{completion: completion}
+}

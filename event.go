@@ -195,19 +195,19 @@ func isNilEventObserver(observer EventObserver) bool {
 	return observer == nil
 }
 
-func (e eventScopedExecutor) beginScope(ctx context.Context, opts *sql.TxOptions) (Executor, scopeFinalizer, error) {
+func (e eventScopedExecutor) BeginScope(ctx context.Context, opts *sql.TxOptions) (Executor, ScopeFinalizer, error) {
 	logicalID := nextEventID()
 	counter := e.counter
 	if counter == nil {
 		counter = &atomic.Int64{}
 	}
 	callCtx, completion := e.start(ctx, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventStart})
-	beginner, ok := e.Executor.(transactionBeginner)
+	beginner, ok := e.Executor.(ScopeBeginner)
 	if !ok {
 		e.complete(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: unsupportedScopeError()})
 		return nil, nil, unsupportedScopeError()
 	}
-	child, finalizer, err := beginner.beginScope(callCtx, opts)
+	child, finalizer, err := beginner.BeginScope(callCtx, opts)
 	if err != nil {
 		e.complete(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
 		return nil, nil, err
@@ -217,25 +217,25 @@ func (e eventScopedExecutor) beginScope(ctx context.Context, opts *sql.TxOptions
 		e.complete(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
 		return nil, nil, err
 	}
-	return e.childScope(child, callCtx, logicalID, counter), &observedFinalizer{scopeFinalizer: finalizer, finish: func(err error) {
+	return e.childScope(child, callCtx, logicalID, counter), &observedFinalizer{ScopeFinalizer: finalizer, finish: func(err error) {
 		e.complete(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
 	}}, nil
 }
 
-func (e eventScopedExecutor) beginSavepoint(ctx context.Context) (Executor, scopeFinalizer, error) {
+func (e eventScopedExecutor) BeginSavepoint(ctx context.Context) (Executor, ScopeFinalizer, error) {
 	logicalID := nextEventID()
 	counter := e.counter
 	if counter == nil {
 		counter = &atomic.Int64{}
 	}
 	callCtx, completion := e.start(ctx, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventStart})
-	beginner, ok := e.Executor.(savepointBeginner)
+	beginner, ok := e.Executor.(SavepointBeginner)
 	if !ok {
 		err := planError("savepoint_unsupported", "scope", "executor does not support savepoints")
 		e.complete(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
 		return nil, nil, planError("savepoint_unsupported", "scope", "executor does not support savepoints")
 	}
-	child, finalizer, err := beginner.beginSavepoint(callCtx)
+	child, finalizer, err := beginner.BeginSavepoint(callCtx)
 	if err != nil {
 		e.complete(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
 		return nil, nil, err
@@ -245,14 +245,14 @@ func (e eventScopedExecutor) beginSavepoint(ctx context.Context) (Executor, scop
 		e.complete(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
 		return nil, nil, err
 	}
-	return e.childScope(child, callCtx, logicalID, counter), &observedFinalizer{scopeFinalizer: finalizer, finish: func(err error) {
+	return e.childScope(child, callCtx, logicalID, counter), &observedFinalizer{ScopeFinalizer: finalizer, finish: func(err error) {
 		e.complete(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
 	}}, nil
 }
 
-func (e eventScopedExecutor) scopeIsTransaction() bool {
-	state, ok := e.Executor.(scopeState)
-	return ok && state.scopeIsTransaction()
+func (e eventScopedExecutor) IsTransaction() bool {
+	state, ok := e.Executor.(ScopeState)
+	return ok && state.IsTransaction()
 }
 
 func (e eventScopedEvidenceExecutor) executionDurability() executionDurabilityEvidence {
@@ -342,7 +342,7 @@ func (e eventExecutor) childScope(child Executor, ctx context.Context, parentID 
 func (e eventExecutor) scopeContext() context.Context { return e.scopeCtx }
 
 type observedFinalizer struct {
-	scopeFinalizer
+	ScopeFinalizer
 	finish func(error)
 	cause  error
 	done   atomic.Bool
@@ -351,7 +351,7 @@ type observedFinalizer struct {
 func (f *observedFinalizer) setCause(err error) { f.cause = err }
 
 func (f *observedFinalizer) Commit(ctx context.Context) error {
-	err := f.scopeFinalizer.Commit(ctx)
+	err := f.ScopeFinalizer.Commit(ctx)
 	if f.cause != nil {
 		err = errors.Join(f.cause, err)
 	}
@@ -361,7 +361,7 @@ func (f *observedFinalizer) Commit(ctx context.Context) error {
 	return err
 }
 func (f *observedFinalizer) Rollback(ctx context.Context) error {
-	err := f.scopeFinalizer.Rollback(ctx)
+	err := f.ScopeFinalizer.Rollback(ctx)
 	if f.cause != nil {
 		err = errors.Join(f.cause, err)
 	}
@@ -374,7 +374,7 @@ func (f *observedFinalizer) Rollback(ctx context.Context) error {
 func wrapEventExecutor(base eventExecutor) Executor {
 	_, compiler := base.Executor.(compilerProvider)
 	_, codecs := base.Executor.(CodecProvider)
-	_, scope := base.Executor.(transactionBeginner)
+	_, scope := base.Executor.(ScopeBeginner)
 	_, evidence := base.Executor.(executionDurabilityProvider)
 	if scope {
 		if compiler && codecs && evidence {
