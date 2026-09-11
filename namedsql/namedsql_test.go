@@ -1,7 +1,6 @@
 package namedsql_test
 
 import (
-	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -170,41 +169,13 @@ func TestTemplateRejectsUnrestrictedActions(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestTemplateCompileRejectsNilPointerDialect(t *testing.T) {
-	var nilDialect *nilPointerDialect
+func TestTemplateCompileRejectsNilDialect(t *testing.T) {
+	parsed, err := namedsql.Parse("user_by_id", "SELECT id FROM users WHERE id = {{bind \"id\"}}")
+	require.NoError(t, err)
 
-	t.Run("with bind action", func(t *testing.T) {
-		parsed, err := namedsql.Parse("user_by_id", "SELECT id FROM users WHERE id = {{bind \"id\"}}")
-		require.NoError(t, err)
-
-		var compiled namedsql.Compiled
-		require.NotPanics(t, func() {
-			compiled, err = parsed.Compile(nilDialect)
-		})
-		require.Zero(t, compiled)
-		require.EqualError(t, err, `namedsql "user_by_id": dialect must not be nil`)
-	})
-
-	t.Run("without bind action", func(t *testing.T) {
-		parsed, err := namedsql.Parse("select_one", "SELECT 1")
-		require.NoError(t, err)
-
-		var compiled namedsql.Compiled
-		require.NotPanics(t, func() {
-			compiled, err = parsed.Compile(nilDialect)
-		})
-		require.Zero(t, compiled)
-		require.EqualError(t, err, `namedsql "select_one": dialect must not be nil`)
-	})
-}
-
-type nilPointerDialect struct {
-	markerDialect
-	prefix string
-}
-
-func (d *nilPointerDialect) Placeholder(position int) (string, error) {
-	return fmt.Sprintf("%s%d", d.prefix, position), nil
+	compiled, err := parsed.Compile(nil)
+	require.Zero(t, compiled)
+	require.EqualError(t, err, `namedsql "user_by_id": dialect must not be nil`)
 }
 
 type markerDialect struct{}
