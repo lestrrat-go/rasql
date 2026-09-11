@@ -61,10 +61,6 @@ func normalizeGraphValue(value any) (driver.Value, error) { return graphkey.Norm
 
 func frameGraphValue(value driver.Value) ([]byte, error) { return graphkey.Frame(value) }
 
-func frameGraphFingerprintValue(value driver.Value) ([]byte, error) {
-	return graphkey.FrameAllowingNaN(value)
-}
-
 // graphKeyEncoder adapts the root's codec registry to what graphkey asks for.
 type graphKeyEncoder struct{ codecs CodecRegistry }
 

@@ -47,3 +47,23 @@ func Q1BindToken[T any](expression Expr[T]) bindplan.Token {
 func Q1CompileQuery[R any](c Compiler, q Query[R]) (bindplan.Compiled, error) {
 	return compileQuery(c.compiler, q)
 }
+
+// Q1PartitionLimitToken returns the bind token a partition limit carries. A
+// test reads it to check the limit binds once and keeps one identity across
+// repeated compiles, which the rendered statement alone does not show.
+func Q1PartitionLimitToken[R any](q Query[R]) (bindplan.Token, bool) {
+	node, ok := q.plan.partitionLimitValue.node.(interface{ Argument() any })
+	if !ok {
+		return bindplan.Token{}, false
+	}
+	token, ok := node.Argument().(bindplan.Token)
+	return token, ok
+}
+
+// Q1WithPartitionLimit applies the per-parent limit a graph edge applies to a
+// child query. It stays unexported in the package because it shapes a query
+// mid-load rather than being something a caller composes, so a test that needs
+// such a query has to build one through here.
+func Q1WithPartitionLimit[R any](q Query[R], partition []GroupKey, order []OrderTerm, limit int) (Query[R], error) {
+	return q.withPartitionLimit(partition, order, limit)
+}

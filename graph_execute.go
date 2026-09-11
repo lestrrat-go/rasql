@@ -535,11 +535,11 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 	batchSize := (budget - fixed) / width
 	fingerprintCompiled := probeCompiled
 	fingerprintCompiled.Statement = basePrepared.statement
-	childFingerprint := graphCacheFingerprint{stage: "child"}
+	childFingerprint := graphCacheFingerprint{Stage: "child"}
 	if basePrepared.run != nil {
 		childFingerprint, err = graphInvocationFingerprint(graphFingerprintStage{
-			name: "child", source: probe.sourceName(), schema: probe.schemaValue(), keys: []*graphKeySpec{edge.childKey},
-			compiled: fingerprintCompiled, perParentLimit: probeLimit, bindLimit: budget,
+			Name: "child", Source: probe.sourceName(), Columns: probe.schemaValue().Columns(), Keys: []*graphKeySpec{edge.childKey},
+			Compiled: fingerprintCompiled, PerParentLimit: probeLimit, BindLimit: budget,
 		}, profile)
 		if err != nil {
 			return nil, err
@@ -721,12 +721,12 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 	}
 	fingerprintCompiled := compiled
 	fingerprintCompiled.Statement = junctionPrepared.statement
-	junctionFingerprint := graphCacheFingerprint{stage: "junction"}
+	junctionFingerprint := graphCacheFingerprint{Stage: "junction"}
 	if junctionCacheable {
 		junctionFingerprint, err = graphInvocationFingerprint(graphFingerprintStage{
-			name: "junction", source: edge.junction.ref.QualifiedName(), schema: junctionBase.schemaValue(),
-			keys: []*graphKeySpec{edge.junctionParent, edge.junctionChild}, compiled: fingerprintCompiled,
-			perParentLimit: edge.options.PerParentLimit, bindLimit: budget,
+			Name: "junction", Source: edge.junction.ref.QualifiedName(), Columns: junctionBase.schemaValue().Columns(),
+			Keys: []*graphKeySpec{edge.junctionParent, edge.junctionChild}, Compiled: fingerprintCompiled,
+			PerParentLimit: edge.options.PerParentLimit, BindLimit: budget,
 		}, profile)
 		if err != nil {
 			return nil, err
@@ -883,11 +883,11 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 		fixed = len(compiled.Slots)
 		fingerprintCompiled := compiled
 		fingerprintCompiled.Statement = targetPrepared.statement
-		targetFingerprint := graphCacheFingerprint{stage: "target"}
+		targetFingerprint := graphCacheFingerprint{Stage: "target"}
 		if targetCacheable {
 			targetFingerprint, err = graphInvocationFingerprint(graphFingerprintStage{
-				name: "target", source: targetBase.sourceName(), schema: targetBase.schemaValue(), keys: []*graphKeySpec{edge.childKey},
-				compiled: fingerprintCompiled, perParentLimit: 0, bindLimit: budget,
+				Name: "target", Source: targetBase.sourceName(), Columns: targetBase.schemaValue().Columns(), Keys: []*graphKeySpec{edge.childKey},
+				Compiled: fingerprintCompiled, PerParentLimit: 0, BindLimit: budget,
 			}, profile)
 			if err != nil {
 				return nil, err
