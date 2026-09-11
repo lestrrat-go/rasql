@@ -3,8 +3,8 @@ package rasql
 import (
 	"fmt"
 	"strings"
-	"sync/atomic"
 
+	"github.com/lestrrat-go/rasql/internal/bindplan"
 	"github.com/lestrrat-go/rasql/internal/planerr"
 	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/lestrrat-go/rasql/stmt"
@@ -97,7 +97,7 @@ func newNativeQueryPlan(statement NativeStatement) (*nativeQueryPlan, error) {
 		if err != nil {
 			return nil, planerr.Wrap("unsnapshotable_bind", fmt.Sprintf("native.args[%d]", i), err.Error(), err)
 		}
-		args[i] = bindToken{id: bindID(atomic.AddUint64(&nextBindID, 1)), value: snapshot, codec: arg.Codec, copy: copier}
+		args[i] = bindToken{ID: bindplan.NextID(), Value: snapshot, Codec: arg.Codec, Copy: copier}
 	}
 	return &nativeQueryPlan{engine: engine, statement: stmt.New(sqltext.Text(statement.SQL), args...)}, nil
 }

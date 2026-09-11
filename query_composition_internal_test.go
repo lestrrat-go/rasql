@@ -15,8 +15,6 @@ import (
 	"github.com/lestrrat-go/rasql/internal/querycompile"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
-	"github.com/lestrrat-go/rasql/sqltext"
-	"github.com/lestrrat-go/rasql/stmt"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
@@ -314,7 +312,7 @@ func q2AcceptanceRows(t *testing.T, db *sql.DB, compiler *querycompile.Compiler,
 	t.Helper()
 	compiled, err := compileQuery(compiler, query)
 	require.NoError(t, err)
-	statement, err := compiled.Statement()
+	statement, err := compiled.Copy()
 	require.NoError(t, err)
 	rows, err := db.QueryContext(t.Context(), statement.SQL(), statement.Args()...)
 	require.NoError(t, err)
@@ -333,7 +331,7 @@ func q2AcceptanceGroupRows(t *testing.T, db *sql.DB, compiler *querycompile.Comp
 	t.Helper()
 	compiled, err := compileQuery(compiler, query)
 	require.NoError(t, err)
-	statement, err := compiled.Statement()
+	statement, err := compiled.Copy()
 	require.NoError(t, err)
 	rows, err := db.QueryContext(t.Context(), statement.SQL(), statement.Args()...)
 	require.NoError(t, err)
@@ -352,7 +350,7 @@ func q2AcceptanceCountRows(t *testing.T, db *sql.DB, compiler *querycompile.Comp
 	t.Helper()
 	compiled, err := compileQuery(compiler, query)
 	require.NoError(t, err)
-	statement, err := compiled.Statement()
+	statement, err := compiled.Copy()
 	require.NoError(t, err)
 	rows, err := db.QueryContext(t.Context(), statement.SQL(), statement.Args()...)
 	require.NoError(t, err)
@@ -394,28 +392,6 @@ func (partitionDecoder) Presence() []Presence                      { return nil 
 func (partitionDecoder) DecodeRow(ScanSource, *partitionRow) error { return nil }
 
 func TestCompositionCompiler(t *testing.T) {
-	t.Run("matches base occurrences", func(t *testing.T) {
-		base := compiledQuery{statement: stmt.New(sqltext.Text("base"), 1, 2), bindSlots: []bindSlot{{id: 11, codec: "a"}, {id: 12, codec: "b"}}}
-		paged := compiledQuery{statement: stmt.New(sqltext.Text("paged"), 9, 1, 2, 10), bindSlots: []bindSlot{{id: 90}, {id: 11, codec: "a"}, {id: 12, codec: "b"}, {id: 91}}}
-		indexes, err := matchBaseOccurrences(base, paged)
-		require.NoError(t, err)
-		require.Equal(t, []int{1, 2}, indexes)
-		base.bindSlots[0].id = 0
-		_, err = matchBaseOccurrences(base, paged)
-		var planErr *PlanError
-		require.ErrorAs(t, err, &planErr)
-		require.Equal(t, "unsupported_keyset_bind", planErr.Code)
-	})
-
-	t.Run("unwrapping bind tokens preserves named values", func(t *testing.T) {
-		value, copier, err := adoptBind(42, true)
-		require.NoError(t, err)
-		statement := stmt.New(sqltext.Text("SELECT ?"), bindToken{id: 7, value: value, copy: copier, codec: "int"})
-		compiled, err := unwrapBindTokens(statement)
-		require.NoError(t, err)
-		require.Equal(t, []any{42}, compiled.statement.Args())
-		require.Equal(t, []bindSlot{{id: 7, codec: "int"}}, compiled.bindSlots)
-	})
 
 	t.Run("a partition limit lowers to ROW_NUMBER", func(t *testing.T) {
 		schemaValue, err := NewResultSchema(ResultColumn{Name: "id", Type: schema.IntegerType{}})
@@ -436,7 +412,7 @@ func TestCompositionCompiler(t *testing.T) {
 		require.NoError(t, err)
 		compiled, err := compileQuery(&compiler, q)
 		require.NoError(t, err)
-		statement := compiled.statement
+		statement := compiled.Statement
 		require.Contains(t, statement.SQL(), "row_number() OVER")
 		require.Contains(t, statement.SQL(), "PARTITION BY")
 		require.Contains(t, statement.SQL(), "<= ?")
@@ -516,7 +492,7 @@ func TestCompositionCompiler(t *testing.T) {
 				require.NoError(t, err)
 				_, err = db.ExecContext(t.Context(), `INSERT INTO nullable_items (id) VALUES (NULL), (1), (2)`)
 				require.NoError(t, err)
-				rows, err := db.QueryContext(t.Context(), compiled.statement.SQL(), compiled.statement.Args()...)
+				rows, err := db.QueryContext(t.Context(), compiled.Statement.SQL(), compiled.Statement.Args()...)
 				require.NoError(t, err)
 				defer func() { require.NoError(t, rows.Close()) }()
 				got := make([]any, 0, 3)
@@ -537,7 +513,7 @@ func TestCompositionCompiler(t *testing.T) {
 		require.NoError(t, err)
 		pgStatement, err := compileQuery(&pgCompiler, q)
 		require.NoError(t, err)
-		require.Contains(t, pgStatement.statement.SQL(), "NULLS LAST")
+		require.Contains(t, pgStatement.Statement.SQL(), "NULLS LAST")
 		my, err := engineprofile.Builtin("mysql-8.4", engineprofile.Version{Known: true, Major: 8, Minor: 4})
 		require.NoError(t, err)
 		myCompiler, err := querycompile.New(my)

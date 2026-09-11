@@ -1,9 +1,9 @@
 package rasql
 
 import (
-	"sync/atomic"
 	"time"
 
+	"github.com/lestrrat-go/rasql/internal/bindplan"
 	"github.com/lestrrat-go/rasql/query"
 )
 
@@ -22,9 +22,9 @@ type Ordered interface {
 // a query.Expression built by hand carries no codec, so a column with a custom
 // codec would bind its unencoded Go representation.
 func comparisonValue[T any](left Expr[T], right T, build func(any, any) query.Binary) Predicate {
-	id := bindID(atomic.AddUint64(&nextBindID, 1))
+	id := bindplan.NextID()
 	snapshot, copier, err := adoptBind(right, true)
-	bind := query.Bind(bindToken{id: id, value: snapshot, codec: left.codec, copy: copier, err: err})
+	bind := query.Bind(bindToken{ID: id, Value: snapshot, Codec: left.codec, Copy: copier, Err: err})
 	return Predicate{node: build(left.node, bind), source: left.source, bindErr: err}
 }
 
@@ -116,12 +116,12 @@ func InValues[T comparable](left Expr[T], first T, rest ...T) Predicate {
 	nodes := make([]any, len(values))
 	var bindErr error
 	for i, value := range values {
-		id := bindID(atomic.AddUint64(&nextBindID, 1))
+		id := bindplan.NextID()
 		snapshot, copier, err := adoptBind(value, true)
 		if err != nil && bindErr == nil {
 			bindErr = err
 		}
-		nodes[i] = query.Bind(bindToken{id: id, value: snapshot, codec: left.codec, copy: copier, err: err})
+		nodes[i] = query.Bind(bindToken{ID: id, Value: snapshot, Codec: left.codec, Copy: copier, Err: err})
 	}
 	return Predicate{node: query.In(left.node, nodes...), source: left.source, bindErr: bindErr}
 }

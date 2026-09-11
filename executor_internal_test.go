@@ -307,7 +307,7 @@ func TestPreparedRows(t *testing.T) {
 		base := runtimeExecutor(t, nil)
 		inner, err := WithCodecs(base, registry)
 		require.NoError(t, err)
-		compiled := compiledQuery{statement: stmt.New(sqltext.Text("SELECT ?"), sql.Named("payload", []byte("x"))), bindSlots: []bindSlot{{id: 1, codec: "count"}}, copyArgs: []bindValueCopy{func() (any, error) { copies.Add(1); return sql.Named("payload", []byte("x")), nil }}}
+		compiled := compiledQuery{Statement: stmt.New(sqltext.Text("SELECT ?"), sql.Named("payload", []byte("x"))), Slots: []bindSlot{{ID: 1, Codec: "count"}}, CopyArgs: []bindValueCopy{func() (any, error) { copies.Add(1); return sql.Named("payload", []byte("x")), nil }}}
 		prepared, err := prepareRows(inner, runtimeQuery(t), compiled)
 		require.NoError(t, err)
 		require.Equal(t, int64(1), copies.Load())
@@ -326,7 +326,7 @@ func TestPreparedRows(t *testing.T) {
 		require.Equal(t, int64(1), copies.Load())
 		require.Equal(t, int64(1), encodes.Load())
 		handoff.Value.([]byte)[0] = 'z'
-		require.Equal(t, []byte("x"), compiled.statement.Args()[0].(sql.NamedArg).Value)
+		require.Equal(t, []byte("x"), compiled.Statement.Args()[0].(sql.NamedArg).Value)
 	})
 
 	t.Run("a copy failure runs neither codec nor executor", func(t *testing.T) {
@@ -338,16 +338,16 @@ func TestPreparedRows(t *testing.T) {
 		base := runtimeExecutor(t, nil)
 		inner, err := WithCodecs(base, registry)
 		require.NoError(t, err)
-		compiled := compiledQuery{statement: stmt.New(sqltext.Text("SELECT ?"), 1), bindSlots: []bindSlot{{id: 1, codec: "count"}}, copyArgs: []bindValueCopy{func() (any, error) { return nil, copyFailure }}}
+		compiled := compiledQuery{Statement: stmt.New(sqltext.Text("SELECT ?"), 1), Slots: []bindSlot{{ID: 1, Codec: "count"}}, CopyArgs: []bindValueCopy{func() (any, error) { return nil, copyFailure }}}
 		_, err = prepareRows(inner, runtimeQuery(t), compiled)
 		require.ErrorIs(t, err, copyFailure)
 		require.Equal(t, int64(0), encodes.Load())
 		raw := base.(profiledExecutor).Executor.(*runtimeFakeExecutor)
 		require.Equal(t, int64(0), raw.calls.Load())
 		for name, broken := range map[string]compiledQuery{
-			"missing slot":     {statement: stmt.New(sqltext.Text("SELECT ?"), 1), bindSlots: nil, copyArgs: []bindValueCopy{func() (any, error) { return 1, nil }}},
-			"missing copier":   {statement: stmt.New(sqltext.Text("SELECT ?"), 1), bindSlots: []bindSlot{{id: 1, codec: "count"}}, copyArgs: nil},
-			"missing argument": {statement: stmt.New(sqltext.Text("SELECT")), bindSlots: []bindSlot{{id: 1, codec: "count"}}, copyArgs: []bindValueCopy{func() (any, error) { return 1, nil }}},
+			"missing slot":     {Statement: stmt.New(sqltext.Text("SELECT ?"), 1), Slots: nil, CopyArgs: []bindValueCopy{func() (any, error) { return 1, nil }}},
+			"missing copier":   {Statement: stmt.New(sqltext.Text("SELECT ?"), 1), Slots: []bindSlot{{ID: 1, Codec: "count"}}, CopyArgs: nil},
+			"missing argument": {Statement: stmt.New(sqltext.Text("SELECT")), Slots: []bindSlot{{ID: 1, Codec: "count"}}, CopyArgs: []bindValueCopy{func() (any, error) { return 1, nil }}},
 		} {
 			t.Run(name, func(t *testing.T) {
 				_, err := prepareRows(inner, runtimeQuery(t), broken)
@@ -365,12 +365,12 @@ func TestPreparedRows(t *testing.T) {
 		base := runtimeExecutor(t, nil)
 		inner, err := WithCodecs(base, registry)
 		require.NoError(t, err)
-		compiled := compiledQuery{statement: stmt.New(sqltext.Text("SELECT ?"), 1), bindSlots: []bindSlot{{id: 1, codec: "present"}}, copyArgs: []bindValueCopy{func() (any, error) { return 1, nil }}}
+		compiled := compiledQuery{Statement: stmt.New(sqltext.Text("SELECT ?"), 1), Slots: []bindSlot{{ID: 1, Codec: "present"}}, CopyArgs: []bindValueCopy{func() (any, error) { return 1, nil }}}
 		_, err = prepareRows(inner, runtimePairQuery(t, "present", "missing"), compiled)
 		var planErr *PlanError
 		require.ErrorAs(t, err, &planErr)
 		require.Equal(t, "result.columns[1].codec", planErr.Path)
-		_, err = prepareRows(inner, runtimeQuery(t), compiledQuery{statement: stmt.New(sqltext.Text("SELECT ?"), 1, 2), bindSlots: []bindSlot{{id: 1, codec: "present"}, {id: 2, codec: "missing"}}, copyArgs: []bindValueCopy{func() (any, error) { return 1, nil }, func() (any, error) { return 2, nil }}})
+		_, err = prepareRows(inner, runtimeQuery(t), compiledQuery{Statement: stmt.New(sqltext.Text("SELECT ?"), 1, 2), Slots: []bindSlot{{ID: 1, Codec: "present"}, {ID: 2, Codec: "missing"}}, CopyArgs: []bindValueCopy{func() (any, error) { return 1, nil }, func() (any, error) { return 2, nil }}})
 		require.ErrorAs(t, err, &planErr)
 		require.Equal(t, "binds[1].codec", planErr.Path)
 		require.Equal(t, int64(0), base.(profiledExecutor).Executor.(*runtimeFakeExecutor).calls.Load())

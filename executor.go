@@ -339,8 +339,8 @@ func prepareRows[R any](executor Executor, q Query[R], compiled compiledQuery) (
 		registry = provided
 	}
 	columns := q.Schema().Columns()
-	slots := compiled.BindSlots()
-	statementCopy, err := compiled.statementCopy()
+	slots := append([]bindSlot(nil), compiled.Slots...)
+	statementCopy, err := compiled.Copy()
 	if err != nil {
 		return result, err
 	}
@@ -357,7 +357,7 @@ func prepareRows[R any](executor Executor, q Query[R], compiled compiledQuery) (
 		_ = i
 	}
 	for i, slot := range slots {
-		if _, err := codecFor(registry, slot.codec); err != nil {
+		if _, err := codecFor(registry, slot.Codec); err != nil {
 			if planErr, ok := err.(*PlanError); ok {
 				planErr.Path = fmt.Sprintf("binds[%d].codec", i)
 			}
