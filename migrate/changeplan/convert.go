@@ -186,6 +186,8 @@ func catalogEngineID(dialect string) EngineID {
 // sourceDigest -- read back nowhere in migrate/, only inside
 // migrate/changeplan -- is set equal to the catalog digest, since there is
 // no separate lock-source digest to carry forward.
+//
+// `source` must not be nil.
 func FromBaseline(baseline Catalog, source ProfileSource, history HistoryIdentity, resolved ResolvedChanges) (Plan, error) {
 	profile, err := NewProfile(source)
 	if err != nil {
@@ -228,6 +230,12 @@ func FromBaseline(baseline Catalog, source ProfileSource, history HistoryIdentit
 	}
 	return newPlan(profile, baselineIdentity, history, resolved.decisions, resolved.operations)
 }
+
+// ProfileDigest builds a Profile from source and returns the digest of it that
+// FromBaseline stores as a plan's profile digest, which CatalogIdentity.ProfileDigest
+// reads back.
+//
+// `source` must not be nil.
 func ProfileDigest(source ProfileSource) (Digest, error) {
 	profile, err := NewProfile(source)
 	if err != nil {

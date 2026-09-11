@@ -63,6 +63,8 @@ func (e *SubqueryReadsWriteTargetError) Unwrap() error {
 }
 
 // Insert renders s for d.
+//
+// `d` must not be nil.
 func Insert(d dialect.Dialect, s query.Insert) (stmt.Statement, error) {
 	return renderStatement(d, "INSERT", s.Validate, func(renderer *renderer) error {
 		return renderer.writeInsert(s)
@@ -70,6 +72,8 @@ func Insert(d dialect.Dialect, s query.Insert) (stmt.Statement, error) {
 }
 
 // Update renders s for d.
+//
+// `d` must not be nil.
 func Update(d dialect.Dialect, s query.Update) (stmt.Statement, error) {
 	return renderStatement(d, "UPDATE", s.Validate, func(renderer *renderer) error {
 		return renderer.writeUpdate(s)
@@ -77,6 +81,8 @@ func Update(d dialect.Dialect, s query.Update) (stmt.Statement, error) {
 }
 
 // Delete renders s for d.
+//
+// `d` must not be nil.
 func Delete(d dialect.Dialect, s query.Delete) (stmt.Statement, error) {
 	return renderStatement(d, "DELETE", s.Validate, func(renderer *renderer) error {
 		return renderer.writeDelete(s)
@@ -84,13 +90,18 @@ func Delete(d dialect.Dialect, s query.Delete) (stmt.Statement, error) {
 }
 
 // Upsert renders s for d.
+//
+// `d` must not be nil.
 func Upsert(d dialect.Dialect, s query.Upsert) (stmt.Statement, error) {
 	return renderStatement(d, "UPSERT", s.Validate, func(renderer *renderer) error {
 		return renderer.writeUpsert(s)
 	})
 }
 
-// Write renders a s that changes database rows.
+// Write renders s for d. It dispatches to Insert, Update, Delete or Upsert by
+// the type of s, and reports an error for any other type.
+//
+// `d` and `s` must not be nil.
 func Write(d dialect.Dialect, s query.WriteStatement) (stmt.Statement, error) {
 	switch s := s.(type) {
 	case query.Insert:

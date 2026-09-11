@@ -61,6 +61,10 @@ func NewCatalogFromPhysical(catalog compilerir.PhysicalCatalog, sourceIdentity s
 	return newCatalogPhysical(catalog.Engine, sourceIdentity, objects)
 }
 
+// NewCatalog builds a Catalog from objects under sourceIdentity, using the
+// engine identity of the Profile built from source.
+//
+// `source` must not be nil.
 func NewCatalog(source ProfileSource, sourceIdentity string, objects []CatalogObject) (Catalog, error) {
 	profile, err := NewProfile(source)
 	if err != nil {
