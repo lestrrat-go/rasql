@@ -73,3 +73,25 @@ func (c Compiler) Mutation(plan MutationPlan) (stmt.Statement, error) {
 	}
 	return compiled.Statement()
 }
+
+// CompileQuery renders q into the SQL text and bound arguments Rows and All
+// would send for it, and is the read counterpart of Compiler.Mutation. Render
+// answers the same question for a dialect alone; CompileQuery goes through an
+// engine profile, so a query an engine cannot express is refused here the way
+// execution refuses it.
+//
+// It is a function rather than a method because a method cannot take a type
+// parameter of its own.
+//
+// It reports a PlanError with code engine_profile_unavailable when c was not
+// built through EngineProfile.Compiler.
+func CompileQuery[R any](c Compiler, q Query[R]) (stmt.Statement, error) {
+	if c.compiler == nil {
+		return stmt.Statement{}, &PlanError{Code: "engine_profile_unavailable", Detail: "compiler has no engine profile"}
+	}
+	compiled, err := compileQuery(c.compiler, q)
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	return compiled.Statement()
+}

@@ -245,6 +245,120 @@ func TestCompilerMutation(t *testing.T) {
 	})
 }
 
+// compilerSelect builds a query that reads one column of compiler_items, with
+// a predicate so the statement carries a bound argument.
+func compilerSelect(t *testing.T) rasql.Query[compilerCountRow] {
+	t.Helper()
+	table, err := rasql.ReadTableOf[compilerCountRow](schema.TableDef{
+		Name:    "compiler_items",
+		Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+	})
+	require.NoError(t, err)
+	relation, err := rasql.SourceOf(table, "")
+	require.NoError(t, err)
+	id, err := rasql.BindColumn[compilerCountRow, int64](relation, "id", "")
+	require.NoError(t, err)
+	result, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}})
+	require.NoError(t, err)
+	projection, err := rasql.NewProjection(
+		[]rasql.ProjectionItem{rasql.Item("id", id.Expr(), schema.IntegerType{}, "")},
+		compilerCountDecoder{result: result},
+	)
+	require.NoError(t, err)
+	return rasql.Select(relation.Source(), projection).Where(rasql.EqualValue(id.Expr(), int64(7)))
+}
+
+type compilerCountRow struct{ ID int64 }
+
+type compilerCountDecoder struct{ result rasql.ResultSchema }
+
+func (d compilerCountDecoder) ResultSchema() rasql.ResultSchema { return d.result }
+func (compilerCountDecoder) Presence() []rasql.Presence         { return nil }
+func (compilerCountDecoder) DecodeRow(source rasql.ScanSource, row *compilerCountRow) error {
+	return source.Scan(&row.ID)
+}
+
+func TestCompileQuery(t *testing.T) {
+	t.Run("renders a read without a database", func(t *testing.T) {
+		compiler := compilerFor(t, "postgresql-17", 17, 0, dialect.PostgreSQL())
+		statement, err := rasql.CompileQuery(compiler, compilerSelect(t))
+		require.NoError(t, err)
+		require.Contains(t, statement.SQL(), "SELECT")
+		require.Contains(t, statement.SQL(), "compiler_items")
+		require.Equal(t, []any{int64(7)}, statement.Args())
+	})
+
+	// Render answers the same question for a dialect alone, so the two agree on
+	// a query whose SQL the profile does not change.
+	t.Run("agrees with Render where the profile does not matter", func(t *testing.T) {
+		query := compilerSelect(t)
+		compiler := compilerFor(t, "postgresql-17", 17, 0, dialect.PostgreSQL())
+		compiled, err := rasql.CompileQuery(compiler, query)
+		require.NoError(t, err)
+		rendered, err := rasql.Render(query, dialect.PostgreSQL())
+		require.NoError(t, err)
+		require.Equal(t, rendered.SQL(), compiled.SQL())
+		require.Equal(t, rendered.Args(), compiled.Args())
+	})
+
+	// A []byte is the value that would expose a shared buffer, and it cannot go
+	// in a predicate because EqualValue needs a comparable type, so it is bound
+	// as a projected value instead. Each compile hands back its own buffer, so
+	// writing through one cannot change what a later compile of the same query
+	// produces.
+	t.Run("hands back bound values a caller cannot write through", func(t *testing.T) {
+		result, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "payload", Type: schema.BytesType{}})
+		require.NoError(t, err)
+		projection, err := rasql.NewProjection(
+			[]rasql.ProjectionItem{rasql.Item("payload", rasql.Value([]byte("original")), schema.BytesType{}, "")},
+			compilerBytesDecoder{result: result},
+		)
+		require.NoError(t, err)
+		table, err := rasql.ReadTableOf[compilerBytesRow](schema.TableDef{
+			Name:    "compiler_items",
+			Columns: []schema.ColumnDef{{Name: "payload", Type: schema.BytesType{}}},
+		})
+		require.NoError(t, err)
+		relation, err := rasql.SourceOf(table, "")
+		require.NoError(t, err)
+		query := rasql.Select(relation.Source(), projection)
+
+		compiler := compilerFor(t, "postgresql-17", 17, 0, dialect.PostgreSQL())
+		first, err := rasql.CompileQuery(compiler, query)
+		require.NoError(t, err)
+		require.Equal(t, []byte("original"), first.BoundArgs()[0])
+		first.BoundArgs()[0].([]byte)[0] = 'X'
+
+		second, err := rasql.CompileQuery(compiler, query)
+		require.NoError(t, err)
+		require.Equal(t, []byte("original"), second.BoundArgs()[0])
+	})
+
+	t.Run("reports a compiler that carries no profile", func(t *testing.T) {
+		var zero rasql.Compiler
+		_, err := rasql.CompileQuery(zero, compilerSelect(t))
+		var planErr *rasql.PlanError
+		require.ErrorAs(t, err, &planErr)
+		require.Equal(t, "engine_profile_unavailable", planErr.Code)
+	})
+
+	t.Run("reports a query the profile refuses", func(t *testing.T) {
+		compiler := compilerFor(t, "postgresql-17", 17, 0, dialect.PostgreSQL())
+		_, err := rasql.CompileQuery(compiler, rasql.Query[compilerCountRow]{})
+		require.Error(t, err)
+	})
+}
+
+type compilerBytesRow struct{ Payload []byte }
+
+type compilerBytesDecoder struct{ result rasql.ResultSchema }
+
+func (d compilerBytesDecoder) ResultSchema() rasql.ResultSchema { return d.result }
+func (compilerBytesDecoder) Presence() []rasql.Presence         { return nil }
+func (compilerBytesDecoder) DecodeRow(source rasql.ScanSource, row *compilerBytesRow) error {
+	return source.Scan(&row.Payload)
+}
+
 func mustRelation(t *testing.T, table rasql.Table[compilerRow]) rasql.TypedRelation[compilerRow] {
 	t.Helper()
 	relation, err := rasql.SourceOf(table, "")

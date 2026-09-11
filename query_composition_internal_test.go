@@ -264,6 +264,15 @@ func q2AcceptanceSQLite(t *testing.T) *sql.DB {
 
 func q2AcceptanceQuery(t *testing.T) Query[q2AcceptanceRow] {
 	t.Helper()
+	q, _ := q2AcceptanceQueryRelation(t)
+	return q
+}
+
+// q2AcceptanceQueryRelation returns the same query alongside the relation it
+// selects from, so a caller that needs to bind another column of the same
+// source does not have to dig one back out of the built query.
+func q2AcceptanceQueryRelation(t *testing.T) (Query[q2AcceptanceRow], TypedRelation[q2AcceptanceRow]) {
+	t.Helper()
 	table, err := ReadTableOf[q2AcceptanceRow](schema.TableDef{
 		Name: "q2_items",
 		Columns: []schema.ColumnDef{
@@ -288,7 +297,7 @@ func q2AcceptanceQuery(t *testing.T) Query[q2AcceptanceRow] {
 		Item("amount", amount.Expr(), schema.IntegerType{}, "amount.codec"),
 	}, q2AcceptanceDecoder{resultSchema: resultSchema})
 	require.NoError(t, err)
-	return Select(relation.Source(), projection)
+	return Select(relation.Source(), projection), relation
 }
 
 func q2AcceptanceCompiler(t *testing.T) *querycompile.Compiler {
@@ -624,14 +633,4 @@ func TestQueryAPIRejectsInvalidCompileFixtures(t *testing.T) {
 			t.Fatalf("fixture %s diagnostic = %s", fixture.name, output)
 		}
 	}
-}
-
-func TestEngineProfileQueryCompilerBridge(t *testing.T) {
-	p, err := EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
-	compiler, err := p.queryCompiler(dialect.SQLite())
-	require.NoError(t, err)
-	require.NotNil(t, compiler)
-	_, err = p.queryCompiler(dialect.PostgreSQL())
-	require.ErrorIs(t, err, ErrEngineProfileMismatch)
 }

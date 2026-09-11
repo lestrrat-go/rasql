@@ -257,10 +257,9 @@ func TestBindCopy(t *testing.T) {
 	})
 
 	t.Run("composition alignment across CTE, compound predicate and order", func(t *testing.T) {
-		base := q2AcceptanceQuery(t)
+		base, relation := q2AcceptanceQueryRelation(t)
 		compound, err := Combine(base, UnionAll, base)
 		require.NoError(t, err)
-		relation := TypedRelation[q2AcceptanceRow]{source: base.plan.sources[0]}
 		amount, err := BindColumn[q2AcceptanceRow, int64](relation, "amount", "")
 		require.NoError(t, err)
 		predicateQuery := base.Where(EqualValue(amount.Expr(), int64(2))).Where(EqualValue(amount.Expr(), int64(3)))
