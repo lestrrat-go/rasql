@@ -1,10 +1,12 @@
 // Package render converts validated query models into parameterized SQL.
+//
+// Every function here takes the dialect to render for as its first argument.
+// `d` must not be nil.
 package render
 
 import (
 	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 
 	"github.com/lestrrat-go/rasql/dialect"
@@ -107,6 +109,8 @@ func (e *UnsupportedMatchOperatorError) Unwrap() error {
 // consistent model of a subquery; this is the same division the MATCH operator
 // already follows, where validation accepts the shape and rendering refuses the
 // dialects that cannot run it.
+//
+// `d` must not be nil.
 func Select(d dialect.Dialect, s query.Select) (stmt.Statement, error) {
 	return renderStatement(d, "SELECT", s.Validate, func(renderer *renderer) error {
 		if correlations := s.Correlations(); len(correlations) > 0 {
@@ -119,6 +123,8 @@ func Select(d dialect.Dialect, s query.Select) (stmt.Statement, error) {
 // Result renders a reusable result query without changing its relational
 // shape. The supplied metadata is validated by query.ResultOf; the body is
 // emitted directly so ordering and paging remain attached to the body.
+//
+// `d` must not be nil.
 func Result(d dialect.Dialect, s query.ResultQuery) (stmt.Statement, error) {
 	return renderStatement(d, "SELECT", func() error {
 		if s.Body() == nil {
@@ -226,7 +232,7 @@ func bodyCorrelations(body query.QueryBody) []query.RelationRef {
 }
 
 func renderStatement(d dialect.Dialect, operation string, validate func() error, write func(*renderer) error) (stmt.Statement, error) {
-	if isNilDialect(d) {
+	if d == nil {
 		return stmt.Statement{}, &Error{Err: fmt.Errorf("dialect must not be nil")}
 	}
 	if err := validate(); err != nil {
@@ -1181,12 +1187,4 @@ func (r *renderer) quoteQualified(schemaName string, name string) (string, error
 		return "", err
 	}
 	return quotedSchema + "." + quotedName, nil
-}
-
-func isNilDialect(d dialect.Dialect) bool {
-	if d == nil {
-		return true
-	}
-	value := reflect.ValueOf(d)
-	return value.Kind() == reflect.Pointer && value.IsNil()
 }

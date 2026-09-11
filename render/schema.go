@@ -1166,8 +1166,10 @@ func (e *UnsupportedExclusionConstraintError) Unwrap() error {
 }
 
 // CreateTable renders a CREATE TABLE statement for table.
+//
+// `d` must not be nil.
 func CreateTable(d dialect.Dialect, table schema.TableDef) (stmt.Statement, error) {
-	if isNilDialect(d) {
+	if d == nil {
 		return stmt.Statement{}, &Error{Err: fmt.Errorf("dialect must not be nil")}
 	}
 	if err := table.Validate(); err != nil {
@@ -1181,8 +1183,10 @@ func CreateTable(d dialect.Dialect, table schema.TableDef) (stmt.Statement, erro
 }
 
 // CreateIndexes renders the CREATE INDEX statements for table.
+//
+// `d` must not be nil.
 func CreateIndexes(d dialect.Dialect, table schema.TableDef) ([]stmt.Statement, error) {
-	if isNilDialect(d) {
+	if d == nil {
 		return nil, &Error{Err: fmt.Errorf("dialect must not be nil")}
 	}
 	if err := table.Validate(); err != nil {
