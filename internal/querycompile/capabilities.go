@@ -106,9 +106,6 @@ func validateExpressionCapabilities(p engineprofile.Profile, expression query.Ex
 	}
 	v := reflect.ValueOf(expression)
 	if v.Kind() == reflect.Pointer {
-		if v.IsNil() {
-			return nil
-		}
 		if value, ok := v.Elem().Interface().(query.Expression); ok {
 			return validateExpressionCapabilities(p, value)
 		}
@@ -196,10 +193,6 @@ func validateExpressionCapabilities(p engineprofile.Profile, expression query.Ex
 
 func validateWriteCapabilities(p engineprofile.Profile, statement query.WriteStatement) error {
 	if statement == nil {
-		return fmt.Errorf("write statement must not be nil")
-	}
-	value := reflect.ValueOf(statement)
-	if value.Kind() == reflect.Pointer && value.IsNil() {
 		return fmt.Errorf("write statement must not be nil")
 	}
 	returning := statement.Returning()

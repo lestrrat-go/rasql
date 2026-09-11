@@ -71,9 +71,6 @@ func collectExpression(expression query.Expression, engines *[]string) {
 	}
 	value := reflect.ValueOf(expression)
 	if value.Kind() == reflect.Pointer {
-		if value.IsNil() {
-			return
-		}
 		if node, ok := value.Elem().Interface().(query.Expression); ok {
 			collectExpression(node, engines)
 			return

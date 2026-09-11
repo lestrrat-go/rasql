@@ -1,16 +1,16 @@
 package engineprofile
 
 import (
-	"reflect"
-
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/schema"
 )
 
 // ValidateDialect checks the syntax capabilities that the dialect interface
 // exposes. Runtime capabilities such as window functions remain profile data.
+//
+// `d` must not be nil.
 func ValidateDialect(d dialect.Dialect, p Profile) error {
-	if isNilDialect(d) {
+	if d == nil {
 		return &ProfileError{Code: ErrInvalidProfile, Engine: p.Engine, Version: p.Version, Detail: "dialect must not be nil"}
 	}
 	if p.Engine != Custom && d.Name() != engineName(p.Engine) {
@@ -76,14 +76,6 @@ func engineName(engine EngineID) string {
 	default:
 		return ""
 	}
-}
-
-func isNilDialect(d dialect.Dialect) bool {
-	if d == nil {
-		return true
-	}
-	v := reflect.ValueOf(d)
-	return v.Kind() == reflect.Pointer && v.IsNil()
 }
 
 type constrainedDialect struct {
