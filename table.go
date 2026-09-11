@@ -3,11 +3,7 @@ package rasql
 import (
 	"context"
 	"fmt"
-	"reflect"
-	"runtime"
-	"strings"
 
-	"github.com/lestrrat-go/rasql/internal/nilcheck"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/schema"
@@ -23,11 +19,11 @@ type ReadTable[T any] interface {
 // Table associates a writable SQL table with the Go type of one of its rows.
 // Only this package implements it; generated table types embed it.
 //
-// Some values satisfy Table[T] with no typed table behind them, such as a nil
-// interface or a zero wrapper whose embedded Table[T] is nil. Every function
-// taking a Table[T] rejects a value whose Ref cannot reach a table, as an
-// error from the call, as an error from the Build of the statement the call
-// feeds, or as a panic where the name says it panics.
+// Every function taking a Table[T] reports "table must not be nil" for the nil
+// interface. A wrapper whose embedded Table[T] is nil, such as the zero wrapper
+// a failed generated As returns beside its error, is not the nil interface:
+// passing that wrapper to one of those functions dereferences the nil embedded
+// field and panics, and the panic names the caller that built it.
 type Table[T any] interface {
 	ReadTable[T]
 	writableTable()
@@ -124,8 +120,10 @@ func ReadTableFrom[T any](definition schema.TableDef) ReadTable[T] {
 // As returns table under alias. Generated table types have their own As with
 // the same fixed body; this one serves dynamic code and the generated
 // implementation.
+//
+// `table` must not be nil.
 func As[T any](table Table[T], alias string) (Table[T], error) {
-	if isNilTable(table) {
+	if table == nil {
 		return nil, fmt.Errorf("rasql: table alias: %w", fmt.Errorf("table must not be nil"))
 	}
 	aliased, err := table.Ref().As(alias)
@@ -136,8 +134,10 @@ func As[T any](table Table[T], alias string) (Table[T], error) {
 }
 
 // AsRead returns a queryable typed object under alias.
+//
+// `table` must not be nil.
 func AsRead[T any](table ReadTable[T], alias string) (ReadTable[T], error) {
-	if isNilReadTable(table) {
+	if table == nil {
 		return nil, fmt.Errorf("rasql: table alias: table must not be nil")
 	}
 	aliased, err := table.Ref().As(alias)
@@ -258,37 +258,21 @@ func TrustedSQL(sql string, parts ...query.FragmentPart) query.TrustedFragment {
 }
 func RowLock(strength query.LockStrength) query.Lock { return query.RowLock(strength) }
 
-// ColumnOf returns the named column of table. It returns the zero ColumnRef only
-// when table has no typed table behind it, so a wrapper that never reached a
-// constructor fails at Build rather than at the point of the column reference.
+// ColumnOf returns the named column of table. `table` must not be nil.
+//
+// A nil table returns the zero ColumnRef instead of an error, because a
+// generated accessor on a zero wrapper passes that wrapper's nil embedded
+// Table[T] here. The statement carrying the zero ColumnRef then reports
+// query.ErrNilTable at Build rather than failing at the accessor call.
+//
 // A name the table does not hold is not that case: the returned ColumnRef keeps
 // its source and its name, and the statement carrying it reports the name it
 // could not find.
-//
-// It asks isNilTable rather than comparing table against nil. A generated
-// wrapper reaches every Table method through an embedded Table[T], so neither
-// a zero wrapper nor a typed nil pointer to one is the nil interface, and
-// comparing against nil would let both reach Column and dereference a nil
-// embedded field.
 func ColumnOf[T any](table Table[T], name string) ColumnRef {
-	if isNilTable(table) {
+	if table == nil {
 		return ColumnRef{}
 	}
 	return table.Column(name)
-}
-
-func isNilReadTable[T any](table ReadTable[T]) bool {
-	if nilcheck.Is(table) {
-		return true
-	}
-	if !dereferencesNil(func() { table.tableRow() }) {
-		return false
-	}
-	if !dereferencesNil(func() { _ = table.Ref() }) {
-		return false
-	}
-	return true
-
 }
 
 // Ref returns the dialect-neutral table backing the descriptor.
@@ -308,8 +292,10 @@ func (t typedTable[T]) tableRow() T {
 
 // CreateTable renders and executes table's definition followed by its indexes.
 // Callers that require atomic DDL pass a DB from Begin.
+//
+// `table` must not be nil.
 func CreateTable[T any](ctx context.Context, db DB, table Table[T]) error {
-	if isNilTable(table) {
+	if table == nil {
 		return fmt.Errorf("rasql: table must not be nil")
 	}
 	return createTableDef(ctx, db, table.Ref().Definition())
@@ -341,133 +327,3 @@ func createTableDef(ctx context.Context, db DB, table schema.TableDef) error {
 	return nil
 }
 
-// isNilTable reports whether table has no typed table behind it, so every entry
-// point taking a Table[T] can reject it instead of panicking. It is the one
-// place this rule lives; every such entry point calls it.
-//
-// It catches more than the nil interface and the typed nil pointer nilcheck.Is
-// covers. A table wrapper embeds Table[T] and reaches every Table method
-// through that embedded field, so a zero wrapper satisfies Table[T] while the
-// field behind each promoted method is nil. That value is a struct, which
-// nilcheck.Is reports as not nil, and it needs no hand-written type to exist:
-// rasqlgen emits an exported wrapper struct that embeds Table[T] under the
-// exported field name Table, and a generated As returns a zero wrapper along
-// with its error.
-//
-// The nil field is not what makes such a value unusable, and the fields cannot
-// decide the question either way. A type can supply its own Ref and
-// Column and keep a nil embedded Table[T] only for the unexported tableRow
-// method: that value works, yet it has the same fields as a zero wrapper. A
-// struct can also embed two fields that satisfy Table[T], where Go promotes the
-// methods from the shallower one while an inspection of the fields sees only two
-// candidates. So the rule asks a promoted method instead of inspecting fields.
-//
-// It probes the unexported tableRow method first rather than Ref, because
-// tableRow cannot be intercepted: it is unexported to this package, so a type
-// defined outside this package can never declare its own tableRow, and always
-// reaches the one promoted from its embedded Table[T]. A nil pointer dereference
-// from that call proves the embedded table is missing, with no caller code
-// having run. Probing Ref first would not have that property: a caller
-// type can declare its own Ref, and a nil dereference inside that
-// caller's own method looks identical to one reached through a nil embedded
-// field, wrongly relabelling the caller's own bug as a missing table.
-//
-// When tableRow does reach a real table, the value works and the probe stops
-// there without calling Ref at all, so a panic from a caller's own
-// Ref propagates out of the entry point unchanged instead of being
-// caught by this guard.
-//
-// When tableRow nil-dereferences, the embedded table may still be genuinely
-// missing, or the value may be the self-method shape: a type that supplies its
-// own working Ref and Column and keeps the embedded Table[T] nil only to
-// satisfy tableRow. Ref is probed next to tell those apart. This still
-// cannot tell a genuinely missing table apart from a self-method table whose own
-// Ref happens to nil-dereference for an unrelated reason: both look like
-// a nil-dereferencing Ref behind a nil-dereferencing tableRow, and Go
-// gives no way to attribute a recovered nil dereference to the frame that raised
-// it. That one shape is outside what this guard can promise.
-func isNilTable[T any](table Table[T]) bool {
-	if nilcheck.Is(table) {
-		return true
-	}
-	if !dereferencesNil(func() { table.tableRow() }) {
-		return false
-	}
-	return dereferencesNil(func() { table.Ref() })
-}
-
-// dereferencesNil calls call and reports whether that call dereferenced a nil
-// pointer, which is what reaching a Table method through a nil embedded field or
-// a nil embedded pointer does.
-//
-// Any other panic is re-panicked unchanged, so a bug inside a caller's own
-// method surfaces as itself instead of being relabelled a nil table.
-func dereferencesNil(call func()) bool {
-	dereferencedNil := false
-	func() {
-		defer func() {
-			recovered := recover()
-			if recovered == nil {
-				return
-			}
-			if !nilPointerDereference(recovered) {
-				panic(recovered)
-			}
-			dereferencedNil = true
-		}()
-		call()
-	}()
-	return dereferencedNil
-}
-
-// nilDereferenceMessage is how the Go runtime describes a nil pointer
-// dereference. The runtime exports no value to compare such a panic against, so
-// the recovered runtime.Error is matched on this text, alongside the concrete
-// type check nilPointerDereference also does.
-const nilDereferenceMessage = "invalid memory address or nil pointer dereference"
-
-// nilPointerDereference reports whether recovered is the runtime's nil pointer
-// dereference rather than a panic the code under it raised itself.
-//
-// Matching the runtime.Error interface and the message text is not enough on
-// its own: runtime.Error is a public interface, so a caller can declare its
-// own type that implements it, return exactly nilDereferenceMessage from its
-// Error method, and panic with that value from its own Ref. Without a
-// further check, that fabricated value would be indistinguishable from a real
-// nil dereference and would be swallowed as "table must not be nil" instead
-// of propagating as the caller's own panic.
-//
-// The concrete type behind recovered is checked against package "runtime" to
-// close that gap. Every nil pointer dereference on this Go toolchain panics
-// with the runtime's own concrete error type (currently *runtime.errorString,
-// reached by unwrapping any pointer indirection), and that type's PkgPath is
-// "runtime". No type a caller declares outside the standard library can carry
-// that package path, so the check cannot be satisfied by a fabricated
-// look-alike. An interface-only check has no such property, which is why it
-// is not enough by itself.
-//
-// This ties the classifier to how the current runtime happens to construct
-// the panic value, which is a known, accepted risk: if a future Go release
-// ever panicked with a nil-dereference value from a different package, this
-// check would fail closed. It would treat that panic as unrelated to a
-// missing table and re-panic it unchanged, which is the behavior this guard
-// had before it existed, rather than risk misclassifying a caller's own panic
-// as a missing table. TestTableGuard/"keeps unrelated panics" and the guard's other
-// panic-shape tests would then fail loudly instead of the guard silently
-// drifting.
-func nilPointerDereference(recovered any) bool {
-	failure, ok := recovered.(runtime.Error)
-	if !ok {
-		return false
-	}
-
-	failureType := reflect.TypeOf(recovered)
-	for failureType != nil && failureType.Kind() == reflect.Pointer {
-		failureType = failureType.Elem()
-	}
-	if failureType == nil || failureType.PkgPath() != "runtime" {
-		return false
-	}
-
-	return strings.Contains(failure.Error(), nilDereferenceMessage)
-}

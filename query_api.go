@@ -140,8 +140,12 @@ type Projection[R any] struct {
 	native  bool
 }
 
+// NativeProjection builds a projection for a native statement from decoder's own
+// result schema, so the caller names no columns itself.
+//
+// `decoder` must not be nil.
 func NativeProjection[R any](decoder RowDecoder[R]) (Projection[R], error) {
-	if decoder == nil || isNilRowDecoder(decoder) {
+	if decoder == nil {
 		return Projection[R]{}, planError("invalid_projection", "decoder", "must not be zero")
 	}
 	schemaValue, err := NewResultSchema(decoder.ResultSchema().Columns()...)
@@ -158,18 +162,14 @@ func NativeProjection[R any](decoder RowDecoder[R]) (Projection[R], error) {
 	return Projection[R]{items: items, schema: schemaValue, decoder: decoder, native: true}, nil
 }
 
-func isNilRowDecoder[R any](decoder RowDecoder[R]) bool {
-	value := reflect.ValueOf(decoder)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return value.IsNil()
-	default:
-		return false
-	}
-}
-
+// NewProjection builds a projection that selects items and decodes each row with
+// decoder. It reports an error when decoder's result schema does not match the
+// columns items name, and when decoder's presence metadata names a column the
+// projection does not select or one that is not nullable.
+//
+// `decoder` must not be nil.
 func NewProjection[R any](items []ProjectionItem, decoder RowDecoder[R]) (Projection[R], error) {
-	if decoder == nil || isNilRowDecoder(decoder) {
+	if decoder == nil {
 		return Projection[R]{}, planError("invalid_projection", "decoder", "must not be zero")
 	}
 	if len(items) == 0 {
@@ -232,8 +232,12 @@ func cloneItems(items []ProjectionItem) []ProjectionItem {
 
 type Source struct{ ref query.RelationRef }
 
+// SourceOf returns table as a relation a query selects from, under alias. An
+// empty alias keeps the alias table already carries.
+//
+// `table` must not be nil.
 func SourceOf[R any](table ReadTable[R], alias string) (TypedRelation[R], error) {
-	if isNilReadTable(table) {
+	if table == nil {
 		return TypedRelation[R]{}, planError("invalid_source", "table", "must not be nil")
 	}
 	originalRef := table.Ref()

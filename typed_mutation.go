@@ -5,7 +5,6 @@ import (
 	"reflect"
 
 	"github.com/lestrrat-go/rasql/internal/mutationcolumn"
-	"github.com/lestrrat-go/rasql/internal/nilcheck"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 )
@@ -137,6 +136,11 @@ type normalizedCreate[T any] struct {
 	defaultOnly bool
 }
 
+// NewCreatePlan builds a validated INSERT plan that writes fields into table.
+// The returned plan carries the same error NewCreatePlan reports, so lowering a
+// plan whose construction failed reports that failure again.
+//
+// `table` must not be nil.
 func NewCreatePlan[T any](table Table[T], fields ...MutationField[T]) (CreatePlan[T], error) {
 	plan := CreatePlan[T]{table: table, fields: append([]MutationField[T](nil), fields...)}
 	// TableOf and MustTableOf already refuse a definition that does not
@@ -158,9 +162,6 @@ func NewCreatePlan[T any](table Table[T], fields ...MutationField[T]) (CreatePla
 }
 
 func validateCreateRequired[T any](table Table[T], fields []MutationField[T]) error {
-	if isNilTable(table) {
-		return nil
-	}
 	seen := make(map[string]struct{}, len(fields))
 	for _, field := range fields {
 		seen[field.column.Name()] = struct{}{}
@@ -204,6 +205,12 @@ func patchWhereExpression[P patchPredicate](value P) (query.Expression, error) {
 	}
 }
 
+// NewPatchPlan builds a validated UPDATE plan that writes fields into the rows
+// of table that where matches. The returned plan carries the same error
+// NewPatchPlan reports, so lowering a plan whose construction failed reports
+// that failure again.
+//
+// `table` must not be nil.
 func NewPatchPlan[T any, P patchPredicate](table Table[T], where P, fields ...MutationField[T]) (PatchPlan[T], error) {
 	expression, err := patchWhereExpression(where)
 	if err != nil {
@@ -221,15 +228,12 @@ func NewPatchPlan[T any, P patchPredicate](table Table[T], where P, fields ...Mu
 }
 
 func validateMutationPlan[T any](table Table[T], fields []MutationField[T], patch bool, where query.Expression) error {
-	if isNilTable(table) {
-		return fmt.Errorf("rasql: mutation plan table must not be nil")
-	}
 	target := table.Ref()
 	definition := target.Definition()
 	if len(fields) == 0 {
 		return fmt.Errorf("rasql: mutation plan requires at least one field")
 	}
-	if patch && nilcheck.Is(where) {
+	if patch && where == nil {
 		return fmt.Errorf("rasql: patch plan requires a predicate")
 	}
 	seen := make(map[string]struct{}, len(fields))
@@ -275,7 +279,7 @@ func (p CreatePlan[T]) lowerNormalized() (normalizedCreate[T], error) {
 	}
 	// A plan built through NewCreatePlan always carries a table, so this
 	// catches the zero value, which would otherwise dereference nothing.
-	if isNilTable(p.table) {
+	if p.table == nil {
 		return normalizedCreate[T]{}, fmt.Errorf("rasql: create plan table must not be nil")
 	}
 	columns := p.table.Ref().Definition().Columns
@@ -312,7 +316,7 @@ func (p PatchPlan[T]) lower() (query.Update, error) {
 	}
 	// A plan built through NewPatchPlan always carries a table, so this
 	// catches the zero value, which would otherwise dereference nothing.
-	if isNilTable(p.table) {
+	if p.table == nil {
 		return query.Update{}, fmt.Errorf("rasql: patch plan table must not be nil")
 	}
 	columns := p.table.Ref().Definition().Columns

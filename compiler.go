@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/internal/nilcheck"
 	"github.com/lestrrat-go/rasql/internal/querycompile"
 	"github.com/lestrrat-go/rasql/stmt"
 )
@@ -50,13 +49,13 @@ func (c Compiler) EngineProfile() EngineProfile {
 // Compiler was not built through EngineProfile.Compiler, and passes back the
 // plan's own error for a native mutation, which carries rendered SQL rather
 // than a write statement to compile.
+//
+// `plan` must not be nil.
 func (c Compiler) Mutation(plan MutationPlan) (stmt.Statement, error) {
 	if c.compiler == nil {
 		return stmt.Statement{}, &PlanError{Code: "engine_profile_unavailable", Detail: "compiler has no engine profile"}
 	}
-	// See the matching comment in ExecMutation: a typed nil MutationPlan
-	// passes == nil and would otherwise reach mutationPlan below.
-	if nilcheck.Is(plan) {
+	if plan == nil {
 		return stmt.Statement{}, fmt.Errorf("rasql: mutation plan must not be nil")
 	}
 	statement, err := plan.mutationPlan()

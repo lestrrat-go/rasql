@@ -390,14 +390,10 @@ func TestNativeProjection(t *testing.T) {
 		require.Equal(t, int64(1), decodes.Load())
 	})
 
-	t.Run("rejects a typed nil, an invalid schema and bad presence", func(t *testing.T) {
-		var typedNil *nativeProjectionDecoder
-		_, err := rasql.NativeProjection[nativeProjectionRow](typedNil)
+	t.Run("rejects an invalid schema and bad presence", func(t *testing.T) {
 		var planErr *rasql.PlanError
-		require.ErrorAs(t, err, &planErr)
-		require.Equal(t, "invalid_projection", planErr.Code)
 		invalid := nativeInvalidDecoder{}
-		_, err = rasql.NativeProjection(invalid)
+		_, err := rasql.NativeProjection(invalid)
 		require.ErrorAs(t, err, &planErr)
 		require.Equal(t, "invalid_schema", planErr.Code)
 		badPresence := nativeBadPresenceDecoder{}

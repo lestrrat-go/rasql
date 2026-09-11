@@ -1,7 +1,6 @@
 package rasql_test
 
 import (
-	"runtime"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -43,29 +42,6 @@ type auditedStaffTable struct {
 	staffTable
 }
 
-// pointerStaffTable mirrors a wrapper that embeds its inner wrapper by pointer,
-// so its zero value promotes every table method to a nil pointer.
-type pointerStaffTable struct {
-	*staffTable
-}
-
-// recursiveStaffTable mirrors a wrapper reachable from itself. Both anonymous
-// fields satisfy rasql.Table[staffRow], and Go promotes the table methods from
-// the shallower one, so its zero value still reaches them through a nil embedded
-// rasql.Table[staffRow]. Nothing reads the recursive field: its presence is the
-// shape under test.
-type recursiveStaffTable struct {
-	*recursiveStaffTable
-	rasql.Table[staffRow]
-}
-
-// twoCandidateStaffTable mirrors the same two-candidate shape with no recursion
-// in it: an ordinary wrapper sits beside the embedded interface Go promotes from.
-type twoCandidateStaffTable struct {
-	rasql.Table[staffRow]
-	staffTable
-}
-
 // selfMethodStaffTable mirrors a table that supplies its own Ref and
 // Column and keeps the embedded rasql.Table[staffRow] nil, using it only for the
 // unexported method that satisfies the interface. It is usable even though that
@@ -81,83 +57,6 @@ func (t selfMethodStaffTable) Ref() query.TableRef {
 
 func (t selfMethodStaffTable) Column(name string) query.ColumnRef {
 	return t.source.Column(name)
-}
-
-// staffTableBug is what buggyStaffTable.Ref panics with.
-const staffTableBug = "staff table: bug of its own"
-
-// buggyStaffTable mirrors a table whose own Ref panics for a reason that
-// has nothing to do with a nil table.
-type buggyStaffTable struct {
-	rasql.Table[staffRow]
-}
-
-func (t buggyStaffTable) Ref() query.TableRef {
-	panic(staffTableBug)
-}
-
-// nilDereferenceStaffTable mirrors a wrapper with a VALID embedded
-// rasql.Table[staffRow] whose own Ref panics with a nil pointer
-// dereference for a reason that has nothing to do with the embedded table. The
-// guard probes the unexported tableRow method first, and tableRow succeeds
-// here because the embedded table is real, so the guard must never call this
-// Ref itself: the panic must reach the caller unrelabelled.
-type nilDereferenceStaffTable struct {
-	rasql.Table[staffRow]
-	source *query.TableRef
-}
-
-func (t nilDereferenceStaffTable) Ref() query.TableRef {
-	return *t.source
-}
-
-// fabricatedNilDereference is a caller-declared type that satisfies
-// runtime.Error and echoes the runtime's own nil-dereference text from its
-// Error method, but is not the runtime's own concrete error type. It exists to
-// prove the guard tells a genuine nil dereference apart from a caller
-// panicking with a value fabricated to look like one, which is only possible
-// because the classifier also checks which package the concrete type behind
-// the panic comes from, not just its interface and text.
-type fabricatedNilDereference struct{}
-
-func (fabricatedNilDereference) Error() string {
-	return "runtime error: invalid memory address or nil pointer dereference"
-}
-
-func (fabricatedNilDereference) RuntimeError() {}
-
-// fabricatedRuntimeErrorStaffTable mirrors a caller type whose own Ref
-// panics with fabricatedNilDereference: a value that satisfies runtime.Error
-// and carries the runtime's own nil-dereference text, yet did not come from an
-// actual nil dereference. Its embedded rasql.Table[staffRow] is nil, so
-// tableRow nil-dereferences first and the guard proceeds to probe Ref,
-// which is where this fabricated panic is raised. A classifier that matched
-// only the interface and the text would swallow it as "table must not be nil"
-// instead of letting the caller's own panic propagate.
-type fabricatedRuntimeErrorStaffTable struct {
-	rasql.Table[staffRow]
-}
-
-func (t fabricatedRuntimeErrorStaffTable) Ref() query.TableRef {
-	panic(fabricatedNilDereference{})
-}
-
-// requirePanicsWithNilDereference runs fn and requires it to panic with the Go
-// runtime's own nil pointer dereference error, proving the panic reached the
-// caller unchanged instead of being caught and relabelled as a missing table.
-func requirePanicsWithNilDereference(t *testing.T, fn func()) {
-	t.Helper()
-
-	var recovered any
-	func() {
-		defer func() { recovered = recover() }()
-		fn()
-	}()
-
-	require.NotNil(t, recovered, "expected a panic")
-	failure, ok := recovered.(runtime.Error)
-	require.Truef(t, ok, "expected a runtime.Error, got %T: %v", recovered, recovered)
-	require.Contains(t, failure.Error(), "invalid memory address or nil pointer dereference")
 }
 
 func staffDefinition() schema.TableDef {
@@ -227,20 +126,6 @@ func TestTable(t *testing.T) {
 	t.Run("binds a column", func(t *testing.T) {
 		t.Run("zero ColumnRef for a nil table", func(t *testing.T) {
 			require.Equal(t, query.ColumnRef{}, rasql.ColumnOf[staffRow](nil, "id"))
-		})
-
-		// A wrapper reaches every Table method through its embedded Table[T], so
-		// neither of the next two values is the nil interface, and both would
-		// dereference a nil embedded field if ColumnOf compared against nil.
-		// The zero wrapper is also what a generated As returns beside its error,
-		// so a caller who ignores that error and takes a column reference lands
-		// here.
-		t.Run("zero ColumnRef for a typed nil wrapper pointer", func(t *testing.T) {
-			require.Equal(t, query.ColumnRef{}, rasql.ColumnOf[staffRow]((*staffTable)(nil), "id"))
-		})
-
-		t.Run("zero ColumnRef for a zero wrapper value", func(t *testing.T) {
-			require.Equal(t, query.ColumnRef{}, rasql.ColumnOf[staffRow](staffTable{}, "id"))
 		})
 
 		t.Run("keeps name and source for a column the table does not have", func(t *testing.T) {
@@ -336,20 +221,22 @@ func TestTable(t *testing.T) {
 		require.Nil(t, failed)
 		requireNilTableRejected(t, "nil table from a failed NewTable", failed)
 
-		requireNilTableRejected[*staffTable](t, "typed nil wrapper pointer", nil)
-		requireNilTableRejected(t, "zero generated wrapper by value", staffTable{})
-		requireNilTableRejected(t, "pointer to a zero generated wrapper", &staffTable{})
-		requireNilTableRejected(t, "zero wrapper around a wrapper", auditedStaffTable{})
-		requireNilTableRejected(t, "zero wrapper around a wrapper pointer", pointerStaffTable{})
-		requireNilTableRejected(t, "wrapper holding a nil wrapper pointer", staffTable{Table: (*staffTable)(nil)})
-		requireNilTableRejected(t, "zero wrapper reachable from itself", recursiveStaffTable{recursiveStaffTable: nil})
-		requireNilTableRejected(t, "zero wrapper beside a second wrapper", twoCandidateStaffTable{})
-
 		t.Run("a generated As reports the error behind the zero wrapper it returns", func(t *testing.T) {
 			var wrapper staffTable
 			aliased, err := wrapper.As("alias")
 			require.ErrorContains(t, err, "must not be nil")
 			require.Equal(t, staffTable{}, aliased)
+		})
+
+		// A wrapper value is not the nil interface, so the contract check in As
+		// cannot see it: Ref promotes through the wrapper's nil embedded
+		// Table[staffRow] and the runtime panics, naming the caller that built
+		// the value. Only the panic is asserted; the runtime's wording for a nil
+		// dereference is not a contract.
+		t.Run("a zero generated wrapper panics", func(t *testing.T) {
+			require.Panics(t, func() {
+				_, _ = rasql.As[staffRow](staffTable{}, "alias")
+			})
 		})
 	})
 
@@ -385,7 +272,8 @@ type nilTableEntryPoint[Wrapper rasql.Table[staffRow]] struct {
 // case below. Insert and InsertWithOptions collapse the same way into
 // NewCreatePlan, which a DefaultField turns into what InsertWithOptions was
 // for. ColumnOf is missing because it returns the zero ColumnRef rather than
-// reporting an error; requireNilTableRejected covers it separately.
+// reporting an error; requireNilTableRejected covers it separately. Every entry
+// point here reports the nil interface only.
 func nilTableEntryPoints[Wrapper rasql.Table[staffRow]]() []nilTableEntryPoint[Wrapper] {
 	return []nilTableEntryPoint[Wrapper]{
 		{
@@ -439,7 +327,10 @@ func nilTableEntryPoints[Wrapper rasql.Table[staffRow]]() []nilTableEntryPoint[W
 }
 
 // requireNilTableRejected drives table through every typed entry point and
-// requires each one to report the nil table instead of panicking.
+// requires each one to report the nil table instead of panicking. Only the nil
+// interface reaches it. A wrapper whose embedded Table[staffRow] is nil is not
+// the nil interface and panics at these entry points instead, which TestTable's
+// "a zero generated wrapper panics" subtest pins.
 func requireNilTableRejected[Wrapper rasql.Table[staffRow]](t *testing.T, name string, table Wrapper) {
 	t.Helper()
 
@@ -506,105 +397,6 @@ func requireTableUsable[Wrapper rasql.Table[staffRow]](t *testing.T, name string
 			Build()
 		require.NoError(t, err)
 		require.Contains(t, left.SQL(), `LEFT JOIN "staff"`)
-	})
-}
-
-func TestTableGuard(t *testing.T) {
-	t.Run("keeps unrelated panics", func(t *testing.T) {
-		// The guard reads a nil pointer dereference from tableRow, and then from
-		// Ref, as signs of a missing table, so every other panic from an
-		// implementation must reach the caller unchanged instead of being reported
-		// as a nil table. This case's own Ref panics with a plain string, so
-		// it stays distinguishable from a nil dereference regardless of probe order.
-		buggy := buggyStaffTable{Table: nil}
-
-		require.PanicsWithValue(t, staffTableBug, func() {
-			rasql.ColumnOf[staffRow](buggy, "id")
-		})
-		require.PanicsWithValue(t, staffTableBug, func() {
-			_, _ = rasql.As[staffRow](buggy, "alias")
-		})
-		require.PanicsWithValue(t, staffTableBug, func() {
-			_, _ = rasql.SourceOf[staffRow](buggy, "")
-		})
-
-		// The nil-dereference subclass needs its own coverage: a string panic and a
-		// nil-dereference panic are recovered and classified differently, so a fix
-		// that keeps the string case passing could still relabel this one. Here the
-		// embedded table is VALID, so tableRow succeeds and the guard never probes
-		// this Ref at all; the panic below comes straight from it.
-		table, err := rasql.TableOf[staffRow](staffDefinition())
-		require.NoError(t, err)
-		buggyNilDeref := nilDereferenceStaffTable{Table: table}
-
-		requirePanicsWithNilDereference(t, func() {
-			_, _ = rasql.As[staffRow](buggyNilDeref, "alias")
-		})
-		requirePanicsWithNilDereference(t, func() {
-			_, _ = rasql.SourceOf[staffRow](buggyNilDeref, "")
-		})
-	})
-
-	// TestTableGuard/"never relabels a caller's own nil dereference" discriminates the
-	// defect a neutral audit confirmed in the Ref-only probe: a caller type
-	// that embeds a VALID rasql.Table[T] but also declares its own Ref that
-	// dereferences an unrelated nil pointer used to be misreported as "table must
-	// not be nil" instead of letting its own panic propagate. Probing tableRow
-	// first fixes this, because tableRow is unexported and a type outside this
-	// package can never intercept it, so it always reaches the embedded table.
-	t.Run("never relabels a caller's own nil dereference", func(t *testing.T) {
-		table, err := rasql.TableOf[staffRow](staffDefinition())
-		require.NoError(t, err)
-		buggy := nilDereferenceStaffTable{Table: table}
-
-		t.Run("SourceOf", func(t *testing.T) {
-			requirePanicsWithNilDereference(t, func() {
-				_, _ = rasql.SourceOf[staffRow](buggy, "")
-			})
-		})
-
-		t.Run("As", func(t *testing.T) {
-			requirePanicsWithNilDereference(t, func() {
-				_, _ = rasql.As[staffRow](buggy, "alias")
-			})
-		})
-
-		t.Run("NewCreatePlan", func(t *testing.T) {
-			requirePanicsWithNilDereference(t, func() {
-				_, _ = rasql.NewCreatePlan[staffRow](buggy)
-			})
-		})
-	})
-
-	// TestTableGuard/"never relabels a fabricated nil dereference" discriminates the
-	// defect a neutral audit confirmed in the text-only classifier: fabricatedNilDereference
-	// implements runtime.Error and its Error method returns exactly the runtime's
-	// nil-dereference text, but it is declared outside rasql and never comes from an
-	// actual nil dereference. Its embedded rasql.Table[staffRow] is nil, so tableRow
-	// nil-dereferences and the guard proceeds to probe Ref, which is where
-	// this fabricated value is panicked. A classifier matching only the
-	// runtime.Error interface and the message text would swallow this as "table
-	// must not be nil"; the concrete type's package is what tells the two apart.
-	t.Run("never relabels a fabricated nil dereference", func(t *testing.T) {
-		buggy := fabricatedRuntimeErrorStaffTable{}
-
-		t.Run("ColumnOf", func(t *testing.T) {
-			require.PanicsWithValue(t, fabricatedNilDereference{}, func() {
-				rasql.ColumnOf[staffRow](buggy, "id")
-			})
-		})
-
-		t.Run("As", func(t *testing.T) {
-			require.PanicsWithValue(t, fabricatedNilDereference{}, func() {
-				_, _ = rasql.As[staffRow](buggy, "alias")
-			})
-		})
-
-		t.Run("SourceOf", func(t *testing.T) {
-			require.PanicsWithValue(t, fabricatedNilDereference{}, func() {
-				_, _ = rasql.SourceOf[staffRow](buggy, "")
-			})
-		})
 	})
 }
 
