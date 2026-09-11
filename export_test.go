@@ -290,3 +290,29 @@ func Q1BeginLogicalInvocation(ctx context.Context, executor Executor, kind Event
 func Q1UnadoptedPredicate[T any](left Expr[T], value T) Predicate {
 	return Predicate{node: query.Equal(left.node, query.Bind(value)), source: left.source}
 }
+
+// Q1GraphEdgeChildKey returns the child key one edge of a plan compiled into,
+// so a test can spoil it and watch preflight reject the plan before it runs. A
+// caller only ever hands NewGraphPlan the GraphKey it built, and never sees
+// what the edge kept.
+func Q1GraphEdgeChildKey[R, G any](plan GraphPlan[R, G], index int) *graphkey.Spec {
+	return plan.node.edges[index].childKey
+}
+
+// Q1GraphAddCycle appends two edges to the child of the plan's first edge. One
+// points at a copy of that child carrying its own identity, and one points
+// back at the root. NewGraphPlan builds a tree, so no public call can make a
+// plan that points back at an ancestor, which leaves the cycle guard with no
+// other way to be tested. It returns the root, child and copy identities,
+// which a caller checks are three distinct things.
+func Q1GraphAddCycle[R, G any](plan GraphPlan[R, G]) (root, child, shared any) {
+	first := plan.node.edges[0]
+	target := first.child
+	copied := *target
+	copied.id = &graphPlanIdentity{marker: 1}
+	target.edges = append(target.edges,
+		&graphEdgeSpec{kind: graphHasMany, name: "shared", parentKey: first.parentKey, childKey: first.childKey, child: &copied, attach: first.attach},
+		&graphEdgeSpec{kind: graphHasMany, name: "cycle", parentKey: first.parentKey, childKey: first.childKey, child: plan.node, attach: first.attach},
+	)
+	return plan.node.id, target.id, copied.id
+}
