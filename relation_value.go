@@ -19,7 +19,7 @@ type keyTuple = graphkey.Tuple
 type GraphKeyPart[R any] struct{ part *graphKeyPartSpec }
 type GraphKey[R any] struct{ key *graphKeySpec }
 
-func KeyPart[R, T comparable](column Column[R, T], extract func(R) T) GraphKeyPart[R] {
+func KeyPart[R any, T comparable](column Column[R, T], extract func(R) T) GraphKeyPart[R] {
 	if extract == nil || column.ref.Name() == "" {
 		return GraphKeyPart[R]{}
 	}
@@ -30,7 +30,7 @@ func KeyPart[R, T comparable](column Column[R, T], extract func(R) T) GraphKeyPa
 	}}
 }
 
-func NullKeyPart[R, T comparable](column NullColumn[R, T], extract func(R) Nullable[T]) GraphKeyPart[R] {
+func NullKeyPart[R any, T comparable](column NullColumn[R, T], extract func(R) Nullable[T]) GraphKeyPart[R] {
 	if extract == nil || column.ref.Name() == "" {
 		return GraphKeyPart[R]{}
 	}
