@@ -97,6 +97,13 @@ var decodePlans sync.Map // reflect.Type -> *decodePlan
 // that type are decoded; nothing in this package reads it otherwise.
 var decodePlanBuilds atomic.Int64
 
+// PlanBuildCount reports how many decode plans this package has built. A plan
+// is built once per row type and then cached, and a caller sees only that
+// decoding keeps working, so this is the one thing that shows the cache is
+// doing its job. This package is internal, so the count reaches the tests and
+// nothing outside the module.
+func PlanBuildCount() int64 { return decodePlanBuilds.Load() }
+
 // planFor returns the cached decodePlan for rowType, building and storing one
 // on first use. LoadOrStore, not Store, is used so that when two goroutines
 // race to build the same type's plan, both builds complete but only one is
