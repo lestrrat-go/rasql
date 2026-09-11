@@ -243,20 +243,17 @@ func validateReadRequest(r ReadRequest) error {
 }
 
 func validateReadDeps(r ReadRequest, d Dependencies) error {
-	if d.Analyzer != nil && isNil(d.Analyzer) {
-		return fmt.Errorf("schema source: analyzer is typed nil")
-	}
-	if isNil(d.Discoverer) || isNil(d.Catalogs) {
+	if d.Discoverer == nil || d.Catalogs == nil {
 		return fmt.Errorf("schema source: dependencies are incomplete")
 	}
 	if r.Scratch {
-		if isNil(d.Factory) {
+		if d.Factory == nil {
 			return fmt.Errorf("schema source: dependencies are incomplete")
 		}
-	} else if isNil(d.Opener) {
+	} else if d.Opener == nil {
 		return fmt.Errorf("schema source: dependencies are incomplete")
 	}
-	if r.MigrationsDir != "" && isNil(d.Migrations) {
+	if r.MigrationsDir != "" && d.Migrations == nil {
 		return fmt.Errorf("schema source: dependencies are incomplete")
 	}
 	return nil

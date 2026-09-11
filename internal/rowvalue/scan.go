@@ -3,7 +3,6 @@ package rowvalue
 import (
 	"fmt"
 	"iter"
-	"reflect"
 )
 
 type rowSource interface {
@@ -23,7 +22,9 @@ type rowSource interface {
 //
 // A nil rows yields nothing and closes nothing. A debug queryer that logs a
 // statement instead of running it returns (nil, nil), and this is what lets its
-// result travel the same path as a real one.
+// result travel the same path as a real one. A non-nil interface value holding a
+// nil pointer is not a nil rows: Scan calls Columns on it, and a *sql.Rows
+// dereferences nil there.
 //
 // The sequence is single-use. Ranging over it a second time yields nothing,
 // because the underlying rows are already closed.
@@ -32,13 +33,15 @@ func Scan(rows rowSource) iter.Seq2[Row, error] {
 }
 
 // ScanSource decodes rows and optionally leaves ownership with the caller.
+//
+// A nil rows yields nothing and closes nothing, the same as Scan.
 func ScanSource(rows rowSource, closeRows bool) iter.Seq2[Row, error] {
 	return scanSource(rows, closeRows)
 }
 
 func scanSource(rows rowSource, closeRows bool) iter.Seq2[Row, error] {
 	return func(yield func(Row, error) bool) {
-		if rows == nil || (reflect.ValueOf(rows).Kind() == reflect.Pointer && reflect.ValueOf(rows).IsNil()) {
+		if rows == nil {
 			return
 		}
 		if closeRows {
