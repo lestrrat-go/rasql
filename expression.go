@@ -193,7 +193,6 @@ func validateBoundColumn(relation Source, name, codec string) error {
 // The bind machinery lives in internal/bindplan so that package can raise the
 // same errors and be tested on its own. These names stay so the rest of this
 // package reads as before.
-type bindID = bindplan.ID
 type bindValueCopy = bindplan.ValueCopy
 type bindToken = bindplan.Token
 
