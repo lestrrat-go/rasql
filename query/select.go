@@ -2,8 +2,6 @@ package query
 
 import (
 	"fmt"
-
-	"github.com/lestrrat-go/rasql/internal/nilcheck"
 )
 
 // Projection is one entry of a SELECT list or a RETURNING list: an expression
@@ -245,7 +243,7 @@ func (o Order) Expression() Expression {
 // second copy that repeating alias could drift from — the exact drift
 // AscResult and DescResult exist to rule out.
 func (o Order) ResultProjection() (Projection, bool) {
-	if nilcheck.Is(o.resultProjection) {
+	if o.resultProjection == nil {
 		return nil, false
 	}
 	return o.resultProjection, true
@@ -849,7 +847,7 @@ func (s Select) validateProjectionSet(sources sourceScope, grouped bool) (expres
 	)
 	for i, projection := range s.projections {
 		path := fmt.Sprintf("projections[%d]", i)
-		if nilcheck.Is(projection) {
+		if projection == nil {
 			return expressionUsage{}, validationError(path, "must not be nil")
 		}
 		if alias := projection.ResultAlias(); alias != "" {

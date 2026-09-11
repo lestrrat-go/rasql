@@ -2,10 +2,8 @@ package query
 
 import (
 	"fmt"
-	"reflect"
 	"strings"
 
-	"github.com/lestrrat-go/rasql/internal/nilcheck"
 	"github.com/lestrrat-go/rasql/schema"
 )
 
@@ -80,7 +78,7 @@ func validateLock(lock Lock, from RelationRef, joins []Join) error {
 // statement's projections with ==, since a projection built by Project can
 // hold an expression whose dynamic type is not comparable.
 func validateOrderResultAlias(projection Projection, results map[string]int, path string) error {
-	if nilcheck.Is(projection) {
+	if projection == nil {
 		return validationError(path, "must not be nil")
 	}
 	name, ok := ResultName(projection)
@@ -305,7 +303,7 @@ func relationColumn(source RelationRef, name string) (schema.ColumnDef, bool) {
 }
 
 func validateExpression(expression Expression, ctx expressionContext, path string) (expressionUsage, error) {
-	if expression == nil || (reflect.ValueOf(expression).Kind() == reflect.Pointer && reflect.ValueOf(expression).IsNil()) {
+	if expression == nil {
 		return expressionUsage{}, validationError(path, "must not be nil")
 	}
 
@@ -375,10 +373,10 @@ func validateExpression(expression Expression, ctx expressionContext, path strin
 			}
 		}
 		for i, branch := range expression.branches {
-			if branch.predicate == nil || (reflect.ValueOf(branch.predicate).Kind() == reflect.Pointer && reflect.ValueOf(branch.predicate).IsNil()) {
+			if branch.predicate == nil {
 				return expressionUsage{}, validationError(fmt.Sprintf("%s.branches[%d].predicate", path, i), "must not be nil")
 			}
-			if branch.result == nil || (reflect.ValueOf(branch.result).Kind() == reflect.Pointer && reflect.ValueOf(branch.result).IsNil()) {
+			if branch.result == nil {
 				return expressionUsage{}, validationError(fmt.Sprintf("%s.branches[%d].result", path, i), "must not be nil")
 			}
 			branchContext := ctx

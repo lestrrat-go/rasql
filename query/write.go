@@ -2,8 +2,6 @@ package query
 
 import (
 	"fmt"
-
-	"github.com/lestrrat-go/rasql/internal/nilcheck"
 )
 
 // WriteStatement is a validated statement that changes database rows.
@@ -55,8 +53,10 @@ func (s Upsert) WithReturning(projections ...Projection) (Upsert, error) {
 }
 
 // WithConflictWhere returns a copy with the partial conflict-target predicate replaced.
+//
+// `predicate` must not be nil.
 func (s Upsert) WithConflictWhere(predicate Expression) (Upsert, error) {
-	if nilcheck.Is(predicate) {
+	if predicate == nil {
 		return Upsert{}, validationError("conflict_where", "must not be nil")
 	}
 	copy := s.clone()
@@ -71,8 +71,10 @@ func (s Upsert) WithConflictWhere(predicate Expression) (Upsert, error) {
 func (s Upsert) ConflictWhere() Expression { return s.conflictWhere }
 
 // WithUpdateWhere returns a copy with the conflict-update predicate replaced.
+//
+// `predicate` must not be nil.
 func (s Upsert) WithUpdateWhere(predicate Expression) (Upsert, error) {
-	if nilcheck.Is(predicate) {
+	if predicate == nil {
 		return Upsert{}, validationError("update_where", "must not be nil")
 	}
 	copy := s.clone()
@@ -116,12 +118,6 @@ func (s Upsert) Validate() error {
 	}
 	if len(s.conflict) == 0 && len(s.assignments) == 0 {
 		return validationError("upsert", "requires conflict columns or assignments")
-	}
-	if s.conflictWhere != nil && nilcheck.Is(s.conflictWhere) {
-		return validationError("conflict_where", "must not be nil")
-	}
-	if s.updateWhere != nil && nilcheck.Is(s.updateWhere) {
-		return validationError("update_where", "must not be nil")
 	}
 	if s.conflictWhere != nil && len(s.conflict) == 0 {
 		return validationError("conflict_where", "requires conflict columns")
@@ -782,7 +778,7 @@ func validateTargetColumn(column ColumnRef, table TableRef, path string) error {
 func validateProjections(projections []Projection, sources sourceScope, path string) error {
 	for i, projection := range projections {
 		itemPath := fmt.Sprintf("%s[%d]", path, i)
-		if nilcheck.Is(projection) {
+		if projection == nil {
 			return validationError(itemPath, "must not be nil")
 		}
 		if alias := projection.ResultAlias(); alias != "" {

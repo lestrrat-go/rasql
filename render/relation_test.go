@@ -303,9 +303,6 @@ func TestReusableRelationValidationBoundaries(t *testing.T) {
 	require.NoError(t, err)
 	_, err = query.NewSelect(derived, derived.Column("missing"))
 	require.Error(t, err)
-	var nilBody *query.Select
-	_, err = query.ResultOf(nilBody, query.ResultColumn{Name: "id", Type: schema.IntegerType{}})
-	require.Error(t, err)
 	otherBase, err := query.NewSelect(users, users.Column("id"), query.Project(query.Bind(1)))
 	require.NoError(t, err)
 	otherResult, err := query.ResultOf(otherBase,
