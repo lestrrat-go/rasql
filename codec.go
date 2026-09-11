@@ -2,12 +2,12 @@ package rasql
 
 import (
 	"context"
-	"database/sql"
 	"database/sql/driver"
 	"errors"
 	"fmt"
 	"reflect"
 
+	"github.com/lestrrat-go/rasql/internal/bindplan"
 	"github.com/lestrrat-go/rasql/internal/querycompile"
 	"github.com/lestrrat-go/rasql/stmt"
 )
@@ -199,55 +199,27 @@ func codecFor(reg CodecRegistry, id string) (ValueCodec, error) {
 	return codec, nil
 }
 
+// bindStatementEncoder adapts the codec registry to what bindplan asks for,
+// and builds the errors this package reports.
+type bindStatementEncoder struct{ registry CodecRegistry }
+
+func (e bindStatementEncoder) CheckBindCodec(codec string) error {
+	_, err := codecFor(e.registry, codec)
+	return err
+}
+
+func (e bindStatementEncoder) EncodeBind(index int, codec string, value any) (driver.Value, error) {
+	found, err := codecFor(e.registry, codec)
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := found.Encode(value)
+	if err != nil {
+		return nil, &EncodeError{Index: index, Codec: CodecID(codec), Err: err}
+	}
+	return encoded, nil
+}
+
 func encodeStatement(statement stmt.Statement, slots []bindSlot, reg CodecRegistry) (stmt.Statement, error) {
-	args := statement.BoundArgs()
-	if len(args) != len(slots) {
-		return stmt.Statement{}, &PlanError{Code: "bind_mismatch", Detail: "statement arguments and bind slots differ"}
-	}
-	for i, slot := range slots {
-		codec, err := codecFor(reg, slot.Codec)
-		if err != nil {
-			return stmt.Statement{}, err
-		}
-		value := args[i]
-		name := ""
-		if named, ok := value.(sql.NamedArg); ok {
-			name, value = named.Name, named.Value
-		}
-		if slot.PreEncoded {
-			if err := validateDriverValue(value); err != nil {
-				return stmt.Statement{}, &PlanError{Code: "internal_plan", Path: fmt.Sprintf("binds[%d]", i), Detail: err.Error()}
-			}
-			if b, ok := value.([]byte); ok {
-				value = append([]byte(nil), b...)
-			}
-			if name != "" {
-				args[i] = sql.Named(name, value)
-			} else {
-				args[i] = value
-			}
-			continue
-		}
-		if codec == nil {
-			continue
-		}
-		if value == nil {
-			if name != "" {
-				args[i] = sql.Named(name, nil)
-			} else {
-				args[i] = nil
-			}
-			continue
-		}
-		encoded, err := codec.Encode(value)
-		if err != nil {
-			return stmt.Statement{}, &EncodeError{Index: i, Codec: CodecID(slot.Codec), Err: err}
-		}
-		if name != "" {
-			args[i] = sql.Named(name, encoded)
-		} else {
-			args[i] = encoded
-		}
-	}
-	return stmt.New(statement.Text(), args...), nil
+	return bindplan.EncodeStatement(statement, slots, bindStatementEncoder{registry: reg})
 }
