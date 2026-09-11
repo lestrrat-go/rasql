@@ -3,7 +3,6 @@ package schema
 import (
 	"encoding/json"
 	"fmt"
-	"reflect"
 )
 
 // TypeKind identifies the family of a column type.
@@ -140,37 +139,6 @@ type DecimalType struct {
 func (DecimalType) Kind() TypeKind { return KindDecimal }
 func (DecimalType) columnType()    {}
 
-// cloneColumnType returns a ColumnType equal to columnType that shares
-// nothing with it.
-//
-// Every built-in column type is a struct with no container field, so a
-// ColumnType holding one of them by value is already a copy of itself and is
-// returned unchanged. A pointer to a built-in type also satisfies ColumnType,
-// since each type declares its methods on a value receiver, and copying such
-// an interface value copies only the pointer -- so this returns a pointer to
-// a fresh copy of the pointed-to value instead. The pointer form is not one
-// the rest of this package supports (validColumnType rejects it, so
-// TableDef.Validate and JSON encoding both refuse it), but a descriptor
-// holding one still must not let a clone write back into its source.
-//
-// This asks the value whether it is a pointer rather than naming the pointer
-// types one by one, so a column type added to this file is deep-copied the
-// day it is declared and there is no list here to fall behind. A nil
-// ColumnType, and a nil pointer to a column type, point at nothing to copy
-// and are returned unchanged.
-func cloneColumnType(columnType ColumnType) ColumnType {
-	if columnType == nil {
-		return nil
-	}
-	value := reflect.ValueOf(columnType)
-	if value.Kind() != reflect.Pointer || value.IsNil() {
-		return columnType
-	}
-	clone := reflect.New(value.Type().Elem())
-	clone.Elem().Set(value.Elem())
-	return clone.Interface().(ColumnType)
-}
-
 func validColumnType(columnType ColumnType) bool {
 	switch columnType.(type) {
 	case BooleanType, IntegerType, FloatType, TextType, BytesType, TimeType, JSONType, UUIDType, DecimalType, OpaqueType:
@@ -184,20 +152,21 @@ func validColumnType(columnType ColumnType) bool {
 // built-in type. It is exported for APIs that carry column metadata without a
 // full TableDef.
 //
+// A pointer to a built-in type satisfies ColumnType too, since every built-in
+// declares its methods on a value receiver. This returns
+// "unsupported column type *schema.IntegerType" for one, the same error
+// TableDef.Validate reports, and ColumnDef.MarshalJSON refuses it as well: a
+// column type is held by value.
+//
 // `columnType` must not be nil.
 func ValidateColumnType(columnType ColumnType) error {
 	if columnType == nil {
 		return fmt.Errorf("column type must not be nil")
 	}
-	value := reflect.ValueOf(columnType)
-	if value.Kind() == reflect.Pointer {
-		value = value.Elem()
-	}
-	base := value.Interface().(ColumnType)
-	if !validColumnType(base) {
+	if !validColumnType(columnType) {
 		return fmt.Errorf("unsupported column type %T", columnType)
 	}
-	switch typed := base.(type) {
+	switch typed := columnType.(type) {
 	case DecimalType:
 		if typed.Precision < 1 {
 			return fmt.Errorf("decimal precision must be at least 1")
@@ -223,11 +192,6 @@ func ValidateColumnType(columnType ColumnType) error {
 		}
 	}
 	return nil
-}
-
-// CloneColumnType returns an independent copy of a built-in column type.
-func CloneColumnType(columnType ColumnType) ColumnType {
-	return cloneColumnType(columnType)
 }
 
 func marshalColumnType(columnType ColumnType) ([]byte, error) {

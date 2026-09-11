@@ -49,10 +49,7 @@ type ResultSchema struct{ columns []ResultColumn }
 
 func cloneQ1ResultColumns(columns []ResultColumn) []ResultColumn {
 	result := make([]ResultColumn, len(columns))
-	for i, column := range columns {
-		result[i] = column
-		result[i].Type = schema.CloneColumnType(column.Type)
-	}
+	copy(result, columns)
 	return result
 }
 

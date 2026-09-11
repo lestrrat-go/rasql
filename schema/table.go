@@ -1158,11 +1158,7 @@ func (t TableDef) QualifiedName() string {
 // field added to one of those types is copied here as soon as that type's
 // own Clone copies it. ColumnDef, CheckDef, IndexKeyDef and
 // ExclusionElementDef own no container, so their elements are copied by
-// assignment and have no Clone method to route through. ColumnDef.Type is
-// the one field an assignment does not settle, because a ColumnType is an
-// interface that a pointer to a built-in type also satisfies; each column's
-// Type is routed through cloneColumnType, which copies the pointed-to value
-// of such a pointer.
+// assignment and have no Clone method to route through.
 func (t TableDef) Clone() TableDef {
 	clone := t
 	clone.Columns = cloneColumns(t.Columns)
@@ -1179,13 +1175,12 @@ func (t TableDef) Clone() TableDef {
 
 // cloneColumns returns a copy of source in which no element shares anything
 // with the source element it was copied from. A ColumnDef owns no container,
-// so an assignment copies all of it but Type, whose interface value is
-// routed through cloneColumnType. It preserves source's nilness exactly as
-// slices.Clone does.
+// so an assignment copies all of it but the two descriptors it points at,
+// NativeType and GoBinding, which are routed through their own clone methods.
+// It preserves source's nilness exactly as slices.Clone does.
 func cloneColumns(source []ColumnDef) []ColumnDef {
 	clone := slices.Clone(source)
 	for i := range clone {
-		clone[i].Type = cloneColumnType(clone[i].Type)
 		clone[i].NativeType = clone[i].NativeType.clone()
 		clone[i].GoBinding = clone[i].GoBinding.Clone()
 	}
