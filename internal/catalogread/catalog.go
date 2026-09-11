@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"reflect"
 	"sort"
 
 	"github.com/lestrrat-go/rasql/dialect"
@@ -38,11 +37,17 @@ type Result struct {
 
 var ErrUnresolvedFact = engineprofile.ErrUnresolvedFact
 
+// Read inspects the catalog under scope through a read-only transaction it begins on db and commits before
+// returning: REPEATABLE READ on PostgreSQL and MySQL, SQLite's default isolation on SQLite. It returns an
+// error wrapping engineprofile.ErrUnsupportedFeature for a custom profile, because no catalog queries exist
+// for one.
+//
+// `db` must not be nil.
 func Read(ctx context.Context, db DB, p engineprofile.Profile, scope Scope) (Result, error) {
 	if err := validateReadProfile(p); err != nil {
 		return Result{}, err
 	}
-	if isNil(db) {
+	if db == nil {
 		return Result{}, fmt.Errorf("catalog database must not be nil")
 	}
 	if err := validateScope(scope, p.Engine == engineprofile.SQLite); err != nil {
@@ -331,15 +336,4 @@ func profileDialect(p engineprofile.Profile) dialect.Dialect {
 		return dialect.SQLite()
 	}
 	return nil
-}
-func isNil(v any) bool {
-	if v == nil {
-		return true
-	}
-	x := reflect.ValueOf(v)
-	switch x.Kind() {
-	case reflect.Pointer, reflect.Interface, reflect.Map, reflect.Slice, reflect.Func:
-		return x.IsNil()
-	}
-	return false
 }

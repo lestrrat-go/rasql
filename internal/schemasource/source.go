@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"reflect"
 	"strings"
 
 	"github.com/lestrrat-go/rasql/internal/catalogread"
@@ -58,6 +57,13 @@ type AnalysisResult struct {
 type Analyzer interface {
 	Analyze(context.Context, AnalysisRequest) (AnalysisResult, error)
 }
+// Dependencies carries the adapters Read calls. Discoverer and Catalogs must be set for every ReadRequest,
+// Factory when ReadRequest.Scratch is true, Opener when it is false, and Migrations when
+// ReadRequest.MigrationsDir is not empty. Read reports "schema source: dependencies are incomplete" for a
+// field it needs and does not have. Analyzer may be nil, and Read then returns a ReadResult with no query
+// analysis.
+//
+// `Discoverer` and `Catalogs` must not be nil.
 type Dependencies struct {
 	Factory    DisposableFactory
 	Opener     DatabaseOpener
@@ -70,18 +76,6 @@ type Dependencies struct {
 // DefaultDependencies wires every production adapter Read needs.
 func DefaultDependencies() Dependencies {
 	return Dependencies{Factory: defaultFactory{}, Opener: sqlOpener{}, Migrations: defaultMigrations{}, Catalogs: defaultCatalogs{}, Discoverer: defaultProfileDiscoverer{}}
-}
-
-func isNil(v any) bool {
-	if v == nil {
-		return true
-	}
-	value := reflect.ValueOf(v)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return value.IsNil()
-	}
-	return false
 }
 
 func engineFor(s string) string { return strings.ToLower(s) }
