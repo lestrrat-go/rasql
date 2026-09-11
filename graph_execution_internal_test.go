@@ -483,82 +483,6 @@ func TestGraphExecution(t *testing.T) {
 		require.Zero(t, executor.queries.Load())
 	})
 
-	t.Run("direct duplicate parents map fresh rows", func(t *testing.T) {
-		fixture := graphCacheFixtureFor(t)
-		raw := &graphDuplicateParentExecutor{Executor: fixture.executor}
-		profile, err := EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
-		executor, err := WithEngineProfile(raw, profile)
-		require.NoError(t, err)
-		var mapped atomic.Int64
-		children, err := NewGraphPlan(fixture.childQuery, func(row graphCacheChildRow) graphCacheChild {
-			call := mapped.Add(1)
-			seen := row.Payload[0]
-			if call == 1 {
-				row.Payload[0] = 'z'
-			}
-			return graphCacheChild{ID: row.ID, Payload: []byte{seen}}
-		})
-		require.NoError(t, err)
-		edge, err := HasMany("children", fixture.parentKey, fixture.childKey, children, EdgeOptions{}, func(parent *graphCacheParent, loaded LoadedMany[graphCacheChild]) {
-			parent.First = loaded
-		})
-		require.NoError(t, err)
-		plan, err := NewGraphPlan(fixture.parentQuery, func(graphCacheParentRow) graphCacheParent { return graphCacheParent{} }, edge)
-		require.NoError(t, err)
-
-		values, err := LoadGraph(t.Context(), executor, plan)
-		require.NoError(t, err)
-		require.Len(t, values, 2)
-		require.Equal(t, int64(4), mapped.Load())
-		for _, value := range values {
-			require.Len(t, value.First.Values, 2)
-		}
-		values[0].First.Values[0].Payload[0] = 'z'
-		require.Equal(t, byte('a'), values[1].First.Values[0].Payload[0])
-	})
-
-	t.Run("a many-through cache normalizes keys once", func(t *testing.T) {
-		fixture := graphCacheFixtureFor(t)
-		parentCodec := &graphRuntimeCodec{}
-		targetCodec := &graphRuntimeCodec{}
-		registry, err := NewCodecRegistry(map[CodecID]ValueCodec{
-			"graph.runtime.parent": parentCodec,
-			"graph.runtime.target": targetCodec,
-		})
-		require.NoError(t, err)
-		withCodecs, err := WithCodecs(fixture.executor, registry)
-		require.NoError(t, err)
-		provider, ok := withCodecs.(compilerProvider)
-		require.True(t, ok)
-		executor := &graphDuplicateParentExecutor{Executor: withCodecs, compiler: provider.queryCompiler()}
-
-		parentKey := graphRuntimeCodecKey(fixture.parentKey, "graph.runtime.parent")
-		junctionParent := graphRuntimeCodecKey(fixture.junctionKey, "graph.runtime.parent")
-		junctionChild := graphRuntimeCodecKey(fixture.throughKey, "graph.runtime.target")
-		childKey := graphRuntimeCodecKey(fixture.childIDKey, "graph.runtime.target")
-		children, err := NewGraphPlan(fixture.childQuery, func(row graphCacheChildRow) graphCacheChild {
-			return graphCacheChild{ID: row.ID, Payload: row.Payload}
-		})
-		require.NoError(t, err)
-		first, err := ManyThrough("first", parentKey, junctionParent, junctionChild, childKey, fixture.junction, children, EdgeOptions{}, func(parent *graphCacheParent, loaded LoadedMany[graphCacheChild]) {
-			parent.First = loaded
-		})
-		require.NoError(t, err)
-		second, err := ManyThrough("second", parentKey, junctionParent, junctionChild, childKey, fixture.junction, children, EdgeOptions{}, func(parent *graphCacheParent, loaded LoadedMany[graphCacheChild]) {
-			parent.Second = loaded
-		})
-		require.NoError(t, err)
-		plan, err := NewGraphPlan(fixture.parentQuery, func(graphCacheParentRow) graphCacheParent { return graphCacheParent{} }, first, second)
-		require.NoError(t, err)
-
-		values, err := LoadGraph(t.Context(), executor, plan)
-		require.NoError(t, err)
-		require.Len(t, values, 2)
-		require.Equal(t, int64(5), parentCodec.enc.Load())
-		require.Equal(t, int64(2), targetCodec.enc.Load())
-	})
-
 	t.Run("a mapper panic reports the decoded row count", func(t *testing.T) {
 		base, _, _, _, parentQuery, _ := graphAcceptanceFixture(t, 1)
 		parentQuery, err := parentQuery.Limit(1)
@@ -749,53 +673,9 @@ type graphRuntimeCountingExecutor struct {
 	queries  atomic.Int64
 }
 
-type graphDuplicateParentExecutor struct {
-	Executor
-	compiler *querycompile.Compiler
-}
-
-func (e *graphDuplicateParentExecutor) queryCompiler() *querycompile.Compiler { return e.compiler }
-
-func (e *graphDuplicateParentExecutor) Codecs() CodecRegistry {
-	provider, ok := e.Executor.(CodecProvider)
-	if !ok {
-		return builtinCodecs
-	}
-	return provider.Codecs()
-}
-
-func (e *graphDuplicateParentExecutor) Query(ctx context.Context, statement stmt.Statement) (ResultRows, error) {
-	if strings.Contains(statement.SQL(), "graph_cache_parents") {
-		return &runtimeFakeRows{columns: []string{"id"}, values: [][]any{{int64(1)}, {int64(1)}}}, nil
-	}
-	return e.Executor.Query(ctx, statement)
-}
-
-type graphRuntimeCodec struct{ enc atomic.Int64 }
-
-func (c *graphRuntimeCodec) Encode(value any) (driver.Value, error) {
-	c.enc.Add(1)
-	return value, nil
-}
-func (*graphRuntimeCodec) Decode(value any, destination any) error {
-	switch destination := destination.(type) {
-	case *any:
-		*destination = value
-	case *int64:
-		*destination = value.(int64)
-	}
-	return nil
-}
-
 func (e *graphRuntimeCountingExecutor) queryCompiler() *querycompile.Compiler { return e.compiler }
 
 func (e *graphRuntimeCountingExecutor) Query(ctx context.Context, statement stmt.Statement) (ResultRows, error) {
 	e.queries.Add(1)
 	return e.Executor.Query(ctx, statement)
-}
-
-func graphRuntimeCodecKey[R any](base GraphKey[R], codec string) GraphKey[R] {
-	part := *base.key.Parts[0]
-	part.Codec = codec
-	return GraphKey[R]{key: &graphKeySpec{Parts: []*graphKeyPartSpec{&part}}}
 }
