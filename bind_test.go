@@ -1,4 +1,4 @@
-package rasql
+package rasql_test
 
 import (
 	"database/sql"
@@ -6,7 +6,10 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/internal/bindplan"
+	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/lestrrat-go/rasql/stmt"
 	"github.com/stretchr/testify/require"
@@ -22,9 +25,8 @@ type bindCopyShape struct {
 	Named sql.NamedArg
 }
 
-func tokenOf[T any](expression Expr[T]) bindToken {
-	value := expression.node.(query.Value).Argument()
-	return value.(bindToken)
+func tokenOf[T any](expression rasql.Expr[T]) bindplan.Token {
+	return rasql.Q1BindToken(expression)
 }
 
 func TestBindCopy(t *testing.T) {
@@ -34,11 +36,11 @@ func TestBindCopy(t *testing.T) {
 			Array: [2]int{1, 2}, Ptr: &number, Empty: []byte{}, Map: map[string][]byte{"x": {3}},
 			Any: []byte{4}, Named: sql.Named("inner", []byte{5}),
 		}
-		expression := Value(input)
+		expression := rasql.Value(input)
 		token := tokenOf(expression)
 		input.Array[0], number, input.Map["x"][0] = 99, 88, 77
 		input.Any.([]byte)[0], input.Named.Value.([]byte)[0] = 66, 55
-		compiled, err := unwrapBindTokens(stmt.New(sqltext.Text("SELECT ?"), token))
+		compiled, err := bindplan.Unwrap(stmt.New(sqltext.Text("SELECT ?"), token))
 		require.NoError(t, err)
 		first, err := compiled.Copy()
 		require.NoError(t, err)
@@ -67,7 +69,7 @@ func TestBindCopy(t *testing.T) {
 		require.NotNil(t, secondShape.Empty)
 		require.Equal(t, []byte{}, secondShape.Empty)
 		require.Nil(t, secondShape.Nil)
-		compiledAgain, err := unwrapBindTokens(stmt.New(sqltext.Text("SELECT ?"), token))
+		compiledAgain, err := bindplan.Unwrap(stmt.New(sqltext.Text("SELECT ?"), token))
 		require.NoError(t, err)
 		third, err := compiledAgain.Copy()
 		require.NoError(t, err)
@@ -75,9 +77,9 @@ func TestBindCopy(t *testing.T) {
 	})
 
 	t.Run("repeated occurrence uses independent copies", func(t *testing.T) {
-		expression := Value([]byte("x"))
+		expression := rasql.Value([]byte("x"))
 		token := tokenOf(expression)
-		compiled, err := unwrapBindTokens(stmt.New(sqltext.Text("SELECT ?, ?"), token, token))
+		compiled, err := bindplan.Unwrap(stmt.New(sqltext.Text("SELECT ?, ?"), token, token))
 		require.NoError(t, err)
 		require.Equal(t, compiled.Slots[0], compiled.Slots[1])
 		statement, err := compiled.Copy()
@@ -85,15 +87,15 @@ func TestBindCopy(t *testing.T) {
 		args := statement.BoundArgs()
 		args[0].([]byte)[0] = 'z'
 		require.Equal(t, []byte("x"), args[1])
-		other := Value([]byte("x"))
+		other := rasql.Value([]byte("x"))
 		require.NotEqual(t, tokenOf(expression).ID, tokenOf(other).ID)
 	})
 
 	t.Run("snapshotter runs once", func(t *testing.T) {
 		calls := &atomic.Int32{}
-		expression := Value(struct{ Value bindCopyOpaque }{Value: bindCopyOpaque{value: []byte("x"), calls: calls}})
+		expression := rasql.Value(struct{ Value bindCopyOpaque }{Value: bindCopyOpaque{value: []byte("x"), calls: calls}})
 		token := tokenOf(expression)
-		compiled, err := unwrapBindTokens(stmt.New(sqltext.Text("SELECT ?"), token))
+		compiled, err := bindplan.Unwrap(stmt.New(sqltext.Text("SELECT ?"), token))
 		require.NoError(t, err)
 		for i := 0; i < 3; i++ {
 			_, err = compiled.Copy()
@@ -111,9 +113,9 @@ func TestBindCopy(t *testing.T) {
 			sql.Named("named", bindCopyOpaque{value: []byte("named"), calls: calls}),
 		}
 		for index, value := range values {
-			expression := Value(value)
-			token := expression.node.(query.Value).Argument().(bindToken)
-			compiled, err := unwrapBindTokens(stmt.New(sqltext.Text("SELECT ?"), token))
+			expression := rasql.Value(value)
+			token := tokenOf(expression)
+			compiled, err := bindplan.Unwrap(stmt.New(sqltext.Text("SELECT ?"), token))
 			require.NoError(t, err)
 			for i := 0; i < 3; i++ {
 				statement, copyErr := compiled.Copy()
@@ -134,7 +136,7 @@ func TestBindCopy(t *testing.T) {
 	})
 
 	t.Run("legacy and named arguments", func(t *testing.T) {
-		legacy, err := unwrapBindTokens(stmt.New(sqltext.Text("SELECT ?, ?"), []byte("x"), sql.Named("name", []byte("y"))))
+		legacy, err := bindplan.Unwrap(stmt.New(sqltext.Text("SELECT ?, ?"), []byte("x"), sql.Named("name", []byte("y"))))
 		require.NoError(t, err)
 		first, err := legacy.Copy()
 		require.NoError(t, err)
@@ -144,7 +146,7 @@ func TestBindCopy(t *testing.T) {
 		require.Equal(t, []byte("x"), second.BoundArgs()[0])
 		require.Equal(t, "name", second.BoundArgs()[1].(sql.NamedArg).Name)
 		nilBytes := []byte(nil)
-		legacyGraph, err := unwrapBindTokens(stmt.New(sqltext.Text("SELECT ?, ?"), nilBytes, struct {
+		legacyGraph, err := bindplan.Unwrap(stmt.New(sqltext.Text("SELECT ?, ?"), nilBytes, struct {
 			Array [2][]byte
 			Map   map[string][]byte
 		}{Array: [2][]byte{{1}, nil}, Map: map[string][]byte{"x": {2}}}))
@@ -168,22 +170,22 @@ func TestBindCopy(t *testing.T) {
 			Array [2][]byte
 			Map   map[string][]byte
 		}).Map["x"])
-		_, err = unwrapBindTokens(stmt.New(sqltext.Text("SELECT ?"), bindCopyLegacy{value: []byte("x")}))
-		var planErr *PlanError
+		_, err = bindplan.Unwrap(stmt.New(sqltext.Text("SELECT ?"), bindCopyLegacy{value: []byte("x")}))
+		var planErr *rasql.PlanError
 		require.ErrorAs(t, err, &planErr)
 		require.Equal(t, "unsnapshotable_bind", planErr.Code)
 	})
 
 	t.Run("named token shapes and alignment", func(t *testing.T) {
-		directExpression, err := ValueWithCodec(sql.Named("inner", []byte("value")), "bytes.codec")
+		directExpression, err := rasql.ValueWithCodec(sql.Named("inner", []byte("value")), "bytes.codec")
 		require.NoError(t, err)
 		directToken := tokenOf(directExpression)
-		value, copier, err := adoptBind([]byte("outer"), true)
+		value, copier, err := bindplan.Adopt([]byte("outer"), true)
 		require.NoError(t, err)
-		syntheticToken := bindToken{ID: 91, Codec: "text.codec", Value: value, Copy: copier}
-		compiled, err := unwrapBindTokens(stmt.New(sqltext.Text("SELECT ?, ?"), directToken, sql.Named("outer", syntheticToken)))
+		syntheticToken := bindplan.Token{ID: 91, Codec: "text.codec", Value: value, Copy: copier}
+		compiled, err := bindplan.Unwrap(stmt.New(sqltext.Text("SELECT ?, ?"), directToken, sql.Named("outer", syntheticToken)))
 		require.NoError(t, err)
-		require.Equal(t, []bindSlot{{ID: directToken.ID, Codec: "bytes.codec"}, {ID: 91, Codec: "text.codec"}}, compiled.Slots)
+		require.Equal(t, []bindplan.Slot{{ID: directToken.ID, Codec: "bytes.codec"}, {ID: 91, Codec: "text.codec"}}, compiled.Slots)
 		statement, err := compiled.Copy()
 		require.NoError(t, err)
 		args := statement.BoundArgs()
@@ -191,32 +193,32 @@ func TestBindCopy(t *testing.T) {
 		require.Equal(t, []byte("value"), args[0].(sql.NamedArg).Value)
 		require.Equal(t, "outer", args[1].(sql.NamedArg).Name)
 		require.Equal(t, []byte("outer"), args[1].(sql.NamedArg).Value)
-		_, nested := args[1].(sql.NamedArg).Value.(bindToken)
+		_, nested := args[1].(sql.NamedArg).Value.(bindplan.Token)
 		require.False(t, nested)
 	})
 
 	t.Run("atomic errors and alignment", func(t *testing.T) {
 		sentinel := errors.New("copy failed")
 		laterCalled := false
-		compiled := compiledQuery{
+		compiled := bindplan.Compiled{
 			Statement: stmt.New(sqltext.Text("SELECT ?, ?"), 1, 2),
-			Slots:     []bindSlot{{}, {}},
-			CopyArgs: []bindValueCopy{
+			Slots:     []bindplan.Slot{{}, {}},
+			CopyArgs: []bindplan.ValueCopy{
 				func() (any, error) { return nil, sentinel },
 				func() (any, error) { laterCalled = true; return 2, nil },
 			},
 		}
 		statement, err := compiled.Copy()
-		var planErr *PlanError
+		var planErr *rasql.PlanError
 		require.ErrorIs(t, err, sentinel)
 		require.ErrorAs(t, err, &planErr)
 		require.Equal(t, "unsnapshotable_bind", planErr.Code)
 		require.Equal(t, "args[0]", planErr.Path)
 		require.Equal(t, stmt.Statement{}, statement)
 		require.False(t, laterCalled)
-		for _, invalid := range []compiledQuery{
-			{Statement: stmt.New(sqltext.Text("SELECT ?"), 1), Slots: []bindSlot{{}}, CopyArgs: []bindValueCopy{nil}},
-			{Statement: stmt.New(sqltext.Text("SELECT ?"), 1), Slots: nil, CopyArgs: []bindValueCopy{func() (any, error) { return 1, nil }}},
+		for _, invalid := range []bindplan.Compiled{
+			{Statement: stmt.New(sqltext.Text("SELECT ?"), 1), Slots: []bindplan.Slot{{}}, CopyArgs: []bindplan.ValueCopy{nil}},
+			{Statement: stmt.New(sqltext.Text("SELECT ?"), 1), Slots: nil, CopyArgs: []bindplan.ValueCopy{func() (any, error) { return 1, nil }}},
 		} {
 			statement, err := invalid.Copy()
 			require.ErrorAs(t, err, &planErr)
@@ -225,9 +227,9 @@ func TestBindCopy(t *testing.T) {
 	})
 
 	t.Run("rendered order across composition shapes", func(t *testing.T) {
-		firstExpression, err := ValueWithCodec([]byte("first"), "bytes.codec")
+		firstExpression, err := rasql.ValueWithCodec([]byte("first"), "bytes.codec")
 		require.NoError(t, err)
-		secondExpression, err := ValueWithCodec(sql.Named("named", []byte("second")), "named.codec")
+		secondExpression, err := rasql.ValueWithCodec(sql.Named("named", []byte("second")), "named.codec")
 		require.NoError(t, err)
 		firstToken, secondToken := tokenOf(firstExpression), tokenOf(secondExpression)
 		legacy := struct {
@@ -236,10 +238,10 @@ func TestBindCopy(t *testing.T) {
 		statement := stmt.New(sqltext.Text("SELECT ?, ?, ?, ?, ?, ?, ?"),
 			firstToken, sql.Named("outer", secondToken), firstToken, nil, legacy, secondToken, sql.NamedArg{Name: "empty"},
 		)
-		compiled, err := unwrapBindTokens(statement)
+		compiled, err := bindplan.Unwrap(statement)
 		require.NoError(t, err)
 		require.Len(t, compiled.Slots, 7)
-		require.Equal(t, []bindID{firstToken.ID, secondToken.ID, firstToken.ID, 0, 0, secondToken.ID, 0}, []bindID{
+		require.Equal(t, []bindplan.ID{firstToken.ID, secondToken.ID, firstToken.ID, 0, 0, secondToken.ID, 0}, []bindplan.ID{
 			compiled.Slots[0].ID, compiled.Slots[1].ID, compiled.Slots[2].ID, compiled.Slots[3].ID,
 			compiled.Slots[4].ID, compiled.Slots[5].ID, compiled.Slots[6].ID,
 		})
@@ -257,32 +259,32 @@ func TestBindCopy(t *testing.T) {
 	})
 
 	t.Run("composition alignment across CTE, compound predicate and order", func(t *testing.T) {
-		base, relation := q2AcceptanceQueryRelation(t)
-		compound, err := Combine(base, UnionAll, base)
+		base, relation := bindQueryRelation(t)
+		compound, err := rasql.Combine(base, rasql.UnionAll, base)
 		require.NoError(t, err)
-		amount, err := BindColumn[q2AcceptanceRow, int64](relation, "amount", "")
+		amount, err := rasql.BindColumn[bindFixtureRow, int64](relation, "amount", "")
 		require.NoError(t, err)
-		predicateQuery := base.Where(EqualValue(amount.Expr(), int64(2))).Where(EqualValue(amount.Expr(), int64(3)))
-		orderQuery := base.OrderBy(AscExpr(Value(int64(3))))
-		cte, err := CTEOf("bound_values", base)
+		predicateQuery := base.Where(rasql.EqualValue(amount.Expr(), int64(2))).Where(rasql.EqualValue(amount.Expr(), int64(3)))
+		orderQuery := base.OrderBy(rasql.AscExpr(rasql.Value(int64(3))))
+		cte, err := rasql.CTEOf("bound_values", base)
 		require.NoError(t, err)
-		with, err := With(base, cte)
+		with, err := rasql.With(base, cte)
 		require.NoError(t, err)
-		compiler := q2AcceptanceCompiler(t)
-		compiledBase, err := compileQuery(compiler, base)
+		compiler := bindCompiler(t)
+		compiledBase, err := rasql.Q1CompileQuery(compiler, base)
 		require.NoError(t, err)
-		compiledCompound, err := compileQuery(compiler, compound)
+		compiledCompound, err := rasql.Q1CompileQuery(compiler, compound)
 		require.NoError(t, err)
-		compiledPredicate, err := compileQuery(compiler, predicateQuery)
+		compiledPredicate, err := rasql.Q1CompileQuery(compiler, predicateQuery)
 		require.NoError(t, err)
-		compiledOrder, err := compileQuery(compiler, orderQuery)
+		compiledOrder, err := rasql.Q1CompileQuery(compiler, orderQuery)
 		require.NoError(t, err)
-		compiledWith, err := compileQuery(compiler, with)
+		compiledWith, err := rasql.Q1CompileQuery(compiler, with)
 		require.NoError(t, err)
-		count := CountQuery(compound, true)
-		compiledCount, err := compileQuery(compiler, count)
+		count := rasql.CountQuery(compound, true)
+		compiledCount, err := rasql.Q1CompileQuery(compiler, count)
 		require.NoError(t, err)
-		for _, compiled := range []compiledQuery{compiledBase, compiledCompound, compiledPredicate, compiledOrder, compiledWith, compiledCount} {
+		for _, compiled := range []bindplan.Compiled{compiledBase, compiledCompound, compiledPredicate, compiledOrder, compiledWith, compiledCount} {
 			require.Equal(t, len(compiled.Statement.BoundArgs()), len(compiled.Slots))
 			require.Equal(t, len(compiled.Statement.BoundArgs()), len(compiled.CopyArgs))
 			for index, copier := range compiled.CopyArgs {
@@ -308,3 +310,61 @@ func (value bindCopyOpaque) SnapshotBind() (bindCopyOpaque, error) {
 type bindCopyLegacy struct{ value []byte }
 
 func (bindCopyLegacy) SnapshotBind() (bindCopyLegacy, error) { panic("legacy snapshotter was called") }
+
+type bindFixtureRow struct {
+	Category rasql.Nullable[string]
+	Amount   int64
+}
+
+type bindFixtureDecoder struct{ result rasql.ResultSchema }
+
+func (d bindFixtureDecoder) ResultSchema() rasql.ResultSchema { return d.result }
+func (bindFixtureDecoder) Presence() []rasql.Presence         { return nil }
+func (bindFixtureDecoder) DecodeRow(source rasql.ScanSource, row *bindFixtureRow) error {
+	var category sql.NullString
+	if err := source.Scan(&category, &row.Amount); err != nil {
+		return err
+	}
+	row.Category = rasql.Nullable[string]{Value: category.String, Valid: category.Valid}
+	return nil
+}
+
+// bindQueryRelation returns a two-column query and the relation it reads, so a
+// caller can bind another column of the same source.
+func bindQueryRelation(t *testing.T) (rasql.Query[bindFixtureRow], rasql.TypedRelation[bindFixtureRow]) {
+	t.Helper()
+	table, err := rasql.ReadTableOf[bindFixtureRow](schema.TableDef{
+		Name: "bind_items",
+		Columns: []schema.ColumnDef{
+			{Name: "category", Type: schema.TextType{}, Nullable: true},
+			{Name: "amount", Type: schema.IntegerType{}},
+		},
+	})
+	require.NoError(t, err)
+	relation, err := rasql.SourceOf(table, "i")
+	require.NoError(t, err)
+	category, err := rasql.BindNullColumn[bindFixtureRow, string](relation, "category", "category.codec")
+	require.NoError(t, err)
+	amount, err := rasql.BindColumn[bindFixtureRow, int64](relation, "amount", "amount.codec")
+	require.NoError(t, err)
+	result, err := rasql.NewResultSchema(
+		rasql.ResultColumn{Name: "category", Type: schema.TextType{}, Nullable: true, Codec: "category.codec"},
+		rasql.ResultColumn{Name: "amount", Type: schema.IntegerType{}, Codec: "amount.codec"},
+	)
+	require.NoError(t, err)
+	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
+		rasql.NullItem("category", category.NullExpr(), schema.TextType{}, "category.codec"),
+		rasql.Item("amount", amount.Expr(), schema.IntegerType{}, "amount.codec"),
+	}, bindFixtureDecoder{result: result})
+	require.NoError(t, err)
+	return rasql.Select(relation.Source(), projection), relation
+}
+
+func bindCompiler(t *testing.T) rasql.Compiler {
+	t.Helper()
+	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+	require.NoError(t, err)
+	compiler, err := profile.Compiler(dialect.SQLite())
+	require.NoError(t, err)
+	return compiler
+}
