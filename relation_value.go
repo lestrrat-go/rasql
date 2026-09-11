@@ -3,12 +3,10 @@ package rasql
 import (
 	"bytes"
 	"database/sql/driver"
-	"encoding/binary"
 	"fmt"
-	"math"
 	"reflect"
-	"time"
 
+	"github.com/lestrrat-go/rasql/internal/graphkey"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 )
@@ -96,69 +94,12 @@ type keyTuple struct {
 	identity   string
 }
 
-func normalizeGraphValue(value any) (driver.Value, error) {
-	if value == nil {
-		return nil, nil
-	}
-	converted, err := driver.DefaultParameterConverter.ConvertValue(value)
-	if err != nil {
-		return nil, err
-	}
-	if err := validateDriverValue(converted); err != nil {
-		return nil, err
-	}
-	return converted, nil
-}
+func normalizeGraphValue(value any) (driver.Value, error) { return graphkey.Normalize(value) }
 
-func frameGraphValue(value driver.Value) ([]byte, error) {
-	return frameGraphValueWithNaN(value, false)
-}
+func frameGraphValue(value driver.Value) ([]byte, error) { return graphkey.Frame(value) }
 
 func frameGraphFingerprintValue(value driver.Value) ([]byte, error) {
-	return frameGraphValueWithNaN(value, true)
-}
-
-func frameGraphValueWithNaN(value driver.Value, allowNaN bool) ([]byte, error) {
-	var tag byte
-	var payload []byte
-	switch v := value.(type) {
-	case nil:
-		tag = 0
-	case int64:
-		tag = 1
-		payload = make([]byte, 8)
-		binary.BigEndian.PutUint64(payload, uint64(v))
-	case float64:
-		if !allowNaN && math.IsNaN(v) {
-			return nil, fmt.Errorf("NaN is not a graph key")
-		}
-		tag = 2
-		payload = make([]byte, 8)
-		binary.BigEndian.PutUint64(payload, math.Float64bits(v))
-	case bool:
-		tag = 3
-		if v {
-			payload = []byte{1}
-		} else {
-			payload = []byte{0}
-		}
-	case []byte:
-		tag = 4
-		payload = append([]byte(nil), v...)
-	case string:
-		tag = 5
-		payload = []byte(v)
-	case time.Time:
-		tag = 6
-		payload = []byte(v.UTC().Format(time.RFC3339Nano))
-	default:
-		return nil, fmt.Errorf("unsupported graph key value %T", value)
-	}
-	result := make([]byte, 9+len(payload))
-	result[0] = tag
-	binary.BigEndian.PutUint64(result[1:], uint64(len(payload)))
-	copy(result[9:], payload)
-	return result, nil
+	return graphkey.FrameAllowingNaN(value)
 }
 
 func (k *graphKeySpec) tuple(row any, codecs CodecRegistry) (keyTuple, bool, error) {

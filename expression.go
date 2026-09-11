@@ -4,11 +4,11 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
-	"fmt"
 	"reflect"
 	"sync/atomic"
 	"time"
 
+	"github.com/lestrrat-go/rasql/internal/graphkey"
 	"github.com/lestrrat-go/rasql/internal/mutationcolumn"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
@@ -222,12 +222,7 @@ func graphEncodedBind(value driver.Value, codec string) (query.Expression, error
 	return query.Bind(bindToken{id: id, value: snapshot, codec: codec, copy: copier, preEncoded: true}), nil
 }
 
-func validateDriverValue(value driver.Value) error {
-	if value == nil || driver.IsValue(value) {
-		return nil
-	}
-	return fmt.Errorf("value %T is not a legal driver value", value)
-}
+func validateDriverValue(value driver.Value) error { return graphkey.ValidateDriverValue(value) }
 
 func Value[T any](value T) Expr[T] {
 	id := bindID(atomic.AddUint64(&nextBindID, 1))
