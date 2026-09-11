@@ -532,6 +532,10 @@ type Plan struct {
 	operations []Operation
 }
 
+// NewPlan builds a Plan from decisions and operations against baseline and
+// history, storing the Profile built from source as the plan's profile.
+//
+// `source` must not be nil.
 func NewPlan(source ProfileSource, baseline BaselineIdentity, history HistoryIdentity, decisions []Decision, operations []Operation) (Plan, error) {
 	profile, err := NewProfile(source)
 	if err != nil {

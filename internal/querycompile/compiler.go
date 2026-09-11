@@ -32,6 +32,8 @@ func New(p engineprofile.Profile) (Compiler, error) {
 // NewWithDialect retains the caller's validated dialect, including optional
 // compiler and identifier extensions. Profile validation remains independent
 // of the dialect value and is performed before the compiler is returned.
+//
+// `d` must not be nil.
 func NewWithDialect(p engineprofile.Profile, d dialect.Dialect) (Compiler, error) {
 	if err := engineprofile.Validate(p); err != nil {
 		return Compiler{}, err
@@ -57,6 +59,14 @@ func (c Compiler) Select(q query.ResultQuery) (stmt.Statement, error) {
 	}
 	return stmt.New(s.Text(), s.Args()...), nil
 }
+
+// Write renders q as SQL for the compiler's dialect. It returns an
+// *engineprofile.ProfileError with Code engineprofile.ErrUnsupportedFeature
+// when the profile does not grant a capability q needs, and one with Code
+// engineprofile.ErrBindLimit when the rendered statement binds more parameters
+// than the profile's Limits.MaxBindParameters allows.
+//
+// `q` must not be nil.
 func (c Compiler) Write(q query.WriteStatement) (stmt.Statement, error) {
 	if err := engineprofile.Validate(c.profile); err != nil {
 		return stmt.Statement{}, err

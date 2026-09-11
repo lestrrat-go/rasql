@@ -27,6 +27,8 @@ type SelectBuilder struct {
 }
 
 // SelectFrom starts a fluent SELECT builder for d using from as its primary table.
+//
+// `d` must not be nil.
 func SelectFrom(d dialect.Dialect, from query.TableRef) SelectBuilder {
 	return SelectFromRelation(d, from)
 }
@@ -34,6 +36,8 @@ func SelectFrom(d dialect.Dialect, from query.TableRef) SelectBuilder {
 // SelectFromRelation starts a fluent SELECT builder for d using any reusable
 // relation as its primary source. SelectFrom remains the table-only entry
 // point for callers that have a TableRef.
+//
+// `d` and `from` must not be nil.
 func SelectFromRelation(d dialect.Dialect, from query.RelationSource) SelectBuilder {
 	return SelectBuilder{dialect: d, from: query.RelationRefOf(from)}
 }
@@ -42,6 +46,8 @@ func SelectFromRelation(d dialect.Dialect, from query.RelationSource) SelectBuil
 // SelectFrom takes the dialect a builder starts with. WithDialect is for a
 // caller that assembles the statement first and chooses the dialect where it
 // renders, which is what the root package's builders do at their terminal call.
+//
+// `d` must not be nil.
 func (b SelectBuilder) WithDialect(d dialect.Dialect) SelectBuilder {
 	b = b.clone()
 	b.dialect = d
@@ -98,6 +104,8 @@ func (b SelectBuilder) Join(joins ...query.Join) SelectBuilder {
 // Where adds a predicate created through the basic query API.
 // Repeated calls combine with AND in the order they were made. Use one call
 // with query.Or for a top-level OR.
+//
+// `expression` must not be nil.
 func (b SelectBuilder) Where(expression query.Expression) SelectBuilder {
 	b = b.clone()
 	if b.err != nil {
@@ -176,6 +184,8 @@ func (b SelectBuilder) GroupByColumns(names ...string) SelectBuilder {
 // Having adds a grouped predicate created through the basic query API.
 // Repeated calls combine with AND in the order they were made, exactly as Where
 // does. Use one call with query.Or for a top-level OR.
+//
+// `expression` must not be nil.
 func (b SelectBuilder) Having(expression query.Expression) SelectBuilder {
 	b = b.clone()
 	if b.err != nil {
