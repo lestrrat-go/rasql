@@ -188,8 +188,8 @@ func TestGraphCache(t *testing.T) {
 		secondQuery := fixture.childQuery.Where(predicate)
 		compiled, err := compileQuery(fixture.executor.compiler, firstQuery)
 		require.NoError(t, err)
-		require.Len(t, compiled.bindSlots, 1)
-		require.Zero(t, compiled.bindSlots[0].id)
+		require.Len(t, compiled.Slots, 1)
+		require.Zero(t, compiled.Slots[0].ID)
 		var firstMapped, secondMapped atomic.Int64
 		first := graphCacheChildPlan(t, firstQuery, "first", &firstMapped)
 		second := graphCacheChildPlan(t, secondQuery, "second", &secondMapped)

@@ -9,7 +9,7 @@ func Q1BindArgument[T any](expression Expr[T]) any {
 	}
 	argument := value.Argument()
 	if token, ok := argument.(bindToken); ok {
-		return token.value
+		return token.Value
 	}
 	return argument
 }

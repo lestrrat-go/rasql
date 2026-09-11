@@ -193,7 +193,7 @@ func compileMutation(executor Executor, statement query.WriteStatement) (stmt.St
 	if err != nil {
 		return stmt.Statement{}, err
 	}
-	statementCopy, err := compiledQuery.statementCopy()
+	statementCopy, err := compiledQuery.Copy()
 	if err != nil {
 		return stmt.Statement{}, err
 	}
@@ -201,7 +201,7 @@ func compileMutation(executor Executor, statement query.WriteStatement) (stmt.St
 	if cp, ok := executor.(CodecProvider); ok && cp.Codecs() != nil {
 		registry = cp.Codecs()
 	}
-	return encodeStatement(statementCopy, compiledQuery.bindSlots, registry)
+	return encodeStatement(statementCopy, compiledQuery.Slots, registry)
 }
 
 func compileNativeMutation(executor Executor, native nativeMutationPlanAccessor) (stmt.Statement, error) {
@@ -403,7 +403,7 @@ func prepareMutationBatches(executor Executor, plans []MutationPlan, maxRows, bi
 				if err != nil {
 					return nil, err
 				}
-				if bindLimit > 0 && len(best.statement.BoundArgs()) > bindLimit {
+				if bindLimit > 0 && len(best.Statement.BoundArgs()) > bindLimit {
 					return nil, &PlanError{Code: "bind_limit", Path: "args", Detail: "mutation batch exceeds bind parameter limit"}
 				}
 			}
@@ -428,7 +428,7 @@ func prepareMutationBatches(executor Executor, plans []MutationPlan, maxRows, bi
 					}
 					return nil, candidateErr
 				}
-				if bindLimit > 0 && len(compiled.statement.BoundArgs()) > bindLimit {
+				if bindLimit > 0 && len(compiled.Statement.BoundArgs()) > bindLimit {
 					break
 				}
 				rows = candidateRows
@@ -451,7 +451,7 @@ func prepareMutationBatches(executor Executor, plans []MutationPlan, maxRows, bi
 		if err != nil {
 			return nil, err
 		}
-		if bindLimit > 0 && len(compiledParts.statement.BoundArgs()) > bindLimit {
+		if bindLimit > 0 && len(compiledParts.Statement.BoundArgs()) > bindLimit {
 			return nil, &PlanError{Code: "bind_limit", Path: "args", Detail: "mutation statement exceeds bind parameter limit"}
 		}
 		compiled, err := encodeCompiledMutation(compiledParts, executor)
@@ -470,7 +470,7 @@ func isMutationBindLimit(err error) bool {
 }
 
 func encodeCompiledMutation(compiled compiledQuery, executor Executor) (stmt.Statement, error) {
-	copy, err := compiled.statementCopy()
+	copy, err := compiled.Copy()
 	if err != nil {
 		return stmt.Statement{}, err
 	}
@@ -478,7 +478,7 @@ func encodeCompiledMutation(compiled compiledQuery, executor Executor) (stmt.Sta
 	if cp, ok := executor.(CodecProvider); ok && cp.Codecs() != nil {
 		registry = cp.Codecs()
 	}
-	return encodeStatement(copy, compiled.bindSlots, registry)
+	return encodeStatement(copy, compiled.Slots, registry)
 }
 
 func execPreparedMutationBatches(ctx context.Context, executor Executor, prepared []preparedMutationBatch, options BulkOptions, outcome BulkOutcome) (BulkOutcome, error) {

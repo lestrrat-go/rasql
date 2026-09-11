@@ -9,9 +9,9 @@ import (
 	"fmt"
 	"math"
 	"reflect"
-	"sync/atomic"
 	"time"
 
+	"github.com/lestrrat-go/rasql/internal/bindplan"
 	"github.com/lestrrat-go/rasql/internal/cursorcodec"
 	"github.com/lestrrat-go/rasql/internal/planerr"
 	"github.com/lestrrat-go/rasql/query"
@@ -117,7 +117,7 @@ func preparePageAfter[R any](executor Executor, q Query[R], spec PageSpec[R], po
 	if err != nil {
 		return result, err
 	}
-	fingerprint, err := pageFingerprint(executor.Dialect().Name(), base.statement.SQL(), final.Schema(), prepared.statement, spec.keys, indexes)
+	fingerprint, err := pageFingerprint(executor.Dialect().Name(), base.Statement.SQL(), final.Schema(), prepared.statement, spec.keys, indexes)
 	if err != nil {
 		return result, err
 	}
@@ -349,9 +349,9 @@ func keysetPredicate[R any](keys []*pageKey[R], cursors []decodedCursor) (Predic
 }
 
 func cursorBind(value any, codec string) query.Expression {
-	id := bindID(atomic.AddUint64(&nextBindID, 1))
+	id := bindplan.NextID()
 	snapshot, copier, err := adoptBind(value, false)
-	return query.Bind(bindToken{id: id, value: snapshot, codec: codec, copy: copier, err: err})
+	return query.Bind(bindToken{ID: id, Value: snapshot, Codec: codec, Copy: copier, Err: err})
 }
 
 func bytesEqual(a, b []byte) bool { return string(a) == string(b) }

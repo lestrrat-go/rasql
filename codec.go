@@ -205,7 +205,7 @@ func encodeStatement(statement stmt.Statement, slots []bindSlot, reg CodecRegist
 		return stmt.Statement{}, &PlanError{Code: "bind_mismatch", Detail: "statement arguments and bind slots differ"}
 	}
 	for i, slot := range slots {
-		codec, err := codecFor(reg, slot.codec)
+		codec, err := codecFor(reg, slot.Codec)
 		if err != nil {
 			return stmt.Statement{}, err
 		}
@@ -214,7 +214,7 @@ func encodeStatement(statement stmt.Statement, slots []bindSlot, reg CodecRegist
 		if named, ok := value.(sql.NamedArg); ok {
 			name, value = named.Name, named.Value
 		}
-		if slot.preEncoded {
+		if slot.PreEncoded {
 			if err := validateDriverValue(value); err != nil {
 				return stmt.Statement{}, &PlanError{Code: "internal_plan", Path: fmt.Sprintf("binds[%d]", i), Detail: err.Error()}
 			}
@@ -241,7 +241,7 @@ func encodeStatement(statement stmt.Statement, slots []bindSlot, reg CodecRegist
 		}
 		encoded, err := codec.Encode(value)
 		if err != nil {
-			return stmt.Statement{}, &EncodeError{Index: i, Codec: CodecID(slot.codec), Err: err}
+			return stmt.Statement{}, &EncodeError{Index: i, Codec: CodecID(slot.Codec), Err: err}
 		}
 		if name != "" {
 			args[i] = sql.Named(name, encoded)

@@ -135,7 +135,7 @@ func validateGraphEdge(edge *graphEdgeSpec, executor Executor, path string) erro
 	if budget == 0 || budget > profile.MaxBind {
 		budget = profile.MaxBind
 	}
-	if budget <= 0 || budget-len(compiled.bindSlots) < len(edge.childKey.parts) {
+	if budget <= 0 || budget-len(compiled.Slots) < len(edge.childKey.parts) {
 		return planError("bind_limit", path, "bind budget cannot fit one key")
 	}
 	return nil
@@ -163,7 +163,7 @@ func validateManyThroughEdge(edge *graphEdgeSpec, executor Executor, path string
 	if err := junction.validateCompiled(executor, junctionCompiled); err != nil {
 		return err
 	}
-	if budget-len(junctionCompiled.bindSlots) < len(edge.junctionParent.parts) {
+	if budget-len(junctionCompiled.Slots) < len(edge.junctionParent.parts) {
 		return planError("bind_limit", path, "bind budget cannot fit one junction key")
 	}
 	target, err := edge.child.query.withOptions(EdgeOptions{}, edge.childKey, 0)
@@ -177,7 +177,7 @@ func validateManyThroughEdge(edge *graphEdgeSpec, executor Executor, path string
 	if err := target.validateCompiled(executor, targetCompiled); err != nil {
 		return err
 	}
-	if budget-len(targetCompiled.bindSlots) < len(edge.childKey.parts) {
+	if budget-len(targetCompiled.Slots) < len(edge.childKey.parts) {
 		return planError("bind_limit", path, "bind budget cannot fit one target key")
 	}
 	return nil
@@ -508,7 +508,7 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 	fixed := 0
 	probeCompiled, err := probe.compile(executor)
 	if err == nil {
-		fixed = len(probeCompiled.bindSlots)
+		fixed = len(probeCompiled.Slots)
 	} else {
 		return nil, err
 	}
@@ -534,7 +534,7 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 	}
 	batchSize := (budget - fixed) / width
 	fingerprintCompiled := probeCompiled
-	fingerprintCompiled.statement = basePrepared.statement
+	fingerprintCompiled.Statement = basePrepared.statement
 	childFingerprint := graphCacheFingerprint{stage: "child"}
 	if basePrepared.run != nil {
 		childFingerprint, err = graphInvocationFingerprint(graphFingerprintStage{
@@ -575,7 +575,7 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 		compiled, err := childQuery.compile(executor)
 		if err != nil {
 			return nil, err
-		} else if len(compiled.bindSlots) > budget || (profile.MaxBind > 0 && len(compiled.bindSlots) > profile.MaxBind) {
+		} else if len(compiled.Slots) > budget || (profile.MaxBind > 0 && len(compiled.Slots) > profile.MaxBind) {
 			return nil, planError("bind_limit", "graph."+edge.name, "compiled query exceeds bind budget")
 		}
 		fingerprint := childFingerprint
@@ -714,13 +714,13 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 			return nil, err
 		}
 	}
-	fixed = len(compiled.bindSlots)
+	fixed = len(compiled.Slots)
 	budget := edge.options.BindLimit
 	if budget == 0 || budget > profile.MaxBind {
 		budget = profile.MaxBind
 	}
 	fingerprintCompiled := compiled
-	fingerprintCompiled.statement = junctionPrepared.statement
+	fingerprintCompiled.Statement = junctionPrepared.statement
 	junctionFingerprint := graphCacheFingerprint{stage: "junction"}
 	if junctionCacheable {
 		junctionFingerprint, err = graphInvocationFingerprint(graphFingerprintStage{
@@ -799,7 +799,7 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 			finalCompiled, err := limited.compile(executor)
 			if err != nil {
 				return nil, err
-			} else if len(finalCompiled.bindSlots) > budget || (profile.MaxBind > 0 && len(finalCompiled.bindSlots) > profile.MaxBind) {
+			} else if len(finalCompiled.Slots) > budget || (profile.MaxBind > 0 && len(finalCompiled.Slots) > profile.MaxBind) {
 				return nil, planError("bind_limit", "graph."+edge.name, "compiled junction query exceeds bind budget")
 			}
 			if junctionCacheable {
@@ -880,9 +880,9 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 				return nil, err
 			}
 		}
-		fixed = len(compiled.bindSlots)
+		fixed = len(compiled.Slots)
 		fingerprintCompiled := compiled
-		fingerprintCompiled.statement = targetPrepared.statement
+		fingerprintCompiled.Statement = targetPrepared.statement
 		targetFingerprint := graphCacheFingerprint{stage: "target"}
 		if targetCacheable {
 			targetFingerprint, err = graphInvocationFingerprint(graphFingerprintStage{
@@ -928,7 +928,7 @@ func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeS
 			finalCompiled, err := childQuery.compile(executor)
 			if err != nil {
 				return nil, err
-			} else if len(finalCompiled.bindSlots) > budget || (profile.MaxBind > 0 && len(finalCompiled.bindSlots) > profile.MaxBind) {
+			} else if len(finalCompiled.Slots) > budget || (profile.MaxBind > 0 && len(finalCompiled.Slots) > profile.MaxBind) {
 				return nil, planError("bind_limit", "graph."+edge.name, "compiled target query exceeds bind budget")
 			}
 			if targetCacheable {

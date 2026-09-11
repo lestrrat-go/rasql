@@ -13,15 +13,15 @@ import (
 )
 
 func graphPreencodeBaseOccurrences(base compiledQuery, encoded stmt.Statement, final compiledQuery) (compiledQuery, error) {
-	baseArgs := base.statement.Args()
+	baseArgs := base.Statement.Args()
 	encodedArgs := encoded.Args()
-	finalArgs := final.statement.Args()
-	if base.statement.SQL() != encoded.SQL() {
+	finalArgs := final.Statement.Args()
+	if base.Statement.SQL() != encoded.SQL() {
 		return compiledQuery{}, planError("internal_plan", "binds", "base and prepared SQL differ")
 	}
-	if len(baseArgs) != len(base.bindSlots) || len(baseArgs) != len(base.copyArgs) ||
-		len(encodedArgs) != len(base.bindSlots) || len(finalArgs) != len(final.bindSlots) ||
-		len(finalArgs) != len(final.copyArgs) {
+	if len(baseArgs) != len(base.Slots) || len(baseArgs) != len(base.CopyArgs) ||
+		len(encodedArgs) != len(base.Slots) || len(finalArgs) != len(final.Slots) ||
+		len(finalArgs) != len(final.CopyArgs) {
 		return compiledQuery{}, planError("internal_plan", "binds", "statement arguments and bind metadata differ")
 	}
 	occurrences, err := matchBaseOccurrences(base, final)
@@ -29,8 +29,8 @@ func graphPreencodeBaseOccurrences(base compiledQuery, encoded stmt.Statement, f
 		return compiledQuery{}, err
 	}
 	result := final
-	result.bindSlots = append([]bindSlot(nil), final.bindSlots...)
-	result.copyArgs = append([]bindValueCopy(nil), final.copyArgs...)
+	result.Slots = append([]bindSlot(nil), final.Slots...)
+	result.CopyArgs = append([]bindValueCopy(nil), final.CopyArgs...)
 	args := append([]any(nil), finalArgs...)
 	for i, position := range occurrences {
 		if position >= len(args) || i >= len(encodedArgs) {
@@ -38,19 +38,19 @@ func graphPreencodeBaseOccurrences(base compiledQuery, encoded stmt.Statement, f
 		}
 		value := encodedArgs[i]
 		args[position] = value
-		result.bindSlots[position].preEncoded = true
-		result.copyArgs[position] = func() (any, error) { return graphCloneEncoded(value), nil }
+		result.Slots[position].PreEncoded = true
+		result.CopyArgs[position] = func() (any, error) { return graphCloneEncoded(value), nil }
 	}
-	result.statement = stmt.New(final.statement.Text(), args...)
+	result.Statement = stmt.New(final.Statement.Text(), args...)
 	return result, nil
 }
 
 func graphStageCacheable(compiled compiledQuery) bool {
-	if len(compiled.bindSlots) != len(compiled.statement.Args()) || len(compiled.bindSlots) != len(compiled.copyArgs) {
+	if len(compiled.Slots) != len(compiled.Statement.Args()) || len(compiled.Slots) != len(compiled.CopyArgs) {
 		return false
 	}
-	for _, slot := range compiled.bindSlots {
-		if slot.id == 0 {
+	for _, slot := range compiled.Slots {
+		if slot.ID == 0 {
 			return false
 		}
 	}
@@ -199,8 +199,8 @@ func (w *graphFingerprintWriter) writeU64(value uint64) {
 func (w *graphFingerprintWriter) writeInt(value int) { w.writeU64(uint64(int64(value))) }
 
 func graphInvocationFingerprint(stage graphFingerprintStage, profile engineProfileSnapshot) (graphCacheFingerprint, error) {
-	args := stage.compiled.statement.Args()
-	if len(args) != len(stage.compiled.bindSlots) {
+	args := stage.compiled.Statement.Args()
+	if len(args) != len(stage.compiled.Slots) {
 		return graphCacheFingerprint{}, planError("internal_plan", "binds", "statement arguments and bind slots differ")
 	}
 	if len(stage.keys) == 0 {
@@ -236,7 +236,7 @@ func graphInvocationFingerprint(stage graphFingerprintStage, profile engineProfi
 	key.writeU8(uint8(capabilities.UpdateDefault))
 	key.writeString(stage.name)
 	key.writeString(stage.source)
-	key.writeString(stage.compiled.statement.SQL())
+	key.writeString(stage.compiled.Statement.SQL())
 	key.writeInt(stage.perParentLimit)
 	key.writeInt(stage.bindLimit)
 	columns := stage.schema.Columns()
@@ -266,10 +266,10 @@ func graphInvocationFingerprint(stage graphFingerprintStage, profile engineProfi
 			key.writeString(part.codec)
 		}
 	}
-	for index, slot := range stage.compiled.bindSlots {
-		key.writeString(slot.codec)
-		key.writeBool(slot.preEncoded)
-		if err := writeGraphFingerprintValue(&key, args[index], slot.preEncoded || slot.codec != ""); err != nil {
+	for index, slot := range stage.compiled.Slots {
+		key.writeString(slot.Codec)
+		key.writeBool(slot.PreEncoded)
+		if err := writeGraphFingerprintValue(&key, args[index], slot.PreEncoded || slot.Codec != ""); err != nil {
 			return graphCacheFingerprint{}, err
 		}
 	}

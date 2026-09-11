@@ -149,9 +149,9 @@ func (q graphQuery[R, G]) validateCompiled(executor Executor, compiled compiledQ
 			return planError("codec_unavailable", fmt.Sprintf("result.columns[%d].codec", index), column.Codec)
 		}
 	}
-	for index, slot := range compiled.bindSlots {
-		if _, err := codecFor(registry, slot.codec); err != nil {
-			return planError("codec_unavailable", fmt.Sprintf("binds[%d].codec", index), slot.codec)
+	for index, slot := range compiled.Slots {
+		if _, err := codecFor(registry, slot.Codec); err != nil {
+			return planError("codec_unavailable", fmt.Sprintf("binds[%d].codec", index), slot.Codec)
 		}
 	}
 	return nil

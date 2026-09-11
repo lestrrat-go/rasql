@@ -60,14 +60,14 @@ func TestGraphPartitionRendering(t *testing.T) {
 			executor := graphRenderExecutor{dialect: tc.dialect, compiler: compiler}
 			compiled, err := limited.compile(executor)
 			require.NoError(t, err)
-			sqlText := compiled.statement.SQL()
+			sqlText := compiled.Statement.SQL()
 			upper := strings.ToUpper(sqlText)
 			require.Contains(t, upper, "ROW_NUMBER() OVER")
 			require.Contains(t, upper, "PARTITION BY")
 			require.Contains(t, upper, "WHERE")
 			require.Contains(t, upper, "<=")
 			require.NotContains(t, upper, "__RASQL_ROW_NUMBER")
-			require.GreaterOrEqual(t, len(compiled.statement.Args()), 2)
+			require.GreaterOrEqual(t, len(compiled.Statement.Args()), 2)
 		})
 	}
 }

@@ -1,12 +1,12 @@
 package rasql
 
 import (
-	"database/sql"
 	"errors"
 	"fmt"
 	"reflect"
 
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/internal/bindplan"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/internal/planerr"
 	"github.com/lestrrat-go/rasql/internal/querycompile"
@@ -238,7 +238,7 @@ func Render[R any](q Query[R], d dialect.Dialect) (stmt.Statement, error) {
 	if err != nil {
 		return stmt.Statement{}, err
 	}
-	return compiled.Statement()
+	return compiled.Copy()
 }
 
 func rejectNativeComposition[R any](q Query[R]) error {
@@ -489,35 +489,17 @@ func resultColumns(items []ProjectionItem) []ResultColumn {
 	return columns
 }
 
-type bindSlot struct {
-	id         bindID
-	codec      string
-	preEncoded bool
-}
-type compiledQuery struct {
-	statement stmt.Statement
-	bindSlots []bindSlot
-	copyArgs  []bindValueCopy
+// The compiled form lives in internal/bindplan alongside the tokens it
+// unwraps. These names stay so the rest of this package reads as before.
+type bindSlot = bindplan.Slot
+type compiledQuery = bindplan.Compiled
+
+func unwrapBindTokens(statement stmt.Statement) (compiledQuery, error) {
+	return bindplan.Unwrap(statement)
 }
 
-func (c compiledQuery) Statement() (stmt.Statement, error) { return c.statementCopy() }
-func (c compiledQuery) BindSlots() []bindSlot              { return append([]bindSlot(nil), c.bindSlots...) }
-func (c compiledQuery) statementCopy() (stmt.Statement, error) {
-	args := c.statement.Args()
-	if len(args) != len(c.bindSlots) || len(args) != len(c.copyArgs) {
-		return stmt.Statement{}, planError("internal_plan", "binds", "statement arguments and bind slots differ")
-	}
-	for i, copier := range c.copyArgs {
-		if copier == nil {
-			return stmt.Statement{}, planError("internal_plan", fmt.Sprintf("binds[%d]", i), "missing bind copier")
-		}
-		copy, err := copier()
-		if err != nil {
-			return stmt.Statement{}, bindCopyError(i, err)
-		}
-		args[i] = copy
-	}
-	return stmt.New(c.statement.Text(), args...), nil
+func matchBaseOccurrences(base, paged compiledQuery) ([]int, error) {
+	return bindplan.MatchBaseOccurrences(base, paged)
 }
 
 func compileQuery[R any](compiler *querycompile.Compiler, q Query[R]) (compiledQuery, error) {
@@ -574,108 +556,4 @@ func mapCompileError(err error) error {
 		return planerr.Wrap(code, path, err.Error(), err)
 	}
 	return planerr.Wrap("unsupported_feature", "compiler", err.Error(), err)
-}
-
-func bindCopyError(index int, err error) error {
-	var planErr *PlanError
-	if errors.As(err, &planErr) && planErr.Code == "unsnapshotable_bind" {
-		return err
-	}
-	return planerr.Wrap("unsnapshotable_bind", fmt.Sprintf("args[%d]", index), err.Error(), err)
-}
-
-func unwrapBindTokens(statement stmt.Statement) (compiledQuery, error) {
-	args := statement.Args()
-	slots := make([]bindSlot, len(args))
-	copyArgs := make([]bindValueCopy, len(args))
-	for i, arg := range args {
-		token, ok := arg.(bindToken)
-		if ok {
-			if token.err != nil {
-				return compiledQuery{}, planError("unsnapshotable_bind", fmt.Sprintf("args[%d]", i), token.err.Error())
-			}
-			if token.copy == nil {
-				return compiledQuery{}, planError("unsnapshotable_bind", fmt.Sprintf("args[%d]", i), "missing bind copier")
-			}
-			if token.id == 0 || token.copy == nil || (token.codec != "" && !codecPattern.MatchString(token.codec)) || !token.preEncoded && token.value == nil && token.copy == nil {
-				return compiledQuery{}, planError("internal_plan", fmt.Sprintf("binds[%d]", i), "invalid bind token")
-			}
-			slots[i] = bindSlot{id: token.id, codec: token.codec, preEncoded: token.preEncoded}
-			copyArgs[i] = token.copy
-			value, err := token.copy()
-			if err != nil {
-				return compiledQuery{}, bindCopyError(i, err)
-			}
-			args[i] = value
-			continue
-		}
-		if named, ok := arg.(sql.NamedArg); ok {
-			if token, ok := named.Value.(bindToken); ok {
-				if token.err != nil {
-					return compiledQuery{}, planError("unsnapshotable_bind", fmt.Sprintf("args[%d]", i), token.err.Error())
-				}
-				if token.copy == nil {
-					return compiledQuery{}, planError("unsnapshotable_bind", fmt.Sprintf("args[%d]", i), "missing bind copier")
-				}
-				if token.id == 0 || token.copy == nil || (token.codec != "" && !codecPattern.MatchString(token.codec)) {
-					return compiledQuery{}, planError("internal_plan", fmt.Sprintf("binds[%d]", i), "invalid bind token")
-				}
-				slots[i] = bindSlot{id: token.id, codec: token.codec, preEncoded: token.preEncoded}
-				name, tokenCopy := named.Name, token.copy
-				copyArgs[i] = func() (any, error) {
-					value, err := tokenCopy()
-					if err != nil {
-						return nil, err
-					}
-					return sql.Named(name, value), nil
-				}
-				value, err := copyArgs[i]()
-				if err != nil {
-					return compiledQuery{}, bindCopyError(i, err)
-				}
-				args[i] = value
-				continue
-			}
-		}
-		value, copier, err := adoptBind(arg, false)
-		if err != nil {
-			return compiledQuery{}, planError("unsnapshotable_bind", fmt.Sprintf("args[%d]", i), err.Error())
-		}
-		args[i] = value
-		copyArgs[i] = copier
-	}
-	if len(args) != len(slots) || len(args) != len(copyArgs) {
-		return compiledQuery{}, planError("internal_plan", "binds", "statement arguments and bind slots differ")
-	}
-	return compiledQuery{statement: stmt.New(statement.Text(), args...), bindSlots: slots, copyArgs: copyArgs}, nil
-}
-
-func matchBaseOccurrences(base, paged compiledQuery) ([]int, error) {
-	if len(base.bindSlots) != len(base.statement.Args()) || len(paged.bindSlots) != len(paged.statement.Args()) {
-		return nil, planError("internal_plan", "binds", "statement arguments and bind slots differ")
-	}
-	result := make([]int, 0, len(base.bindSlots))
-	next := 0
-	for i, want := range base.bindSlots {
-		if want.id == 0 {
-			return nil, planError("unsupported_keyset_bind", fmt.Sprintf("base[%d]", i), "bind has no identity")
-		}
-		found := -1
-		for j := next; j < len(paged.bindSlots); j++ {
-			got := paged.bindSlots[j]
-			if got.id == want.id {
-				if got.codec != want.codec {
-					return nil, planError("unsupported_keyset_bind", fmt.Sprintf("paged[%d]", j), "codec differs")
-				}
-				found = j
-				next = j + 1
-				break
-			}
-		}
-		if found < 0 {
-			return nil, planError("unsupported_keyset_bind", fmt.Sprintf("base[%d]", i), "bind occurrence is missing or reordered")
-		}
-		result = append(result, found)
-	}
-	return result, nil
 }

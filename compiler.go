@@ -71,7 +71,7 @@ func (c Compiler) Mutation(plan MutationPlan) (stmt.Statement, error) {
 	if err != nil {
 		return stmt.Statement{}, err
 	}
-	return compiled.Statement()
+	return compiled.Copy()
 }
 
 // CompileQuery renders q into the SQL text and bound arguments Rows and All
@@ -93,5 +93,5 @@ func CompileQuery[R any](c Compiler, q Query[R]) (stmt.Statement, error) {
 	if err != nil {
 		return stmt.Statement{}, err
 	}
-	return compiled.Statement()
+	return compiled.Copy()
 }

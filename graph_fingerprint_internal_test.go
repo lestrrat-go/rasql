@@ -34,7 +34,7 @@ func graphFingerprintStageFor(t *testing.T) graphFingerprintStage {
 	}}}
 	return graphFingerprintStage{
 		name: "child", source: source.QualifiedName(), schema: resultSchema, keys: []*graphKeySpec{key},
-		compiled: compiledQuery{statement: stmt.New(sqltext.Text("SELECT id FROM fingerprint_rows"))}, bindLimit: 999,
+		compiled: compiledQuery{Statement: stmt.New(sqltext.Text("SELECT id FROM fingerprint_rows"))}, bindLimit: 999,
 	}
 }
 
@@ -107,13 +107,13 @@ func TestGraphFingerprint(t *testing.T) {
 
 	t.Run("rejects a bind argument count mismatch", func(t *testing.T) {
 		stage := graphFingerprintStageFor(t)
-		stage.compiled.bindSlots = []bindSlot{{codec: ""}}
+		stage.compiled.Slots = []bindSlot{{Codec: ""}}
 		_, err := graphInvocationFingerprint(stage, graphFingerprintProfile())
 		var planErr *PlanError
 		require.ErrorAs(t, err, &planErr)
 		require.Equal(t, "internal_plan", planErr.Code)
 
-		stage.compiled.statement = stmt.New(sqltext.Text("SELECT id FROM fingerprint_rows"), int64(1), int64(2))
+		stage.compiled.Statement = stmt.New(sqltext.Text("SELECT id FROM fingerprint_rows"), int64(1), int64(2))
 		_, err = graphInvocationFingerprint(stage, graphFingerprintProfile())
 		require.ErrorAs(t, err, &planErr)
 		require.Equal(t, "internal_plan", planErr.Code)
@@ -121,15 +121,15 @@ func TestGraphFingerprint(t *testing.T) {
 
 	t.Run("frames canonical fixed values", func(t *testing.T) {
 		stage := graphFingerprintStageFor(t)
-		stage.compiled.statement = stmt.New(sqltext.Text("SELECT id FROM fingerprint_rows"),
+		stage.compiled.Statement = stmt.New(sqltext.Text("SELECT id FROM fingerprint_rows"),
 			float64(0), float64(math.Copysign(0, -1)), sql.Named("payload", math.Float64frombits(0x7ff8000000000042)),
 		)
-		stage.compiled.bindSlots = []bindSlot{{preEncoded: true}, {preEncoded: true}, {preEncoded: true}}
+		stage.compiled.Slots = []bindSlot{{PreEncoded: true}, {PreEncoded: true}, {PreEncoded: true}}
 		base, err := graphInvocationFingerprint(stage, graphFingerprintProfile())
 		require.NoError(t, err)
 
 		zero := stage
-		zero.compiled.statement = stmt.New(sqltext.Text("SELECT id FROM fingerprint_rows"),
+		zero.compiled.Statement = stmt.New(sqltext.Text("SELECT id FROM fingerprint_rows"),
 			float64(0), float64(0), sql.Named("payload", math.Float64frombits(0x7ff8000000000042)),
 		)
 		zeroKey, err := graphInvocationFingerprint(zero, graphFingerprintProfile())
@@ -137,7 +137,7 @@ func TestGraphFingerprint(t *testing.T) {
 		require.NotEqual(t, base.digest, zeroKey.digest)
 
 		nan := stage
-		nan.compiled.statement = stmt.New(sqltext.Text("SELECT id FROM fingerprint_rows"),
+		nan.compiled.Statement = stmt.New(sqltext.Text("SELECT id FROM fingerprint_rows"),
 			float64(0), float64(math.Copysign(0, -1)), sql.Named("payload", math.Float64frombits(0x7ff8000000000043)),
 		)
 		nanKey, err := graphInvocationFingerprint(nan, graphFingerprintProfile())
@@ -145,7 +145,7 @@ func TestGraphFingerprint(t *testing.T) {
 		require.NotEqual(t, base.digest, nanKey.digest)
 
 		changed := stage
-		changed.compiled.statement = stmt.New(sqltext.Text("SELECT id FROM fingerprint_rows"),
+		changed.compiled.Statement = stmt.New(sqltext.Text("SELECT id FROM fingerprint_rows"),
 			float64(0), float64(math.Copysign(0, -1)), sql.Named("other", math.Float64frombits(0x7ff8000000000042)),
 		)
 		changedKey, err := graphInvocationFingerprint(changed, graphFingerprintProfile())
@@ -153,14 +153,14 @@ func TestGraphFingerprint(t *testing.T) {
 		require.NotEqual(t, base.digest, changedKey.digest)
 
 		invalid := stage
-		invalid.compiled.statement = stmt.New(sqltext.Text("SELECT id FROM fingerprint_rows"), 1, float64(0), float64(0))
+		invalid.compiled.Statement = stmt.New(sqltext.Text("SELECT id FROM fingerprint_rows"), 1, float64(0), float64(0))
 		_, err = graphInvocationFingerprint(invalid, graphFingerprintProfile())
 		var planErr *PlanError
 		require.ErrorAs(t, err, &planErr)
 		require.Equal(t, "internal_plan", planErr.Code)
 
 		valuer := stage
-		valuer.compiled.statement = stmt.New(sqltext.Text("SELECT id FROM fingerprint_rows"), graphFingerprintValueValuer{}, float64(0), float64(0))
+		valuer.compiled.Statement = stmt.New(sqltext.Text("SELECT id FROM fingerprint_rows"), graphFingerprintValueValuer{}, float64(0), float64(0))
 		_, err = graphInvocationFingerprint(valuer, graphFingerprintProfile())
 		require.ErrorAs(t, err, &planErr)
 		require.Equal(t, "internal_plan", planErr.Code)
@@ -221,33 +221,33 @@ func TestGraphStageBindMetadata(t *testing.T) {
 	t.Run("cacheability requires stable bind metadata", func(t *testing.T) {
 		copyArg := func() (any, error) { return int64(1), nil }
 		base := compiledQuery{
-			statement: stmt.New(sqltext.Text("SELECT ?"), int64(1)),
-			bindSlots: []bindSlot{{id: bindID(1)}},
-			copyArgs:  []bindValueCopy{copyArg},
+			Statement: stmt.New(sqltext.Text("SELECT ?"), int64(1)),
+			Slots:     []bindSlot{{ID: bindID(1)}},
+			CopyArgs:  []bindValueCopy{copyArg},
 		}
 		require.True(t, graphStageCacheable(base))
 
-		base.bindSlots[0].id = 0
+		base.Slots[0].ID = 0
 		require.False(t, graphStageCacheable(base))
-		base.bindSlots[0].id = bindID(1)
-		base.copyArgs = nil
+		base.Slots[0].ID = bindID(1)
+		base.CopyArgs = nil
 		require.False(t, graphStageCacheable(base))
 	})
 
 	t.Run("pre-encoded base occurrences match by identity and detach", func(t *testing.T) {
 		base := compiledQuery{
-			statement: stmt.New(sqltext.Text("SELECT ? AND ?"), int64(1), []byte("base")),
-			bindSlots: []bindSlot{{id: bindID(11)}, {id: bindID(12)}},
-			copyArgs: []bindValueCopy{
+			Statement: stmt.New(sqltext.Text("SELECT ? AND ?"), int64(1), []byte("base")),
+			Slots:     []bindSlot{{ID: bindID(11)}, {ID: bindID(12)}},
+			CopyArgs: []bindValueCopy{
 				func() (any, error) { return int64(1), nil },
 				func() (any, error) { return []byte("base"), nil },
 			},
 		}
 		encoded := stmt.New(sqltext.Text("SELECT ? AND ?"), int64(7), []byte("encoded"))
 		final := compiledQuery{
-			statement: stmt.New(sqltext.Text("SELECT ? AND ? AND ?"), int64(98), int64(99), []byte("old")),
-			bindSlots: []bindSlot{{id: bindID(11)}, {id: bindID(99)}, {id: bindID(12)}},
-			copyArgs: []bindValueCopy{
+			Statement: stmt.New(sqltext.Text("SELECT ? AND ? AND ?"), int64(98), int64(99), []byte("old")),
+			Slots:     []bindSlot{{ID: bindID(11)}, {ID: bindID(99)}, {ID: bindID(12)}},
+			CopyArgs: []bindValueCopy{
 				func() (any, error) { return int64(98), nil },
 				func() (any, error) { return int64(99), nil },
 				func() (any, error) { return []byte("old"), nil },
@@ -255,20 +255,20 @@ func TestGraphStageBindMetadata(t *testing.T) {
 		}
 		result, err := graphPreencodeBaseOccurrences(base, encoded, final)
 		require.NoError(t, err)
-		require.Equal(t, []any{int64(7), int64(99), []byte("encoded")}, result.statement.Args())
-		require.False(t, result.bindSlots[1].preEncoded)
-		require.True(t, result.bindSlots[2].preEncoded)
-		require.True(t, result.bindSlots[0].preEncoded)
-		require.False(t, final.bindSlots[0].preEncoded)
+		require.Equal(t, []any{int64(7), int64(99), []byte("encoded")}, result.Statement.Args())
+		require.False(t, result.Slots[1].PreEncoded)
+		require.True(t, result.Slots[2].PreEncoded)
+		require.True(t, result.Slots[0].PreEncoded)
+		require.False(t, final.Slots[0].PreEncoded)
 
-		value := result.statement.Args()[2].([]byte)
+		value := result.Statement.Args()[2].([]byte)
 		value[0] = 'x'
-		copyArgs, err := result.statementCopy()
+		copyArgs, err := result.Copy()
 		require.NoError(t, err)
 		require.Equal(t, []byte("encoded"), copyArgs.Args()[2])
 
 		reordered := final
-		reordered.bindSlots = []bindSlot{{id: bindID(12)}, {id: bindID(99)}, {id: bindID(11)}}
+		reordered.Slots = []bindSlot{{ID: bindID(12)}, {ID: bindID(99)}, {ID: bindID(11)}}
 		_, err = graphPreencodeBaseOccurrences(base, encoded, reordered)
 		var planErr *PlanError
 		require.ErrorAs(t, err, &planErr)
@@ -281,8 +281,8 @@ func TestGraphStageBindMetadata(t *testing.T) {
 		require.True(t, ok)
 		token, ok := node.Argument().(bindToken)
 		require.True(t, ok)
-		require.NotZero(t, token.id)
-		require.Equal(t, int64(2), token.value)
+		require.NotZero(t, token.ID)
+		require.Equal(t, int64(2), token.Value)
 
 		profile, err := engineprofile.Builtin("sqlite-3.35", engineprofile.Version{Known: true, Major: 3, Minor: 35})
 		require.NoError(t, err)
@@ -293,14 +293,14 @@ func TestGraphStageBindMetadata(t *testing.T) {
 		second, err := compileQuery(&compiler, q)
 		require.NoError(t, err)
 		findLimit := func(compiled compiledQuery) bindID {
-			for index, value := range compiled.statement.Args() {
+			for index, value := range compiled.Statement.Args() {
 				if value == int64(2) {
-					return compiled.bindSlots[index].id
+					return compiled.Slots[index].ID
 				}
 			}
 			return 0
 		}
-		require.Equal(t, token.id, findLimit(first))
-		require.Equal(t, token.id, findLimit(second))
+		require.Equal(t, token.ID, findLimit(first))
+		require.Equal(t, token.ID, findLimit(second))
 	})
 }

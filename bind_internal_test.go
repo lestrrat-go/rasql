@@ -40,7 +40,7 @@ func TestBindCopy(t *testing.T) {
 		input.Any.([]byte)[0], input.Named.Value.([]byte)[0] = 66, 55
 		compiled, err := unwrapBindTokens(stmt.New(sqltext.Text("SELECT ?"), token))
 		require.NoError(t, err)
-		first, err := compiled.statementCopy()
+		first, err := compiled.Copy()
 		require.NoError(t, err)
 		got := first.BoundArgs()[0].(bindCopyShape)
 		require.Equal(t, [2]int{1, 2}, got.Array)
@@ -55,7 +55,7 @@ func TestBindCopy(t *testing.T) {
 		got.Empty = append(got.Empty, 8)
 		got.Any.([]byte)[0] = 9
 		got.Named.Value.([]byte)[0] = 10
-		second, err := compiled.statementCopy()
+		second, err := compiled.Copy()
 		require.NoError(t, err)
 		require.Equal(t, []byte{3}, second.BoundArgs()[0].(bindCopyShape).Map["x"])
 		secondShape := second.BoundArgs()[0].(bindCopyShape)
@@ -69,7 +69,7 @@ func TestBindCopy(t *testing.T) {
 		require.Nil(t, secondShape.Nil)
 		compiledAgain, err := unwrapBindTokens(stmt.New(sqltext.Text("SELECT ?"), token))
 		require.NoError(t, err)
-		third, err := compiledAgain.statementCopy()
+		third, err := compiledAgain.Copy()
 		require.NoError(t, err)
 		require.Equal(t, secondShape, third.BoundArgs()[0])
 	})
@@ -79,14 +79,14 @@ func TestBindCopy(t *testing.T) {
 		token := tokenOf(expression)
 		compiled, err := unwrapBindTokens(stmt.New(sqltext.Text("SELECT ?, ?"), token, token))
 		require.NoError(t, err)
-		require.Equal(t, compiled.bindSlots[0], compiled.bindSlots[1])
-		statement, err := compiled.statementCopy()
+		require.Equal(t, compiled.Slots[0], compiled.Slots[1])
+		statement, err := compiled.Copy()
 		require.NoError(t, err)
 		args := statement.BoundArgs()
 		args[0].([]byte)[0] = 'z'
 		require.Equal(t, []byte("x"), args[1])
 		other := Value([]byte("x"))
-		require.NotEqual(t, tokenOf(expression).id, tokenOf(other).id)
+		require.NotEqual(t, tokenOf(expression).ID, tokenOf(other).ID)
 	})
 
 	t.Run("snapshotter runs once", func(t *testing.T) {
@@ -96,7 +96,7 @@ func TestBindCopy(t *testing.T) {
 		compiled, err := unwrapBindTokens(stmt.New(sqltext.Text("SELECT ?"), token))
 		require.NoError(t, err)
 		for i := 0; i < 3; i++ {
-			_, err = compiled.statementCopy()
+			_, err = compiled.Copy()
 			require.NoError(t, err)
 		}
 		require.Equal(t, int32(1), calls.Load())
@@ -116,7 +116,7 @@ func TestBindCopy(t *testing.T) {
 			compiled, err := unwrapBindTokens(stmt.New(sqltext.Text("SELECT ?"), token))
 			require.NoError(t, err)
 			for i := 0; i < 3; i++ {
-				statement, copyErr := compiled.statementCopy()
+				statement, copyErr := compiled.Copy()
 				require.NoError(t, copyErr)
 				switch index {
 				case 0:
@@ -136,10 +136,10 @@ func TestBindCopy(t *testing.T) {
 	t.Run("legacy and named arguments", func(t *testing.T) {
 		legacy, err := unwrapBindTokens(stmt.New(sqltext.Text("SELECT ?, ?"), []byte("x"), sql.Named("name", []byte("y"))))
 		require.NoError(t, err)
-		first, err := legacy.statementCopy()
+		first, err := legacy.Copy()
 		require.NoError(t, err)
 		first.BoundArgs()[0].([]byte)[0] = 'z'
-		second, err := legacy.statementCopy()
+		second, err := legacy.Copy()
 		require.NoError(t, err)
 		require.Equal(t, []byte("x"), second.BoundArgs()[0])
 		require.Equal(t, "name", second.BoundArgs()[1].(sql.NamedArg).Name)
@@ -149,7 +149,7 @@ func TestBindCopy(t *testing.T) {
 			Map   map[string][]byte
 		}{Array: [2][]byte{{1}, nil}, Map: map[string][]byte{"x": {2}}}))
 		require.NoError(t, err)
-		legacyFirst, err := legacyGraph.statementCopy()
+		legacyFirst, err := legacyGraph.Copy()
 		require.NoError(t, err)
 		legacyValue := legacyFirst.BoundArgs()[1].(struct {
 			Array [2][]byte
@@ -157,7 +157,7 @@ func TestBindCopy(t *testing.T) {
 		})
 		legacyValue.Array[0][0] = 9
 		legacyValue.Map["x"][0] = 8
-		legacySecond, err := legacyGraph.statementCopy()
+		legacySecond, err := legacyGraph.Copy()
 		require.NoError(t, err)
 		require.Nil(t, legacySecond.BoundArgs()[0])
 		require.Equal(t, []byte{1}, legacySecond.BoundArgs()[1].(struct {
@@ -180,11 +180,11 @@ func TestBindCopy(t *testing.T) {
 		directToken := tokenOf(directExpression)
 		value, copier, err := adoptBind([]byte("outer"), true)
 		require.NoError(t, err)
-		syntheticToken := bindToken{id: 91, codec: "text.codec", value: value, copy: copier}
+		syntheticToken := bindToken{ID: 91, Codec: "text.codec", Value: value, Copy: copier}
 		compiled, err := unwrapBindTokens(stmt.New(sqltext.Text("SELECT ?, ?"), directToken, sql.Named("outer", syntheticToken)))
 		require.NoError(t, err)
-		require.Equal(t, []bindSlot{{id: directToken.id, codec: "bytes.codec"}, {id: 91, codec: "text.codec"}}, compiled.bindSlots)
-		statement, err := compiled.statementCopy()
+		require.Equal(t, []bindSlot{{ID: directToken.ID, Codec: "bytes.codec"}, {ID: 91, Codec: "text.codec"}}, compiled.Slots)
+		statement, err := compiled.Copy()
 		require.NoError(t, err)
 		args := statement.BoundArgs()
 		require.Equal(t, "inner", args[0].(sql.NamedArg).Name)
@@ -199,14 +199,14 @@ func TestBindCopy(t *testing.T) {
 		sentinel := errors.New("copy failed")
 		laterCalled := false
 		compiled := compiledQuery{
-			statement: stmt.New(sqltext.Text("SELECT ?, ?"), 1, 2),
-			bindSlots: []bindSlot{{}, {}},
-			copyArgs: []bindValueCopy{
+			Statement: stmt.New(sqltext.Text("SELECT ?, ?"), 1, 2),
+			Slots:     []bindSlot{{}, {}},
+			CopyArgs: []bindValueCopy{
 				func() (any, error) { return nil, sentinel },
 				func() (any, error) { laterCalled = true; return 2, nil },
 			},
 		}
-		statement, err := compiled.statementCopy()
+		statement, err := compiled.Copy()
 		var planErr *PlanError
 		require.ErrorIs(t, err, sentinel)
 		require.ErrorAs(t, err, &planErr)
@@ -215,10 +215,10 @@ func TestBindCopy(t *testing.T) {
 		require.Equal(t, stmt.Statement{}, statement)
 		require.False(t, laterCalled)
 		for _, invalid := range []compiledQuery{
-			{statement: stmt.New(sqltext.Text("SELECT ?"), 1), bindSlots: []bindSlot{{}}, copyArgs: []bindValueCopy{nil}},
-			{statement: stmt.New(sqltext.Text("SELECT ?"), 1), bindSlots: nil, copyArgs: []bindValueCopy{func() (any, error) { return 1, nil }}},
+			{Statement: stmt.New(sqltext.Text("SELECT ?"), 1), Slots: []bindSlot{{}}, CopyArgs: []bindValueCopy{nil}},
+			{Statement: stmt.New(sqltext.Text("SELECT ?"), 1), Slots: nil, CopyArgs: []bindValueCopy{func() (any, error) { return 1, nil }}},
 		} {
-			statement, err := invalid.statementCopy()
+			statement, err := invalid.Copy()
 			require.ErrorAs(t, err, &planErr)
 			require.Equal(t, stmt.Statement{}, statement)
 		}
@@ -238,19 +238,19 @@ func TestBindCopy(t *testing.T) {
 		)
 		compiled, err := unwrapBindTokens(statement)
 		require.NoError(t, err)
-		require.Len(t, compiled.bindSlots, 7)
-		require.Equal(t, []bindID{firstToken.id, secondToken.id, firstToken.id, 0, 0, secondToken.id, 0}, []bindID{
-			compiled.bindSlots[0].id, compiled.bindSlots[1].id, compiled.bindSlots[2].id, compiled.bindSlots[3].id,
-			compiled.bindSlots[4].id, compiled.bindSlots[5].id, compiled.bindSlots[6].id,
+		require.Len(t, compiled.Slots, 7)
+		require.Equal(t, []bindID{firstToken.ID, secondToken.ID, firstToken.ID, 0, 0, secondToken.ID, 0}, []bindID{
+			compiled.Slots[0].ID, compiled.Slots[1].ID, compiled.Slots[2].ID, compiled.Slots[3].ID,
+			compiled.Slots[4].ID, compiled.Slots[5].ID, compiled.Slots[6].ID,
 		})
 		require.Equal(t, []string{"bytes.codec", "named.codec", "bytes.codec", "", "", "named.codec", ""}, []string{
-			compiled.bindSlots[0].codec, compiled.bindSlots[1].codec, compiled.bindSlots[2].codec, compiled.bindSlots[3].codec,
-			compiled.bindSlots[4].codec, compiled.bindSlots[5].codec, compiled.bindSlots[6].codec,
+			compiled.Slots[0].Codec, compiled.Slots[1].Codec, compiled.Slots[2].Codec, compiled.Slots[3].Codec,
+			compiled.Slots[4].Codec, compiled.Slots[5].Codec, compiled.Slots[6].Codec,
 		})
-		for i, copier := range compiled.copyArgs {
+		for i, copier := range compiled.CopyArgs {
 			require.NotNil(t, copier, "copyArgs[%d]", i)
 		}
-		copy, err := compiled.statementCopy()
+		copy, err := compiled.Copy()
 		require.NoError(t, err)
 		require.Equal(t, "outer", copy.BoundArgs()[1].(sql.NamedArg).Name)
 		require.Equal(t, "empty", copy.BoundArgs()[6].(sql.NamedArg).Name)
@@ -283,14 +283,14 @@ func TestBindCopy(t *testing.T) {
 		compiledCount, err := compileQuery(compiler, count)
 		require.NoError(t, err)
 		for _, compiled := range []compiledQuery{compiledBase, compiledCompound, compiledPredicate, compiledOrder, compiledWith, compiledCount} {
-			require.Equal(t, len(compiled.statement.BoundArgs()), len(compiled.bindSlots))
-			require.Equal(t, len(compiled.statement.BoundArgs()), len(compiled.copyArgs))
-			for index, copier := range compiled.copyArgs {
+			require.Equal(t, len(compiled.Statement.BoundArgs()), len(compiled.Slots))
+			require.Equal(t, len(compiled.Statement.BoundArgs()), len(compiled.CopyArgs))
+			for index, copier := range compiled.CopyArgs {
 				require.NotNil(t, copier, "copyArgs[%d]", index)
 			}
-			statement, copyErr := compiled.statementCopy()
+			statement, copyErr := compiled.Copy()
 			require.NoError(t, copyErr)
-			require.Equal(t, len(statement.BoundArgs()), len(compiled.bindSlots))
+			require.Equal(t, len(statement.BoundArgs()), len(compiled.Slots))
 		}
 	})
 }

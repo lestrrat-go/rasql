@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/internal/bindplan"
 	"github.com/lestrrat-go/rasql/internal/cursorcodec"
 	"github.com/lestrrat-go/rasql/internal/querycompile"
 	querypkg "github.com/lestrrat-go/rasql/query"
@@ -410,8 +411,8 @@ func TestPageBinds(t *testing.T) {
 		projection, err := NewProjection([]ProjectionItem{Item("value", id.Expr(), schema.IntegerType{}, "")}, runtimeDecoder{schema: resultSchema})
 		require.NoError(t, err)
 		baseQuery := Select(relation.Source(), projection)
-		filterID := bindID(atomic.AddUint64(&nextBindID, 1))
-		filter := Expr[int64]{node: querypkg.Bind(bindToken{id: filterID, value: sql.Named("filter", int64(1)), copy: func() (any, error) { return sql.Named("filter", int64(1)), nil }})}
+		filterID := bindplan.NextID()
+		filter := Expr[int64]{node: querypkg.Bind(bindToken{ID: filterID, Value: sql.Named("filter", int64(1)), Copy: func() (any, error) { return sql.Named("filter", int64(1)), nil }})}
 		baseQuery = baseQuery.Where(Predicate{node: querypkg.Equal(id.Expr().node, filter.node)}).Where(Predicate{node: querypkg.Equal(id.Expr().node, filter.node)})
 		codec := &r5CountingCursorCodec{}
 		registry, err := NewCodecRegistry(map[CodecID]ValueCodec{"count.page": codec})
@@ -459,31 +460,31 @@ func TestPageBinds(t *testing.T) {
 		first := bindID(11)
 		second := bindID(12)
 		base := compiledQuery{
-			statement: stmt.New(sqltext.Text("SELECT ? WHERE x = ? ORDER BY y = ?"), sql.Named("filter", int64(1)), sql.Named("order", int64(2)), int64(3)),
-			bindSlots: []bindSlot{{id: first, codec: "filter.codec"}, {id: second, codec: "order.codec"}, {id: second, codec: "order.codec"}},
+			Statement: stmt.New(sqltext.Text("SELECT ? WHERE x = ? ORDER BY y = ?"), sql.Named("filter", int64(1)), sql.Named("order", int64(2)), int64(3)),
+			Slots:     []bindSlot{{ID: first, Codec: "filter.codec"}, {ID: second, Codec: "order.codec"}, {ID: second, Codec: "order.codec"}},
 		}
 		paged := compiledQuery{
-			statement: stmt.New(sqltext.Text("SELECT ? WHERE x = ? AND key > ? ORDER BY y = ? AND z = ?"), int64(99), sql.Named("filter", int64(1)), int64(9), sql.Named("order", int64(2)), sql.Named("order", int64(2))),
-			bindSlots: []bindSlot{{id: bindID(99)}, {id: first, codec: "filter.codec"}, {id: bindID(98)}, {id: second, codec: "order.codec"}, {id: second, codec: "order.codec"}},
+			Statement: stmt.New(sqltext.Text("SELECT ? WHERE x = ? AND key > ? ORDER BY y = ? AND z = ?"), int64(99), sql.Named("filter", int64(1)), int64(9), sql.Named("order", int64(2)), sql.Named("order", int64(2))),
+			Slots:     []bindSlot{{ID: bindID(99)}, {ID: first, Codec: "filter.codec"}, {ID: bindID(98)}, {ID: second, Codec: "order.codec"}, {ID: second, Codec: "order.codec"}},
 		}
 		indexes, err := matchBaseOccurrences(base, paged)
 		require.NoError(t, err)
 		require.Equal(t, []int{1, 3, 4}, indexes)
-		require.Equal(t, "filter", paged.statement.Args()[indexes[0]].(sql.NamedArg).Name)
-		require.Equal(t, "order", paged.statement.Args()[indexes[1]].(sql.NamedArg).Name)
+		require.Equal(t, "filter", paged.Statement.Args()[indexes[0]].(sql.NamedArg).Name)
+		require.Equal(t, "order", paged.Statement.Args()[indexes[1]].(sql.NamedArg).Name)
 	})
 
 	t.Run("base occurrences distinguish codec and reordered binds", func(t *testing.T) {
-		base := compiledQuery{statement: stmt.New(sqltext.Text("SELECT ?"), 1), bindSlots: []bindSlot{{id: bindID(21), codec: "a"}}}
-		wrongCodec := compiledQuery{statement: stmt.New(sqltext.Text("SELECT ?"), 1), bindSlots: []bindSlot{{id: bindID(21), codec: "b"}}}
+		base := compiledQuery{Statement: stmt.New(sqltext.Text("SELECT ?"), 1), Slots: []bindSlot{{ID: bindID(21), Codec: "a"}}}
+		wrongCodec := compiledQuery{Statement: stmt.New(sqltext.Text("SELECT ?"), 1), Slots: []bindSlot{{ID: bindID(21), Codec: "b"}}}
 		_, err := matchBaseOccurrences(base, wrongCodec)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "codec differs")
-		missing := compiledQuery{statement: stmt.New(sqltext.Text("SELECT ?"), 1), bindSlots: []bindSlot{{id: bindID(22), codec: "a"}}}
+		missing := compiledQuery{Statement: stmt.New(sqltext.Text("SELECT ?"), 1), Slots: []bindSlot{{ID: bindID(22), Codec: "a"}}}
 		_, err = matchBaseOccurrences(base, missing)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "missing or reordered")
-		zero := compiledQuery{statement: stmt.New(sqltext.Text("SELECT ?"), 1), bindSlots: []bindSlot{{id: 0}}}
+		zero := compiledQuery{Statement: stmt.New(sqltext.Text("SELECT ?"), 1), Slots: []bindSlot{{ID: 0}}}
 		_, err = matchBaseOccurrences(zero, wrongCodec)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "no identity")

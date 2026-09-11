@@ -3,9 +3,9 @@ package rasql
 import (
 	"fmt"
 	"reflect"
-	"regexp"
 	"strings"
 
+	"github.com/lestrrat-go/rasql/internal/bindplan"
 	"github.com/lestrrat-go/rasql/internal/planerr"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
@@ -56,7 +56,8 @@ func cloneQ1ResultColumns(columns []ResultColumn) []ResultColumn {
 	return result
 }
 
-var codecPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]{0,127}$`)
+// codecPattern is defined in internal/bindplan, which checks it too.
+var codecPattern = bindplan.CodecPattern
 
 func NewResultSchema(columns ...ResultColumn) (ResultSchema, error) {
 	if len(columns) == 0 {
@@ -451,8 +452,8 @@ func validateQ1Expression(expression query.Expression, allowed map[string]struct
 			return planError("invalid_source", path, "expression source is outside plan")
 		}
 	case query.Value:
-		if token, ok := node.Argument().(bindToken); ok && token.err != nil {
-			return planerr.Wrap("unsnapshotable_bind", path, token.err.Error(), token.err)
+		if token, ok := node.Argument().(bindToken); ok && token.Err != nil {
+			return planerr.Wrap("unsnapshotable_bind", path, token.Err.Error(), token.Err)
 		}
 	case query.Binary:
 		if err := validateQ1Expression(node.Left(), allowed, path+".left"); err != nil {
@@ -753,10 +754,10 @@ func validatePartitionLimitValue(expression Expr[int64], limit int) error {
 		return planError("internal_plan", "plan.partition_limit", "partition limit bind is missing")
 	}
 	token, ok := node.Argument().(bindToken)
-	if !ok || token.id == 0 || token.codec != "" || token.preEncoded || token.copy == nil || token.err != nil {
+	if !ok || token.ID == 0 || token.Codec != "" || token.PreEncoded || token.Copy == nil || token.Err != nil {
 		return planError("internal_plan", "plan.partition_limit", "partition limit bind is invalid")
 	}
-	value, ok := token.value.(int64)
+	value, ok := token.Value.(int64)
 	if !ok || value != int64(limit) {
 		return planError("internal_plan", "plan.partition_limit", "partition limit bind value differs")
 	}
