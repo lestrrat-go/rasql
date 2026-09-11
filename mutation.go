@@ -538,19 +538,19 @@ func execAtomicMutationBatch(ctx context.Context, executor Executor, plans []Mut
 		return outcome, err
 	}
 	var child Executor
-	var finalizer scopeFinalizer
-	if state, ok := executor.(scopeState); ok && state.scopeIsTransaction() {
-		beginner, supported := executor.(savepointBeginner)
+	var finalizer ScopeFinalizer
+	if state, ok := executor.(ScopeState); ok && state.IsTransaction() {
+		beginner, supported := executor.(SavepointBeginner)
 		if !supported {
 			return outcome, planError("savepoint_unsupported", "scope", "executor does not support savepoints")
 		}
-		child, finalizer, err = beginner.beginSavepoint(ctx)
+		child, finalizer, err = beginner.BeginSavepoint(ctx)
 	} else {
-		beginner, supported := executor.(transactionBeginner)
+		beginner, supported := executor.(ScopeBeginner)
 		if !supported {
 			return outcome, planError("transaction_scope_unsupported", "scope", "executor does not support transaction scopes")
 		}
-		child, finalizer, err = beginner.beginScope(ctx, nil)
+		child, finalizer, err = beginner.BeginScope(ctx, nil)
 	}
 	if err != nil {
 		return outcome, err

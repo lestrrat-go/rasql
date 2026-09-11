@@ -139,7 +139,7 @@ func wrapCodecExecutor(executor Executor, codecs CodecRegistry) Executor {
 		hasLogical = true
 	}
 	_, compiler := executor.(compilerProvider)
-	_, scope := executor.(transactionBeginner)
+	_, scope := executor.(ScopeBeginner)
 	_, evidence := executor.(executionDurabilityProvider)
 	if scope {
 		if compiler {

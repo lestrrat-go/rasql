@@ -14,20 +14,42 @@ import (
 // Scope is one owned transaction or savepoint callback.
 type Scope func(context.Context, Executor) error
 
-type transactionBeginner interface {
-	beginScope(context.Context, *sql.TxOptions) (Executor, scopeFinalizer, error)
+// ScopeBeginner is an Executor that can open an owned transaction. Within and
+// ExecMutationBatch open a transaction through this interface, so an executor
+// written outside this package joins them by implementing it. An executor that
+// does not implement it is rejected with the code transaction_scope_unsupported.
+//
+// BeginScope returns the child executor that runs inside the new transaction
+// and the finalizer that ends it. Neither return value may be nil when the
+// error is nil.
+type ScopeBeginner interface {
+	BeginScope(context.Context, *sql.TxOptions) (Executor, ScopeFinalizer, error)
 }
 
-type savepointBeginner interface {
-	beginSavepoint(context.Context) (Executor, scopeFinalizer, error)
+// SavepointBeginner is an Executor that can open an owned savepoint. Within
+// opens a savepoint instead of a transaction when the executor it is given
+// reports IsTransaction, so an executor that reports true implements this
+// interface as well as ScopeBeginner.
+//
+// BeginSavepoint returns the child executor that runs inside the new savepoint
+// and the finalizer that ends it. Neither return value may be nil when the
+// error is nil.
+type SavepointBeginner interface {
+	BeginSavepoint(context.Context) (Executor, ScopeFinalizer, error)
 }
 
-type scopeFinalizer interface {
+// ScopeFinalizer ends the transaction or savepoint a ScopeBeginner or a
+// SavepointBeginner opened. Within calls Commit once the callback returns nil
+// and Rollback once it returns an error or panics.
+type ScopeFinalizer interface {
 	Commit(context.Context) error
 	Rollback(context.Context) error
 }
 
-type scopeState interface{ scopeIsTransaction() bool }
+// ScopeState is an Executor that reports whether it already runs inside a
+// transaction. Within opens a savepoint on an executor that reports true and a
+// transaction on one that reports false or does not implement this interface.
+type ScopeState interface{ IsTransaction() bool }
 
 type scopeContextProvider interface{ scopeContext() context.Context }
 type scopeCauseSetter interface{ setCause(error) }
@@ -48,9 +70,9 @@ type executionDurabilityProvider interface {
 }
 
 var (
-	_ transactionBeginner         = dbExecutor{}
-	_ savepointBeginner           = dbExecutor{}
-	_ scopeFinalizer              = guardedScopeFinalizer{}
+	_ ScopeBeginner               = dbExecutor{}
+	_ SavepointBeginner           = dbExecutor{}
+	_ ScopeFinalizer              = guardedScopeFinalizer{}
 	_ executionDurabilityProvider = dbExecutor{}
 )
 
@@ -113,9 +135,9 @@ func (e logicalCodecCompilerScopedEvidenceExecutor) beginLogicalInvocation(ctx c
 	return callCtx, wrapCodecExecutor(child, e.codecs), completion
 }
 
-func (e profiledScopedExecutor) scopeIsTransaction() bool {
-	state, ok := e.Executor.(scopeState)
-	return ok && state.scopeIsTransaction()
+func (e profiledScopedExecutor) IsTransaction() bool {
+	state, ok := e.Executor.(ScopeState)
+	return ok && state.IsTransaction()
 }
 func (e profiledScopedExecutor) scopeContext() context.Context {
 	provider, _ := e.Executor.(scopeContextProvider)
@@ -133,24 +155,24 @@ func (e profiledCodecScopedExecutor) Codecs() CodecRegistry {
 	return provider.Codecs()
 }
 
-func (e profiledCodecScopedExecutor) beginScope(ctx context.Context, opts *sql.TxOptions) (Executor, scopeFinalizer, error) {
-	beginner, ok := e.Executor.(transactionBeginner)
+func (e profiledCodecScopedExecutor) BeginScope(ctx context.Context, opts *sql.TxOptions) (Executor, ScopeFinalizer, error) {
+	beginner, ok := e.Executor.(ScopeBeginner)
 	if !ok {
 		return nil, nil, unsupportedScopeError()
 	}
-	child, finalizer, err := beginner.beginScope(ctx, opts)
+	child, finalizer, err := beginner.BeginScope(ctx, opts)
 	if err != nil {
 		return nil, nil, err
 	}
 	return wrapProfiledChildWithCodecs(child, e.compiler, e.Codecs()), finalizer, nil
 }
 
-func (e profiledCodecScopedExecutor) beginSavepoint(ctx context.Context) (Executor, scopeFinalizer, error) {
-	beginner, ok := e.Executor.(savepointBeginner)
+func (e profiledCodecScopedExecutor) BeginSavepoint(ctx context.Context) (Executor, ScopeFinalizer, error) {
+	beginner, ok := e.Executor.(SavepointBeginner)
 	if !ok {
 		return nil, nil, planError("savepoint_unsupported", "scope", "executor does not support savepoints")
 	}
-	child, finalizer, err := beginner.beginSavepoint(ctx)
+	child, finalizer, err := beginner.BeginSavepoint(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -173,9 +195,9 @@ func (e profiledCodecScopedEvidenceExecutor) executionDurability() executionDura
 	return provider.executionDurability()
 }
 
-func (e codecScopedExecutor) scopeIsTransaction() bool {
-	state, ok := e.Executor.(scopeState)
-	return ok && state.scopeIsTransaction()
+func (e codecScopedExecutor) IsTransaction() bool {
+	state, ok := e.Executor.(ScopeState)
+	return ok && state.IsTransaction()
 }
 func (e codecScopedExecutor) scopeContext() context.Context {
 	provider, _ := e.Executor.(scopeContextProvider)
@@ -185,24 +207,24 @@ func (e codecScopedExecutor) scopeContext() context.Context {
 	return provider.scopeContext()
 }
 
-func (e codecScopedExecutor) beginScope(ctx context.Context, opts *sql.TxOptions) (Executor, scopeFinalizer, error) {
-	beginner, ok := e.Executor.(transactionBeginner)
+func (e codecScopedExecutor) BeginScope(ctx context.Context, opts *sql.TxOptions) (Executor, ScopeFinalizer, error) {
+	beginner, ok := e.Executor.(ScopeBeginner)
 	if !ok {
 		return nil, nil, unsupportedScopeError()
 	}
-	child, finalizer, err := beginner.beginScope(ctx, opts)
+	child, finalizer, err := beginner.BeginScope(ctx, opts)
 	if err != nil {
 		return nil, nil, err
 	}
 	return wrapCodecExecutor(child, e.codecs), finalizer, nil
 }
 
-func (e codecScopedExecutor) beginSavepoint(ctx context.Context) (Executor, scopeFinalizer, error) {
-	beginner, ok := e.Executor.(savepointBeginner)
+func (e codecScopedExecutor) BeginSavepoint(ctx context.Context) (Executor, ScopeFinalizer, error) {
+	beginner, ok := e.Executor.(SavepointBeginner)
 	if !ok {
 		return nil, nil, planError("savepoint_unsupported", "scope", "executor does not support savepoints")
 	}
-	child, finalizer, err := beginner.beginSavepoint(ctx)
+	child, finalizer, err := beginner.BeginSavepoint(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -233,24 +255,24 @@ func (e codecCompilerScopedEvidenceExecutor) executionDurability() executionDura
 	return provider.executionDurability()
 }
 
-func (e profiledScopedExecutor) beginScope(ctx context.Context, opts *sql.TxOptions) (Executor, scopeFinalizer, error) {
-	beginner, ok := e.Executor.(transactionBeginner)
+func (e profiledScopedExecutor) BeginScope(ctx context.Context, opts *sql.TxOptions) (Executor, ScopeFinalizer, error) {
+	beginner, ok := e.Executor.(ScopeBeginner)
 	if !ok {
 		return nil, nil, unsupportedScopeError()
 	}
-	child, finalizer, err := beginner.beginScope(ctx, opts)
+	child, finalizer, err := beginner.BeginScope(ctx, opts)
 	if err != nil {
 		return nil, nil, err
 	}
 	return wrapProfiledChild(child, e.compiler), finalizer, nil
 }
 
-func (e profiledScopedExecutor) beginSavepoint(ctx context.Context) (Executor, scopeFinalizer, error) {
-	beginner, ok := e.Executor.(savepointBeginner)
+func (e profiledScopedExecutor) BeginSavepoint(ctx context.Context) (Executor, ScopeFinalizer, error) {
+	beginner, ok := e.Executor.(SavepointBeginner)
 	if !ok {
 		return nil, nil, planError("savepoint_unsupported", "scope", "executor does not support savepoints")
 	}
-	child, finalizer, err := beginner.beginSavepoint(ctx)
+	child, finalizer, err := beginner.BeginSavepoint(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -270,7 +292,7 @@ func wrapProfiledChildWithCodecs(child Executor, compiler *querycompile.Compiler
 	if _, ok := child.(logicalInvocationProvider); ok {
 		hasLogical = true
 	}
-	if _, scope := child.(transactionBeginner); scope {
+	if _, scope := child.(ScopeBeginner); scope {
 		if _, evidence := child.(executionDurabilityProvider); evidence {
 			if _, codecs := child.(CodecProvider); codecs {
 				if hasLogical {
@@ -324,19 +346,19 @@ func Within(ctx context.Context, executor Executor, opts *sql.TxOptions, fn Scop
 		return fmt.Errorf("rasql: scope function must not be nil")
 	}
 	var child Executor
-	var finalizer scopeFinalizer
-	state, _ := executor.(scopeState)
-	if state != nil && state.scopeIsTransaction() {
-		tx, ok := executor.(savepointBeginner)
+	var finalizer ScopeFinalizer
+	state, _ := executor.(ScopeState)
+	if state != nil && state.IsTransaction() {
+		tx, ok := executor.(SavepointBeginner)
 		if !ok {
 			return unsupportedScopeError()
 		}
 		if opts != nil {
 			return planError("nested_options", "scope", "nested scopes do not accept transaction options")
 		}
-		child, finalizer, err = tx.beginSavepoint(ctx)
-	} else if tx, ok := executor.(transactionBeginner); ok {
-		child, finalizer, err = tx.beginScope(ctx, opts)
+		child, finalizer, err = tx.BeginSavepoint(ctx)
+	} else if tx, ok := executor.(ScopeBeginner); ok {
+		child, finalizer, err = tx.BeginScope(ctx, opts)
 	} else {
 		return unsupportedScopeError()
 	}
@@ -376,7 +398,7 @@ func Within(ctx context.Context, executor Executor, opts *sql.TxOptions, fn Scop
 	return finalizer.Commit(cleanupCtx)
 }
 
-func isNilScopeFinalizer(finalizer scopeFinalizer) bool {
+func isNilScopeFinalizer(finalizer ScopeFinalizer) bool {
 	if finalizer == nil {
 		return true
 	}
