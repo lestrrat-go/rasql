@@ -281,3 +281,12 @@ func Q1BeginLogicalInvocation(ctx context.Context, executor Executor, kind Event
 	callCtx, child, completion := beginLogicalInvocation(ctx, executor, kind)
 	return callCtx, child, Q1LogicalInvocation{completion: completion}
 }
+
+// Q1UnadoptedPredicate builds an equality whose right side is a bare
+// query.Bind, the shape a caller gets from the query package on its own. Every
+// rasql builder adopts its value and stamps it with an id first, so no public
+// call produces an unstamped bind; the compiler still guards against one, and
+// these tests hold that guard in place.
+func Q1UnadoptedPredicate[T any](left Expr[T], value T) Predicate {
+	return Predicate{node: query.Equal(left.node, query.Bind(value)), source: left.source}
+}

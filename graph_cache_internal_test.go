@@ -6,7 +6,6 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"math"
-	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -15,7 +14,6 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/graphfingerprint"
 	"github.com/lestrrat-go/rasql/internal/graphkey"
-	querypkg "github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/stmt"
 	"github.com/stretchr/testify/assert"
@@ -41,14 +39,6 @@ func TestGraphCache(t *testing.T) {
 		require.NotEmpty(t, stampFrame)
 		_, err = graphkey.Frame(driver.Value(math.NaN()))
 		require.Error(t, err)
-	})
-
-	t.Run("decoder compatibility includes empty entries", func(t *testing.T) {
-		one := struct{ Name string }{Name: "one"}
-		two := struct{ Name string }{Name: "two"}
-		entry := graphCacheEntry{decoder: one}
-		require.True(t, reflect.DeepEqual(entry.decoder, one))
-		require.False(t, reflect.DeepEqual(entry.decoder, two))
 	})
 
 	t.Run("a snapshot copies its bytes", func(t *testing.T) {
@@ -183,8 +173,7 @@ func TestGraphCache(t *testing.T) {
 
 	t.Run("a legacy zero-id fixed bind runs without cache reuse", func(t *testing.T) {
 		fixture := graphCacheFixtureFor(t)
-		fixed := querypkg.Bind(int64(0))
-		predicate := Predicate{node: querypkg.Equal(fixture.childRank.node, fixed), source: fixture.childRank.source}
+		predicate := Q1UnadoptedPredicate(fixture.childRank, int64(0))
 		firstQuery := fixture.childQuery.Where(predicate)
 		secondQuery := fixture.childQuery.Where(predicate)
 		compiled, err := Q1CompileQuery(graphCacheCompiler(t), firstQuery)
@@ -308,6 +297,10 @@ type graphCacheFixture struct {
 	childParent  Expr[int64]
 	childRank    Expr[int64]
 	childPayload Expr[[]byte]
+	// childItems and childSchema rebuild the child projection with a different
+	// decoder, which is what varies the cache identity across subtests.
+	childItems  []ProjectionItem
+	childSchema ResultSchema
 }
 
 func graphCacheFixtureFor(t *testing.T) graphCacheFixture {
@@ -350,8 +343,8 @@ INSERT INTO graph_cache_junction VALUES (1, 11), (2, 11)`)
 		Columns: []schema.ColumnDef{{Name: "parent", Type: schema.IntegerType{}}, {Name: "child", Type: schema.IntegerType{}}},
 	}), "j")
 	require.NoError(t, err)
-	parentRelation := TypedRelation[graphCacheParentRow]{source: parents.Source()}
-	childRelation := TypedRelation[graphCacheChildRow]{source: children.Source()}
+	parentRelation := Q1TypedRelation[graphCacheParentRow](parents.Source())
+	childRelation := Q1TypedRelation[graphCacheChildRow](children.Source())
 	parentID, err := BindColumn[graphCacheParentRow, int64](parentRelation, "id", "")
 	require.NoError(t, err)
 	childID, err := BindColumn[graphCacheChildRow, int64](childRelation, "id", "")
@@ -362,7 +355,7 @@ INSERT INTO graph_cache_junction VALUES (1, 11), (2, 11)`)
 	require.NoError(t, err)
 	childPayload, err := BindColumn[graphCacheChildRow, []byte](childRelation, "payload", "")
 	require.NoError(t, err)
-	junctionRelation := TypedRelation[graphCacheJunctionRow]{source: junction.Source()}
+	junctionRelation := Q1TypedRelation[graphCacheJunctionRow](junction.Source())
 	junctionParent, err := BindColumn[graphCacheJunctionRow, int64](junctionRelation, "parent", "")
 	require.NoError(t, err)
 	junctionChild, err := BindColumn[graphCacheJunctionRow, int64](junctionRelation, "child", "")
@@ -378,40 +371,39 @@ INSERT INTO graph_cache_junction VALUES (1, 11), (2, 11)`)
 		ResultColumn{Name: "payload", Type: schema.BytesType{}},
 	)
 	require.NoError(t, err)
-	childProjection, err := NewProjection([]ProjectionItem{
+	childItems := []ProjectionItem{
 		Item("id", childID.Expr(), schema.IntegerType{}, ""),
 		Item("parent", childParent.Expr(), schema.IntegerType{}, ""),
 		Item("rank", childRank.Expr(), schema.IntegerType{}, ""),
 		Item("payload", childPayload.Expr(), schema.BytesType{}, ""),
-	}, graphCacheChildDecoder{schema: childSchema})
+	}
+	childProjection, err := NewProjection(childItems, graphCacheChildDecoder{schema: childSchema})
 	require.NoError(t, err)
 	parentQuery := Select(parents.Source(), parentProjection).OrderBy(AscExpr(parentID.Expr()))
 	childQuery := Select(children.Source(), childProjection).OrderBy(AscExpr(childRank.Expr()), AscExpr(childID.Expr()))
 	parentKey, err := NewGraphKey(KeyPart(parentID, func(row graphCacheParentRow) int64 { return row.ID }))
 	require.NoError(t, err)
-	childKey := graphCacheDirectKey(childParent, func(row graphCacheChildRow) int64 { return row.Parent })
-	childIDKey := graphCacheDirectKey(childID, func(row graphCacheChildRow) int64 { return row.ID })
+	childKey := graphCacheDirectKey(t, childParent, func(row graphCacheChildRow) int64 { return row.Parent })
+	childIDKey := graphCacheDirectKey(t, childID, func(row graphCacheChildRow) int64 { return row.ID })
 	junctionKey, err := NewGraphKey(KeyPart(junctionParent, func(row graphCacheJunctionRow) int64 { return row.Parent }))
 	require.NoError(t, err)
 	throughKey, err := NewGraphKey(KeyPart(junctionChild, func(row graphCacheJunctionRow) int64 { return row.Child }))
 	require.NoError(t, err)
-	return graphCacheFixture{counter: counter, executor: executor, parentSource: parents.Source(), childSource: children.Source(), junction: junction.Source(), parentQuery: parentQuery, childQuery: childQuery, parentKey: parentKey, childKey: childKey, childIDKey: childIDKey, junctionKey: junctionKey, throughKey: throughKey, parentID: parentID.Expr(), childID: childID.Expr(), childParent: childParent.Expr(), childRank: childRank.Expr(), childPayload: childPayload.Expr()}
+	return graphCacheFixture{counter: counter, executor: executor, parentSource: parents.Source(), childSource: children.Source(), junction: junction.Source(), parentQuery: parentQuery, childQuery: childQuery, parentKey: parentKey, childKey: childKey, childIDKey: childIDKey, junctionKey: junctionKey, throughKey: throughKey, parentID: parentID.Expr(), childID: childID.Expr(), childParent: childParent.Expr(), childRank: childRank.Expr(), childPayload: childPayload.Expr(), childItems: childItems, childSchema: childSchema}
 }
 
-func graphCacheDirectKey[R any](column Column[R, int64], extract func(R) int64) GraphKey[R] {
-	return GraphKey[R]{key: &graphkey.Spec{Parts: []*graphkey.PartSpec{{
-		Column: column.ref, Codec: column.codec, Type: reflect.TypeOf(int64(0)),
-		Extract:    func(row any) (any, bool) { return extract(row.(R)), true },
-		ColumnType: graphkey.ColumnType(column.ref), Source: column.ref.Source().QualifiedName(),
-	}}}}
+func graphCacheDirectKey[R any](t *testing.T, column Column[R, int64], extract func(R) int64) GraphKey[R] {
+	t.Helper()
+	key, err := NewGraphKey(KeyPart(column, extract))
+	require.NoError(t, err)
+	return key
 }
 
 func graphCacheChildQuery(t *testing.T, fixture graphCacheFixture, rank *int64, mode string, codec string) Query[graphCacheChildRow] {
 	t.Helper()
-	projection := fixture.childQuery.Projection()
-	projection.decoder = graphCacheChildDecoder{schema: projection.schema, mode: mode}
-	query := fixture.childQuery
-	query.projection = projection
+	projection, err := NewProjection(fixture.childItems, graphCacheChildDecoder{schema: fixture.childSchema, mode: mode})
+	require.NoError(t, err)
+	query := Select(fixture.childSource, projection).OrderBy(AscExpr(fixture.childRank), AscExpr(fixture.childID))
 	if rank != nil {
 		value, err := ValueWithCodec(*rank, codec)
 		require.NoError(t, err)

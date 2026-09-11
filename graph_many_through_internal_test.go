@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/lestrrat-go/rasql/dialect"
-	querypkg "github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/stmt"
 	"github.com/stretchr/testify/require"
@@ -123,9 +122,9 @@ func TestGraphManyThrough(t *testing.T) {
 
 	t.Run("the cache includes the fixed target filter", func(t *testing.T) {
 		executor, counter, parentQuery, parentKey, junctionParent, junctionChild, childKey, junction, childPlan := mtFixture(t)
-		baseChild := childPlan.node.query.(graphQuery[mtChildRow, mtChildGraph]).value
-		childSource := baseChild.plan.sources[0]
-		active, err := BindColumn[mtChildRow, int64](TypedRelation[mtChildRow]{source: childSource}, "active", "")
+		baseChild := Q1GraphChildQuery[mtChildRow, mtChildGraph, mtChildRow, mtChildGraph](childPlan)
+		childSource := Q1PlanSources(baseChild.Plan())[0]
+		active, err := BindColumn[mtChildRow, int64](Q1TypedRelation[mtChildRow](childSource), "active", "")
 		require.NoError(t, err)
 		inactiveQuery := baseChild.Where(EqualValue(active.Expr(), int64(0)))
 		inactivePlan, err := NewGraphPlan(inactiveQuery, func(row mtChildRow) mtChildGraph { return mtChildGraph{ID: row.ID} })
@@ -241,8 +240,7 @@ func TestGraphManyThrough(t *testing.T) {
 			return plan
 		}
 		rawPredicate := func(value int64) Predicate {
-			expression := fixture.kind.Expr()
-			return Predicate{node: querypkg.Equal(expression.node, querypkg.Bind(value)), source: expression.source}
+			return Q1UnadoptedPredicate(fixture.kind.Expr(), value)
 		}
 		first, err := ManyThrough("first", parentKey, junctionParent, junctionChild, childKey, fixture.junction, childPlan("first"), EdgeOptions{Where: rawPredicate(1)}, func(parent *graphWidthParent, loaded LoadedMany[graphWidthChild]) {
 			if len(loaded.Values) > 0 {
@@ -270,14 +268,14 @@ func TestGraphManyThrough(t *testing.T) {
 
 	t.Run("a bind limit above the profile splits the batch", func(t *testing.T) {
 		fixture := graphWidthFixtureFor(t, 1000, false)
-		fixedValues := make([]any, 500)
-		for index := range fixedValues {
-			fixedValues[index] = int64(1)
+		fixedRest := make([]int64, 499)
+		for index := range fixedRest {
+			fixedRest[index] = int64(1)
 		}
 		kind := fixture.kind.Expr()
 		options := EdgeOptions{
 			BindLimit: Q1ExecutorProfile(fixture.executor).MaxBind + 100,
-			Where:     Predicate{node: querypkg.In(kind.node, fixedValues...), source: kind.source},
+			Where:     InValues(kind, int64(1), fixedRest...),
 		}
 		plan := graphWidthPlan(t, fixture, 1, 2, options, "loaded")
 		values, err := LoadGraph(t.Context(), fixture.executor, plan)
@@ -347,8 +345,8 @@ func mtFixture(t *testing.T) (Executor, *mtCountingExecutor, Query[mtParentRow],
 	require.NoError(t, err)
 	cp, err := NewProjection([]ProjectionItem{Item("id", cid.Expr(), schema.IntegerType{}, ""), Item("active", active.Expr(), schema.IntegerType{}, "")}, mtChildDecoder{schema: cs})
 	require.NoError(t, err)
-	parentQuery := Select(parentSource.source, pp)
-	childQuery := Select(childSource.source, cp).Where(EqualValue(active.Expr(), int64(1)))
+	parentQuery := Select(parentSource.Source(), pp)
+	childQuery := Select(childSource.Source(), cp).Where(EqualValue(active.Expr(), int64(1)))
 	childPlan, err := NewGraphPlan(childQuery, func(row mtChildRow) mtChildGraph { return mtChildGraph{ID: row.ID} })
 	require.NoError(t, err)
 	parentKey, err := NewGraphKey(KeyPart(pid, func(row mtParentRow) int64 { return row.ID }))
@@ -361,11 +359,11 @@ func mtFixture(t *testing.T) (Executor, *mtCountingExecutor, Query[mtParentRow],
 	require.NoError(t, err)
 	_ = jid
 	_ = jrank
-	return executor, counter, parentQuery, parentKey, junctionParent, junctionChild, childKey, junctionSource.source, childPlan
+	return executor, counter, parentQuery, parentKey, junctionParent, junctionChild, childKey, junctionSource.Source(), childPlan
 }
 
 func mtJunctionOrder(source Source) []OrderTerm {
-	relation := TypedRelation[mtJunctionRow]{source: source}
+	relation := Q1TypedRelation[mtJunctionRow](source)
 	rank, _ := BindColumn[mtJunctionRow, int64](relation, "rank", "")
 	id, _ := BindColumn[mtJunctionRow, int64](relation, "id", "")
 	return []OrderTerm{AscExpr(rank.Expr()), AscExpr(id.Expr())}
@@ -493,9 +491,9 @@ CREATE TABLE r4_width_junctions (parent_id INTEGER NOT NULL, parent_tenant INTEG
 		},
 	}), "wj")
 	require.NoError(t, err)
-	parentRelation := TypedRelation[graphWidthParentRow]{source: parents.Source()}
-	childRelation := TypedRelation[graphWidthChildRow]{source: children.Source()}
-	junctionRelation := TypedRelation[graphWidthJunctionRow]{source: junction.Source()}
+	parentRelation := Q1TypedRelation[graphWidthParentRow](parents.Source())
+	childRelation := Q1TypedRelation[graphWidthChildRow](children.Source())
+	junctionRelation := Q1TypedRelation[graphWidthJunctionRow](junction.Source())
 	parentID, err := BindColumn[graphWidthParentRow, int64](parentRelation, "id", "")
 	require.NoError(t, err)
 	parentTenant, err := BindColumn[graphWidthParentRow, int64](parentRelation, "tenant", "")
