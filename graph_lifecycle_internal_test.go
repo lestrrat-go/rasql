@@ -319,16 +319,16 @@ func TestGraphContract(t *testing.T) {
 		_, err = NewGraphKey[graphParentRow]()
 		require.Error(t, err)
 
-		shortKey := GraphKey[graphChildRow]{key: &graphKeySpec{parts: childKey.key.parts[:1]}}
+		shortKey := GraphKey[graphChildRow]{key: &graphKeySpec{Parts: childKey.key.Parts[:1]}}
 		childPlan := GraphPlan[graphChildRow, graphChild]{node: plan.node.edges[0].child}
 		edge, err := HasMany("wrong-width", parentKey, shortKey, childPlan, EdgeOptions{}, func(*graphParent, LoadedMany[graphChild]) {})
 		require.NoError(t, err)
 		_, err = NewGraphPlan(plan.node.query.(graphQuery[graphParentRow, graphParent]).value, func(row graphParentRow) graphParent { return graphParent{ID: row.ID} }, edge)
 		require.Error(t, err)
 
-		wrongType := *childKey.key.parts[0]
-		wrongType.typ = reflect.TypeOf("")
-		wrongKey := GraphKey[graphChildRow]{key: &graphKeySpec{parts: []*graphKeyPartSpec{&wrongType, childKey.key.parts[1]}}}
+		wrongType := *childKey.key.Parts[0]
+		wrongType.Type = reflect.TypeOf("")
+		wrongKey := GraphKey[graphChildRow]{key: &graphKeySpec{Parts: []*graphKeyPartSpec{&wrongType, childKey.key.Parts[1]}}}
 		edge, err = HasMany("wrong-type", parentKey, wrongKey, childPlan, EdgeOptions{}, func(*graphParent, LoadedMany[graphChild]) {})
 		require.NoError(t, err)
 		_, err = NewGraphPlan(plan.node.query.(graphQuery[graphParentRow, graphParent]).value, func(row graphParentRow) graphParent { return graphParent{ID: row.ID} }, edge)
@@ -356,7 +356,7 @@ func TestGraphContract(t *testing.T) {
 			return ctx, nil
 		}))
 		require.NoError(t, err)
-		plan.node.edges[0].childKey.parts[0].codec = "missing-contract-codec"
+		plan.node.edges[0].childKey.Parts[0].Codec = "missing-contract-codec"
 		_, err = LoadGraph(t.Context(), executor, plan)
 		require.Error(t, err)
 		require.Zero(t, starts.Load())
@@ -384,14 +384,14 @@ func TestGraphContract(t *testing.T) {
 		var count atomic.Int64
 		registry, err := NewCodecRegistry(map[CodecID]ValueCodec{"contract": graphContractCodec{enc: &count}})
 		require.NoError(t, err)
-		key := &graphKeySpec{parts: []*graphKeyPartSpec{{typ: reflect.TypeOf(int64(0)), codec: "contract", extract: func(any) (any, bool) { return int64(7), true }}}}
-		first, present, err := key.tuple(struct{}{}, registry)
+		key := &graphKeySpec{Parts: []*graphKeyPartSpec{{Type: reflect.TypeOf(int64(0)), Codec: "contract", Extract: func(any) (any, bool) { return int64(7), true }}}}
+		first, present, err := key.Tuple(struct{}{}, graphKeyEncoder{codecs: registry})
 		require.NoError(t, err)
 		require.True(t, present)
-		second, present, err := key.tuple(struct{}{}, registry)
+		second, present, err := key.Tuple(struct{}{}, graphKeyEncoder{codecs: registry})
 		require.NoError(t, err)
 		require.True(t, present)
-		require.Equal(t, first.identity, second.identity)
+		require.Equal(t, first.Identity, second.Identity)
 		require.Equal(t, int64(2), count.Load())
 	})
 }
