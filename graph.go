@@ -200,12 +200,12 @@ func (q graphQuery[R, G]) withOptions(options EdgeOptions, key *graphKeySpec, li
 		child = child.OrderBy(order...)
 	}
 	if limit > 0 {
-		if key == nil || len(key.parts) == 0 {
+		if key == nil || len(key.Parts) == 0 {
 			return nil, planError("invalid_graph_key", "partition", "must not be empty")
 		}
-		partition := make([]GroupKey, len(key.parts))
-		for i, part := range key.parts {
-			partition[i] = GroupKey{node: part.column, source: part.column.Source().QualifiedName()}
+		partition := make([]GroupKey, len(key.Parts))
+		for i, part := range key.Parts {
+			partition[i] = GroupKey{node: part.Column, source: part.Column.Source().QualifiedName()}
 		}
 		limited, err := child.withPartitionLimit(partition, order, limit)
 		if err != nil {
@@ -324,12 +324,12 @@ func NewGraphPlan[R, G any](q Query[R], mapper func(R) G, edges ...GraphEdge[R, 
 			return GraphPlan[R, G]{}, planError("invalid_graph_plan", "edges", "through metadata is incomplete")
 		}
 		matchParts := func(left, right *graphKeySpec, path string) error {
-			if len(left.parts) != len(right.parts) {
+			if len(left.Parts) != len(right.Parts) {
 				return planError("graph_key_mismatch", path, "key widths differ")
 			}
-			for partIndex := range left.parts {
-				leftPart, rightPart := left.parts[partIndex], right.parts[partIndex]
-				if leftPart.typ != rightPart.typ || leftPart.codec != rightPart.codec || !reflect.DeepEqual(leftPart.columnType, rightPart.columnType) {
+			for partIndex := range left.Parts {
+				leftPart, rightPart := left.Parts[partIndex], right.Parts[partIndex]
+				if leftPart.Type != rightPart.Type || leftPart.Codec != rightPart.Codec || !reflect.DeepEqual(leftPart.ColumnType, rightPart.ColumnType) {
 					return planError("graph_key_mismatch", fmt.Sprintf("%s[%d]", path, partIndex), "key component types differ")
 				}
 			}
@@ -345,20 +345,20 @@ func NewGraphPlan[R, G any](q Query[R], mapper func(R) G, edges ...GraphEdge[R, 
 		} else if err := matchParts(spec.parentKey, spec.childKey, "edges"); err != nil {
 			return GraphPlan[R, G]{}, err
 		}
-		for _, part := range spec.parentKey.parts {
-			if part.source != node.query.sourceName() {
+		for _, part := range spec.parentKey.Parts {
+			if part.Source != node.query.sourceName() {
 				return GraphPlan[R, G]{}, planError("graph_key_mismatch", "parent_key", "key source differs from graph stage")
 			}
 		}
-		for _, part := range spec.childKey.parts {
-			if part.source != spec.child.query.sourceName() {
+		for _, part := range spec.childKey.Parts {
+			if part.Source != spec.child.query.sourceName() {
 				return GraphPlan[R, G]{}, planError("graph_key_mismatch", "child_key", "key source differs from graph stage")
 			}
 		}
 		if spec.kind == graphManyThrough {
 			for _, key := range []*graphKeySpec{spec.junctionParent, spec.junctionChild} {
-				for _, part := range key.parts {
-					if part.source != spec.junction.ref.QualifiedName() {
+				for _, part := range key.Parts {
+					if part.Source != spec.junction.ref.QualifiedName() {
 						return GraphPlan[R, G]{}, planError("graph_key_mismatch", "junction", "junction key source differs from junction")
 					}
 				}
@@ -461,7 +461,7 @@ func ManyThrough[P, G, J, C, CG any](name string, parent GraphKey[P], junctionPa
 	if attach == nil || children.node == nil || parent.key == nil || junctionParent.key == nil || junctionChild.key == nil || child.key == nil || junction.ref.QualifiedName() == "" {
 		return nil, planError("invalid_graph_edge", "edge", "is incomplete")
 	}
-	if len(junctionParent.key.parts) != len(parent.key.parts) || len(junctionChild.key.parts) != len(child.key.parts) {
+	if len(junctionParent.key.Parts) != len(parent.key.Parts) || len(junctionChild.key.Parts) != len(child.key.Parts) {
 		return nil, planError("invalid_graph_edge", "edge", "key widths differ")
 	}
 	options.Order = append([]OrderTerm(nil), options.Order...)

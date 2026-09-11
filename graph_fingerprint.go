@@ -251,19 +251,19 @@ func graphInvocationFingerprint(stage graphFingerprintStage, profile engineProfi
 	}
 	key.writeU64(uint64(len(stage.keys)))
 	for _, keySpec := range stage.keys {
-		if keySpec == nil || len(keySpec.parts) == 0 {
+		if keySpec == nil || len(keySpec.Parts) == 0 {
 			return graphCacheFingerprint{}, planError("internal_plan", "graph.key", "stage key is empty")
 		}
-		key.writeU64(uint64(len(keySpec.parts)))
-		for _, part := range keySpec.parts {
-			key.writeString(part.source)
-			key.writeString(part.column.Name())
-			if err := writeGraphColumnType(&key, part.columnType); err != nil {
+		key.writeU64(uint64(len(keySpec.Parts)))
+		for _, part := range keySpec.Parts {
+			key.writeString(part.Source)
+			key.writeString(part.Column.Name())
+			if err := writeGraphColumnType(&key, part.ColumnType); err != nil {
 				return graphCacheFingerprint{}, err
 			}
-			key.writeBool(part.nullable)
-			writeGraphGoType(&key, part.typ)
-			key.writeString(part.codec)
+			key.writeBool(part.Nullable)
+			writeGraphGoType(&key, part.Type)
+			key.writeString(part.Codec)
 		}
 	}
 	for index, slot := range stage.compiled.Slots {

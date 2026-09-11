@@ -35,7 +35,7 @@ func TestGraphPartitionRendering(t *testing.T) {
 	childKey, err := NewGraphKey(KeyPart(childParent, func(row graphChildRow) int64 { return row.Parent }), KeyPart(childTenant, func(row graphChildRow) int64 { return row.Tenant }))
 	require.NoError(t, err)
 	graphChildQuery := graphQuery[graphChildRow, graphChild]{value: childQuery, mapFn: func(row graphChildRow) graphChild { return graphChild{ID: row.ID} }}
-	membership, err := buildGraphMembership(childKey.key, []keyTuple{{components: []keyComponent{{value: int64(1)}, {value: int64(1)}}}})
+	membership, err := buildGraphMembership(childKey.key, []keyTuple{{Components: []keyComponent{{Value: int64(1)}, {Value: int64(1)}}}})
 	require.NoError(t, err)
 	limited, err := graphChildQuery.withOptions(EdgeOptions{Where: EqualValue(childTenant.Expr(), int64(1)), PerParentLimit: 5}, childKey.key, 5)
 	require.NoError(t, err)

@@ -203,13 +203,13 @@ func TestGraphCache(t *testing.T) {
 
 	t.Run("many-through unequal widths are rejected before execution", func(t *testing.T) {
 		executor, _, _, parentKey, junctionParent, junctionChild, childKey, junction, childPlan := mtFixture(t)
-		wideJunctionParent := GraphKey[mtJunctionRow]{key: &graphKeySpec{parts: append(append([]*graphKeyPartSpec(nil), junctionParent.key.parts...), junctionChild.key.parts[0])}}
+		wideJunctionParent := GraphKey[mtJunctionRow]{key: &graphKeySpec{Parts: append(append([]*graphKeyPartSpec(nil), junctionParent.key.Parts...), junctionChild.key.Parts[0])}}
 		_, err := ManyThrough("one-to-two", parentKey, wideJunctionParent, junctionChild, childKey, junction, childPlan, EdgeOptions{}, func(*mtParentGraph, LoadedMany[mtChildGraph]) {})
 		var planErr *PlanError
 		require.ErrorAs(t, err, &planErr)
 		require.Equal(t, "invalid_graph_edge", planErr.Code)
 
-		wideParent := GraphKey[mtParentRow]{key: &graphKeySpec{parts: append(append([]*graphKeyPartSpec(nil), parentKey.key.parts...), parentKey.key.parts[0])}}
+		wideParent := GraphKey[mtParentRow]{key: &graphKeySpec{Parts: append(append([]*graphKeyPartSpec(nil), parentKey.key.Parts...), parentKey.key.Parts[0])}}
 		_, err = ManyThrough("two-to-one", wideParent, junctionParent, junctionChild, childKey, junction, childPlan, EdgeOptions{}, func(*mtParentGraph, LoadedMany[mtChildGraph]) {})
 		require.ErrorAs(t, err, &planErr)
 		require.Equal(t, "invalid_graph_edge", planErr.Code)
@@ -396,10 +396,10 @@ INSERT INTO graph_cache_junction VALUES (1, 11), (2, 11)`)
 }
 
 func graphCacheDirectKey[R any](column Column[R, int64], extract func(R) int64) GraphKey[R] {
-	return GraphKey[R]{key: &graphKeySpec{parts: []*graphKeyPartSpec{{
-		column: column.ref, codec: column.codec, typ: reflect.TypeOf(int64(0)),
-		extract:    func(row any) (any, bool) { return extract(row.(R)), true },
-		columnType: graphColumnType(column.ref), source: column.ref.Source().QualifiedName(),
+	return GraphKey[R]{key: &graphKeySpec{Parts: []*graphKeyPartSpec{{
+		Column: column.ref, Codec: column.codec, Type: reflect.TypeOf(int64(0)),
+		Extract:    func(row any) (any, bool) { return extract(row.(R)), true },
+		ColumnType: graphColumnType(column.ref), Source: column.ref.Source().QualifiedName(),
 	}}}}
 }
 

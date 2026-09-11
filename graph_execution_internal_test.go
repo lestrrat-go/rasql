@@ -149,7 +149,7 @@ func TestGraphExecution(t *testing.T) {
 		require.NoError(t, err)
 		childKey, err := NewGraphKey(KeyPart(childParent, func(row graphChildRow) int64 { return row.Parent }), KeyPart(childTenant, func(row graphChildRow) int64 { return row.Tenant }))
 		require.NoError(t, err)
-		t.Logf("graph key widths parent=%d child=%d", len(parentKey.key.parts), len(childKey.key.parts))
+		t.Logf("graph key widths parent=%d child=%d", len(parentKey.key.Parts), len(childKey.key.Parts))
 		childPlan, err := NewGraphPlan(childQuery, func(row graphChildRow) graphChild { return graphChild{ID: row.ID, Rank: row.Rank} })
 		require.NoError(t, err)
 		edge, err := HasMany("children", parentKey, childKey, childPlan, EdgeOptions{PerParentLimit: 5}, func(parent *graphParent, loaded LoadedMany[graphChild]) { parent.Children = loaded })
@@ -791,7 +791,7 @@ func (e *graphRuntimeCountingExecutor) Query(ctx context.Context, statement stmt
 }
 
 func graphRuntimeCodecKey[R any](base GraphKey[R], codec string) GraphKey[R] {
-	part := *base.key.parts[0]
-	part.codec = codec
-	return GraphKey[R]{key: &graphKeySpec{parts: []*graphKeyPartSpec{&part}}}
+	part := *base.key.Parts[0]
+	part.Codec = codec
+	return GraphKey[R]{key: &graphKeySpec{Parts: []*graphKeyPartSpec{&part}}}
 }

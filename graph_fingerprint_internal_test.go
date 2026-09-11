@@ -28,9 +28,9 @@ func graphFingerprintStageFor(t *testing.T) graphFingerprintStage {
 	column := source.Column("id")
 	resultSchema, err := NewResultSchema(ResultColumn{Name: "id", Type: schema.IntegerType{}})
 	require.NoError(t, err)
-	key := &graphKeySpec{parts: []*graphKeyPartSpec{{
-		column: column, source: source.QualifiedName(), typ: reflect.TypeOf(graphFingerprintNamedID(0)),
-		columnType: schema.IntegerType{},
+	key := &graphKeySpec{Parts: []*graphKeyPartSpec{{
+		Column: column, Source: source.QualifiedName(), Type: reflect.TypeOf(graphFingerprintNamedID(0)),
+		ColumnType: schema.IntegerType{},
 	}}}
 	return graphFingerprintStage{
 		name: "child", source: source.QualifiedName(), schema: resultSchema, keys: []*graphKeySpec{key},
@@ -88,9 +88,9 @@ func TestGraphFingerprint(t *testing.T) {
 		require.NotEqual(t, base, logicalKey)
 
 		nullableStage := stage
-		nullableStage.keys = []*graphKeySpec{{parts: []*graphKeyPartSpec{{
-			column: stage.keys[0].parts[0].column, source: stage.keys[0].parts[0].source,
-			typ: stage.keys[0].parts[0].typ, columnType: stage.keys[0].parts[0].columnType, nullable: true,
+		nullableStage.keys = []*graphKeySpec{{Parts: []*graphKeyPartSpec{{
+			Column: stage.keys[0].Parts[0].Column, Source: stage.keys[0].Parts[0].Source,
+			Type: stage.keys[0].Parts[0].Type, ColumnType: stage.keys[0].Parts[0].ColumnType, Nullable: true,
 		}}}}
 		nullableKey, err := graphInvocationFingerprint(nullableStage, graphFingerprintProfile())
 		require.NoError(t, err)
