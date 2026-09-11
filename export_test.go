@@ -1,6 +1,9 @@
 package rasql
 
 import (
+	"context"
+	"iter"
+
 	"github.com/lestrrat-go/rasql/internal/bindplan"
 	"github.com/lestrrat-go/rasql/internal/querycompile"
 	"github.com/lestrrat-go/rasql/query"
@@ -74,3 +77,21 @@ func Q1WithPartitionLimit[R any](q Query[R], partition []GroupKey, order []Order
 // speaking a standard dialect. A test that checks what the compiler does with
 // such a pairing has no other way to build one.
 func Q1CompilerFor(c *querycompile.Compiler) Compiler { return Compiler{compiler: c} }
+
+// Q1Prepared carries a prepared row sequence without naming the type that
+// holds it, which stays unexported.
+type Q1Prepared[R any] struct{ prepared preparedRows[R] }
+
+// Q1PrepareRows prepares q against a compiled query the caller supplies, so a
+// test can hand in a compiled form that no query would produce, such as one
+// whose bind copier fails or whose codec is missing. Every public entry point
+// compiles the query itself, leaving no way to inject one.
+func Q1PrepareRows[R any](executor Executor, q Query[R], compiled bindplan.Compiled) (Q1Prepared[R], error) {
+	prepared, err := prepareRows(executor, q, compiled)
+	return Q1Prepared[R]{prepared: prepared}, err
+}
+
+// Q1Rows consumes what Q1PrepareRows produced.
+func Q1Rows[R any](ctx context.Context, executor Executor, prepared Q1Prepared[R]) (iter.Seq2[R, error], error) {
+	return rowsPrepared(ctx, executor, prepared.prepared)
+}
