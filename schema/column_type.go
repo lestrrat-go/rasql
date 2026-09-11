@@ -183,14 +183,13 @@ func validColumnType(columnType ColumnType) bool {
 // ValidateColumnType checks that columnType is a supported, well-formed
 // built-in type. It is exported for APIs that carry column metadata without a
 // full TableDef.
+//
+// `columnType` must not be nil.
 func ValidateColumnType(columnType ColumnType) error {
 	if columnType == nil {
 		return fmt.Errorf("column type must not be nil")
 	}
 	value := reflect.ValueOf(columnType)
-	if value.Kind() == reflect.Pointer && value.IsNil() {
-		return fmt.Errorf("column type must not be a typed nil")
-	}
 	if value.Kind() == reflect.Pointer {
 		value = value.Elem()
 	}
