@@ -7,6 +7,7 @@ import (
 	"github.com/lestrrat-go/rasql/internal/bindplan"
 	"github.com/lestrrat-go/rasql/internal/querycompile"
 	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/stmt"
 )
 
 // This file compiles only under `go test`, so what it exports is reachable
@@ -94,4 +95,60 @@ func Q1PrepareRows[R any](executor Executor, q Query[R], compiled bindplan.Compi
 // Q1Rows consumes what Q1PrepareRows produced.
 func Q1Rows[R any](ctx context.Context, executor Executor, prepared Q1Prepared[R]) (iter.Seq2[R, error], error) {
 	return rowsPrepared(ctx, executor, prepared.prepared)
+}
+
+// Q1PreparedPage carries a prepared page without naming the type that holds
+// it, which stays unexported.
+type Q1PreparedPage[R any] struct{ page preparedPage[R] }
+
+// Q1PreparePageAfter plans a page without running it. PageAfter plans and runs
+// in one call, so a test that wants to see the plan, or to watch each row
+// arrive through the callback below, has no other way in.
+func Q1PreparePageAfter[R any](executor Executor, q Query[R], spec PageSpec[R], policy PagePolicy, request PageRequest) (Q1PreparedPage[R], error) {
+	page, err := preparePageAfter(executor, q, spec, policy, request)
+	return Q1PreparedPage[R]{page: page}, err
+}
+
+// Q1ConsumePreparedPage runs a prepared page, reporting each row and whether
+// it was kept. PageAfter returns only the finished page, so the per-row flag
+// is visible nowhere else.
+func Q1ConsumePreparedPage[R any](ctx context.Context, executor Executor, prepared Q1PreparedPage[R], callback func(R, bool) error) (Page[R], error) {
+	return consumePreparedPage(ctx, executor, prepared.page, callback)
+}
+
+// Q1NativeStatement builds the statement a native query plan carries, with its
+// bind tokens still in place. Native wraps the plan in a Query and hands back
+// nothing that shows the tokens, so a test checking how a native argument was
+// bound comes through here.
+func Q1NativeStatement(statement NativeStatement) (stmt.Statement, error) {
+	plan, err := newNativeQueryPlan(statement)
+	if err != nil {
+		return stmt.Statement{}, err
+	}
+	return plan.statement, nil
+}
+
+// Q1PlanSources returns the relations a query reads. Query.Plan hands back a
+// QueryPlan whose sources stay unexported, because a caller composes queries
+// from sources rather than taking them back out.
+func Q1PlanSources(plan QueryPlan) []Source { return plan.sources }
+
+// Q1SourceColumns returns the columns a source declares.
+func Q1SourceColumns(source Source) []query.ResultColumn { return source.ref.Columns() }
+
+// Q1ProjectionExpressions returns the expression behind each projected column,
+// which is empty for a native projection because its columns come from the SQL
+// rather than from anything this package built.
+func Q1ProjectionExpressions[R any](projection Projection[R]) []query.Expression {
+	result := make([]query.Expression, len(projection.items))
+	for i, item := range projection.items {
+		result[i] = item.expression
+	}
+	return result
+}
+
+// Q1Presence builds a presence without checking it, so a test can hand a
+// decoder one that NewPresence would refuse and see where the refusal lands.
+func Q1Presence(component string, columns ...string) Presence {
+	return Presence{component: component, columns: columns}
 }

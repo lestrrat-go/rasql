@@ -1,33 +1,14 @@
 package rasql
 
 import (
-	"context"
 	"database/sql"
-	"database/sql/driver"
 	"errors"
 	"reflect"
-	"sync"
-	"sync/atomic"
-	"testing"
-
-	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/schema"
-	"github.com/lestrrat-go/rasql/stmt"
-	"github.com/stretchr/testify/require"
 )
 
 // These fakes serve the tests still inside this package. The same shapes live
 // in executor_test.go for the tests that have moved out; this copy goes when
 // the last of those tests follows them.
-
-type runtimeFakeExecutor struct {
-	calls         atomic.Int64
-	rows          [][]any
-	dialect       dialect.Dialect
-	last          *runtimeFakeRows
-	mu            sync.Mutex
-	lastStatement stmt.Statement
-}
 
 type runtimeFakeRows struct {
 	values                                   [][]any
@@ -39,21 +20,6 @@ type runtimeFakeRows struct {
 	columnsErr, iterErr, finishErr, closeErr error
 	lastFinish                               error
 	lastEarly                                bool
-}
-
-func (e *runtimeFakeExecutor) Dialect() dialect.Dialect { return e.dialect }
-
-func (e *runtimeFakeExecutor) Query(_ context.Context, statement stmt.Statement) (ResultRows, error) {
-	e.calls.Add(1)
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.lastStatement = statement
-	e.last = &runtimeFakeRows{values: e.rows}
-	return e.last, nil
-}
-
-func (*runtimeFakeExecutor) Exec(context.Context, stmt.Statement) (sql.Result, error) {
-	return driver.RowsAffected(0), nil
 }
 
 func (r *runtimeFakeRows) Columns() ([]string, error) {
@@ -97,31 +63,6 @@ func (r *runtimeFakeRows) Finish(primary error, early bool) error {
 	return errors.Join(primary, r.finishErr)
 }
 
-func runtimeQuery(t *testing.T) Query[int64] {
-	t.Helper()
-	table, err := ReadTableOf[struct{}](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "value", Type: schema.IntegerType{}}}})
-	require.NoError(t, err)
-	relation, err := SourceOf(table, "i")
-	require.NoError(t, err)
-	column, err := BindColumn[struct{}, int64](relation, "value", "")
-	require.NoError(t, err)
-	resultSchema, err := NewResultSchema(ResultColumn{Name: "value", Type: schema.IntegerType{}})
-	require.NoError(t, err)
-	projection, err := NewProjection([]ProjectionItem{Item("value", column.Expr(), schema.IntegerType{}, "")}, runtimeDecoder{schema: resultSchema})
-	require.NoError(t, err)
-	return Select(relation.Source(), projection)
-}
-
-type runtimeDecoder struct{ schema ResultSchema }
-
-func (d runtimeDecoder) ResultSchema() ResultSchema { return d.schema }
-
-func (runtimeDecoder) Presence() []Presence { return nil }
-
-func (runtimeDecoder) DecodeRow(source ScanSource, result *int64) error {
-	return source.Scan(result)
-}
-
 func setRuntimeDestination(destination, value any) {
 	v := reflect.ValueOf(destination)
 	if value == nil {
@@ -148,16 +89,4 @@ func setRuntimeDestination(destination, value any) {
 	if source.Type().ConvertibleTo(v.Elem().Type()) {
 		v.Elem().Set(source.Convert(v.Elem().Type()))
 	}
-}
-
-// runtimeExecutor returns an executor and the fake behind it, so a caller that
-// needs to look at what the fake saw does not have to unwrap the executor.
-func runtimeExecutor(t *testing.T, rows [][]any) (Executor, *runtimeFakeExecutor) {
-	t.Helper()
-	raw := &runtimeFakeExecutor{rows: rows, dialect: dialect.SQLite()}
-	profile, err := EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
-	executor, err := WithEngineProfile(raw, profile)
-	require.NoError(t, err)
-	return executor, raw
 }
