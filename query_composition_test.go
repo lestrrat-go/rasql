@@ -1,4 +1,4 @@
-package rasql
+package rasql_test
 
 import (
 	"database/sql"
@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
-	"github.com/lestrrat-go/rasql/internal/planerr"
 	"github.com/lestrrat-go/rasql/internal/querycompile"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
@@ -20,38 +20,38 @@ import (
 )
 
 type q2AcceptanceRow struct {
-	Category Nullable[string]
+	Category rasql.Nullable[string]
 	Amount   int64
 }
 
-type q2AcceptanceDecoder struct{ resultSchema ResultSchema }
+type q2AcceptanceDecoder struct{ resultSchema rasql.ResultSchema }
 
-func (d q2AcceptanceDecoder) ResultSchema() ResultSchema { return d.resultSchema }
-func (q2AcceptanceDecoder) Presence() []Presence         { return nil }
-func (q2AcceptanceDecoder) DecodeRow(source ScanSource, row *q2AcceptanceRow) error {
+func (d q2AcceptanceDecoder) ResultSchema() rasql.ResultSchema { return d.resultSchema }
+func (q2AcceptanceDecoder) Presence() []rasql.Presence         { return nil }
+func (q2AcceptanceDecoder) DecodeRow(source rasql.ScanSource, row *q2AcceptanceRow) error {
 	var category sql.NullString
 	if err := source.Scan(&category, &row.Amount); err != nil {
 		return err
 	}
-	row.Category = Nullable[string]{Value: category.String, Valid: category.Valid}
+	row.Category = rasql.Nullable[string]{Value: category.String, Valid: category.Valid}
 	return nil
 }
 
 type q2AcceptanceGroup struct {
-	Category Nullable[string]
+	Category rasql.Nullable[string]
 	Count    int64
 }
 
-type q2AcceptanceGroupDecoder struct{ resultSchema ResultSchema }
+type q2AcceptanceGroupDecoder struct{ resultSchema rasql.ResultSchema }
 
-func (d q2AcceptanceGroupDecoder) ResultSchema() ResultSchema { return d.resultSchema }
-func (q2AcceptanceGroupDecoder) Presence() []Presence         { return nil }
-func (q2AcceptanceGroupDecoder) DecodeRow(source ScanSource, row *q2AcceptanceGroup) error {
+func (d q2AcceptanceGroupDecoder) ResultSchema() rasql.ResultSchema { return d.resultSchema }
+func (q2AcceptanceGroupDecoder) Presence() []rasql.Presence         { return nil }
+func (q2AcceptanceGroupDecoder) DecodeRow(source rasql.ScanSource, row *q2AcceptanceGroup) error {
 	var category sql.NullString
 	if err := source.Scan(&category, &row.Count); err != nil {
 		return err
 	}
-	row.Category = Nullable[string]{Value: category.String, Valid: category.Valid}
+	row.Category = rasql.Nullable[string]{Value: category.String, Valid: category.Valid}
 	return nil
 }
 
@@ -61,22 +61,22 @@ func TestQueryComposition(t *testing.T) {
 		base := q2AcceptanceQuery(t)
 		compiler := q2AcceptanceCompiler(t)
 
-		union, err := Combine(base, Union, base)
+		union, err := rasql.Combine(base, rasql.Union, base)
 		require.NoError(t, err)
 		unionRows := q2AcceptanceRows(t, db, compiler, union)
-		require.Equal(t, []q2AcceptanceRow{{Category: Nullable[string]{Valid: false}, Amount: 0}, {Category: Nullable[string]{Value: "a", Valid: true}, Amount: 1}, {Category: Nullable[string]{Value: "b", Valid: true}, Amount: 2}}, unionRows)
+		require.Equal(t, []q2AcceptanceRow{{Category: rasql.Nullable[string]{Valid: false}, Amount: 0}, {Category: rasql.Nullable[string]{Value: "a", Valid: true}, Amount: 1}, {Category: rasql.Nullable[string]{Value: "b", Valid: true}, Amount: 2}}, unionRows)
 
-		all, err := Combine(base, UnionAll, base)
+		all, err := rasql.Combine(base, rasql.UnionAll, base)
 		require.NoError(t, err)
 		allRows := q2AcceptanceRows(t, db, compiler, all)
 		require.Len(t, allRows, 8)
 		require.Equal(t, allRows[:4], allRows[4:])
 
-		filtered := all.Where(EqualExpr(Value(1), Value(2))).Where(EqualExpr(Value(3), Value(4)))
+		filtered := all.Where(rasql.EqualExpr(rasql.Value(1), rasql.Value(2))).Where(rasql.EqualExpr(rasql.Value(3), rasql.Value(4)))
 		filteredRows := q2AcceptanceRows(t, db, compiler, filtered)
 		require.Empty(t, filteredRows)
 
-		ordered := all.OrderBy(AscExpr(Value(int64(1))))
+		ordered := all.OrderBy(rasql.AscExpr(rasql.Value(int64(1))))
 		orderedRows := q2AcceptanceRows(t, db, compiler, ordered)
 		require.Len(t, orderedRows, 8)
 
@@ -90,61 +90,61 @@ func TestQueryComposition(t *testing.T) {
 		pagedRows := q2AcceptanceRows(t, db, compiler, offset)
 		require.Len(t, pagedRows, 1)
 
-		projectedSchema, err := NewResultSchema(
-			ResultColumn{Name: "category", Type: schema.TextType{}, Codec: "category.codec"},
-			ResultColumn{Name: "amount", Type: schema.IntegerType{}, Codec: "amount.codec"},
+		projectedSchema, err := rasql.NewResultSchema(
+			rasql.ResultColumn{Name: "category", Type: schema.TextType{}, Codec: "category.codec"},
+			rasql.ResultColumn{Name: "amount", Type: schema.IntegerType{}, Codec: "amount.codec"},
 		)
 		require.NoError(t, err)
-		projected, err := NewProjection([]ProjectionItem{
-			Item("category", Value("projected"), schema.TextType{}, "category.codec"),
-			Item("amount", Value(int64(99)), schema.IntegerType{}, "amount.codec"),
+		projected, err := rasql.NewProjection([]rasql.ProjectionItem{
+			rasql.Item("category", rasql.Value("projected"), schema.TextType{}, "category.codec"),
+			rasql.Item("amount", rasql.Value(int64(99)), schema.IntegerType{}, "amount.codec"),
 		}, q2AcceptanceDecoder{resultSchema: projectedSchema})
 		require.NoError(t, err)
-		projectedQuery := Project(all.Plan(), projected)
+		projectedQuery := rasql.Project(all.Plan(), projected)
 		projectedRows := q2AcceptanceRows(t, db, compiler, projectedQuery)
 		require.Len(t, projectedRows, 8)
 		for _, row := range projectedRows {
-			require.Equal(t, q2AcceptanceRow{Category: Nullable[string]{Value: "projected", Valid: true}, Amount: 99}, row)
+			require.Equal(t, q2AcceptanceRow{Category: rasql.Nullable[string]{Value: "projected", Valid: true}, Amount: 99}, row)
 		}
 
-		cte, err := CTEOf("categories", base)
+		cte, err := rasql.CTEOf("categories", base)
 		require.NoError(t, err)
 		withSource, err := cte.Source("c")
 		require.NoError(t, err)
-		withCategory, err := BindNullResultColumn[q2AcceptanceRow, string](withSource, "category")
+		withCategory, err := rasql.BindNullResultColumn[q2AcceptanceRow, string](withSource, "category")
 		require.NoError(t, err)
-		withAmount, err := BindResultColumn[q2AcceptanceRow, int64](withSource, "amount")
+		withAmount, err := rasql.BindResultColumn[q2AcceptanceRow, int64](withSource, "amount")
 		require.NoError(t, err)
-		withProjection, err := NewProjection([]ProjectionItem{
-			NullItem("category", withCategory.NullExpr(), schema.TextType{}, "category.codec"),
-			Item("amount", withAmount.Expr(), schema.IntegerType{}, "amount.codec"),
+		withProjection, err := rasql.NewProjection([]rasql.ProjectionItem{
+			rasql.NullItem("category", withCategory.NullExpr(), schema.TextType{}, "category.codec"),
+			rasql.Item("amount", withAmount.Expr(), schema.IntegerType{}, "amount.codec"),
 		}, q2AcceptanceDecoder{resultSchema: base.Schema()})
 		require.NoError(t, err)
-		withQuery, err := With(Select(withSource.Source(), withProjection), cte)
+		withQuery, err := rasql.With(rasql.Select(withSource.Source(), withProjection), cte)
 		require.NoError(t, err)
 		withRows := q2AcceptanceRows(t, db, compiler, withQuery)
 		require.Equal(t, baseRowsExpected(), withRows)
 
-		countAll := CountQuery(offset, true)
+		countAll := rasql.CountQuery(offset, true)
 		require.Equal(t, int64(1), q2AcceptanceCountValue(t, db, compiler, countAll))
-		countUnpaged := CountQuery(offset, false)
+		countUnpaged := rasql.CountQuery(offset, false)
 		require.Equal(t, int64(8), q2AcceptanceCountValue(t, db, compiler, countUnpaged))
 
 		operand, err := base.Limit(2)
 		require.NoError(t, err)
-		pagedUnion, err := Combine(operand, UnionAll, operand)
+		pagedUnion, err := rasql.Combine(operand, rasql.UnionAll, operand)
 		require.NoError(t, err)
 		outerPaged, err := pagedUnion.Limit(1)
 		require.NoError(t, err)
 		require.Len(t, q2AcceptanceRows(t, db, compiler, outerPaged), 1)
-		require.Equal(t, int64(1), q2AcceptanceCountValue(t, db, compiler, CountQuery(outerPaged, true)))
-		require.Equal(t, int64(4), q2AcceptanceCountValue(t, db, compiler, CountQuery(outerPaged, false)))
+		require.Equal(t, int64(1), q2AcceptanceCountValue(t, db, compiler, rasql.CountQuery(outerPaged, true)))
+		require.Equal(t, int64(4), q2AcceptanceCountValue(t, db, compiler, rasql.CountQuery(outerPaged, false)))
 	})
 
 	t.Run("reuses a grouped DTO through a derived table and a CTE", func(t *testing.T) {
 		db := q2AcceptanceSQLite(t)
 		compiler := q2AcceptanceCompiler(t)
-		table, err := ReadTableOf[q2AcceptanceRow](schema.TableDef{
+		table, err := rasql.ReadTableOf[q2AcceptanceRow](schema.TableDef{
 			Name: "q2_items",
 			Columns: []schema.ColumnDef{
 				{Name: "category", Type: schema.TextType{}, Nullable: true},
@@ -152,54 +152,54 @@ func TestQueryComposition(t *testing.T) {
 			},
 		})
 		require.NoError(t, err)
-		relation, err := SourceOf(table, "i")
+		relation, err := rasql.SourceOf(table, "i")
 		require.NoError(t, err)
-		category, err := BindNullColumn[q2AcceptanceRow, string](relation, "category", "category.codec")
+		category, err := rasql.BindNullColumn[q2AcceptanceRow, string](relation, "category", "category.codec")
 		require.NoError(t, err)
-		amount, err := BindColumn[q2AcceptanceRow, int64](relation, "amount", "amount.codec")
+		amount, err := rasql.BindColumn[q2AcceptanceRow, int64](relation, "amount", "amount.codec")
 		require.NoError(t, err)
-		schemaValue, err := NewResultSchema(
-			ResultColumn{Name: "category", Type: schema.TextType{}, Nullable: true, Codec: "category.codec"},
-			ResultColumn{Name: "total", Type: schema.IntegerType{}, Codec: "count.codec"},
+		schemaValue, err := rasql.NewResultSchema(
+			rasql.ResultColumn{Name: "category", Type: schema.TextType{}, Nullable: true, Codec: "category.codec"},
+			rasql.ResultColumn{Name: "total", Type: schema.IntegerType{}, Codec: "count.codec"},
 		)
 		require.NoError(t, err)
-		groupProjection, err := NewProjection([]ProjectionItem{
-			NullItem("category", category.NullExpr(), schema.TextType{}, "category.codec"),
-			Item("total", CountExpr(amount.Expr()), schema.IntegerType{}, "count.codec"),
+		groupProjection, err := rasql.NewProjection([]rasql.ProjectionItem{
+			rasql.NullItem("category", category.NullExpr(), schema.TextType{}, "category.codec"),
+			rasql.Item("total", rasql.CountExpr(amount.Expr()), schema.IntegerType{}, "count.codec"),
 		}, q2AcceptanceGroupDecoder{resultSchema: schemaValue})
 		require.NoError(t, err)
-		grouped := Select(relation.Source(), groupProjection).GroupBy(GroupNull(category.NullExpr())).OrderBy(AscNull(category.NullExpr(), NullsFirst))
+		grouped := rasql.Select(relation.Source(), groupProjection).GroupBy(rasql.GroupNull(category.NullExpr())).OrderBy(rasql.AscNull(category.NullExpr(), rasql.NullsFirst))
 		require.NoError(t, grouped.Validate())
 
-		derived, err := Derive(grouped, "derived_groups")
+		derived, err := rasql.Derive(grouped, "derived_groups")
 		require.NoError(t, err)
-		derivedCategory, err := BindNullResultColumn[q2AcceptanceGroup, string](derived, "category")
+		derivedCategory, err := rasql.BindNullResultColumn[q2AcceptanceGroup, string](derived, "category")
 		require.NoError(t, err)
-		derivedCount, err := BindResultColumn[q2AcceptanceGroup, int64](derived, "total")
+		derivedCount, err := rasql.BindResultColumn[q2AcceptanceGroup, int64](derived, "total")
 		require.NoError(t, err)
-		derivedProjection, err := NewProjection([]ProjectionItem{
-			NullItem("category", derivedCategory.NullExpr(), schema.TextType{}, "category.codec"),
-			Item("total", derivedCount.Expr(), schema.IntegerType{}, "count.codec"),
+		derivedProjection, err := rasql.NewProjection([]rasql.ProjectionItem{
+			rasql.NullItem("category", derivedCategory.NullExpr(), schema.TextType{}, "category.codec"),
+			rasql.Item("total", derivedCount.Expr(), schema.IntegerType{}, "count.codec"),
 		}, q2AcceptanceGroupDecoder{resultSchema: schemaValue})
 		require.NoError(t, err)
-		derivedQuery := Select(derived.Source(), derivedProjection)
+		derivedQuery := rasql.Select(derived.Source(), derivedProjection)
 		derivedRows := q2AcceptanceGroupRows(t, db, compiler, derivedQuery)
-		require.Equal(t, []q2AcceptanceGroup{{Count: 2}, {Category: Nullable[string]{Value: "a", Valid: true}, Count: 1}, {Category: Nullable[string]{Value: "b", Valid: true}, Count: 1}}, derivedRows)
+		require.Equal(t, []q2AcceptanceGroup{{Count: 2}, {Category: rasql.Nullable[string]{Value: "a", Valid: true}, Count: 1}, {Category: rasql.Nullable[string]{Value: "b", Valid: true}, Count: 1}}, derivedRows)
 
-		cte, err := CTEOf("grouped", grouped)
+		cte, err := rasql.CTEOf("grouped", grouped)
 		require.NoError(t, err)
 		cteSource, err := cte.Source("grouped_alias")
 		require.NoError(t, err)
-		cteCategory, err := BindNullResultColumn[q2AcceptanceGroup, string](cteSource, "category")
+		cteCategory, err := rasql.BindNullResultColumn[q2AcceptanceGroup, string](cteSource, "category")
 		require.NoError(t, err)
-		cteCount, err := BindResultColumn[q2AcceptanceGroup, int64](cteSource, "total")
+		cteCount, err := rasql.BindResultColumn[q2AcceptanceGroup, int64](cteSource, "total")
 		require.NoError(t, err)
-		cteProjection, err := NewProjection([]ProjectionItem{
-			NullItem("category", cteCategory.NullExpr(), schema.TextType{}, "category.codec"),
-			Item("total", cteCount.Expr(), schema.IntegerType{}, "count.codec"),
+		cteProjection, err := rasql.NewProjection([]rasql.ProjectionItem{
+			rasql.NullItem("category", cteCategory.NullExpr(), schema.TextType{}, "category.codec"),
+			rasql.Item("total", cteCount.Expr(), schema.IntegerType{}, "count.codec"),
 		}, q2AcceptanceGroupDecoder{resultSchema: schemaValue})
 		require.NoError(t, err)
-		cteQuery, err := With(Select(cteSource.Source(), cteProjection), cte)
+		cteQuery, err := rasql.With(rasql.Select(cteSource.Source(), cteProjection), cte)
 		require.NoError(t, err)
 		cteRows := q2AcceptanceGroupRows(t, db, compiler, cteQuery)
 		require.Equal(t, derivedRows, cteRows)
@@ -209,35 +209,32 @@ func TestQueryComposition(t *testing.T) {
 
 	t.Run("rejects an invalid CTE plan without panicking", func(t *testing.T) {
 		base := q2AcceptanceQuery(t)
-		zero := TypedCTE[q2AcceptanceRow]{}
-		_, err := With(base, zero)
+		zero := rasql.TypedCTE[q2AcceptanceRow]{}
+		_, err := rasql.With(base, zero)
 		q2RequirePlanCode(t, err, "invalid_cte")
 
-		var typedNil *TypedCTE[q2AcceptanceRow]
+		var typedNil *rasql.TypedCTE[q2AcceptanceRow]
 		require.NotPanics(t, func() {
-			_, err = With(base, typedNil)
+			_, err = rasql.With(base, typedNil)
 		})
 		q2RequirePlanCode(t, err, "invalid_cte")
 
-		valid, err := CTEOf("items", base)
+		valid, err := rasql.CTEOf("items", base)
 		require.NoError(t, err)
 		_, err = valid.Source("")
 		q2RequirePlanCode(t, err, "invalid_source")
 
-		first, err := With(base, valid)
+		first, err := rasql.With(base, valid)
 		require.NoError(t, err)
-		_, err = With(first, valid)
+		_, err = rasql.With(first, valid)
 		q2RequirePlanCode(t, err, "duplicate_cte")
 	})
 
 	t.Run("a count preserves a bad bind cause", func(t *testing.T) {
-		base := q2AcceptanceQuery(t)
-		bad := base
-		bad.plan = clonePlan(base.plan)
-		bad.plan.projection[0].bindErr = planerr.Wrap("unsnapshotable_bind", "bind", "bad bind", q2AcceptanceBindCause{})
-		count := CountQuery(bad, true)
+		bad := q2BadBindQuery(t)
+		count := rasql.CountQuery(bad, true)
 		err := count.Validate()
-		var planErr *PlanError
+		var planErr *rasql.PlanError
 		require.ErrorAs(t, err, &planErr)
 		require.Equal(t, "unsnapshotable_bind", planErr.Code)
 		var cause q2AcceptanceBindCause
@@ -261,7 +258,7 @@ func q2AcceptanceSQLite(t *testing.T) *sql.DB {
 	return db
 }
 
-func q2AcceptanceQuery(t *testing.T) Query[q2AcceptanceRow] {
+func q2AcceptanceQuery(t *testing.T) rasql.Query[q2AcceptanceRow] {
 	t.Helper()
 	q, _ := q2AcceptanceQueryRelation(t)
 	return q
@@ -270,9 +267,9 @@ func q2AcceptanceQuery(t *testing.T) Query[q2AcceptanceRow] {
 // q2AcceptanceQueryRelation returns the same query alongside the relation it
 // selects from, so a caller that needs to bind another column of the same
 // source does not have to dig one back out of the built query.
-func q2AcceptanceQueryRelation(t *testing.T) (Query[q2AcceptanceRow], TypedRelation[q2AcceptanceRow]) {
+func q2AcceptanceQueryRelation(t *testing.T) (rasql.Query[q2AcceptanceRow], rasql.TypedRelation[q2AcceptanceRow]) {
 	t.Helper()
-	table, err := ReadTableOf[q2AcceptanceRow](schema.TableDef{
+	table, err := rasql.ReadTableOf[q2AcceptanceRow](schema.TableDef{
 		Name: "q2_items",
 		Columns: []schema.ColumnDef{
 			{Name: "category", Type: schema.TextType{}, Nullable: true},
@@ -280,23 +277,23 @@ func q2AcceptanceQueryRelation(t *testing.T) (Query[q2AcceptanceRow], TypedRelat
 		},
 	})
 	require.NoError(t, err)
-	relation, err := SourceOf(table, "i")
+	relation, err := rasql.SourceOf(table, "i")
 	require.NoError(t, err)
-	category, err := BindNullColumn[q2AcceptanceRow, string](relation, "category", "category.codec")
+	category, err := rasql.BindNullColumn[q2AcceptanceRow, string](relation, "category", "category.codec")
 	require.NoError(t, err)
-	amount, err := BindColumn[q2AcceptanceRow, int64](relation, "amount", "amount.codec")
+	amount, err := rasql.BindColumn[q2AcceptanceRow, int64](relation, "amount", "amount.codec")
 	require.NoError(t, err)
-	resultSchema, err := NewResultSchema(
-		ResultColumn{Name: "category", Type: schema.TextType{}, Nullable: true, Codec: "category.codec"},
-		ResultColumn{Name: "amount", Type: schema.IntegerType{}, Codec: "amount.codec"},
+	resultSchema, err := rasql.NewResultSchema(
+		rasql.ResultColumn{Name: "category", Type: schema.TextType{}, Nullable: true, Codec: "category.codec"},
+		rasql.ResultColumn{Name: "amount", Type: schema.IntegerType{}, Codec: "amount.codec"},
 	)
 	require.NoError(t, err)
-	projection, err := NewProjection([]ProjectionItem{
-		NullItem("category", category.NullExpr(), schema.TextType{}, "category.codec"),
-		Item("amount", amount.Expr(), schema.IntegerType{}, "amount.codec"),
+	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
+		rasql.NullItem("category", category.NullExpr(), schema.TextType{}, "category.codec"),
+		rasql.Item("amount", amount.Expr(), schema.IntegerType{}, "amount.codec"),
 	}, q2AcceptanceDecoder{resultSchema: resultSchema})
 	require.NoError(t, err)
-	return Select(relation.Source(), projection), relation
+	return rasql.Select(relation.Source(), projection), relation
 }
 
 func q2AcceptanceCompiler(t *testing.T) *querycompile.Compiler {
@@ -308,9 +305,9 @@ func q2AcceptanceCompiler(t *testing.T) *querycompile.Compiler {
 	return &compiler
 }
 
-func q2AcceptanceRows(t *testing.T, db *sql.DB, compiler *querycompile.Compiler, query Query[q2AcceptanceRow]) []q2AcceptanceRow {
+func q2AcceptanceRows(t *testing.T, db *sql.DB, compiler *querycompile.Compiler, query rasql.Query[q2AcceptanceRow]) []q2AcceptanceRow {
 	t.Helper()
-	compiled, err := compileQuery(compiler, query)
+	compiled, err := rasql.Q1CompileQuery(rasql.Q1CompilerFor(compiler), query)
 	require.NoError(t, err)
 	statement, err := compiled.Copy()
 	require.NoError(t, err)
@@ -327,9 +324,9 @@ func q2AcceptanceRows(t *testing.T, db *sql.DB, compiler *querycompile.Compiler,
 	return result
 }
 
-func q2AcceptanceGroupRows(t *testing.T, db *sql.DB, compiler *querycompile.Compiler, query Query[q2AcceptanceGroup]) []q2AcceptanceGroup {
+func q2AcceptanceGroupRows(t *testing.T, db *sql.DB, compiler *querycompile.Compiler, query rasql.Query[q2AcceptanceGroup]) []q2AcceptanceGroup {
 	t.Helper()
-	compiled, err := compileQuery(compiler, query)
+	compiled, err := rasql.Q1CompileQuery(rasql.Q1CompilerFor(compiler), query)
 	require.NoError(t, err)
 	statement, err := compiled.Copy()
 	require.NoError(t, err)
@@ -346,9 +343,9 @@ func q2AcceptanceGroupRows(t *testing.T, db *sql.DB, compiler *querycompile.Comp
 	return result
 }
 
-func q2AcceptanceCountRows(t *testing.T, db *sql.DB, compiler *querycompile.Compiler, query Query[int64]) []int64 {
+func q2AcceptanceCountRows(t *testing.T, db *sql.DB, compiler *querycompile.Compiler, query rasql.Query[int64]) []int64 {
 	t.Helper()
-	compiled, err := compileQuery(compiler, query)
+	compiled, err := rasql.Q1CompileQuery(rasql.Q1CompilerFor(compiler), query)
 	require.NoError(t, err)
 	statement, err := compiled.Copy()
 	require.NoError(t, err)
@@ -365,52 +362,46 @@ func q2AcceptanceCountRows(t *testing.T, db *sql.DB, compiler *querycompile.Comp
 	return result
 }
 
-func q2AcceptanceCountValue(t *testing.T, db *sql.DB, compiler *querycompile.Compiler, query Query[int64]) int64 {
+func q2AcceptanceCountValue(t *testing.T, db *sql.DB, compiler *querycompile.Compiler, query rasql.Query[int64]) int64 {
 	values := q2AcceptanceCountRows(t, db, compiler, query)
 	require.Len(t, values, 1)
 	return values[0]
 }
 
 func baseRowsExpected() []q2AcceptanceRow {
-	return []q2AcceptanceRow{{Category: Nullable[string]{Valid: false}, Amount: 0}, {Category: Nullable[string]{Valid: false}, Amount: 0}, {Category: Nullable[string]{Value: "a", Valid: true}, Amount: 1}, {Category: Nullable[string]{Value: "b", Valid: true}, Amount: 2}}
+	return []q2AcceptanceRow{{Category: rasql.Nullable[string]{Valid: false}, Amount: 0}, {Category: rasql.Nullable[string]{Valid: false}, Amount: 0}, {Category: rasql.Nullable[string]{Value: "a", Valid: true}, Amount: 1}, {Category: rasql.Nullable[string]{Value: "b", Valid: true}, Amount: 2}}
 }
 
 func q2RequirePlanCode(t *testing.T, err error, code string) {
 	t.Helper()
-	var planErr *PlanError
+	var planErr *rasql.PlanError
 	require.Error(t, err)
 	require.True(t, errors.As(err, &planErr), fmt.Sprintf("expected PlanError, got %T: %v", err, err))
 	require.Equal(t, code, planErr.Code)
 }
 
-type partitionRow struct{ ID int64 }
-type nullOrderRow struct{ ID Nullable[int64] }
-type partitionDecoder struct{ schema ResultSchema }
-
-func (d partitionDecoder) ResultSchema() ResultSchema              { return d.schema }
-func (partitionDecoder) Presence() []Presence                      { return nil }
-func (partitionDecoder) DecodeRow(ScanSource, *partitionRow) error { return nil }
+type nullOrderRow struct{ ID rasql.Nullable[int64] }
 
 func TestCompositionCompiler(t *testing.T) {
 
 	t.Run("a partition limit lowers to ROW_NUMBER", func(t *testing.T) {
-		schemaValue, err := NewResultSchema(ResultColumn{Name: "id", Type: schema.IntegerType{}})
+		schemaValue, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}})
 		require.NoError(t, err)
-		table, err := ReadTableOf[partitionRow](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
+		table, err := rasql.ReadTableOf[partitionRow](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
 		require.NoError(t, err)
-		relation, err := SourceOf(table, "i")
+		relation, err := rasql.SourceOf(table, "i")
 		require.NoError(t, err)
-		column, err := BindColumn[partitionRow, int64](relation, "id", "")
+		column, err := rasql.BindColumn[partitionRow, int64](relation, "id", "")
 		require.NoError(t, err)
-		projection, err := NewProjection([]ProjectionItem{Item("id", column.Expr(), schema.IntegerType{}, "")}, partitionDecoder{schema: schemaValue})
+		projection, err := rasql.NewProjection([]rasql.ProjectionItem{rasql.Item("id", column.Expr(), schema.IntegerType{}, "")}, partitionDecoder{result: schemaValue})
 		require.NoError(t, err)
-		q, err := Select(relation.Source(), projection).withPartitionLimit([]GroupKey{Group(column.Expr())}, []OrderTerm{AscExpr(column.Expr())}, 2)
+		q, err := rasql.Q1WithPartitionLimit(rasql.Select(relation.Source(), projection), []rasql.GroupKey{rasql.Group(column.Expr())}, []rasql.OrderTerm{rasql.AscExpr(column.Expr())}, 2)
 		require.NoError(t, err)
 		profile, err := engineprofile.Builtin("sqlite-3.35", engineprofile.Version{Known: true, Major: 3, Minor: 35})
 		require.NoError(t, err)
 		compiler, err := querycompile.New(profile)
 		require.NoError(t, err)
-		compiled, err := compileQuery(&compiler, q)
+		compiled, err := rasql.Q1CompileQuery(rasql.Q1CompilerFor(&compiler), q)
 		require.NoError(t, err)
 		statement := compiled.Statement
 		require.Contains(t, statement.SQL(), "row_number() OVER")
@@ -437,8 +428,8 @@ func TestCompositionCompiler(t *testing.T) {
 		require.NoError(t, rows.Err())
 		require.Equal(t, 4, count)
 		require.Equal(t, []int64{1, 1, 2, 2}, ids)
-		_, err = q.withPartitionLimit(nil, []OrderTerm{AscExpr(column.Expr())}, 2)
-		var planErr *PlanError
+		_, err = rasql.Q1WithPartitionLimit(q, nil, []rasql.OrderTerm{rasql.AscExpr(column.Expr())}, 2)
+		var planErr *rasql.PlanError
 		require.ErrorAs(t, err, &planErr)
 		require.Equal(t, "invalid_partition_limit", planErr.Code)
 	})
@@ -453,8 +444,8 @@ func TestCompositionCompiler(t *testing.T) {
 		require.NoError(t, err)
 		compiler, err := querycompile.NewWithDialect(profile, dialect.PostgreSQL())
 		require.NoError(t, err)
-		_, err = compileQuery(&compiler, partitionQuery(t))
-		var planErr *PlanError
+		_, err = rasql.Q1CompileQuery(rasql.Q1CompilerFor(&compiler), partitionQuery(t))
+		var planErr *rasql.PlanError
 		require.ErrorAs(t, err, &planErr)
 		require.Equal(t, "unsupported_feature", planErr.Code)
 		require.True(t, errors.Is(err, engineprofile.ErrUnsupportedFeature))
@@ -463,27 +454,27 @@ func TestCompositionCompiler(t *testing.T) {
 	t.Run("null order on SQLite and render profiles", func(t *testing.T) {
 		for _, tc := range []struct {
 			name       string
-			placement  NullOrder
+			placement  rasql.NullOrder
 			descending bool
 			want       []any
 		}{
-			{"asc first", NullsFirst, false, []any{nil, int64(1), int64(2)}},
-			{"asc last", NullsLast, false, []any{int64(1), int64(2), nil}},
-			{"desc first", NullsFirst, true, []any{nil, int64(2), int64(1)}},
-			{"desc last", NullsLast, true, []any{int64(2), int64(1), nil}},
+			{"asc first", rasql.NullsFirst, false, []any{nil, int64(1), int64(2)}},
+			{"asc last", rasql.NullsLast, false, []any{int64(1), int64(2), nil}},
+			{"desc first", rasql.NullsFirst, true, []any{nil, int64(2), int64(1)}},
+			{"desc last", rasql.NullsLast, true, []any{int64(2), int64(1), nil}},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				nullColumn, table := nullableColumn(t)
-				term := AscNull(nullColumn.NullExpr(), tc.placement)
+				term := rasql.AscNull(nullColumn.NullExpr(), tc.placement)
 				if tc.descending {
-					term = DescNull(nullColumn.NullExpr(), tc.placement)
+					term = rasql.DescNull(nullColumn.NullExpr(), tc.placement)
 				}
 				q := nullableOrderQuery(t, table, nullColumn, term)
 				profile, err := engineprofile.Builtin("sqlite-3.35", engineprofile.Version{Known: true, Major: 3, Minor: 35})
 				require.NoError(t, err)
 				compiler, err := querycompile.New(profile)
 				require.NoError(t, err)
-				compiled, err := compileQuery(&compiler, q)
+				compiled, err := rasql.Q1CompileQuery(rasql.Q1CompilerFor(&compiler), q)
 				require.NoError(t, err)
 				db, err := sql.Open("sqlite", ":memory:")
 				require.NoError(t, err)
@@ -506,28 +497,28 @@ func TestCompositionCompiler(t *testing.T) {
 			})
 		}
 		nullColumn, table := nullableColumn(t)
-		q := nullableOrderQuery(t, table, nullColumn, AscNull(nullColumn.NullExpr(), NullsLast))
+		q := nullableOrderQuery(t, table, nullColumn, rasql.AscNull(nullColumn.NullExpr(), rasql.NullsLast))
 		pg, err := engineprofile.Builtin("postgresql-17", engineprofile.Version{Known: true, Major: 17})
 		require.NoError(t, err)
 		pgCompiler, err := querycompile.New(pg)
 		require.NoError(t, err)
-		pgStatement, err := compileQuery(&pgCompiler, q)
+		pgStatement, err := rasql.Q1CompileQuery(rasql.Q1CompilerFor(&pgCompiler), q)
 		require.NoError(t, err)
 		require.Contains(t, pgStatement.Statement.SQL(), "NULLS LAST")
 		my, err := engineprofile.Builtin("mysql-8.4", engineprofile.Version{Known: true, Major: 8, Minor: 4})
 		require.NoError(t, err)
 		myCompiler, err := querycompile.New(my)
 		require.NoError(t, err)
-		_, err = compileQuery(&myCompiler, q)
-		var planErr *PlanError
+		_, err = rasql.Q1CompileQuery(rasql.Q1CompilerFor(&myCompiler), q)
+		var planErr *rasql.PlanError
 		require.ErrorAs(t, err, &planErr)
 		require.Equal(t, "unsupported_feature", planErr.Code)
 	})
 
 	t.Run("a partition limit rejects zero nodes and invalid null placement", func(t *testing.T) {
 		q := partitionQuery(t)
-		_, err := q.withPartitionLimit([]GroupKey{{}}, []OrderTerm{AscExpr(Expr[int64]{})}, 2)
-		var planErr *PlanError
+		_, err := rasql.Q1WithPartitionLimit(q, []rasql.GroupKey{{}}, []rasql.OrderTerm{rasql.AscExpr(rasql.Expr[int64]{})}, 2)
+		var planErr *rasql.PlanError
 		require.ErrorAs(t, err, &planErr)
 		require.Equal(t, "invalid_partition_limit", planErr.Code)
 		table := query.MustTableRef(schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
@@ -538,44 +529,27 @@ func TestCompositionCompiler(t *testing.T) {
 	})
 }
 
-func partitionQuery(t *testing.T) Query[partitionRow] {
+func nullableColumn(t *testing.T) (rasql.NullColumn[nullOrderRow, int64], rasql.ReadTable[nullOrderRow]) {
 	t.Helper()
-	schemaValue, err := NewResultSchema(ResultColumn{Name: "id", Type: schema.IntegerType{}})
+	table, err := rasql.ReadTableOf[nullOrderRow](schema.TableDef{Name: "nullable_items", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}, Nullable: true}}})
 	require.NoError(t, err)
-	table, err := ReadTableOf[partitionRow](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
+	relation, err := rasql.SourceOf(table, "n")
 	require.NoError(t, err)
-	relation, err := SourceOf(table, "i")
-	require.NoError(t, err)
-	column, err := BindColumn[partitionRow, int64](relation, "id", "")
-	require.NoError(t, err)
-	projection, err := NewProjection([]ProjectionItem{Item("id", column.Expr(), schema.IntegerType{}, "")}, partitionDecoder{schema: schemaValue})
-	require.NoError(t, err)
-	q, err := Select(relation.Source(), projection).withPartitionLimit([]GroupKey{Group(column.Expr())}, []OrderTerm{AscExpr(column.Expr())}, 2)
-	require.NoError(t, err)
-	return q
-}
-
-func nullableColumn(t *testing.T) (NullColumn[nullOrderRow, int64], ReadTable[nullOrderRow]) {
-	t.Helper()
-	table, err := ReadTableOf[nullOrderRow](schema.TableDef{Name: "nullable_items", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}, Nullable: true}}})
-	require.NoError(t, err)
-	relation, err := SourceOf(table, "n")
-	require.NoError(t, err)
-	column, err := BindNullColumn[nullOrderRow, int64](relation, "id", "")
+	column, err := rasql.BindNullColumn[nullOrderRow, int64](relation, "id", "")
 	require.NoError(t, err)
 	return column, table
 }
 
-func nullableOrderQuery(t *testing.T, table ReadTable[nullOrderRow], column NullColumn[nullOrderRow, int64], term OrderTerm) Query[Nullable[int64]] {
+func nullableOrderQuery(t *testing.T, table rasql.ReadTable[nullOrderRow], column rasql.NullColumn[nullOrderRow, int64], term rasql.OrderTerm) rasql.Query[rasql.Nullable[int64]] {
 	t.Helper()
-	schemaValue, err := NewResultSchema(ResultColumn{Name: "id", Type: schema.IntegerType{}, Nullable: true})
+	schemaValue, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}, Nullable: true})
 	require.NoError(t, err)
-	projection, err := NullableScalar("id", column.NullExpr(), schema.IntegerType{}, "")
+	projection, err := rasql.NullableScalar("id", column.NullExpr(), schema.IntegerType{}, "")
 	require.NoError(t, err)
-	relation, err := SourceOf(table, "n")
+	relation, err := rasql.SourceOf(table, "n")
 	require.NoError(t, err)
 	_ = schemaValue
-	return Select(relation.Source(), projection).OrderBy(term)
+	return rasql.Select(relation.Source(), projection).OrderBy(term)
 }
 
 func TestQueryAPICompiles(t *testing.T) {
@@ -611,3 +585,29 @@ func TestQueryAPIRejectsInvalidCompileFixtures(t *testing.T) {
 		}
 	}
 }
+
+// q2BadBindQuery projects a value whose bind snapshot fails, so the query
+// carries the bind error a later step has to report.
+func q2BadBindQuery(t *testing.T) rasql.Query[q2AcceptanceRow] {
+	t.Helper()
+	_, relation := q2AcceptanceQueryRelation(t)
+	category, err := rasql.BindNullColumn[q2AcceptanceRow, string](relation, "category", "category.codec")
+	require.NoError(t, err)
+	resultSchema, err := rasql.NewResultSchema(
+		rasql.ResultColumn{Name: "category", Type: schema.TextType{}, Nullable: true, Codec: "category.codec"},
+		rasql.ResultColumn{Name: "amount", Type: schema.IntegerType{}, Codec: "amount.codec"},
+	)
+	require.NoError(t, err)
+	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
+		rasql.NullItem("category", category.NullExpr(), schema.TextType{}, "category.codec"),
+		rasql.Item("amount", rasql.Value(q2BadBind(1)), schema.IntegerType{}, "amount.codec"),
+	}, q2AcceptanceDecoder{resultSchema: resultSchema})
+	require.NoError(t, err)
+	return rasql.Select(relation.Source(), projection)
+}
+
+// q2BadBind refuses to snapshot, which is how a projection reaches the bind
+// error path without one being written in by hand.
+type q2BadBind int64
+
+func (q2BadBind) SnapshotBind() (q2BadBind, error) { return 0, q2AcceptanceBindCause{} }
