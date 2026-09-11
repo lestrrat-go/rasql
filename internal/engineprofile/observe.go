@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"reflect"
 	"strconv"
 	"strings"
 )
@@ -39,8 +38,14 @@ func (e *DiscoveryError) Error() string {
 }
 func (e *DiscoveryError) Unwrap() error { return e.Code }
 
+// Observe runs the engine's version query through q and parses the single value it returns into a Version.
+// It returns a *DiscoveryError with Code ErrVersionObservation when engine is not PostgreSQL, MySQL or
+// SQLite, when the query fails, and when the result is not exactly one row of one column; with Code
+// ErrVersionParse when that value does not parse as the engine's version string.
+//
+// `q` must not be nil.
 func Observe(ctx context.Context, q Queryer, engine EngineID) (identity ObservedIdentity, retErr error) {
-	if isNil(q) || (engine != PostgreSQL && engine != MySQL && engine != SQLite) {
+	if q == nil || (engine != PostgreSQL && engine != MySQL && engine != SQLite) {
 		return ObservedIdentity{}, &DiscoveryError{Code: ErrVersionObservation, RequestedEngine: engine, Detail: "invalid queryer or engine"}
 	}
 	sqlText := map[EngineID]string{PostgreSQL: "SHOW server_version_num", MySQL: "SELECT VERSION()", SQLite: "SELECT sqlite_version()"}[engine]
@@ -207,15 +212,4 @@ func stringValue(v any) string {
 		return strconv.FormatUint(x, 10)
 	}
 	return fmt.Sprint(v)
-}
-func isNil(v any) bool {
-	if v == nil {
-		return true
-	}
-	rv := reflect.ValueOf(v)
-	switch rv.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return rv.IsNil()
-	}
-	return false
 }

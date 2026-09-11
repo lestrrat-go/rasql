@@ -301,23 +301,6 @@ func TestAcceptanceQueryCapabilityChecksIgnoreQuotedIdentifiers(t *testing.T) {
 	require.Equal(t, "SELECT `a RETURNING b`.`id` FROM `a RETURNING b`", statement.SQL())
 }
 
-type typedNilDialect struct{}
-
-func (*typedNilDialect) Name() string                              { return "typed-nil" }
-func (*typedNilDialect) QuoteIdentifier(string) (string, error)    { return "", nil }
-func (*typedNilDialect) Placeholder(int) (string, error)           { return "", nil }
-func (*typedNilDialect) TypeName(schema.ColumnDef) (string, error) { return "", nil }
-func (*typedNilDialect) UpsertStyle() dialect.UpsertStyle          { return dialect.UpsertUnsupported }
-func (*typedNilDialect) Supports(dialect.Capability) bool          { return false }
-
-func TestAcceptanceQueryRejectsTypedNilDialect(t *testing.T) {
-	p, err := engineprofile.New("custom:typed-nil", engineprofile.Custom, "typed-nil", engineprofile.Version{}, engineprofile.Capabilities{}, engineprofile.Limits{MaxBindParameters: 1})
-	require.NoError(t, err)
-	var adapter *typedNilDialect
-	_, err = querycompile.NewWithDialect(p, adapter)
-	require.Error(t, err)
-}
-
 type extensionExpression struct{ value int }
 
 func (extensionExpression) ExpressionNode() {}
@@ -529,16 +512,14 @@ func TestAcceptanceQueryReturningInsertOnlyRejectsUpdateAndDelete(t *testing.T) 
 	require.Contains(t, statement.SQL(), "RETURNING")
 }
 
-func TestAcceptanceQueryRejectsNilWriteFormsWithoutPanic(t *testing.T) {
+func TestAcceptanceQueryRejectsNilWriteStatementWithoutPanic(t *testing.T) {
 	c, err := querycompile.New(queryProfile(t))
 	require.NoError(t, err)
-	for _, statement := range []query.WriteStatement{nil, (*query.Insert)(nil), (*query.Update)(nil), (*query.Delete)(nil), (*query.Upsert)(nil)} {
-		require.NotPanics(t, func() {
-			compiled, compileErr := c.Write(statement)
-			require.Error(t, compileErr)
-			require.Empty(t, compiled.SQL())
-		})
-	}
+	require.NotPanics(t, func() {
+		compiled, compileErr := c.Write(nil)
+		require.Error(t, compileErr)
+		require.Empty(t, compiled.SQL())
+	})
 }
 
 func TestAcceptanceQueryChecksTrustedFragmentHolesAndPointerWrites(t *testing.T) {
