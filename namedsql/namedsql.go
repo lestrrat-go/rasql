@@ -10,7 +10,6 @@ package namedsql
 import (
 	"fmt"
 	"iter"
-	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -170,25 +169,11 @@ func parseColumnRef(text string) (columnRef, error) {
 	return columnRef{schemaName: parts[0], table: parts[1], column: parts[2]}, nil
 }
 
-// isNilDialect reports whether d is nil, including a typed nil held in a
-// non-nil dialect.Dialect interface value (for example a nil *T pointer
-// implementation).
-func isNilDialect(d dialect.Dialect) bool {
-	if d == nil {
-		return true
-	}
-	value := reflect.ValueOf(d)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return value.IsNil()
-	default:
-		return false
-	}
-}
-
 // Compile renders template placeholders for d.
+//
+// `d` must not be nil.
 func (t Template) Compile(d dialect.Dialect) (Compiled, error) {
-	if isNilDialect(d) {
+	if d == nil {
 		return Compiled{}, fmt.Errorf("namedsql %q: dialect must not be nil", t.name)
 	}
 	if t.name == "" || len(t.parts) == 0 {
