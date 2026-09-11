@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/lestrrat-go/rasql/internal/nilcheck"
 	"github.com/lestrrat-go/rasql/stmt"
 )
 
@@ -231,7 +230,7 @@ func appendHooks(current []Hook, additions []Hook) ([]Hook, error) {
 	hooks := make([]Hook, 0, len(current)+len(additions))
 	hooks = append(hooks, current...)
 	for _, hook := range additions {
-		if nilcheck.Is(hook) {
+		if hook == nil {
 			return nil, fmt.Errorf("rasql: hook must not be nil")
 		}
 		hooks = append(hooks, hook)
@@ -243,7 +242,7 @@ func appendObservers(current []Observer, additions []Observer) ([]Observer, erro
 	observers := make([]Observer, 0, len(current)+len(additions))
 	observers = append(observers, current...)
 	for _, observer := range additions {
-		if nilcheck.Is(observer) {
+		if observer == nil {
 			return nil, fmt.Errorf("rasql: observer must not be nil")
 		}
 		observers = append(observers, observer)
@@ -255,7 +254,7 @@ func appendInvocationObservers(current []InvocationObserver, additions []Invocat
 	observers := make([]InvocationObserver, 0, len(current)+len(additions))
 	observers = append(observers, current...)
 	for _, observer := range additions {
-		if nilcheck.Is(observer) {
+		if observer == nil {
 			return nil, fmt.Errorf("rasql: invocation observer must not be nil")
 		}
 		observers = append(observers, observer)

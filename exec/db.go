@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/internal/nilcheck"
 	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/lestrrat-go/rasql/stmt"
 )
@@ -112,19 +111,8 @@ type DB struct {
 	tx *sql.Tx
 }
 
-// New pairs a database/sql handle with the dialect used to render SQL for it.
-// handle may be a *sql.DB for a connection pool, a *sql.Conn for one pinned
-// connection, a *sql.Tx for a transaction that is already open, or any other
-// Handle. New opens no connection and starts no transaction.
-//
-// A DB built from a *sql.Tx is a transaction: its Commit and Rollback finish
-// that transaction, and its Begin reports an error rather than nesting. Use
-// Atomic when work must compose inside an existing transaction.
-//
-// Optional hooks and observers configure the returned DB and observe every
-// statement run through it and, unless narrowed or extended by WithHooks,
-// WithObservers, or by Begin's own hooks parameter, every transaction Begin
-// starts from it.
+// Option configures the DB that New returns. WithRelationshipBindLimit returns
+// one.
 type Option interface{ apply(*DB) error }
 
 type relationshipBindLimitOption int
@@ -139,11 +127,26 @@ func (o relationshipBindLimitOption) apply(db *DB) error {
 
 func WithRelationshipBindLimit(limit int) Option { return relationshipBindLimitOption(limit) }
 
+// New pairs a database/sql handle with the dialect used to render SQL for it.
+// handle may be a *sql.DB for a connection pool, a *sql.Conn for one pinned
+// connection, a *sql.Tx for a transaction that is already open, or any other
+// Handle. New opens no connection and starts no transaction.
+//
+// A DB built from a *sql.Tx is a transaction: its Commit and Rollback finish
+// that transaction, and its Begin reports an error rather than nesting. Use
+// Atomic when work must compose inside an existing transaction.
+//
+// Optional hooks and observers configure the returned DB and observe every
+// statement run through it and, unless narrowed or extended by WithHooks,
+// WithObservers, or by Begin's own hooks parameter, every transaction Begin
+// starts from it.
+//
+// `handle` and `d` must not be nil.
 func New(handle Handle, d dialect.Dialect, options ...any) (DB, error) {
-	if nilcheck.Is(handle) {
+	if handle == nil {
 		return DB{}, fmt.Errorf("rasql: handle must not be nil")
 	}
-	if nilcheck.Is(d) {
+	if d == nil {
 		return DB{}, fmt.Errorf("rasql: dialect must not be nil")
 	}
 	db := DB{handle: handle, dialect: d}
@@ -177,6 +180,8 @@ func (db DB) RelationshipBindLimit() int { return db.relationshipBindLimit }
 // Begin starts from the copy inherits them. It does not affect a DB that Begin
 // already returned, and it does not wrap the database handle, so the SQL and
 // bound arguments that reach database/sql are unchanged.
+//
+// No element of `hooks` may be nil.
 func (db DB) WithHooks(hooks ...Hook) (DB, error) {
 	if err := db.valid(); err != nil {
 		return DB{}, err
@@ -191,11 +196,14 @@ func (db DB) WithHooks(hooks ...Hook) (DB, error) {
 
 // WithObservers returns a copy of db that reports observer and legacy hook
 // failures to handler. Observers are appended in registration order.
+//
+// `handler` must not be nil when db already carries an observer or when
+// `observers` is non-empty, and no element of `observers` may be nil.
 func (db DB) WithObservers(handler ExtensionErrorHandler, observers ...Observer) (DB, error) {
 	if err := db.valid(); err != nil {
 		return DB{}, err
 	}
-	if len(db.observers)+len(observers) > 0 && nilcheck.Is(handler) {
+	if len(db.observers)+len(observers) > 0 && handler == nil {
 		return DB{}, fmt.Errorf("rasql: extension error handler must not be nil when observers are supplied")
 	}
 	configured, err := appendObservers(db.observers, observers)
@@ -209,11 +217,14 @@ func (db DB) WithObservers(handler ExtensionErrorHandler, observers ...Observer)
 
 // WithInvocationObservers returns a copy of db that reports complete
 // execution, consumption, and transaction lifecycles.
+//
+// `handler` must not be nil when db already carries an invocation observer or
+// when `observers` is non-empty, and no element of `observers` may be nil.
 func (db DB) WithInvocationObservers(handler ExtensionErrorHandler, observers ...InvocationObserver) (DB, error) {
 	if err := db.valid(); err != nil {
 		return DB{}, err
 	}
-	if len(db.invocationObservers)+len(observers) > 0 && nilcheck.Is(handler) {
+	if len(db.invocationObservers)+len(observers) > 0 && handler == nil {
 		return DB{}, fmt.Errorf("rasql: extension error handler must not be nil when invocation observers are supplied")
 	}
 	configured, err := appendInvocationObservers(db.invocationObservers, observers)
@@ -257,6 +268,8 @@ func (db DB) Handle() Handle {
 // opts may be nil, which leaves the isolation level and read-only mode to the
 // driver. Begin does not roll back on ctx cancellation by itself; that is
 // database/sql's own behavior for the transaction it returns.
+//
+// No element of `hooks` may be nil.
 func (db DB) Begin(ctx context.Context, opts *sql.TxOptions, hooks ...Hook) (DB, error) {
 	if err := db.valid(); err != nil {
 		return DB{}, err
@@ -483,7 +496,7 @@ func (db DB) ValidateStatement(s stmt.Statement) error {
 // valid reports whether db came from New rather than being a zero DB, so every
 // entry point answers a zero value with an error instead of a nil dereference.
 func (db DB) valid() error {
-	if nilcheck.Is(db.handle) || nilcheck.Is(db.dialect) {
+	if db.handle == nil || db.dialect == nil {
 		return fmt.Errorf("rasql: invalid DB: create one with rasql.New")
 	}
 	return nil

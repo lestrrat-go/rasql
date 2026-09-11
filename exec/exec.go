@@ -14,7 +14,6 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/lestrrat-go/rasql/internal/nilcheck"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
 	"github.com/lestrrat-go/rasql/stmt"
@@ -23,11 +22,13 @@ import (
 // Write renders and executes a write statement.
 // It rejects a statement carrying a RETURNING clause, because ExecContext
 // discards result rows; RenderWrite reads them instead.
+//
+// `s` must not be nil.
 func Write(ctx context.Context, db DB, s query.WriteStatement) (sql.Result, error) {
 	if err := db.valid(); err != nil {
 		return nil, err
 	}
-	if !nilcheck.Is(s) && len(s.Returning()) > 0 {
+	if s != nil && len(s.Returning()) > 0 {
 		return nil, fmt.Errorf("rasql: write statement has a RETURNING clause: use QueryWrite to read its rows")
 	}
 	rendered, err := render.Write(db.Dialect(), s)
@@ -39,11 +40,13 @@ func Write(ctx context.Context, db DB, s query.WriteStatement) (sql.Result, erro
 
 // RenderWrite renders a write statement that must carry a RETURNING clause,
 // and reports an error when it does not.
+//
+// `s` must not be nil.
 func RenderWrite(db DB, s query.WriteStatement) (stmt.Statement, error) {
 	if err := db.valid(); err != nil {
 		return stmt.Statement{}, err
 	}
-	if nilcheck.Is(s) || len(s.Returning()) == 0 {
+	if s == nil || len(s.Returning()) == 0 {
 		return stmt.Statement{}, fmt.Errorf("rasql: write statement has no RETURNING clause: use Exec for a statement that returns no rows")
 	}
 	rendered, err := render.Write(db.Dialect(), s)
