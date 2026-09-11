@@ -3682,28 +3682,8 @@ func TestSQLiteInspectorPreservesNullableTextPrimaryKey(t *testing.T) {
 	require.Equal(t, []string{"id"}, table.PrimaryKey)
 }
 
-// nilPointerDialect is a stub dialect.Dialect implemented with pointer
-// receivers, so a typed-nil *nilPointerDialect value is a non-nil interface
-// value that would panic if dereferenced.
-type nilPointerDialect struct{}
-
-func (*nilPointerDialect) Name() string { return "stub" }
-
-func (*nilPointerDialect) QuoteIdentifier(string) (string, error) { return "", nil }
-
-func (*nilPointerDialect) Placeholder(int) (string, error) { return "", nil }
-
-func (*nilPointerDialect) TypeName(schema.ColumnDef) (string, error) { return "", nil }
-
-func (*nilPointerDialect) UpsertStyle() dialect.UpsertStyle { return dialect.UpsertUnsupported }
-
-func (*nilPointerDialect) Supports(dialect.Capability) bool { return false }
-
-func TestNewRejectsTypedNilDependencies(t *testing.T) {
-	_, err := inspect.New((*sql.DB)(nil), dialect.SQLite())
-	require.ErrorContains(t, err, "queryer must not be nil")
-
-	_, err = inspect.New(nil, dialect.SQLite())
+func TestNewRejectsNilDependencies(t *testing.T) {
+	_, err := inspect.New(nil, dialect.SQLite())
 	require.ErrorContains(t, err, "queryer must not be nil")
 
 	database, mock, err := sqlmock.New()
@@ -3712,10 +3692,13 @@ func TestNewRejectsTypedNilDependencies(t *testing.T) {
 		mock.ExpectClose()
 		require.NoError(t, database.Close())
 	})
-	_, err = inspect.New(database, (*nilPointerDialect)(nil))
+	_, err = inspect.New(database, nil)
 	require.ErrorContains(t, err, "dialect must not be nil")
+}
 
+func TestZeroInspectorReportsInvalidInspector(t *testing.T) {
 	var inspector inspect.Inspector
+	var err error
 	require.NotPanics(t, func() {
 		_, err = inspector.Table(t.Context(), "users")
 	})

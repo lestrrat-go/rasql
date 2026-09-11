@@ -17,7 +17,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -135,11 +134,15 @@ type Inspector struct {
 }
 
 // New creates an Inspector. It does not open a connection or start a transaction.
+//
+// `queryer` and `d` must not be nil. New calls no method on either, so a nil
+// pointer stored in a non-nil interface reaches the first query and panics
+// there.
 func New(queryer Queryer, d dialect.Dialect) (Inspector, error) {
-	if isNil(queryer) {
+	if queryer == nil {
 		return Inspector{}, fmt.Errorf("inspect: queryer must not be nil")
 	}
-	if isNil(d) {
+	if d == nil {
 		return Inspector{}, fmt.Errorf("inspect: dialect must not be nil")
 	}
 	return Inspector{queryer: queryer, dialect: d, mysqlErrorType: mysqlDriverErrorType}, nil
@@ -204,7 +207,7 @@ func (i Inspector) ObjectNamesIn(ctx context.Context, namespace string) ([]Objec
 }
 
 func (i Inspector) objectNames(ctx context.Context, namespace string) ([]ObjectName, error) {
-	if isNil(i.queryer) || isNil(i.dialect) {
+	if i.queryer == nil || i.dialect == nil {
 		return nil, fmt.Errorf("inspect: invalid inspector")
 	}
 	if i.dialect.Name() == "sqlite" {
@@ -418,7 +421,7 @@ func (i Inspector) TableNamesIn(ctx context.Context, databaseName string) ([]Tab
 	if err := schema.ValidateIdentifier(databaseName); err != nil {
 		return nil, fmt.Errorf("inspect: invalid namespace: %w", err)
 	}
-	if isNil(i.queryer) || isNil(i.dialect) {
+	if i.queryer == nil || i.dialect == nil {
 		return nil, fmt.Errorf("inspect: invalid inspector")
 	}
 	if i.dialect.Name() == "sqlite" {
@@ -428,7 +431,7 @@ func (i Inspector) TableNamesIn(ctx context.Context, databaseName string) ([]Tab
 }
 
 func (i Inspector) tableNames(ctx context.Context, databaseName string) ([]TableName, error) {
-	if isNil(i.queryer) || isNil(i.dialect) {
+	if i.queryer == nil || i.dialect == nil {
 		return nil, fmt.Errorf("inspect: invalid inspector")
 	}
 	if i.dialect.Name() == "sqlite" {
@@ -446,7 +449,7 @@ func (i Inspector) table(ctx context.Context, databaseName string, tableName str
 			return schema.TableDef{}, fmt.Errorf("inspect: invalid namespace: %w", err)
 		}
 	}
-	if isNil(i.queryer) || isNil(i.dialect) {
+	if i.queryer == nil || i.dialect == nil {
 		return schema.TableDef{}, fmt.Errorf("inspect: invalid inspector")
 	}
 	if i.dialect.Name() == "sqlite" {
@@ -464,7 +467,7 @@ func (i Inspector) object(ctx context.Context, databaseName string, tableName st
 			return schema.TableDef{}, fmt.Errorf("inspect: invalid namespace: %w", err)
 		}
 	}
-	if isNil(i.queryer) || isNil(i.dialect) {
+	if i.queryer == nil || i.dialect == nil {
 		return schema.TableDef{}, fmt.Errorf("inspect: invalid inspector")
 	}
 	if i.dialect.Name() == "sqlite" {
@@ -4231,18 +4234,5 @@ func text(value any) sqltext.Text {
 		return sqltext.Text(value)
 	default:
 		return sqltext.Text(fmt.Sprint(value))
-	}
-}
-
-func isNil(value any) bool {
-	if value == nil {
-		return true
-	}
-	reflectValue := reflect.ValueOf(value)
-	switch reflectValue.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return reflectValue.IsNil()
-	default:
-		return false
 	}
 }
