@@ -185,3 +185,35 @@ func Q1WithoutPredicates[R, G any](plan GraphPlan[R, G]) GraphPlan[R, G] {
 	plan.node.query = plan.node.query.withoutPredicates()
 	return plan
 }
+
+// Q1ProjectedExpr rebuilds the expression behind one projected column, so a
+// test can filter on a column the projection already names without binding it
+// a second time.
+func Q1ProjectedExpr[R, T any](q Query[R], index int) Expr[T] {
+	item := q.plan.projection[index]
+	return Expr[T]{node: item.expression, source: item.source}
+}
+
+// Q1FailingPageKey builds a page key whose extraction fails, ordering by the
+// query's own first order term. A key built through AscKey always extracts, so
+// there is no public way to make one that reports an error mid-page.
+func Q1FailingPageKey[R any](q Query[R], err error) PageKey[R] {
+	return &pageKey[R]{
+		term:      q.plan.order[0],
+		direction: PageAscending,
+		extract:   func(R) (bool, any, error) { return false, nil, err },
+	}
+}
+
+// Q1GraphChildQuery returns the query a graph plan's child stage runs. A
+// caller composes a plan from queries and never takes one back out.
+func Q1GraphChildQuery[R, G, CR, CG any](plan GraphPlan[R, G]) Query[CR] {
+	return plan.node.query.(graphQuery[CR, CG]).value
+}
+
+// Q1TypedRelation rebuilds a typed relation from a source. SourceOf goes the
+// other way, from a table to a relation, so a caller holding only a source has
+// no way back to the relation that names its columns.
+func Q1TypedRelation[R any](source Source) TypedRelation[R] {
+	return TypedRelation[R]{source: source}
+}
