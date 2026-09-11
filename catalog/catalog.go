@@ -23,7 +23,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"reflect"
 	"sort"
 
 	"github.com/lestrrat-go/rasql/dialect"
@@ -111,8 +110,10 @@ var ErrNoTables = errors.New("catalog: no tables to describe")
 // almost always a misconfigured connection.
 //
 // ctx bounds the whole read. FromDatabase adds no deadline of its own.
+//
+// `db` must not be nil, and `options`.Dialect must not be nil.
 func FromDatabase(ctx context.Context, db DB, options Options) ([]schema.TableDef, error) {
-	if isNil(db) {
+	if db == nil {
 		return nil, fmt.Errorf("catalog: db must not be nil")
 	}
 	if err := validateOptions(options); err != nil {
@@ -152,8 +153,10 @@ func FromDatabase(ctx context.Context, db DB, options Options) ([]schema.TableDe
 //
 // It is otherwise identical to FromDatabase, including the sweep rules and
 // ErrNoTables.
+//
+// `queryer` must not be nil, and `options`.Dialect must not be nil.
 func FromQueryer(ctx context.Context, queryer inspect.Queryer, options Options) ([]schema.TableDef, error) {
-	if isNil(queryer) {
+	if queryer == nil {
 		return nil, fmt.Errorf("catalog: queryer must not be nil")
 	}
 	if err := validateOptions(options); err != nil {
@@ -167,7 +170,7 @@ func FromQueryer(ctx context.Context, queryer inspect.Queryer, options Options) 
 // FromDatabase and FromQueryer check Options, so the two entry points reject
 // the same input the same way.
 func validateOptions(options Options) error {
-	if isNil(options.Dialect) {
+	if options.Dialect == nil {
 		return fmt.Errorf("catalog: options.Dialect must not be nil")
 	}
 	if len(options.Include) > 0 && len(options.Exclude) > 0 {
@@ -591,21 +594,4 @@ func describeSweptTable(ctx context.Context, inspector inspect.Inspector, name i
 		return inspector.TableIn(ctx, name.Schema, name.Name)
 	}
 	return inspector.Table(ctx, name.Name)
-}
-
-// isNil reports whether value is a nil interface or a non-nil interface
-// holding a nil pointer, map, slice, channel, or function -- the same check
-// inspect.isNil applies, duplicated here rather than exported across the
-// package boundary.
-func isNil(value any) bool {
-	if value == nil {
-		return true
-	}
-	reflectValue := reflect.ValueOf(value)
-	switch reflectValue.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return reflectValue.IsNil()
-	default:
-		return false
-	}
 }
