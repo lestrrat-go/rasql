@@ -105,16 +105,6 @@ type runtimeFakeExecutor struct {
 	mu            sync.Mutex
 	lastStatement stmt.Statement
 }
-type nilMapExecutor map[string]string
-
-func (nilMapExecutor) Dialect() dialect.Dialect { panic("typed nil executor called Dialect") }
-func (nilMapExecutor) Query(context.Context, stmt.Statement) (rasql.ResultRows, error) {
-	panic("typed nil executor called Query")
-}
-func (nilMapExecutor) Exec(context.Context, stmt.Statement) (sql.Result, error) {
-	panic("typed nil executor called Exec")
-}
-
 func (e *runtimeFakeExecutor) Dialect() dialect.Dialect { return e.dialect }
 func (e *runtimeFakeExecutor) Query(_ context.Context, statement stmt.Statement) (rasql.ResultRows, error) {
 	e.calls.Add(1)
@@ -228,16 +218,6 @@ func runtimePairQuery(t *testing.T, firstCodec, secondCodec string) rasql.Query[
 	projection, err := rasql.NewProjection([]rasql.ProjectionItem{rasql.Item("first", first.Expr(), schema.IntegerType{}, firstCodec), rasql.Item("second", second.Expr(), schema.IntegerType{}, secondCodec)}, runtimePairDecoder{schema: schemaValue})
 	require.NoError(t, err)
 	return rasql.Select(relation.Source(), projection)
-}
-
-// testCodec is a pass-through codec, used where a test needs a registry entry
-// rather than any particular conversion.
-type testCodec struct{}
-
-func (testCodec) Encode(value any) (driver.Value, error) { return value, nil }
-func (testCodec) Decode(source any, destination any) error {
-	*destination.(*string) = source.(string)
-	return nil
 }
 
 // runtimeExecutor returns an executor and the fake behind it, so a caller that
@@ -461,18 +441,6 @@ func TestResultRows(t *testing.T) {
 }
 
 func TestExecutor(t *testing.T) {
-	t.Run("a typed-nil executor is rejected before capabilities", func(t *testing.T) {
-		var executor nilMapExecutor
-		registry, err := rasql.NewCodecRegistry(map[rasql.CodecID]rasql.ValueCodec{"x": testCodec{}})
-		require.NoError(t, err)
-		_, err = rasql.WithCodecs(executor, registry)
-		require.ErrorContains(t, err, "executor must not be nil")
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
-		_, err = rasql.WithEngineProfile(executor, profile)
-		require.ErrorContains(t, err, "executor must not be nil")
-	})
-
 	t.Run("SQLite scans rows and projections directly", func(t *testing.T) {
 		database, err := sql.Open("sqlite", ":memory:")
 		require.NoError(t, err)

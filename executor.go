@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"iter"
-	"reflect"
 	"sync/atomic"
 
 	"github.com/lestrrat-go/rasql/dialect"
@@ -212,13 +211,20 @@ func (e profiledCodecExecutor) Codecs() CodecRegistry {
 		return builtinCodecs
 	}
 	registry := provider.Codecs()
-	if isNilRegistry(registry) {
+	if registry == nil {
 		return builtinCodecs
 	}
 	return registry
 }
+
+// WithEngineProfile wraps executor so every statement it compiles is rendered
+// for profile. It reports ErrInvalidEngineProfile when profile is zero and
+// ErrEngineProfileMismatch when profile names a different engine than
+// executor's dialect speaks.
+//
+// `executor` must not be nil.
 func WithEngineProfile(executor Executor, profile EngineProfile) (Executor, error) {
-	if isNilExecutor(executor) {
+	if executor == nil {
 		return nil, fmt.Errorf("executor must not be nil")
 	}
 	c, err := profile.queryCompiler(executor.Dialect())
@@ -263,17 +269,6 @@ func WithEngineProfile(executor Executor, profile EngineProfile) (Executor, erro
 	}
 	return base, nil
 }
-func isNilExecutor(e Executor) bool {
-	if e == nil {
-		return true
-	}
-	v := reflect.ValueOf(e)
-	switch v.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return v.IsNil()
-	}
-	return false
-}
 
 type preparedRows[R any] struct {
 	statement   stmt.Statement
@@ -288,9 +283,6 @@ type rowTerminalKey struct{}
 
 func prepareRows[R any](executor Executor, q Query[R], compiled compiledQuery) (preparedRows[R], error) {
 	var result preparedRows[R]
-	if isNilExecutor(executor) {
-		return result, &PlanError{Code: "engine_profile_unavailable", Detail: "executor has no retained compiler"}
-	}
 	if err := q.Validate(); err != nil {
 		return result, err
 	}
@@ -333,7 +325,7 @@ func prepareRows[R any](executor Executor, q Query[R], compiled compiledQuery) (
 	registry := builtinCodecs
 	if cp, ok := executor.(CodecProvider); ok {
 		provided := cp.Codecs()
-		if isNilRegistry(provided) {
+		if provided == nil {
 			return result, &PlanError{Code: "codec_registry_unavailable", Detail: "executor returned a nil codec registry"}
 		}
 		registry = provided
@@ -378,9 +370,6 @@ func rowsPrepared[R any](ctx context.Context, executor Executor, prepared prepar
 }
 
 func rowsPreparedRequired[R any](ctx context.Context, executor Executor, prepared preparedRows[R], consumer Cardinality) (iter.Seq2[R, error], error) {
-	if isNilExecutor(executor) {
-		return nil, errors.New("executor must not be nil")
-	}
 	used := false
 	return func(yield func(R, error) bool) {
 		if used {

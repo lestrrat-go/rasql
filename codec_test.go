@@ -26,8 +26,6 @@ func TestCodecRegistry(t *testing.T) {
 	require.NotNil(t, codec)
 	_, err = rasql.NewCodecRegistry(map[rasql.CodecID]rasql.ValueCodec{"": registryCodec{}})
 	require.Error(t, err)
-	_, err = rasql.NewCodecRegistry(map[rasql.CodecID]rasql.ValueCodec{"nil": (*registryCodec)(nil)})
-	require.Error(t, err)
 }
 
 func TestCodecErrors(t *testing.T) {

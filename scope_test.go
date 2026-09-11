@@ -413,8 +413,6 @@ func TestScopeFinalizers(t *testing.T) {
 		}{
 			{name: "nil child", executor: nilBeginExecutor{kind: nilChild}},
 			{name: "nil finalizer", executor: nilBeginExecutor{kind: nilFinalizer}},
-			{name: "typed nil child", executor: nilBeginExecutor{kind: typedNilChild}},
-			{name: "typed nil finalizer", executor: nilBeginExecutor{kind: typedNilFinalizerKind}},
 		} {
 			t.Run(test.name, func(t *testing.T) {
 				called := false
@@ -437,8 +435,6 @@ func TestScopeFinalizers(t *testing.T) {
 		}{
 			{name: "nil child", kind: nilChild},
 			{name: "nil finalizer", kind: nilFinalizer},
-			{name: "typed nil child", kind: typedNilChild},
-			{name: "typed nil finalizer", kind: typedNilFinalizerKind},
 		} {
 			t.Run(test.name, func(t *testing.T) {
 				base := rasql.Executor(nilBeginExecutor{kind: test.kind})
@@ -586,8 +582,6 @@ type nilBeginKind uint8
 const (
 	nilChild nilBeginKind = iota
 	nilFinalizer
-	typedNilChild
-	typedNilFinalizerKind
 )
 
 type nilBeginExecutor struct{ kind nilBeginKind }
@@ -601,30 +595,9 @@ func (e nilBeginExecutor) BeginScope(context.Context, *sql.TxOptions) (rasql.Exe
 	if e.kind == nilChild {
 		return nil, capabilityFinalizer{}, nil
 	}
-	if e.kind == nilFinalizer {
-		return capabilityTestExecutor{}, nil, nil
-	}
-	if e.kind == typedNilChild {
-		var child *typedNilExecutor
-		return child, capabilityFinalizer{}, nil
-	}
-	var finalizer *typedNilFinalizer
-	return capabilityTestExecutor{}, finalizer, nil
+	return capabilityTestExecutor{}, nil, nil
 }
 func (e nilBeginExecutor) BeginSavepoint(context.Context) (rasql.Executor, rasql.ScopeFinalizer, error) {
 	return e.BeginScope(context.Background(), nil)
 }
 func (nilBeginExecutor) IsTransaction() bool { return false }
-
-type typedNilExecutor struct{}
-
-func (*typedNilExecutor) Dialect() dialect.Dialect { return dialect.SQLite() }
-func (*typedNilExecutor) Query(context.Context, stmt.Statement) (rasql.ResultRows, error) {
-	return nil, nil
-}
-func (*typedNilExecutor) Exec(context.Context, stmt.Statement) (sql.Result, error) { return nil, nil }
-
-type typedNilFinalizer struct{}
-
-func (*typedNilFinalizer) Commit(context.Context) error   { return nil }
-func (*typedNilFinalizer) Rollback(context.Context) error { return nil }

@@ -19,7 +19,7 @@ func graphCodecs(executor Executor) CodecRegistry {
 
 func prepareGraphPlan[R, G any](executor Executor, plan GraphPlan[R, G]) (compiledQuery, error) {
 	var rootCompiled compiledQuery
-	if isNilExecutor(executor) || plan.node == nil {
+	if executor == nil || plan.node == nil {
 		return rootCompiled, planError("invalid_graph_plan", "graph", "executor and plan are required")
 	}
 	if err := graphValidate(plan.node, executor, &rootCompiled); err != nil {
@@ -205,6 +205,10 @@ func validateGraphKeys(node *graphPlanNode, executor Executor) error {
 	return nil
 }
 
+// LoadGraph runs plan's root query and the child query of every edge it names,
+// and returns the mapped graph values.
+//
+// `executor` must not be nil.
 func LoadGraph[R, G any](ctx context.Context, executor Executor, plan GraphPlan[R, G]) ([]G, error) {
 	rootCompiled, err := prepareGraphPlan(executor, plan)
 	if err != nil {

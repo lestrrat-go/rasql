@@ -5,7 +5,6 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
-	"reflect"
 
 	"github.com/lestrrat-go/rasql/internal/bindplan"
 	"github.com/lestrrat-go/rasql/internal/querycompile"
@@ -30,13 +29,17 @@ func (r codecRegistry) Lookup(id CodecID) (ValueCodec, bool) { c, ok := r.codecs
 
 var builtinCodecs CodecRegistry = codecRegistry{codecs: map[CodecID]ValueCodec{}}
 
+// NewCodecRegistry copies values into a registry that a codec lookup reads by
+// ID. It reports an error for an empty ID.
+//
+// No value in `values` may be nil.
 func NewCodecRegistry(values map[CodecID]ValueCodec) (CodecRegistry, error) {
 	copyValues := make(map[CodecID]ValueCodec, len(values))
 	for id, codec := range values {
 		if id == "" {
 			return nil, fmt.Errorf("codec ID must not be empty")
 		}
-		if isNilCodec(codec) {
+		if codec == nil {
 			return nil, fmt.Errorf("codec %q must not be nil", id)
 		}
 		if _, ok := copyValues[id]; ok {
@@ -45,17 +48,6 @@ func NewCodecRegistry(values map[CodecID]ValueCodec) (CodecRegistry, error) {
 		copyValues[id] = codec
 	}
 	return codecRegistry{codecs: copyValues}, nil
-}
-func isNilCodec(codec ValueCodec) bool {
-	if codec == nil {
-		return true
-	}
-	v := reflect.ValueOf(codec)
-	switch v.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return v.IsNil()
-	}
-	return false
 }
 
 var (
@@ -122,11 +114,15 @@ func (e codecCompilerExec) queryCompiler() *querycompile.Compiler {
 	}
 	return provider.queryCompiler()
 }
+// WithCodecs wraps executor so every value it binds and every column it decodes
+// passes through codecs.
+//
+// `executor` and `codecs` must not be nil.
 func WithCodecs(executor Executor, codecs CodecRegistry) (Executor, error) {
-	if isNilExecutor(executor) {
+	if executor == nil {
 		return nil, fmt.Errorf("executor must not be nil")
 	}
-	if isNilRegistry(codecs) {
+	if codecs == nil {
 		return nil, fmt.Errorf("codec registry must not be nil")
 	}
 	return wrapCodecExecutor(executor, codecs), nil
@@ -175,17 +171,6 @@ func wrapCodecExecutor(executor Executor, codecs CodecRegistry) Executor {
 		return logicalCodecExec{base}
 	}
 	return base
-}
-func isNilRegistry(registry CodecRegistry) bool {
-	if registry == nil {
-		return true
-	}
-	v := reflect.ValueOf(registry)
-	switch v.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return v.IsNil()
-	}
-	return false
 }
 
 func codecFor(reg CodecRegistry, id string) (ValueCodec, error) {

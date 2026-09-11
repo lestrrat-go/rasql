@@ -22,6 +22,10 @@ type preparedPage[R any] struct {
 	impossible  bool
 }
 
+// PageAfter runs q ordered by spec's keys and returns the one page that policy
+// and request bound, together with the cursor the next page starts after.
+//
+// `executor` must not be nil.
 func PageAfter[R any](ctx context.Context, executor Executor, q Query[R], spec PageSpec[R], policy PagePolicy, request PageRequest) (Page[R], error) {
 	prepared, err := preparePageAfter(executor, q, spec, policy, request)
 	if err != nil {
@@ -32,7 +36,7 @@ func PageAfter[R any](ctx context.Context, executor Executor, q Query[R], spec P
 
 func preparePageAfter[R any](executor Executor, q Query[R], spec PageSpec[R], policy PagePolicy, request PageRequest) (preparedPage[R], error) {
 	var result preparedPage[R]
-	if isNilExecutor(executor) {
+	if executor == nil {
 		return result, planError("engine_profile_unavailable", "executor", "must not be nil")
 	}
 	if len(spec.keys) == 0 {
