@@ -83,3 +83,12 @@ func validateCheckpointShape(data []byte) error {
 	}
 	return nil
 }
+
+func requireKeys(object map[string]json.RawMessage, keys ...string) error {
+	for _, key := range keys {
+		if _, ok := object[key]; !ok {
+			return fmt.Errorf("%w: missing required wire field %q", ErrInvalidWire, key)
+		}
+	}
+	return nil
+}

@@ -155,6 +155,21 @@ func validationContractDecodeError(t *testing.T, data []byte, target error, cont
 	}
 }
 
+// validationContractRejectsOrRoundTrips states the contract the plan ID digest enforces.
+// Decode either rejects the mutated bytes, or returns the plan the fixture authored, in which
+// case Encode reproduces the baseline byte for byte.  A file that spells a field the encoder
+// would have written as its zero value decodes to that same plan, so acceptance is not a hole.
+func validationContractRejectsOrRoundTrips(t *testing.T, data []byte, baseline []byte) {
+	t.Helper()
+	plan, err := Decode(data)
+	if err != nil {
+		return
+	}
+	encoded, encodeErr := Encode(plan)
+	require.NoError(t, encodeErr)
+	require.Equal(t, string(baseline), string(encoded), "accepted wire bytes must decode to the authored plan")
+}
+
 func validationContractWrongType(value any) any {
 	switch value.(type) {
 	case string:
@@ -190,50 +205,16 @@ func validationContractPath(path []any) string {
 }
 
 type validationContractField struct {
-	path            []any
-	value           any
-	allowNull       bool
-	missingFragment string
-	nullFragment    string
-	typeFragment    string
-}
-
-func validationContractFieldFragments(path []any, value any) (string, string, string) {
-	key := path[len(path)-1].(string)
-	missing := `missing required wire field "` + key + `"`
-	if key == "value" {
-		for _, part := range path {
-			if part == "args" {
-				return "", "", ""
-			}
-		}
-	}
-	if key == "result_digest" {
-		return missing, "", ""
-	}
-	switch value.(type) {
-	case string:
-		return missing, key + " must be a string", key + " must be a string"
-	case bool:
-		return missing, key + " must be a boolean", key + " must be a boolean"
-	case json.Number:
-		return missing, key + " must be an integer", key + " must be an integer"
-	case []any:
-		return missing, "null array " + key, "array " + key
-	case map[string]any:
-		return missing, "object expected", "object expected"
-	default:
-		return missing, "", ""
-	}
+	path      []any
+	value     any
+	allowNull bool
 }
 
 func validationContractWireFields(t *testing.T, root any) []validationContractField {
 	t.Helper()
 	fields := make([]validationContractField, 0, 320)
 	add := func(path ...any) {
-		value := validationContractAt(root, path...)
-		missing, null, wrong := validationContractFieldFragments(path, value)
-		fields = append(fields, validationContractField{path: path, value: value, missingFragment: missing, nullFragment: null, typeFragment: wrong})
+		fields = append(fields, validationContractField{path: path, value: validationContractAt(root, path...)})
 	}
 	for _, key := range []string{"format", "id"} {
 		add(key)
@@ -460,37 +441,31 @@ func TestValidationContractWireShape(t *testing.T) {
 						require.NoError(t, err)
 						return
 					}
-					fragment := field.typeFragment
-					switch test.name {
-					case "missing":
-						fragment = field.missingFragment
-					case "null":
-						fragment = field.nullFragment
+					if test.name == "wrong type" {
+						validationContractDecodeError(t, data, ErrInvalidWire, "")
+						return
 					}
-					validationContractDecodeError(t, data, ErrInvalidWire, fragment)
+					validationContractRejectsOrRoundTrips(t, data, reverseValid)
 				})
 			}
 		})
 	}
 
 	for _, test := range []struct {
-		name            string
-		path            []any
-		missingFragment string
-		nullFragment    string
-		typeFragment    string
+		name string
+		path []any
 	}{
-		{"decisions", []any{"decisions"}, `missing required wire field "decisions"`, "null array decisions", "array decisions"},
-		{"operations", []any{"operations"}, `missing required wire field "operations"`, "null array operations", "array operations"},
-		{"baseline.objects", []any{"baseline", "objects"}, `missing required wire field "objects"`, "null array objects", "array objects"},
-		{"baseline.renames", []any{"baseline", "renames"}, `missing required wire field "renames"`, "null array renames", "array renames"},
-		{"operations[1].depends_on", []any{"operations", 1, "depends_on"}, `missing required wire field "depends_on"`, "null array depends_on", "array depends_on"},
-		{"operations[0].objects", []any{"operations", 0, "objects"}, `missing required wire field "objects"`, "null array objects", "array objects"},
-		{"operations[1].preconditions", []any{"operations", 1, "preconditions"}, `missing required wire field "preconditions"`, "null array preconditions", "array preconditions"},
-		{"operations[9].postconditions", []any{"operations", 9, "postconditions"}, `missing required wire field "postconditions"`, "null array postconditions", "array postconditions"},
-		{"operations[0].statements", []any{"operations", 0, "statements"}, `missing required wire field "statements"`, "null array statements", "array statements"},
-		{"operations[10].reverse_statements", []any{"operations", 10, "reverse_statements"}, `missing required wire field "reverse_statements"`, "null array reverse_statements", "array reverse_statements"},
-		{"operations[9].statements[0].args", []any{"operations", 9, "statements", 0, "args"}, `missing required wire field "args"`, "null array args", "array args"},
+		{"decisions", []any{"decisions"}},
+		{"operations", []any{"operations"}},
+		{"baseline.objects", []any{"baseline", "objects"}},
+		{"baseline.renames", []any{"baseline", "renames"}},
+		{"operations[1].depends_on", []any{"operations", 1, "depends_on"}},
+		{"operations[0].objects", []any{"operations", 0, "objects"}},
+		{"operations[1].preconditions", []any{"operations", 1, "preconditions"}},
+		{"operations[9].postconditions", []any{"operations", 9, "postconditions"}},
+		{"operations[0].statements", []any{"operations", 0, "statements"}},
+		{"operations[10].reverse_statements", []any{"operations", 10, "reverse_statements"}},
+		{"operations[9].statements[0].args", []any{"operations", 9, "statements", 0, "args"}},
 	} {
 		test := test
 		for _, shape := range []struct {
@@ -511,14 +486,12 @@ func TestValidationContractWireShape(t *testing.T) {
 				} else {
 					validationContractSet(copyRoot, shape.value, test.path...)
 				}
-				fragment := test.typeFragment
-				switch shape.name {
-				case "missing":
-					fragment = test.missingFragment
-				case "null":
-					fragment = test.nullFragment
+				data := validationContractBytes(t, copyRoot)
+				if shape.name == "missing" || shape.name == "null" {
+					validationContractRejectsOrRoundTrips(t, data, reverseValid)
+					return
 				}
-				validationContractDecodeError(t, validationContractBytes(t, copyRoot), ErrInvalidWire, fragment)
+				validationContractDecodeError(t, data, ErrInvalidWire, "")
 			})
 		}
 	}
@@ -555,7 +528,12 @@ func TestValidationContractWireShape(t *testing.T) {
 			t.Run(test.name+" element "+element.name, func(t *testing.T) {
 				copyRoot := validationContractClone(t, root)
 				validationContractSet(copyRoot, element.value, test.path...)
-				validationContractDecodeError(t, validationContractBytes(t, copyRoot), ErrInvalidWire, "object expected")
+				data := validationContractBytes(t, copyRoot)
+				if element.name == "null" {
+					validationContractRejectsOrRoundTrips(t, data, reverseValid)
+					return
+				}
+				validationContractDecodeError(t, data, ErrInvalidWire, "")
 			})
 		}
 	}
@@ -563,14 +541,13 @@ func TestValidationContractWireShape(t *testing.T) {
 	for _, test := range []struct {
 		name string
 		path []any
-		key  string
 	}{
-		{"precondition", []any{"operations", 1, "preconditions", 0}, "preconditions"},
-		{"postcondition", []any{"operations", 9, "postconditions", 0}, "postconditions"},
-		{"precondition native", []any{"operations", 10, "preconditions", 0}, "preconditions"},
-		{"forward argument", []any{"operations", 9, "statements", 0, "args", 0}, "args"},
-		{"native argument", []any{"operations", 10, "statements", 0, "args", 0}, "args"},
-		{"reverse argument", []any{"operations", 10, "reverse_statements", 0, "args", 0}, "args"},
+		{"precondition", []any{"operations", 1, "preconditions", 0}},
+		{"postcondition", []any{"operations", 9, "postconditions", 0}},
+		{"precondition native", []any{"operations", 10, "preconditions", 0}},
+		{"forward argument", []any{"operations", 9, "statements", 0, "args", 0}},
+		{"native argument", []any{"operations", 10, "statements", 0, "args", 0}},
+		{"reverse argument", []any{"operations", 10, "reverse_statements", 0, "args", 0}},
 	} {
 		test := test
 		for _, element := range []struct {
@@ -587,7 +564,12 @@ func TestValidationContractWireShape(t *testing.T) {
 			t.Run(test.name+" element "+element.name, func(t *testing.T) {
 				copyRoot := validationContractClone(t, root)
 				validationContractSet(copyRoot, element.value, test.path...)
-				validationContractDecodeError(t, validationContractBytes(t, copyRoot), ErrInvalidWire, "object expected")
+				data := validationContractBytes(t, copyRoot)
+				if element.name == "null" {
+					validationContractRejectsOrRoundTrips(t, data, reverseValid)
+					return
+				}
+				validationContractDecodeError(t, data, ErrInvalidWire, "")
 			})
 		}
 	}
@@ -595,10 +577,9 @@ func TestValidationContractWireShape(t *testing.T) {
 	for _, test := range []struct {
 		name string
 		path []any
-		key  string
 	}{
-		{"depends_on", []any{"operations", 1, "depends_on", 0}, "depends_on"},
-		{"objects", []any{"operations", 0, "objects", 0}, "objects"},
+		{"depends_on", []any{"operations", 1, "depends_on", 0}},
+		{"objects", []any{"operations", 0, "objects", 0}},
 	} {
 		test := test
 		for _, element := range []struct {
@@ -616,7 +597,11 @@ func TestValidationContractWireShape(t *testing.T) {
 				copyRoot := validationContractClone(t, root)
 				validationContractSet(copyRoot, element.value, test.path...)
 				data := validationContractBytes(t, copyRoot)
-				validationContractDecodeError(t, data, ErrInvalidWire, test.key+" element must be a string")
+				if element.name == "null" {
+					validationContractRejectsOrRoundTrips(t, data, reverseValid)
+					return
+				}
+				validationContractDecodeError(t, data, ErrInvalidWire, "")
 			})
 		}
 	}
@@ -943,14 +928,14 @@ func TestValidationContractArgumentGrammar(t *testing.T) {
 		index    int
 		fragment string
 	}{
-		{"null", 0, "null argument value"},
-		{"bool", 1, "argument bool cannot be null"},
-		{"int64", 2, "argument int64 cannot be null"},
-		{"uint64", 3, "argument uint64 cannot be null"},
-		{"float64", 4, "argument float64 cannot be null"},
-		{"string", 5, "argument string cannot be null"},
-		{"bytes_base64", 6, "argument bytes_base64 cannot be null"},
-		{"time_rfc3339nano", 7, "argument time_rfc3339nano cannot be null"},
+		{"null", 0, "null argument"},
+		{"bool", 1, "plan ID mismatch"},
+		{"int64", 2, "plan ID mismatch"},
+		{"uint64", 3, "plan ID mismatch"},
+		{"float64", 4, "plan ID mismatch"},
+		{"string", 5, "plan ID mismatch"},
+		{"bytes_base64", 6, "plan ID mismatch"},
+		{"time_rfc3339nano", 7, "time argument"},
 	}
 	for _, source := range argumentPaths {
 		source := source
@@ -977,9 +962,9 @@ func TestValidationContractArgumentGrammar(t *testing.T) {
 				value any
 				want  string
 			}{
-				{"false value", false, "null argument value"},
-				{"string value", "value", "null argument value"},
-				{"object value", map[string]any{}, "null argument value"},
+				{"false value", false, "null argument"},
+				{"string value", "value", "null argument"},
+				{"object value", map[string]any{}, "null argument"},
 			} {
 				row := row
 				if tag.name != "null" {
@@ -1015,11 +1000,11 @@ func TestValidationContractArgumentGrammar(t *testing.T) {
 			{"string boolean", "string", 5, true, "string argument"},
 			{"string number", "string", 5, json.Number("1"), "string argument"},
 			{"string object", "string", 5, map[string]any{}, "string argument"},
-			{"bytes non-string", "bytes_base64", 6, json.Number("1"), "string argument"},
+			{"bytes non-string", "bytes_base64", 6, json.Number("1"), "bytes argument"},
 			{"bytes invalid alphabet", "bytes_base64", 6, "%%%", "bytes argument"},
 			{"bytes bad padding", "bytes_base64", 6, "Yg", "bytes argument"},
 			{"bytes trailing junk", "bytes_base64", 6, "Yg==junk", "bytes argument"},
-			{"time non-string", "time_rfc3339nano", 7, json.Number("1"), "string argument"},
+			{"time non-string", "time_rfc3339nano", 7, json.Number("1"), "time argument"},
 			{"time malformed", "time_rfc3339nano", 7, "not-time", "time argument"},
 			{"time offset not canonical", "time_rfc3339nano", 7, "2024-01-02T03:04:05+00:00", "non-canonical time argument"},
 			{"time redundant fractional zeros", "time_rfc3339nano", 7, "2024-01-02T03:04:05.000000006000Z", "non-canonical time argument"},

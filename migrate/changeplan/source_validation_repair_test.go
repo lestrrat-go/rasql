@@ -125,18 +125,36 @@ func TestResolvedColumnRenameUsesAdjacentCatalogs(t *testing.T) {
 func TestDecodeRejectsNonStringOperationArrayElements(t *testing.T) {
 	fixture, err := os.ReadFile("testdata/v1/valid/full.json")
 	require.NoError(t, err)
-	for _, field := range []string{"depends_on", "objects"} {
-		for _, element := range [][]byte{[]byte("null"), []byte("true"), []byte("1"), []byte(`{}`), []byte(`[]`)} {
-			needle := []byte(`"` + field + `":[]`)
-			replacement := []byte(`"` + field + `":[` + string(element) + `]`)
-			if field == "objects" {
+	// A JSON null decodes into a string element as a no-op, leaving the empty string for the
+	// constructor to reject; every other wrong element type is a JSON type error the typed decode
+	// reports as ErrInvalidWire.
+	for _, field := range []struct {
+		name     string
+		nullWant error
+	}{
+		{name: "depends_on", nullWant: ErrInvalidOperation},
+		{name: "objects", nullWant: ErrInvalidIdentity},
+	} {
+		for _, element := range []struct {
+			token string
+			want  error
+		}{
+			{token: "null", want: field.nullWant},
+			{token: "true", want: ErrInvalidWire},
+			{token: "1", want: ErrInvalidWire},
+			{token: `{}`, want: ErrInvalidWire},
+			{token: `[]`, want: ErrInvalidWire},
+		} {
+			needle := []byte(`"` + field.name + `":[]`)
+			replacement := []byte(`"` + field.name + `":[` + element.token + `]`)
+			if field.name == "objects" {
 				needle = []byte(`"objects":["starting"]`)
-				replacement = []byte(`"objects":[` + string(element) + `]`)
+				replacement = []byte(`"objects":[` + element.token + `]`)
 			}
 			data := bytes.Replace(fixture, needle, replacement, 1)
 			_, decodeErr := Decode(data)
-			require.Error(t, decodeErr, field)
-			require.True(t, errors.Is(decodeErr, ErrInvalidWire), field)
+			require.Error(t, decodeErr, field.name)
+			require.True(t, errors.Is(decodeErr, element.want), decodeErr)
 		}
 	}
 }

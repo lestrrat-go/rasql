@@ -71,60 +71,103 @@ func TestFullWireInvalidCorpus(t *testing.T) {
 		})
 	}
 
+	// A null whose zero value is what the author wrote re-encodes to the authored bytes, so the
+	// plan ID matches and Decode returns the same plan.  want nil records that, and
+	// wireDecodeRoundTrips proves the accepted plan is the fixture's plan.
 	for _, test := range []struct {
 		name                string
 		needle, replacement string
+		want                error
 	}{
-		{name: "null custom name", needle: `"custom_name":""`, replacement: `"custom_name":null`},
-		{name: "null reversible", needle: `"reversible":false`, replacement: `"reversible":null`},
-		{name: "null bool argument", needle: `"kind":"bool","value":false`, replacement: `"kind":"bool","value":null`},
-		{name: "wrong bool argument", needle: `"kind":"bool","value":false`, replacement: `"kind":"bool","value":"false"`},
-		{name: "unknown argument kind", needle: `"kind":"bool","value":false`, replacement: `"kind":"unknown","value":false`},
+		{name: "null custom name", needle: `"custom_name":""`, replacement: `"custom_name":null`, want: nil},
+		{name: "null reversible", needle: `"reversible":false`, replacement: `"reversible":null`, want: nil},
+		{name: "null bool argument", needle: `"kind":"bool","value":false`, replacement: `"kind":"bool","value":null`, want: nil},
+		{name: "wrong bool argument", needle: `"kind":"bool","value":false`, replacement: `"kind":"bool","value":"false"`, want: changeplan.ErrInvalidWire},
+		{name: "unknown argument kind", needle: `"kind":"bool","value":false`, replacement: `"kind":"unknown","value":false`, want: changeplan.ErrInvalidWire},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			mutated := bytes.Replace(valid, []byte(test.needle), []byte(test.replacement), 1)
 			require.NotEqual(t, valid, mutated)
+			if test.want == nil {
+				wireDecodeRoundTrips(t, mutated, valid)
+				return
+			}
 			_, decodeErr := changeplan.Decode(mutated)
 			require.Error(t, decodeErr, test.name)
-			require.True(t, errors.Is(decodeErr, changeplan.ErrInvalidWire), decodeErr)
+			require.True(t, errors.Is(decodeErr, test.want), decodeErr)
 		})
 	}
+	// A wrong JSON type is still a wire error: encoding/json reports it and Decode wraps it.  A
+	// null array decodes to nil, so the constructor that needs its contents reports the domain
+	// error instead, and depends_on:null re-encodes as the authored empty array.
 	for _, test := range []struct {
 		name  string
 		field string
 		value string
+		want  error
 	}{
-		{name: "null statement array", field: "statements", value: "null"},
-		{name: "null dependency array", field: "depends_on", value: "null"},
-		{name: "null object array", field: "objects", value: "null"},
-		{name: "null dependency element", field: "depends_on", value: "[null]"},
-		{name: "boolean object element", field: "objects", value: "[true]"},
-		{name: "numeric dependency element", field: "depends_on", value: "[1]"},
-		{name: "object object element", field: "objects", value: "[{}]"},
-		{name: "nested dependency element", field: "depends_on", value: `[["create-table"]]`},
+		{name: "null statement array", field: "statements", value: "null", want: changeplan.ErrInvalidOperation},
+		{name: "null dependency array", field: "depends_on", value: "null", want: nil},
+		{name: "null object array", field: "objects", value: "null", want: changeplan.ErrInvalidOperation},
+		{name: "null dependency element", field: "depends_on", value: "[null]", want: changeplan.ErrInvalidOperation},
+		{name: "boolean object element", field: "objects", value: "[true]", want: changeplan.ErrInvalidWire},
+		{name: "numeric dependency element", field: "depends_on", value: "[1]", want: changeplan.ErrInvalidWire},
+		{name: "object object element", field: "objects", value: "[{}]", want: changeplan.ErrInvalidWire},
+		{name: "nested dependency element", field: "depends_on", value: `[["create-table"]]`, want: changeplan.ErrInvalidWire},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			mutated := mutateOperationField(t, valid, test.field, json.RawMessage(test.value))
 			require.True(t, json.Valid(mutated))
+			if test.want == nil {
+				wireDecodeRoundTrips(t, mutated, valid)
+				return
+			}
 			_, decodeErr := changeplan.Decode(mutated)
 			require.Error(t, decodeErr, test.name)
-			require.True(t, errors.Is(decodeErr, changeplan.ErrInvalidWire), decodeErr)
+			require.True(t, errors.Is(decodeErr, test.want), decodeErr)
 		})
 	}
 
+	// A wrong type and an unknown field are reported by the typed decode, so they stay
+	// ErrInvalidWire.  A missing key or a null is whatever the plan ID digest makes of it: either
+	// Decode rejects the file, or the file decodes to the very plan the fixture authored.
 	for _, test := range wireFieldCases(t, valid) {
 		t.Run(test.name, func(t *testing.T) {
 			mutated := test.data()
 			require.True(t, json.Valid(mutated), test.name)
-			_, decodeErr := changeplan.Decode(mutated)
-			if strings.Contains(test.name, ".args[0].value null") {
-				require.NoError(t, decodeErr, test.name)
+			if strings.HasSuffix(test.name, " wrong type") || strings.HasSuffix(test.name, " unknown field") {
+				_, decodeErr := changeplan.Decode(mutated)
+				require.Error(t, decodeErr, test.name)
+				require.True(t, errors.Is(decodeErr, changeplan.ErrInvalidWire), decodeErr)
 				return
 			}
-			require.Error(t, decodeErr, test.name)
-			require.True(t, errors.Is(decodeErr, changeplan.ErrInvalidWire), decodeErr)
+			wireRejectsOrRoundTrips(t, mutated, valid)
 		})
 	}
+}
+
+// wireRejectsOrRoundTrips states what the plan ID digest in Decode guarantees.  Decode computes
+// the digest of the plan it built and compares it to the file's id, so it returns either an error
+// or the exact plan whose canonical bytes the author hashed - never a third, different plan.
+func wireRejectsOrRoundTrips(t *testing.T, data, baseline []byte) {
+	t.Helper()
+	plan, err := changeplan.Decode(data)
+	if err != nil {
+		return
+	}
+	encoded, encodeErr := changeplan.Encode(plan)
+	require.NoError(t, encodeErr)
+	require.Equal(t, string(baseline), string(encoded), "accepted wire bytes must decode to the authored plan")
+}
+
+// wireDecodeRoundTrips is wireRejectsOrRoundTrips for an input that must be accepted.
+func wireDecodeRoundTrips(t *testing.T, data, baseline []byte) {
+	t.Helper()
+	plan, err := changeplan.Decode(data)
+	require.NoError(t, err)
+	encoded, encodeErr := changeplan.Encode(plan)
+	require.NoError(t, encodeErr)
+	require.Equal(t, string(baseline), string(encoded))
 }
 
 // wireFieldCases walks every DTO object in the canonical fixture.  Each field
