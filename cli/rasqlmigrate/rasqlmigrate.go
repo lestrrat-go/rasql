@@ -20,7 +20,6 @@ import (
 	"github.com/lestrrat-go/rasql/internal/dsnredact"
 	"github.com/lestrrat-go/rasql/internal/migrationdir"
 	"github.com/lestrrat-go/rasql/migrate"
-	"github.com/lestrrat-go/rasql/migrate/changeplan"
 	"github.com/lestrrat-go/rasql/migrate/diff"
 	"github.com/lestrrat-go/rasql/migrate/diff/mysql"
 	"github.com/lestrrat-go/rasql/migrate/diff/postgresql"
@@ -111,8 +110,8 @@ func printUsage(output io.Writer, program string) {
 	_, _ = fmt.Fprintln(output, "  diff     Generate a reviewed migration from desired schemas")
 	_, _ = fmt.Fprintln(output, "  diff-live Compare one live table with a desired schema")
 	_, _ = fmt.Fprintln(output, "  dump     Write rasql's own schema descriptor for a live database")
-	_, _ = fmt.Fprintln(output, "  plan     Print directory sources, inspect a saved plan, check live state, or create one")
-	_, _ = fmt.Fprintln(output, "  apply    Apply directory migrations or a reviewed plan")
+	_, _ = fmt.Fprintln(output, "  plan     Print the forward sources the directory migrations hold")
+	_, _ = fmt.Fprintln(output, "  apply    Apply directory migrations")
 	_, _ = fmt.Fprintln(output, "  revert   Revert applied migrations, newest first")
 	_, _ = fmt.Fprintln(output, "  status   Show applied, pending, changed, unknown, and incomplete migrations")
 	_, _ = fmt.Fprintln(output, "  verify   Require every supplied migration to be applied unchanged")
@@ -374,41 +373,19 @@ func schemaAnalyzer(name string) (diff.Analyzer, error) {
 }
 
 func runPlan(args []string) error {
-	if len(args) > 0 && args[0] == "check" {
-		return runChangePlanCheck(args[1:])
-	}
-	if len(args) > 0 && args[0] == "create" {
-		return runChangePlanCreate(args[1:])
-	}
 	flags := newFlagSet("plan")
 	directory := addUniqueStringFlag(flags, "dir", "directory that holds migration directories")
-	file := addUniqueStringFlag(flags, "file", "serialized migration plan file")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if len(flags.Args()) != 0 {
 		return errors.New("plan accepts no positional arguments")
 	}
-	if directory.set == file.set {
-		return errors.New("plan requires exactly one of -dir and -file")
+	if !directory.set {
+		return errors.New("plan requires -dir")
 	}
-	if directory.set && directory.value == "" {
+	if directory.value == "" {
 		return errors.New("plan -dir must not be empty")
-	}
-	if file.set && file.value == "" {
-		return errors.New("plan -file must not be empty")
-	}
-	if file.set {
-		plan, err := changeplan.Read(file.value)
-		if err != nil {
-			return fmt.Errorf("read migration plan: %w", err)
-		}
-		output, err := formatChangePlan(plan)
-		if err != nil {
-			return err
-		}
-		_, _ = commandOutput.Write(output)
-		return nil
 	}
 	migrations, err := migrationdir.Load(directory.value)
 	if err != nil {
@@ -421,7 +398,6 @@ func runPlan(args []string) error {
 func runApply(args []string) error {
 	flags := newFlagSet("apply")
 	directory := addUniqueStringFlag(flags, "dir", "directory that holds migration directories")
-	planFile := addUniqueStringFlag(flags, "plan", "serialized migration plan file")
 	dialectName := flags.String("dialect", "", "postgresql, mysql, or sqlite")
 	dsn := flags.String("dsn", "", "database connection string")
 	historyTable := flags.String("history-table", "", "migration history table name")
@@ -433,26 +409,11 @@ func runApply(args []string) error {
 	if len(flags.Args()) != 0 {
 		return errors.New("apply accepts no positional arguments")
 	}
-	if directory.set == planFile.set {
-		return errors.New("apply requires exactly one of -dir and -plan")
+	if !directory.set {
+		return errors.New("apply requires -dir")
 	}
-	if directory.set && directory.value == "" {
+	if directory.value == "" {
 		return errors.New("apply -dir must not be empty")
-	}
-	if planFile.set && planFile.value == "" {
-		return errors.New("apply -plan must not be empty")
-	}
-	if planFile.set {
-		var directoryOnly string
-		flags.Visit(func(flagValue *flag.Flag) {
-			if flagValue.Name == "to" || flagValue.Name == "dry-run" {
-				directoryOnly = flagValue.Name
-			}
-		})
-		if directoryOnly != "" {
-			return fmt.Errorf("apply -%s is valid only with -dir", directoryOnly)
-		}
-		return runChangePlanApply(planFile.value, *dialectName, *dsn, *historyTable)
 	}
 	target := migrate.AllPending()
 	if *through != "" {
@@ -740,6 +701,33 @@ func newFlagSet(name string) *flag.FlagSet {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
 	flags.SetOutput(commandDiagnostics)
 	return flags
+}
+
+// uniqueStringFlag is a string flag that refuses a second occurrence of itself
+// rather than letting the later value win. apply and revert write to a
+// database, and a run that silently took the second of two -dir values would
+// be discovered only after the wrong directory had been applied. It also
+// records whether the flag was given at all, which an empty string cannot.
+type uniqueStringFlag struct {
+	name  string
+	value string
+	set   bool
+}
+
+func (f *uniqueStringFlag) String() string { return f.value }
+func (f *uniqueStringFlag) Set(value string) error {
+	if f.set {
+		return fmt.Errorf("-%s provided more than once", f.name)
+	}
+	f.set = true
+	f.value = value
+	return nil
+}
+
+func addUniqueStringFlag(flags *flag.FlagSet, name, usage string) *uniqueStringFlag {
+	value := &uniqueStringFlag{name: name}
+	flags.Var(value, name, usage)
+	return value
 }
 
 type resolutionFlagValue struct {
