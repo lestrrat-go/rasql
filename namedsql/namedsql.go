@@ -15,7 +15,6 @@ import (
 	"strings"
 
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/querydescribe"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/lestrrat-go/rasql/sqltext"
 	"github.com/lestrrat-go/rasql/stmt"
@@ -231,81 +230,17 @@ type QueryDef struct {
 	// passes one argument per placeholder.
 	Parameters []string
 	// Binds describes each distinct parameter once, in first-use order.
-	Binds      []BindDef
-	Result     *querydescribe.Description
-	ResultType string
-}
-
-// WithBindings returns a copy with explicit Go parameter bindings overlaid by
-// name. Each key must identify one distinct bind in the query.
-func (d QueryDef) WithBindings(bindings map[string]ParameterBinding) (QueryDef, error) {
-	clone := d.clone()
-	for name, binding := range bindings {
-		matches := 0
-		for index := range clone.Binds {
-			if clone.Binds[index].Name != name {
-				continue
-			}
-			matches++
-		}
-		if matches != 1 {
-			if matches == 0 {
-				return QueryDef{}, fmt.Errorf("namedsql %q: binding %q does not name a query parameter", d.Name, name)
-			}
-			return QueryDef{}, fmt.Errorf("namedsql %q: binding %q names multiple query parameters", d.Name, name)
-		}
-		for index := range clone.Binds {
-			if clone.Binds[index].Name == name {
-				value := binding
-				value.Go = *binding.Go.Clone()
-				clone.Binds[index].Binding = &value
-				break
-			}
-		}
-	}
-	return clone, nil
-}
-
-func (d QueryDef) clone() QueryDef {
-	clone := d
-	clone.Parameters = append([]string(nil), d.Parameters...)
-	clone.Binds = make([]BindDef, len(d.Binds))
-	for index, bind := range d.Binds {
-		clone.Binds[index] = bind
-		if bind.Binding != nil {
-			value := *bind.Binding
-			value.Go = *bind.Binding.Go.Clone()
-			clone.Binds[index].Binding = &value
-		}
-	}
-	if d.Result != nil {
-		result := *d.Result
-		result.Columns = append([]querydescribe.Column(nil), d.Result.Columns...)
-		for index := range result.Columns {
-			result.Columns[index].Binding.Imports = append([]schema.GoImport(nil), result.Columns[index].Binding.Imports...)
-		}
-		clone.Result = &result
-	}
-	return clone
-}
-
-// ParameterBinding overrides the generated Go type for one static-query
-// parameter. Nullable selects Go.NullableType when it is set.
-type ParameterBinding struct {
-	Go       schema.GoBinding
-	Nullable bool
+	Binds []BindDef
 }
 
 // BindDef is one distinct parameter of a query, and the column it names.
 // Table and Column are empty when the bind named no column. Schema is empty
-// unless the reference was written schema-qualified. Binding can override
-// the generated Go type for this parameter.
+// unless the reference was written schema-qualified.
 type BindDef struct {
-	Name    string
-	Schema  string
-	Table   string
-	Column  string
-	Binding *ParameterBinding `json:",omitempty"`
+	Name   string
+	Schema string
+	Table  string
+	Column string
 }
 
 // QueryDef returns a description of this compiled query for a code

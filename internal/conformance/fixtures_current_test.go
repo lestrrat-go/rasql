@@ -82,13 +82,9 @@ func checkOrUpdateFixture(t *testing.T, engine, dsn string, scratch bool) {
 //
 // T10's own live tests reach around that same staleness with stdlib.RegisterConnConfig, which
 // hands database/sql an opaque key that only the stdlib driver's own Open resolves back to the
-// live config. That key does not survive here: this fixture declares queries, so
-// prepareLiveGeneration builds a compilerquery.Analyzer, and querydescribe.NewPostgreSQL's
-// describer opens its own connection with pgx.Connect(ctx, dsn) directly, bypassing database/sql
-// and its driver registry entirely -- pgx.ParseConfig then rejects the registration key as
-// unparseable. T10's fixtures never declare a query, so its tests never took this path and never
-// hit the conflict between the two fixes decision 13 names. A real connection string sidesteps
-// both problems at once.
+// live config. That key would work here too, now that generation reaches PostgreSQL only through
+// database/sql; a literal connection string is kept because it is also what a reader can paste
+// into psql when a fixture run fails.
 func postgresFixtureDSN(t *testing.T) string {
 	t.Helper()
 	db := dbtest.PostgreSQLDB(t)

@@ -106,42 +106,22 @@ bases, and per-column fields and accessors. These names affect Go output only, a
 SQL descriptors keep the exact physical names.
 
 `queries` compiles static SQL templates into generated functions beside the
-table code. Each entry names the `function` to generate and states its
-template in exactly one of two places. Naming an `input` file, resolved
-against the same root, keeps the template in a file an editor, a formatter and
-a query runner all read as SQL, and holds a multi-line statement as the lines
-it was written as. Writing the template into `sql` instead keeps a short query
-in the settings file, at the cost of escaping the quotes each `{{bind "name"}}`
-action needs. Stating both is refused rather than resolved by precedence.
+table code. Each entry names the `function` to generate and the `input` file
+holding its template, resolved against the same root. A file keeps the template
+where an editor, a formatter and a query runner all read it as SQL, and holds a
+multi-line statement as the lines it was written as.
 
 An entry may also name the `output` file. Leaving that out derives it from the
-input, so `queries/user_by_email.sql` becomes `user_by_email_gen.go`, and
-derives it from the function for an entry stating `sql`, so `CountUsers`
-becomes `count_users_gen.go`.
+input, so `queries/user_by_email.sql` becomes `user_by_email_gen.go`.
 
-A `{{bind "name"}}` action may also name a column, as `{{bind "name"
-users.email}}`: the generated parameter's Go type then comes from that
-column's descriptor instead of `any`. The table must be one this run
-generates, so a `tables.include` or `tables.exclude` that leaves it out makes
-the reference an error rather than an untyped parameter.
+A `{{bind "name"}}` action may also name the column the parameter stands for,
+as `{{bind "name" users.email}}`, which records that pairing in the SQL file
+for a reader. The generated parameter's Go type comes from the entry's own
+`scalar` declaration instead, and nothing checks the reference against the
+database, so a reference naming a table this run does not generate is accepted.
 
-Query entries can set `bindings` by parameter name when a standalone bind
-needs an explicit Go type:
-
-```json
-"bindings": {
-  "limit": {"Go": {"Type": "int"}}
-}
-```
-
-An explicit binding overrides the generated application type while a stated
-column reference still has to resolve. Set `Nullable` to `true` to select the
-binding's `NullableType`; an unconfigured nullable column uses its nullable
-form automatically. An unconfigured standalone bind generates `any`.
-
-A template held in `input` is read again before the run writes anything, so an
-edit made while a run was in flight is caught rather than committed around. A
-template held in `sql` is already in hand, so nothing has to be re-read.
+Each run reads the template again before it writes anything, so an edit made
+while a run was in flight is caught rather than committed around.
 
 `prune` lets a run delete a generated file it no longer writes, such as the
 per-table file of a dropped table. Setting it to `false` refuses the run and

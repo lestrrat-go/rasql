@@ -15,8 +15,9 @@ WHERE status = {{bind "status"}}
 ORDER BY id
 ```
 
-`{{bind "name"}}` declares a named argument. The optional table and column reference records type evidence for the
-compiler. Template actions cannot execute Go code or interpolate SQL fragments.
+`{{bind "name"}}` declares a named argument. The optional table and column reference records which column the argument
+stands for, for a reader of the SQL; the generated parameter's Go type comes from the query entry's own `scalar`
+declaration. Template actions cannot execute Go code or interpolate SQL fragments.
 
 Compilation chooses placeholders for the target dialect and returns SQL text plus ordered bind metadata. Repeated names
 remain repeated placeholders with one caller-visible argument identity.
