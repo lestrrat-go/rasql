@@ -48,7 +48,6 @@ type AnalysisRequest struct {
 	DB      *sql.DB
 	DSN     string
 	Profile engineprofile.Profile
-	Catalog compilerir.PhysicalCatalog
 }
 type AnalysisResult struct {
 	Queries   []compilerir.QueryAnalysis

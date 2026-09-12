@@ -179,7 +179,7 @@ func Read(ctx context.Context, req ReadRequest, deps Dependencies) (ReadResult, 
 
 		analysis := AnalysisResult{}
 		if deps.Analyzer != nil {
-			analysis, err = deps.Analyzer.Analyze(ctx, AnalysisRequest{DB: db, DSN: connectionDSN, Profile: profile, Catalog: catalog.Clone()})
+			analysis, err = deps.Analyzer.Analyze(ctx, AnalysisRequest{DB: db, DSN: connectionDSN, Profile: profile})
 			if err != nil {
 				return err
 			}

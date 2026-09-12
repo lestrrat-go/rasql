@@ -108,12 +108,9 @@ func TestTaskboardOfflineCheckAndDrift(t *testing.T) {
 // integration job does. This is a claim about what a live server reports, so it is guarded by
 // internal/dbtest per CLAUDE.md rather than resting on the offline test above.
 //
-// rasql.json declares a typed query, so check -dsn opens a second connection of its own through
-// querydescribe.NewPostgreSQL to describe it, using pgx.Connect on the literal DSN string rather
-// than the *sql.DB check's other steps share -- stdlib.RegisterConnConfig's key is invisible to
-// that connector, so this builds a real postgres:// URL from the fields dbtest resolved instead of
-// trusting pgx.ConnConfig.ConnString(), which the campaign's decision 13 warns still names the
-// shared bootstrap database after PostgreSQLConfig repoints .Database at a fresh one.
+// check -dsn reaches the server only through database/sql, so this builds a real postgres:// URL
+// from the fields dbtest resolved rather than trusting pgx.ConnConfig.ConnString(), which still
+// names the shared bootstrap database after PostgreSQLConfig repoints .Database at a fresh one.
 func TestTaskboardLiveCheckMatchesGeneratedStore(t *testing.T) {
 	repoRoot, err := filepath.Abs("..")
 	require.NoError(t, err)

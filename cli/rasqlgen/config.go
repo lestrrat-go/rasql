@@ -15,7 +15,6 @@ import (
 	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/compilerquery"
 	"github.com/lestrrat-go/rasql/internal/modroot"
-	"github.com/lestrrat-go/rasql/namedsql"
 	"github.com/lestrrat-go/rasql/schema"
 )
 
@@ -148,12 +147,10 @@ func (c config) names() (map[schema.ObjectName]configObjectNames, error) {
 
 // configQuery is one static SQL template compiled into a generated function.
 //
-// The template lives either in its own file, named by Input, or in this file,
-// written into SQL. A file keeps SQL in a file an editor, a formatter and a
-// query runner all recognize as SQL, which a JSON string is not, and it holds
-// a multi-line statement as the lines it was written as. Writing the template
-// here keeps a one-line query in one place, at the cost of escaping every
-// quote the {{bind "name"}} action needs.
+// The template lives in its own file, named by Input. A file keeps SQL in a
+// file an editor, a formatter and a query runner all recognize as SQL, which a
+// JSON string is not, and it holds a multi-line statement as the lines it was
+// written as.
 type configQuery struct {
 	ID          compilerir.QueryID               `json:"id"`
 	Engine      string                           `json:"engine"`
@@ -161,15 +158,9 @@ type configQuery struct {
 	Cardinality string                           `json:"cardinality"`
 	Parameters  []compilerquery.ValueDeclaration `json:"parameters"`
 	Results     []compilerquery.ValueDeclaration `json:"results"`
-	// Bindings configures explicit Go types for static-query parameters.
-	Bindings map[string]namedsql.ParameterBinding `json:"bindings"`
 
 	// Input is the template file, resolved against Root when relative.
-	// State exactly one of Input and SQL.
 	Input string `json:"input"`
-
-	// SQL is the template itself. State exactly one of Input and SQL.
-	SQL string `json:"sql"`
 
 	// Function is the generated function name, which must be exported.
 	Function string `json:"function"`
@@ -177,8 +168,7 @@ type configQuery struct {
 	// Output is the file the function is generated into, a file name
 	// directly inside the generated package's directory. Empty derives it
 	// from Input's base name, so queries/user_by_email.sql becomes
-	// user_by_email_gen.go, and from Function for a query stating SQL, so
-	// UserByEmail becomes user_by_email_gen.go as well.
+	// user_by_email_gen.go.
 	Output string `json:"output"`
 }
 

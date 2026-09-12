@@ -5,34 +5,24 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"reflect"
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
-	"github.com/lestrrat-go/rasql/internal/queryevidence"
 	"github.com/lestrrat-go/rasql/internal/schemasource"
 	"github.com/lestrrat-go/rasql/internal/sourcefile"
 	"github.com/lestrrat-go/rasql/namedsql"
 )
 
-type DescribeRequest = queryevidence.DescribeRequest
-type TypeEvidence = queryevidence.TypeEvidence
-type ValueEvidence = queryevidence.ValueEvidence
-type Description = queryevidence.Description
-type Describer = queryevidence.Describer
-type Describers = queryevidence.Describers
-
 type analyzer struct {
-	config     Config
-	describers Describers
+	config Config
 }
 
-func NewAnalyzer(config Config, describers Describers) (schemasource.Analyzer, error) {
+func NewAnalyzer(config Config) (schemasource.Analyzer, error) {
 	if config.ModuleRoot == "" {
 		return nil, fmt.Errorf("compilerquery: module root is required")
 	}
-	return analyzer{config: cloneConfig(config), describers: describers}, nil
+	return analyzer{config: cloneConfig(config)}, nil
 }
 
 func (a analyzer) Analyze(ctx context.Context, request schemasource.AnalysisRequest) (schemasource.AnalysisResult, error) {
@@ -71,58 +61,24 @@ func (a analyzer) Analyze(ctx context.Context, request schemasource.AnalysisRequ
 		if err := validateCardinality(query, classification, request.Profile); err != nil {
 			return schemasource.AnalysisResult{}, err
 		}
-		if request.Profile.Engine != engineprofile.PostgreSQL {
-			for _, value := range append(append([]ValueDeclaration(nil), query.Parameters...), query.Results...) {
-				if value.Scalar == "" {
-					return schemasource.AnalysisResult{}, fmt.Errorf("query %q value %q requires a scalar declaration", query.ID, value.Name)
-				}
+		for _, value := range append(append([]ValueDeclaration(nil), query.Parameters...), query.Results...) {
+			if value.Scalar == "" {
+				return schemasource.AnalysisResult{}, fmt.Errorf("query %q value %q requires a scalar declaration", query.ID, value.Name)
 			}
 		}
-		describer := a.describer(request.Profile.Engine)
-		if describer == nil {
-			return schemasource.AnalysisResult{}, fmt.Errorf("query %q: no describer for %s", query.ID, engine.Dialect)
-		}
-		description, err := describer.Describe(ctx, DescribeRequest{Name: string(query.ID), Engine: engine, Operation: classification.Operation, SQL: loweredSQL, ParameterNames: parameterNames, DB: request.DB, DSN: request.DSN})
-		if err != nil {
+		if err := checkSQLPrepares(ctx, request.DB, loweredSQL); err != nil {
 			return schemasource.AnalysisResult{}, err
 		}
 		if err := compareParameterNames(query.Parameters, parameterNames); err != nil {
 			return schemasource.AnalysisResult{}, fmt.Errorf("query %q parameters: %w", query.ID, err)
 		}
-		var parameters, results []compilerir.SemanticValue
-		if description.DeclaredOnly {
-			if len(description.Parameters) != 0 || len(description.Results) != 0 {
-				return schemasource.AnalysisResult{}, fmt.Errorf("query %q: declared-only description includes observations", query.ID)
-			}
-			parameters, err = declaredValues(query.Parameters, a.config.Mappings)
-			if err != nil {
-				return schemasource.AnalysisResult{}, fmt.Errorf("query %q parameters: %w", query.ID, err)
-			}
-			results, err = declaredValues(query.Results, a.config.Mappings)
-			if err != nil {
-				return schemasource.AnalysisResult{}, fmt.Errorf("query %q results: %w", query.ID, err)
-			}
-		} else {
-			parameters, err = mergeValues(query.Parameters, description.Parameters, parameterNames, a.config.Mappings)
-			if err != nil {
-				return schemasource.AnalysisResult{}, fmt.Errorf("query %q parameters: %w", query.ID, err)
-			}
-			results, err = mergeValues(query.Results, description.Results, nil, a.config.Mappings)
-			if err != nil {
-				return schemasource.AnalysisResult{}, fmt.Errorf("query %q results: %w", query.ID, err)
-			}
+		parameters, err := declaredValues(query.Parameters, a.config.Mappings)
+		if err != nil {
+			return schemasource.AnalysisResult{}, fmt.Errorf("query %q parameters: %w", query.ID, err)
 		}
-		if request.Profile.Engine == engineprofile.PostgreSQL {
-			for i, value := range query.Parameters {
-				if value.Scalar == "" && (i >= len(parameters) || parameters[i].LogicalKind == "" || parameters[i].TypeCertainty == compilerir.CertaintyUnknown) {
-					return schemasource.AnalysisResult{}, fmt.Errorf("query %q parameter %q has unresolved type", query.ID, value.Name)
-				}
-			}
-			for i, value := range query.Results {
-				if value.Scalar == "" && (i >= len(results) || results[i].LogicalKind == "" || results[i].TypeCertainty == compilerir.CertaintyUnknown) {
-					return schemasource.AnalysisResult{}, fmt.Errorf("query %q result %q has unresolved type", query.ID, value.Name)
-				}
-			}
+		results, err := declaredValues(query.Results, a.config.Mappings)
+		if err != nil {
+			return schemasource.AnalysisResult{}, fmt.Errorf("query %q results: %w", query.ID, err)
 		}
 		digest := sha256.Sum256(snapshot.Bytes())
 		queries = append(queries, compilerir.QueryAnalysis{ID: query.ID, Name: query.Function, SQLPath: snapshot.Path(), SQLSHA256: hex.EncodeToString(digest[:]), Engine: engine, Operation: classification.Operation, Parameters: parameters, Results: results, Cardinality: query.Cardinality})
@@ -148,24 +104,12 @@ func declaredValues(declarations []ValueDeclaration, mappings compilerir.Mapping
 	return values, nil
 }
 
-func Analyze(ctx context.Context, request schemasource.AnalysisRequest, config Config, describers Describers) (schemasource.AnalysisResult, error) {
-	a, err := NewAnalyzer(config, describers)
+func Analyze(ctx context.Context, request schemasource.AnalysisRequest, config Config) (schemasource.AnalysisResult, error) {
+	a, err := NewAnalyzer(config)
 	if err != nil {
 		return schemasource.AnalysisResult{}, err
 	}
 	return a.Analyze(ctx, request)
-}
-
-func (a analyzer) describer(engine engineprofile.EngineID) Describer {
-	switch engine {
-	case engineprofile.PostgreSQL:
-		return a.describers.PostgreSQL
-	case engineprofile.MySQL:
-		return a.describers.MySQL
-	case engineprofile.SQLite:
-		return a.describers.SQLite
-	}
-	return nil
 }
 
 func engineName(engine engineprofile.EngineID) string {
@@ -213,109 +157,6 @@ func validateCardinality(q QueryConfig, c Classification, p engineprofile.Profil
 		return fmt.Errorf("query %q: MySQL does not support returning", q.ID)
 	}
 	return nil
-}
-
-func mergeValues(declarations []ValueDeclaration, observed []ValueEvidence, names []string, mappings compilerir.MappingConfig) ([]compilerir.SemanticValue, error) {
-	if len(names) != 0 {
-		if len(observed) != len(names) {
-			return nil, fmt.Errorf("observed occurrence count %d differs from lowered count %d", len(observed), len(names))
-		}
-		collapsed := make([]ValueEvidence, 0, len(declarations))
-		seen := map[string]struct{}{}
-		for i, name := range names {
-			if i >= len(observed) {
-				break
-			}
-			fact := observed[i]
-			fact.Name = name
-			if _, ok := seen[name]; ok {
-				for _, prior := range collapsed {
-					if prior.Name == name && (!sameTypeEvidence(prior.Type, fact.Type) || !sameNullable(prior.Nullable, fact.Nullable)) {
-						return nil, fmt.Errorf("repeated parameter %q has conflicting evidence", name)
-					}
-				}
-				continue
-			}
-			seen[name] = struct{}{}
-			collapsed = append(collapsed, fact)
-		}
-		observed = collapsed
-	}
-	if len(declarations) != len(observed) {
-		return nil, fmt.Errorf("declaration count %d differs from observed count %d", len(declarations), len(observed))
-	}
-	if len(declarations) == 0 && len(observed) == 0 {
-		return nil, nil
-	}
-	values := make([]compilerir.SemanticValue, len(declarations))
-	for i, declaration := range declarations {
-		fact := ValueEvidence{Name: declaration.Name, Type: TypeEvidence{Certainty: compilerir.CertaintyDeclared}}
-		if i < len(observed) {
-			fact = observed[i]
-		}
-		if declaration.Name != fact.Name && fact.Name != "" {
-			return nil, fmt.Errorf("value %d name %q differs from %q", i, fact.Name, declaration.Name)
-		}
-		mappedScalar, mapped := compilerir.ResolveQueryScalar(fact.Type.LogicalKind, fact.Type.Native, fact.Type.Integer, mappings)
-		if declaration.Scalar != "" && mapped && declaration.Scalar != mappedScalar {
-			return nil, fmt.Errorf("value %q type %q conflicts with %q", declaration.Name, mappedScalar, declaration.Scalar)
-		}
-		nullable := false
-		if declaration.Nullable != nil {
-			nullable = *declaration.Nullable
-		}
-		if fact.Nullable != nil && declaration.Nullable != nil && *fact.Nullable != *declaration.Nullable {
-			return nil, fmt.Errorf("value %q nullability conflicts", declaration.Name)
-		}
-		scalar := declaration.Scalar
-		if scalar == "" {
-			scalar = mappedScalar
-			if scalar == "" {
-				scalar = fact.Type.LogicalKind
-			}
-		}
-		if scalar == "" {
-			return nil, fmt.Errorf("value %q has no scalar", declaration.Name)
-		}
-		typeCertainty := fact.Type.Certainty
-		if typeCertainty == compilerir.CertaintyUnknown && scalar != "" {
-			typeCertainty = compilerir.CertaintyDeclared
-		}
-		nullabilityCertainty := compilerir.CertaintyDeclared
-		if fact.Nullable != nil {
-			nullabilityCertainty = compilerir.CertaintyKnown
-		}
-		values[i] = compilerir.SemanticValue{Name: declaration.Name, Scalar: scalar, Nullable: nullable, TypeCertainty: typeCertainty, NullabilityCertainty: nullabilityCertainty, LogicalKind: fact.Type.LogicalKind, Native: cloneNative(fact.Type.Native), Integer: cloneInteger(fact.Type.Integer)}
-	}
-	return values, nil
-}
-
-func sameTypeEvidence(a, b TypeEvidence) bool {
-	return a.LogicalKind == b.LogicalKind && a.Certainty == b.Certainty && reflect.DeepEqual(a.Native, b.Native) && reflect.DeepEqual(a.Integer, b.Integer)
-}
-
-func sameNullable(a, b *bool) bool {
-	if a == nil || b == nil {
-		return a == nil && b == nil
-	}
-	return *a == *b
-}
-
-func cloneNative(in *compilerir.NativeType) *compilerir.NativeType {
-	if in == nil {
-		return nil
-	}
-	out := *in
-	out.Arguments = append([]string(nil), in.Arguments...)
-	out.Element = cloneNative(in.Element)
-	return &out
-}
-func cloneInteger(in *compilerir.IntegerTypeFacts) *compilerir.IntegerTypeFacts {
-	if in == nil {
-		return nil
-	}
-	out := *in
-	return &out
 }
 
 func compareParameterNames(declarations []ValueDeclaration, names []string) error {

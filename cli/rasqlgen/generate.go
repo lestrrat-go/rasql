@@ -27,12 +27,12 @@ import (
 	"github.com/lestrrat-go/rasql/internal/sourcefile"
 	"github.com/lestrrat-go/rasql/migrate"
 	"github.com/lestrrat-go/rasql/namedsql"
-	"github.com/lestrrat-go/rasql/querydescribe"
 	"github.com/lestrrat-go/rasql/schema"
 )
 
 // defaultGenerateTimeout bounds a live generate or check: opening the database, applying or
-// checking migrations, reading the catalog, describing every query, and publishing the result.
+// checking migrations, reading the catalog, checking every query against the server, and
+// publishing the result.
 const defaultGenerateTimeout = 30 * time.Second
 
 // runGenerate renders the store package by reading a live database, named by -dsn or built as a
@@ -113,7 +113,7 @@ type liveGeneration struct {
 
 // prepareLiveGeneration is steps 1 through 7 of design section 4.1, shared by generate and check:
 // load the config's paths, open or build the database, discover the profile, apply or check any
-// configured migration directory, read the catalog, describe every query, and render the store.
+// configured migration directory, read the catalog, analyze every query, and render the store.
 // Nothing is written; the caller decides whether to commit the plan or merely check it.
 func (c command) prepareLiveGeneration(ctx context.Context, configPath string, cfg config, dsn string, scratch bool) (liveGeneration, error) {
 	if cfg.Dialect == "" {
@@ -157,7 +157,7 @@ func (c command) prepareLiveGeneration(ctx context.Context, configPath string, c
 		if qErr != nil {
 			return liveGeneration{}, qErr
 		}
-		analyzer, aErr := compilerquery.NewAnalyzer(queryConfig, compilerquery.Describers{PostgreSQL: querydescribe.NewPostgreSQL(), MySQL: querydescribe.NewMySQL(nil), SQLite: querydescribe.NewSQLitePrepare(nil)})
+		analyzer, aErr := compilerquery.NewAnalyzer(queryConfig)
 		if aErr != nil {
 			return liveGeneration{}, aErr
 		}
