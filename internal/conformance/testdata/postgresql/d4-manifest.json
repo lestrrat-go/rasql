@@ -8,7 +8,7 @@
   "profile": "postgresql-17",
   "observed_server_version": "17.10.0",
   "generated_files": 9,
-  "generated_bytes": 56416,
+  "generated_bytes": 56128,
   "compile_render": {
     "postgresql-17": {
       "digest": "bff890d3491762b844da907093cc2219b94d8b589447b0891481b6f4ff45ec56",

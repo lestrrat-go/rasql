@@ -46,7 +46,7 @@ func (overdue_countDecoder) DecodeRow(s rasql.ScanSource, r *overdue_countResult
 
 func overdue_countDecoderSchema() rasql.ResultSchema {
 	s, _ := rasql.NewResultSchema(
-		rasql.ResultColumn{Name: "overdue", Type: schema.IntegerType{Unsigned: false, ZeroFill: false}, Nullable: false, Codec: ""},
+		rasql.ResultColumn{Name: "overdue", Type: schema.IntegerType{}, Nullable: false, Codec: ""},
 	)
 	return s
 }

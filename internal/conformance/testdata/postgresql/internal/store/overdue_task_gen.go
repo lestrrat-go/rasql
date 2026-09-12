@@ -74,9 +74,9 @@ func (overdue_taskDecoder) DecodeRow(s rasql.ScanSource, r *overdue_taskResult) 
 
 func overdue_taskDecoderSchema() rasql.ResultSchema {
 	s, _ := rasql.NewResultSchema(
-		rasql.ResultColumn{Name: "id", Type: schema.IntegerType{Unsigned: false, ZeroFill: false}, Nullable: false, Codec: ""},
-		rasql.ResultColumn{Name: "project_id", Type: schema.IntegerType{Unsigned: false, ZeroFill: false}, Nullable: false, Codec: ""},
-		rasql.ResultColumn{Name: "assignee_id", Type: schema.IntegerType{Unsigned: false, ZeroFill: false}, Nullable: true, Codec: ""},
+		rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}, Nullable: false, Codec: ""},
+		rasql.ResultColumn{Name: "project_id", Type: schema.IntegerType{}, Nullable: false, Codec: ""},
+		rasql.ResultColumn{Name: "assignee_id", Type: schema.IntegerType{}, Nullable: true, Codec: ""},
 		rasql.ResultColumn{Name: "title", Type: schema.TextType{}, Nullable: false, Codec: ""},
 		rasql.ResultColumn{Name: "is_open", Type: schema.BooleanType{}, Nullable: false, Codec: ""},
 		rasql.ResultColumn{Name: "due_on", Type: schema.TimeType{}, Nullable: true, Codec: ""},
