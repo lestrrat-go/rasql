@@ -220,49 +220,7 @@ rasql migrate verify \
 
 `status` reports `applied`, `pending`, `changed`, `out_of_order`, `unknown`, and `incomplete` migrations, and prints `irreversible` beside any migration that has no `.down.sql` sources, so a rollback can be planned before it is attempted. `verify` succeeds only when every supplied migration is `applied`; whether a migration can be reverted is a separate question from whether it is applied, so `verify` does not report it and a caller checks `status` instead. The command redacts the exact DSN from returned errors. Pass `-history-table` to each database command when the default `rasql_schema_migrations` table name conflicts with an existing application table.
 
-### Apply a reviewed migration plan
-
-`rasql migrate apply` reads a migration directory unless a plan file says otherwise. A serialized migration plan v1 is an optional reviewed artifact that
-binds its operations to an exact engine profile, history identity, starting catalog, facts, and checkpoints.
-
-`plan create` reads its baseline catalog from `-dsn` itself, before running anything, and then runs every migration
-in `-dir` that `-dsn`'s migration history has not yet recorded, producing a reviewable plan file without writing Go
-against `changeplan`. It runs those migrations for real: it does not roll the statements back, since MySQL commits
-DDL immediately regardless of a surrounding transaction. Point `-dsn` at a database you are prepared to have changed,
-and apply the finished plan to its real target separately through `apply -plan`. `plan create` refuses to run when
-`-output` already names an existing file, so a plan a reviewer already has open is never silently replaced.
-
-Inspect a plan without opening a database, check it against a live database without changing schema or metadata, then
-apply it:
-
-```sh
-rasql migrate plan create \
-  -dir db/migrations \
-  -dialect sqlite \
-  -dsn "$DATABASE_URL" \
-  -output db/plans/add-user-nickname.json
-
-rasql migrate plan -file db/plans/add-user-nickname.json
-
-rasql migrate plan check \
-  -file db/plans/add-user-nickname.json \
-  -dialect sqlite \
-  -dsn "$DATABASE_URL"
-
-rasql migrate apply \
-  -plan db/plans/add-user-nickname.json \
-  -dialect sqlite \
-  -dsn "$DATABASE_URL"
-```
-
-`plan check` is read-only. It runs no plan SQL and creates no history or progress table. `apply -plan` validates the
-live engine profile, history identity, stored checkpoint, complete catalog digest, and operation facts before it
-continues. It records progress in the plan checkpoint table and never records the plan ID in directory migration
-history. Pass the same `-history-table` used when the plan was created when it differs from the default.
-
-`-to` and `-dry-run` apply only to directory migrations. A typed reconciliation error blocks replay when the database
-state cannot prove whether a nontransactional operation completed. Review and resolve that state before retrying.
-Changing any checked plan content changes its plan ID, so publish and review a new artifact after every change.
+### Reconcile an interrupted migration
 
 If MySQL stops during a migration, `status` shows the source and direction that need review. Use a read-only query returning one non-NULL boolean to reconcile it after checking the database:
 

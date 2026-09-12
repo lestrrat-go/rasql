@@ -574,6 +574,44 @@ func TestRunPlanPrintsSQLSources(t *testing.T) {
 	require.Equal(t, "-- 001_create_users/001_create_users.up.sql\nCREATE TABLE \"users\" (\"id\" INTEGER PRIMARY KEY);\n\n-- 001_create_users/002_users_email_index.up.sql\nCREATE INDEX \"users_email_idx\" ON \"users\" (\"email\");\n", outputBuffer.String())
 }
 
+// TestRunPlanAndApplyRefuseARepeatedDirectoryFlag pins the refusal
+// addUniqueStringFlag exists for. apply writes to a database, so a second -dir
+// must stop the run rather than quietly winning over the first.
+func TestRunPlanAndApplyRefuseARepeatedDirectoryFlag(t *testing.T) {
+	setCommandOutput(t)
+	require.ErrorContains(t, run([]string{"plan", "-dir", "first", "-dir", "second"}), "-dir provided more than once")
+	require.ErrorContains(t, run([]string{"apply", "-dir", "first", "-dir", "second"}), "-dir provided more than once")
+}
+
+// TestRunPlanAndApplySelectorFlags covers how the two commands that used to
+// take a change-plan file read -dir now. The removed selectors are undefined
+// flags, and "plan create" and "plan check" are positional arguments neither
+// command accepts.
+func TestRunPlanAndApplySelectorFlags(t *testing.T) {
+	setCommandOutput(t)
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "plan missing", args: []string{"plan"}, want: "plan requires -dir"},
+		{name: "plan empty dir", args: []string{"plan", "-dir="}, want: "plan -dir must not be empty"},
+		{name: "plan positional", args: []string{"plan", "-dir", "migrations", "extra"}, want: "plan accepts no positional arguments"},
+		{name: "plan rejects file", args: []string{"plan", "-file", "plan.json"}, want: "flag provided but not defined: -file"},
+		{name: "plan rejects create", args: []string{"plan", "create"}, want: "plan accepts no positional arguments"},
+		{name: "plan rejects check", args: []string{"plan", "check", "-file", "plan.json"}, want: "plan accepts no positional arguments"},
+		{name: "apply missing", args: []string{"apply"}, want: "apply requires -dir"},
+		{name: "apply empty dir", args: []string{"apply", "-dir="}, want: "apply -dir must not be empty"},
+		{name: "apply positional", args: []string{"apply", "-dir", "migrations", "extra"}, want: "apply accepts no positional arguments"},
+		{name: "apply rejects plan", args: []string{"apply", "-plan", "plan.json"}, want: "flag provided but not defined: -plan"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.ErrorContains(t, run(test.args), test.want)
+		})
+	}
+}
+
 func TestRunApplyStatusAndVerifySQLiteSQLSources(t *testing.T) {
 	directory := newTestDirectory(t)
 	writeTestMigration(t, directory, "001_create_users")
