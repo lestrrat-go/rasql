@@ -284,6 +284,58 @@ func TestScopeCapabilities(t *testing.T) {
 		require.NoError(t, finalizer.Rollback(t.Context()))
 	})
 
+	// WithEventObservers hands the executor back untouched when no observer is
+	// given, so the subtest above reads capabilities off an executor that was
+	// never wrapped. This one supplies an observer, which is what builds the
+	// observed wrapper, and then reads the same capabilities back through it.
+	t.Run("an observed executor reports only the capabilities its base carries", func(t *testing.T) {
+		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+		require.NoError(t, err)
+		handler := rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {})
+		observer := rasql.EventObserverFunc(func(ctx context.Context, event rasql.Event) (context.Context, rasql.EventCompletion) { return ctx, nil })
+		registry := mustEmptyRegistry(t)
+
+		plain, err := rasql.WithEventObservers(capabilityTestExecutor{}, handler, observer)
+		require.NoError(t, err)
+		assertScopeCapabilities(t, plain, false, false, rasql.Q1DurabilityUnknown)
+		_, hasCodecs := plain.(rasql.CodecProvider)
+		require.False(t, hasCodecs)
+		require.Nil(t, rasql.Q1QueryCompilerOf(plain))
+
+		scoped, err := rasql.WithEventObservers(capabilityScopedExecutor{}, handler, observer)
+		require.NoError(t, err)
+		assertScopeCapabilities(t, scoped, true, true, rasql.Q1DurabilityUnknown)
+		_, hasCodecs = scoped.(rasql.CodecProvider)
+		require.False(t, hasCodecs)
+		require.Nil(t, rasql.Q1QueryCompilerOf(scoped))
+
+		profiled, err := rasql.WithEngineProfile(capabilityScopedExecutor{}, profile)
+		require.NoError(t, err)
+		enriched, err := rasql.WithCodecs(profiled, registry)
+		require.NoError(t, err)
+		observed, err := rasql.WithEventObservers(enriched, handler, observer)
+		require.NoError(t, err)
+		assertScopeCapabilities(t, observed, true, true, rasql.Q1DurabilityUnknown)
+		_, hasCodecs = observed.(rasql.CodecProvider)
+		require.True(t, hasCodecs)
+		require.NotNil(t, rasql.Q1QueryCompilerOf(observed))
+
+		// A real executor carries durability evidence, and the observed wrapper
+		// does not implement the interface that reports it, so this is what
+		// shows the lookup still reaches the evidence underneath.
+		database, err := sql.Open("sqlite", ":memory:")
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, database.Close()) })
+		db, err := rasql.New(database, dialect.SQLite())
+		require.NoError(t, err)
+		base, err := rasql.AsExecutor(db, profile)
+		require.NoError(t, err)
+		durable, err := rasql.WithEventObservers(base, handler, observer)
+		require.NoError(t, err)
+		assertScopeCapabilities(t, durable, true, true, rasql.Q1DurabilityCommitted)
+		require.NotNil(t, rasql.Q1QueryCompilerOf(durable))
+	})
+
 	t.Run("a logical invocation forwards only from observed executors", func(t *testing.T) {
 		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
 		require.NoError(t, err)

@@ -87,7 +87,7 @@ type graphQuery[R, G any] struct {
 
 func (q graphQuery[R, G]) validate() error { return q.value.Validate() }
 func (q graphQuery[R, G]) compile(executor Executor) (compiledQuery, error) {
-	provider, ok := executor.(compilerProvider)
+	provider, ok := executorCapability[compilerProvider](executor)
 	if !ok || provider.queryCompiler() == nil {
 		return compiledQuery{}, planError("engine_profile_unavailable", "executor", "compiler unavailable")
 	}
