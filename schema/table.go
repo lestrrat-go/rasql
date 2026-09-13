@@ -1098,9 +1098,8 @@ type TableDef struct {
 	// doc for what recording one currently means for rendering.
 	ExclusionConstraints []ExclusionDef `json:",omitempty"`
 
-	Indexes       []IndexDef
-	ForeignKeys   []ForeignKeyDef
-	Relationships []RelationshipDef
+	Indexes     []IndexDef
+	ForeignKeys []ForeignKeyDef
 }
 
 // ObjectName returns the table's canonical physical identity.
@@ -1169,7 +1168,6 @@ func (t TableDef) Clone() TableDef {
 	clone.ExclusionConstraints = cloneEach(t.ExclusionConstraints)
 	clone.Indexes = cloneEach(t.Indexes)
 	clone.ForeignKeys = cloneEach(t.ForeignKeys)
-	clone.Relationships = cloneEach(t.Relationships)
 	return clone
 }
 
@@ -1388,97 +1386,7 @@ func (t TableDef) Validate() error {
 	if err := validateIndexes(t.Indexes, columns); err != nil {
 		return err
 	}
-	if err := validateForeignKeys(t.ForeignKeys, columns, constraintNames); err != nil {
-		return err
-	}
-	return validateRelationships(t.Relationships, t.ForeignKeys, columns)
-}
-
-func validateRelationships(relationships []RelationshipDef, _ []ForeignKeyDef, columns map[string]struct{}) error {
-	for i, relationship := range relationships {
-		path := fmt.Sprintf("relationships[%d]", i)
-		if relationship.Name == "" {
-			return validationError(path+".name", "must not be empty")
-		}
-		if err := ValidateSimpleIdentifier(relationship.Name); err != nil {
-			return validationError(path+".name", "%s", err)
-		}
-		if relationship.InverseName != "" {
-			if err := ValidateSimpleIdentifier(relationship.InverseName); err != nil {
-				return validationError(path+".inverse_name", "%s", err)
-			}
-		}
-		switch relationship.Kind {
-		case RelationshipBelongsTo, RelationshipHasOne, RelationshipHasMany, RelationshipManyToMany:
-		default:
-			return validationError(path+".kind", "unsupported relationship kind %q", relationship.Kind)
-		}
-		if err := validateColumnList(path+".columns", relationship.Columns, columns, true); err != nil {
-			return err
-		}
-		if relationship.ReferencedSchema != "" {
-			if err := ValidateIdentifier(relationship.ReferencedSchema); err != nil {
-				return validationError(path+".referenced_schema", "%s", err)
-			}
-		}
-		if relationship.ResolvedReferencedSchema != "" {
-			if err := ValidateIdentifier(relationship.ResolvedReferencedSchema); err != nil {
-				return validationError(path+".resolved_referenced_schema", "%s", err)
-			}
-		}
-		if err := ValidateIdentifier(relationship.ReferencedTable); err != nil {
-			return validationError(path+".referenced_table", "%s", err)
-		}
-		if err := validateIdentifierList(path+".referenced_columns", relationship.ReferencedColumns, true); err != nil {
-			return err
-		}
-		if len(relationship.Columns) != len(relationship.ReferencedColumns) {
-			return validationError(path, "has %d local columns and %d referenced columns", len(relationship.Columns), len(relationship.ReferencedColumns))
-		}
-		switch relationship.Optionality {
-		case RelationshipOptionalityInferred, RelationshipRequired, RelationshipOptional:
-		default:
-			return validationError(path+".optionality", "unsupported relationship optionality %q", relationship.Optionality)
-		}
-		if relationship.Kind == RelationshipManyToMany && relationship.Through == nil {
-			return validationError(path+".through", "must be present for many-to-many relationships")
-		}
-		if relationship.Kind != RelationshipManyToMany && relationship.Through != nil {
-			return validationError(path+".through", "is only valid for many-to-many relationships")
-		}
-		if through := relationship.Through; through != nil {
-			if through.Table.Name == "" {
-				return validationError(path+".through.table.name", "must not be empty")
-			}
-			if err := ValidateIdentifier(through.Table.Name); err != nil {
-				return validationError(path+".through.table.name", "%s", err)
-			}
-			if through.Table.Schema != "" {
-				if err := ValidateIdentifier(through.Table.Schema); err != nil {
-					return validationError(path+".through.table.schema", "%s", err)
-				}
-			}
-			if len(relationship.Columns) != len(through.SourceColumns) || len(through.TargetColumns) != len(relationship.ReferencedColumns) {
-				return validationError(path+".through", "column widths must match relationship columns")
-			}
-			if err := validateIdentifierList(path+".through.source_columns", through.SourceColumns, true); err != nil {
-				return err
-			}
-			if err := validateIdentifierList(path+".through.target_columns", through.TargetColumns, true); err != nil {
-				return err
-			}
-			for _, list := range [][]string{relationship.Columns, relationship.ReferencedColumns, through.SourceColumns, through.TargetColumns} {
-				seen := make(map[string]struct{}, len(list))
-				for _, column := range list {
-					if _, ok := seen[column]; ok {
-						return validationError(path+".through", "contains duplicate column %q", column)
-					}
-					seen[column] = struct{}{}
-				}
-			}
-		}
-	}
-	return nil
+	return validateForeignKeys(t.ForeignKeys, columns, constraintNames)
 }
 
 // validateNamedColumnLists validates constraints and records each non-empty

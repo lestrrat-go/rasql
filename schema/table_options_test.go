@@ -85,80 +85,6 @@ func TestNewTableOptionOrderDoesNotMatter(t *testing.T) {
 	require.Equal(t, columnsFirst, keyFirst)
 }
 
-// TestNewTableAssemblesForeignKeyAndRelationship covers ForeignKey's four
-// options together: Named, References, OnDelete, and RelationshipNamed, the
-// last of which derives a belongs-to Relationship separate from the
-// ForeignKeyDef itself.
-func TestNewTableAssemblesForeignKeyAndRelationship(t *testing.T) {
-	table, err := schema.NewTableDef("orders",
-		schema.Integer("id"),
-		schema.Integer("customer_id"),
-		schema.PrimaryKey("id"),
-		schema.ForeignKey("customer_id",
-			schema.Named("orders_customer_fkey"),
-			schema.References("customers", "id"),
-			schema.OnDelete(schema.Cascade),
-			schema.OnUpdate(schema.Restrict),
-			schema.RelationshipNamed("buyer")),
-	)
-	require.NoError(t, err)
-
-	require.Equal(t, []schema.ForeignKeyDef{{
-		Name:              "orders_customer_fkey",
-		Columns:           []string{"customer_id"},
-		ReferencedTable:   "customers",
-		ReferencedColumns: []string{"id"},
-		OnDelete:          schema.Cascade,
-		OnUpdate:          schema.Restrict,
-	}}, table.ForeignKeys)
-
-	require.Equal(t, []schema.RelationshipDef{{
-		Name:              "buyer",
-		Kind:              schema.RelationshipBelongsTo,
-		Columns:           []string{"customer_id"},
-		ReferencedTable:   "customers",
-		ReferencedColumns: []string{"id"},
-	}}, table.Relationships)
-}
-
-func TestRelationshipNamedSupportsInverseName(t *testing.T) {
-	table, err := schema.NewTableDef("orders",
-		schema.Integer("id"),
-		schema.Integer("customer_id"),
-		schema.PrimaryKey("id"),
-		schema.ForeignKey("customer_id", schema.References("customers", "id"),
-			schema.RelationshipNamed("customer", schema.InverseNamed("Orders"))),
-	)
-	require.NoError(t, err)
-	require.Equal(t, "Orders", table.Relationships[0].InverseName)
-}
-
-func TestRelationshipNamedRejectsInvalidInverseName(t *testing.T) {
-	_, err := schema.NewTableDef("orders",
-		schema.Integer("id"),
-		schema.Integer("customer_id"),
-		schema.PrimaryKey("id"),
-		schema.ForeignKey("customer_id", schema.References("customers", "id"),
-			schema.RelationshipNamed("customer", schema.InverseNamed("not-valid"))),
-	)
-	require.ErrorContains(t, err, "relationships[0].inverse_name")
-}
-
-// TestForeignKeyWithoutAsDeclaresNoRelationship covers the common case: a
-// foreign key with no RelationshipNamed leaves Relationships empty, so
-// rasqlgen derives its own name from the local column exactly as it does
-// for a struct literal that also states no Relationships.
-func TestForeignKeyWithoutAsDeclaresNoRelationship(t *testing.T) {
-	table, err := schema.NewTableDef("orders",
-		schema.Integer("id"),
-		schema.Integer("customer_id"),
-		schema.PrimaryKey("id"),
-		schema.ForeignKey("customer_id", schema.References("customers", "id")),
-	)
-	require.NoError(t, err)
-	require.Empty(t, table.Relationships)
-}
-
 func TestNewTableInSchema(t *testing.T) {
 	table, err := schema.NewTableDef("events",
 		schema.InSchema("audit"),
@@ -412,19 +338,6 @@ func TestRowNamedRejectsEmptyName(t *testing.T) {
 	})
 }
 
-func TestForeignKeyAsRejectsEmptyName(t *testing.T) {
-	_, err := schema.NewTableDef("orders",
-		schema.Integer("id"),
-		schema.Integer("customer_id"),
-		schema.PrimaryKey("id"),
-		schema.ForeignKey("customer_id",
-			schema.References("customers", "id"),
-			schema.RelationshipNamed("")),
-	)
-	require.Error(t, err)
-	require.ErrorContains(t, err, "RelationshipNamed name must not be empty")
-}
-
 // TestIndexDefAndForeignKeyDefJSONUnchanged proves that renaming the Go
 // types formerly named Index and ForeignKey to IndexDef and ForeignKeyDef
 // left the JSON wire format untouched: encoding/json never encodes a Go type
@@ -466,7 +379,7 @@ func TestIndexDefAndForeignKeyDefJSONUnchanged(t *testing.T) {
 	// produced by json.Marshal, must still decode: this is what actually
 	// pins the wire format, since round-tripping through the new types alone
 	// would not catch a field that had quietly been renamed too.
-	const snapshot = `{"Schema":"","Name":"orders","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false},"Nullable":false,"Default":""}],"PrimaryKey":["id"],"UniqueConstraints":null,"Checks":null,"Indexes":[{"Name":"orders_id_idx","Columns":["id"],"Unique":true}],"ForeignKeys":[{"Name":"orders_customer_fk","Columns":["id"],"ReferencedSchema":"tenant","ReferencedTable":"customers","ReferencedColumns":["id"],"OnDelete":"CASCADE","OnUpdate":"RESTRICT"}],"Relationships":null}`
+	const snapshot = `{"Schema":"","Name":"orders","Columns":[{"Name":"id","Type":{"Kind":"integer","Unsigned":false},"Nullable":false,"Default":""}],"PrimaryKey":["id"],"UniqueConstraints":null,"Checks":null,"Indexes":[{"Name":"orders_id_idx","Columns":["id"],"Unique":true}],"ForeignKeys":[{"Name":"orders_customer_fk","Columns":["id"],"ReferencedSchema":"tenant","ReferencedTable":"customers","ReferencedColumns":["id"],"OnDelete":"CASCADE","OnUpdate":"RESTRICT"}]}`
 	var decoded schema.TableDef
 	require.NoError(t, json.Unmarshal([]byte(snapshot), &decoded))
 	require.Equal(t, table, decoded)
@@ -581,8 +494,7 @@ func TestNewTableMatchesStructLiteralEveryFeature(t *testing.T) {
 			schema.Named("orders_customer_fkey"),
 			schema.References("customers", "id"),
 			schema.OnDelete(schema.Cascade),
-			schema.OnUpdate(schema.Restrict),
-			schema.RelationshipNamed("customer")),
+			schema.OnUpdate(schema.Restrict)),
 		schema.ForeignKeyOn([]string{"tenant_id", "customer_id"},
 			schema.Named("orders_tenant_customer_fkey"),
 			schema.ReferencesIn("crm", "tenant_customers", "tenant_id", "customer_id"),
@@ -630,15 +542,6 @@ func TestNewTableMatchesStructLiteralEveryFeature(t *testing.T) {
 				ReferencedTable:   "tenant_customers",
 				ReferencedColumns: []string{"tenant_id", "customer_id"},
 				OnDelete:          schema.SetNull,
-			},
-		},
-		Relationships: []schema.RelationshipDef{
-			{
-				Name:              "customer",
-				Kind:              schema.RelationshipBelongsTo,
-				Columns:           []string{"customer_id"},
-				ReferencedTable:   "customers",
-				ReferencedColumns: []string{"id"},
 			},
 		},
 	}

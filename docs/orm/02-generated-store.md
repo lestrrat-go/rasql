@@ -368,9 +368,8 @@ Column accessors make query code refer to compiler-checked methods instead of
 column-name strings. The generated scan methods map result columns to typed Go
 fields and report duplicate result columns.
 
-The generator also derives relationship helpers from foreign keys. A hint can
-override generated Go names when database names do not match the application's
-preferred names.
+A hint can override generated Go names when database names do not match the
+application's preferred names.
 
 ### What the column accessors catch
 
@@ -563,7 +562,7 @@ Each column may carry a `schema.GoBinding`. Its `Type` is used for non-null
 values, and `NullableType` is used when the column is nullable. An omitted
 nullable type uses a pointer to `Type`. Imports are validated and emitted
 deterministically, so the same named ID and application wrapper appear in row
-fields, scanners, writes, relationships, and descriptors.
+fields, scanners, writes, and descriptors.
 
 [Typed queries](03-typed-queries.md) reads rows through the generated table, and
 [Writing rows](04-writing.md) inserts, updates, and deletes them.
@@ -571,5 +570,5 @@ fields, scanners, writes, relationships, and descriptors.
 
 Store generation can include inspected views with
 `catalog.Options{IncludeViews: true}`. Generated view types provide row fields,
-column accessors, typed selects, aliases, and relationship reads. They do not
-implement mutation or table DDL capabilities.
+column accessors, typed selects, and aliases. They do not implement mutation
+or table DDL capabilities.

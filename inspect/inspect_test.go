@@ -422,13 +422,9 @@ func TestPostgreSQLInspectorPreservesSupportedMetadata(t *testing.T) {
 		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant_id", Type: schema.IntegerType{}}},
 		PrimaryKey: []string{"id", "tenant_id"},
 	}
-	// The compact emitter's table descriptor literal, like the deleted legacy
-	// renderer's, echoes table.Relationships verbatim rather than deriving a
-	// BelongsTo relationship from a foreign key, so an inspected table (whose
-	// Relationships the inspector never populates) renders no such literal.
-	// That derivation lived only in the legacy renderer's own prepareSchema
-	// step and has no replacement; see the task report for what a caller
-	// wanting it back would need.
+	// The compact emitter renders a foreign key as a ForeignKeyDef and nothing
+	// more. No descriptor carries navigation metadata derived from a foreign
+	// key, so an inspected table renders no such literal either.
 	source := compactRenderedSource(t, table, accounts)
 	require.Contains(t, source, `{Name: "uq_users_email", Columns: []string{"email"}}`)
 	require.Contains(t, source, `{Name: "uq_users_tenant_email", Columns: []string{"tenant_id", "email"}}`)

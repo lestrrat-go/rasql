@@ -49,8 +49,6 @@ type AtomicPanic = exec.AtomicPanic
 // every transaction Begin starts from it.
 type Option = exec.Option
 
-func WithRelationshipBindLimit(limit int) Option { return exec.WithRelationshipBindLimit(limit) }
-
 func New(handle Handle, d dialect.Dialect, options ...any) (DB, error) {
 	return exec.New(handle, d, options...)
 }
