@@ -27,11 +27,11 @@ import (
 // because the method would shadow the embedded rasql.Table or its own methods,
 // or collide with a mapping method declared on the row type.
 //
-// DecodeRow is deliberately absent, and the list is exactly these eight.
-// Nothing emits a DecodeRow method any more, so a decode_row column collides
-// with nothing: a table with such a column renders without error, with an
-// ordinary DecodeRow field. Re-adding it here would reject a legitimate column
-// name for a method that does not exist.
+// DecodeRow and ColumnValue are deliberately absent, and the list is exactly
+// these seven. Nothing emits a method by either name any more, so a decode_row
+// or column_value column collides with nothing: a table with such a column
+// renders without error, with an ordinary field of that name. Re-adding either
+// here would reject a legitimate column name for a method that does not exist.
 //
 // reservedRelationshipMethod is this map's only reader now: a relationship
 // whose derived method name lands on one of these is rejected the same way a
@@ -39,7 +39,6 @@ import (
 var reservedFieldNames = map[string]struct{}{
 	"As":               {},
 	"Column":           {},
-	"ColumnValue":      {},
 	"Ref":              {},
 	"ScanDestinations": {},
 	"ScanRow":          {},

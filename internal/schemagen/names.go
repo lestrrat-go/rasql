@@ -150,7 +150,7 @@ func (n *ResolvedNames) validateCollisions(tables []schema.TableDef) error {
 				return err
 			}
 		}
-		methods := map[string]struct{}{"As": {}, "Column": {}, "ColumnValue": {}, "Ref": {}, "ScanDestinations": {}, "ScanRow": {}, "Table": {}, "tableRow": {}}
+		methods := map[string]struct{}{"As": {}, "Column": {}, "Ref": {}, "ScanDestinations": {}, "ScanRow": {}, "Table": {}, "tableRow": {}}
 		fields := make(map[string]string)
 		accessors := make(map[string]string)
 		for _, column := range table.Columns {

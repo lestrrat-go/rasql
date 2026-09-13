@@ -55,19 +55,6 @@ func (r *EmployeesRow) ScanDestinations(columns []string) ([]any, error) {
 	return destinations, nil
 }
 
-// ColumnValue returns the value of the named column.
-func (r EmployeesRow) ColumnValue(name string) (any, bool) {
-	switch name {
-	case "id":
-		return r.ID, true
-	case "name":
-		return r.Name, true
-	case "manager_id":
-		return r.ManagerID, true
-	}
-	return nil, false
-}
-
 // EmployeesTable is the generated table type for the "employees" table.
 type EmployeesTable struct {
 	rasql.Table[EmployeesRow]

@@ -76,25 +76,6 @@ func (r *UsersRow) ScanDestinations(columns []string) ([]any, error) {
 	return destinations, nil
 }
 
-// ColumnValue returns the value of the named column.
-func (r UsersRow) ColumnValue(name string) (any, bool) {
-	switch name {
-	case "id":
-		return r.ID, true
-	case "email":
-		return r.Email, true
-	case "nickname":
-		return r.Nickname, true
-	case "status":
-		return r.Status, true
-	case "first_name":
-		return r.FirstName, true
-	case "last_name":
-		return r.LastName, true
-	}
-	return nil, false
-}
-
 // UsersTable is the generated table type for the "users" table.
 type UsersTable struct {
 	rasql.Table[UsersRow]

@@ -48,17 +48,6 @@ func (r *TasksRow) ScanDestinations(columns []string) ([]any, error) {
 	return destinations, nil
 }
 
-// ColumnValue returns the value of the named column.
-func (r TasksRow) ColumnValue(name string) (any, bool) {
-	switch name {
-	case "id":
-		return r.ID, true
-	case "status":
-		return r.Status, true
-	}
-	return nil, false
-}
-
 // TasksTable is the generated table type for the "tasks" table.
 type TasksTable struct {
 	rasql.Table[TasksRow]
