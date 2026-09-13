@@ -9,8 +9,8 @@ page says what each one contains and which parts an application may rely on.
 
 The generated package contains one `<table>_gen.go` file per table,
 `schema_gen.go`, and `schema_gen_test.go`. A table file contains the row type,
-scan and mapping methods, the table type, column accessors, and the package
-accessor. The descriptor file contains the runtime `schema.TableDef` values.
+its scan methods, the table type, column accessors, and the package accessor.
+The descriptor file contains the runtime `schema.TableDef` values.
 
 When a physical table or column name contains spaces, punctuation, or a
 keyword, configure `generate.Store.Names` with its exact `schema.ObjectName`.
@@ -97,25 +97,6 @@ func (r *UsersRow) ScanDestinations(columns []string) ([]any, error) {
 		}
 	}
 	return destinations, nil
-}
-
-// ColumnValue returns the value of the named column.
-func (r UsersRow) ColumnValue(name string) (any, bool) {
-	switch name {
-	case "id":
-		return r.ID, true
-	case "email":
-		return r.Email, true
-	case "nickname":
-		return r.Nickname, true
-	case "status":
-		return r.Status, true
-	case "first_name":
-		return r.FirstName, true
-	case "last_name":
-		return r.LastName, true
-	}
-	return nil, false
 }
 
 // UsersTable is the generated table type for the "users" table.
@@ -452,9 +433,9 @@ The generator fails rather than emitting doubtful code when a table or column
 name cannot become a Go identifier, or when two names collide after
 conversion. A column also fails when its generated name would be `Table`,
 `As`, `Ref`, `Column`, or `tableRow`, because its column accessor method would
-collide with the embedded `rasql.Table` and its methods, or `ScanRow`,
-`ScanDestinations`, or `ColumnValue`, because its row type field would collide
-with the row type's own scan and mapping methods. A table also fails when its
+collide with the embedded `rasql.Table` and its methods, or `ScanRow` or
+`ScanDestinations`, because its row type field would collide with the row
+type's own scan methods. A table also fails when its
 accessor would spell the fixed function name `schema_gen_test.go` declares.
 
 ## Static query functions

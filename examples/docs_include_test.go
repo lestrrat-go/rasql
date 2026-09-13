@@ -814,12 +814,12 @@ var tableSideReserved = []string{"Table", "As", "Ref", "Column", "tableRow"}
 // rowSideReserved lists the reserved generated names that collide as a FIELD on
 // the row type, which declares each of them as a method of its own. The table
 // type has no member by any of these names.
-var rowSideReserved = []string{"ScanRow", "ScanDestinations", "ColumnValue"}
+var rowSideReserved = []string{"ScanRow", "ScanDestinations"}
 
 // reservedNamesProblem reports why a passage misstates the reserved generated
 // name rule, or the empty string when it states it correctly. One derived
 // identifier names two different generated members, so the passage has to name
-// all eight reserved names, blame the table-side group on the accessor method,
+// all seven reserved names, blame the table-side group on the accessor method,
 // and blame the row-side group on the row type field. A passage that calls the
 // whole set one kind of member is wrong about one group whichever kind it
 // picks.
@@ -925,27 +925,27 @@ var reservedNamesFixtures = []struct {
 }{
 	{
 		name:    "historical passage calls every reserved name a field name",
-		passage: "A column also fails when its field name would be `Table`, `As`, `Ref`, `Column`, or `tableRow`, because those names belong to the embedded `rasql.Table` and its methods, or `ScanRow`, `ScanDestinations`, or `ColumnValue`, because those belong to the row type's own scan and mapping methods.",
+		passage: "A column also fails when its field name would be `Table`, `As`, `Ref`, `Column`, or `tableRow`, because those names belong to the embedded `rasql.Table` and its methods, or `ScanRow` or `ScanDestinations`, because those belong to the row type's own scan methods.",
 		reject:  true,
 	},
 	{
 		name:    "invented passage calls every reserved name an accessor method name",
-		passage: "A column also fails when its accessor method name would be `Table`, `As`, `Ref`, `Column`, or `tableRow`, because those names belong to the embedded `rasql.Table` and its methods, or `ScanRow`, `ScanDestinations`, or `ColumnValue`, because those belong to the row type's own scan and mapping methods.",
+		passage: "A column also fails when its accessor method name would be `Table`, `As`, `Ref`, `Column`, or `tableRow`, because those names belong to the embedded `rasql.Table` and its methods, or `ScanRow` or `ScanDestinations`, because those belong to the row type's own scan methods.",
 		reject:  true,
 	},
 	{
 		name:    "invented passage blames the table-side group on a field",
-		passage: "A column also fails when its generated name would be `Table`, `As`, `Ref`, `Column`, or `tableRow`, because its row type field would collide with the embedded `rasql.Table`, or `ScanRow`, `ScanDestinations`, or `ColumnValue`, because its row type field would collide with the row type's own scan and mapping methods.",
+		passage: "A column also fails when its generated name would be `Table`, `As`, `Ref`, `Column`, or `tableRow`, because its row type field would collide with the embedded `rasql.Table`, or `ScanRow` or `ScanDestinations`, because its row type field would collide with the row type's own scan methods.",
 		reject:  true,
 	},
 	{
 		name:    "invented passage drops a reserved name",
-		passage: "A column also fails when its generated name would be `Table`, `As`, `Ref`, or `Column`, because its column accessor method would collide with the embedded `rasql.Table` and its methods, or `ScanRow`, `ScanDestinations`, or `ColumnValue`, because its row type field would collide with the row type's own scan and mapping methods.",
+		passage: "A column also fails when its generated name would be `Table`, `As`, `Ref`, or `Column`, because its column accessor method would collide with the embedded `rasql.Table` and its methods, or `ScanRow` or `ScanDestinations`, because its row type field would collide with the row type's own scan methods.",
 		reject:  true,
 	},
 	{
 		name:    "invented passage splits the two groups by member kind",
-		passage: "A column also fails when its generated name would be `Table`, `As`, `Ref`, `Column`, or `tableRow`, because its column accessor method would collide with the embedded `rasql.Table` and its methods, or `ScanRow`, `ScanDestinations`, or `ColumnValue`, because its row type field would collide with the row type's own scan and mapping methods.",
+		passage: "A column also fails when its generated name would be `Table`, `As`, `Ref`, `Column`, or `tableRow`, because its column accessor method would collide with the embedded `rasql.Table` and its methods, or `ScanRow` or `ScanDestinations`, because its row type field would collide with the row type's own scan methods.",
 		reject:  false,
 	},
 }

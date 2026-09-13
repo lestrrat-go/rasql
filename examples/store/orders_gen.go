@@ -55,19 +55,6 @@ func (r *OrdersRow) ScanDestinations(columns []string) ([]any, error) {
 	return destinations, nil
 }
 
-// ColumnValue returns the value of the named column.
-func (r OrdersRow) ColumnValue(name string) (any, bool) {
-	switch name {
-	case "id":
-		return r.ID, true
-	case "user_id":
-		return r.UserID, true
-	case "total":
-		return r.Total, true
-	}
-	return nil, false
-}
-
 // OrdersTable is the generated table type for the "orders" table.
 type OrdersTable struct {
 	rasql.Table[OrdersRow]
