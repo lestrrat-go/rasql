@@ -189,36 +189,6 @@ func NewProjection[R any](items []ProjectionItem, decoder RowDecoder[R]) (Projec
 	if err := validateQ1DecoderMetadata(schemaValue, decoder); err != nil {
 		return Projection[R]{}, err
 	}
-	seenComponents := make(map[string]struct{})
-	seenColumns := make(map[string]struct{})
-	for i, presence := range decoder.Presence() {
-		if presence.component == "" || len(presence.columns) == 0 {
-			return Projection[R]{}, planError("invalid_projection", fmt.Sprintf("decoder.presence[%d]", i), "presence metadata is incomplete")
-		}
-		if _, ok := seenComponents[presence.component]; ok {
-			return Projection[R]{}, planError("invalid_projection", fmt.Sprintf("decoder.presence[%d]", i), "duplicate component")
-		}
-		seenComponents[presence.component] = struct{}{}
-		for _, name := range presence.columns {
-			if _, ok := seenColumns[name]; ok {
-				return Projection[R]{}, planError("invalid_projection", fmt.Sprintf("decoder.presence[%d]", i), "duplicate presence column")
-			}
-			seenColumns[name] = struct{}{}
-			found := false
-			for _, column := range schemaValue.columns {
-				if column.Name == name {
-					if !column.Nullable {
-						return Projection[R]{}, planError("invalid_projection", fmt.Sprintf("decoder.presence[%d]", i), "presence column must be nullable")
-					}
-					found = true
-					break
-				}
-			}
-			if !found {
-				return Projection[R]{}, planError("invalid_projection", fmt.Sprintf("decoder.presence[%d]", i), "presence column is not projected")
-			}
-		}
-	}
 	return Projection[R]{items: cloneItems(items), schema: schemaValue, decoder: decoder}, nil
 }
 func (p Projection[R]) Schema() ResultSchema   { return p.schema }
