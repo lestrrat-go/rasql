@@ -23,16 +23,12 @@ func compactStore(t *testing.T, dir string, tables ...schema.TableDef) generate.
 	require.Empty(t, diagnostics)
 	catalog, diagnostics = compilerir.AssignObjectIDs(catalog, compilerir.IdentityInput{SourceIdentity: "schemagen-fixture"})
 	require.Empty(t, diagnostics)
-	semantic, diagnostics := compilerir.BuildSemantic(catalog, compilerir.MappingConfig{}, nil)
-	require.Empty(t, diagnostics)
 	objects := make([]compilerir.ObjectGoName, len(catalog.Objects))
 	for i, object := range catalog.Objects {
 		objects[i] = compilerir.ObjectGoName{ID: object.ID, File: strings.ToLower(object.Name) + "_gen.go"}
 	}
 	config := compilerir.GoConfig{Package: "generated", Output: dir, Emitter: "compact", Objects: objects}
-	model, diagnostics := compilerir.BuildGo(semantic, config)
-	require.Empty(t, diagnostics)
-	in, err := generate.NewEmitterInput(catalog, semantic, model, config, compilerir.MappingConfig{})
+	in, err := generate.NewEmitterInput(catalog, compilerir.MappingConfig{}, config)
 	require.NoError(t, err)
 	store, err := generate.RenderCompact(in)
 	require.NoError(t, err)

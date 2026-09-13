@@ -73,6 +73,17 @@ func TestCompactRichExternalConsumer(t *testing.T) {
 
 func richCompactInput(t *testing.T) generate.EmitterInput {
 	t.Helper()
+	catalog, relations, config := richCompactParts(t)
+	in, err := generate.NewEmitterInput(catalog, relations, config)
+	require.NoError(t, err)
+	return in
+}
+
+// richCompactParts returns the catalog, mappings and generation config
+// richCompactInput is built from, so a variant fixture can alter one of the
+// three and let NewEmitterInput derive the models again.
+func richCompactParts(t *testing.T) (compilerir.PhysicalCatalog, compilerir.MappingConfig, compilerir.GoConfig) {
+	t.Helper()
 	money := &compilerir.NativeType{Dialect: "sqlite", Name: "MONEY", Kind: "other"}
 	users := compilerir.PhysicalObject{ID: "users", Kind: "table", Name: "users", Columns: []compilerir.PhysicalColumn{
 		{Name: "id", LogicalKind: "integer"}, {Name: "nickname", Ordinal: 1, LogicalKind: "text", Nullable: true},
@@ -87,18 +98,8 @@ func richCompactInput(t *testing.T) generate.EmitterInput {
 	catalog := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "sqlite", Version: "3"}, Objects: []compilerir.PhysicalObject{users, projects, roles, links, view}}
 	mapping := compilerir.ScalarMapping{Name: "money", Match: compilerir.NativeMatch{Dialect: "sqlite", Name: "MONEY", Kind: "other"}, GoType: "domain.Money", Imports: []compilerir.GoImport{{Path: "example.com/domain", Alias: "domain"}}, Codec: "money"}
 	relations := compilerir.MappingConfig{Scalars: []compilerir.ScalarMapping{mapping}, Relations: []compilerir.RelationMapping{{Name: "Roles", Source: "users", From: []string{"id"}, Target: "roles", To: []string{"id"}, Through: compilerir.ThroughMapping{Object: "user_roles", SourceFrom: []string{"user_id"}, SourceTo: []string{"id"}, TargetFrom: []string{"role_id"}, TargetTo: []string{"id"}}}}}
-	semantic, diagnostics := compilerir.BuildSemantic(catalog, relations, nil)
-	for _, diagnostic := range diagnostics {
-		require.NotEqual(t, compilerir.DiagnosticError, diagnostic.Level, diagnostic.Message)
-	}
 	config := compilerir.GoConfig{Package: "store", Output: "generated", Emitter: "compact", Scalars: relations.Scalars, Objects: []compilerir.ObjectGoName{{ID: "users", Source: "Account", Row: "AccountRecord", File: "users_gen.go"}, {ID: "projects", Source: "Project", Row: "ProjectRecord", File: "projects_gen.go"}, {ID: "roles", Source: "Role", Row: "RoleRecord", File: "roles_gen.go"}, {ID: "user_roles", Source: "Membership", Row: "MembershipRecord", File: "user_roles_gen.go"}, {ID: "active_users", Source: "ActiveUser", Row: "ActiveUserRecord", File: "active_users_gen.go"}}}
-	model, diagnostics := compilerir.BuildGo(semantic, config)
-	for _, diagnostic := range diagnostics {
-		require.NotEqual(t, compilerir.DiagnosticError, diagnostic.Level, diagnostic.Message)
-	}
-	in, err := generate.NewEmitterInput(catalog, semantic, model, config, relations)
-	require.NoError(t, err)
-	return in
+	return catalog, relations, config
 }
 
 const richDomainSource = `package domain

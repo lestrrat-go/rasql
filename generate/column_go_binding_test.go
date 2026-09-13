@@ -40,9 +40,6 @@ func TestCompactHonoursColumnGoBinding(t *testing.T) {
 	require.Empty(t, diagnostics)
 	catalog, diagnostics = compilerir.AssignObjectIDs(catalog, compilerir.IdentityInput{SourceIdentity: "column-go-binding-fixture"})
 	require.Empty(t, diagnostics)
-	semantic, diagnostics := compilerir.BuildSemantic(catalog, compilerir.MappingConfig{}, nil)
-	require.Empty(t, diagnostics)
-
 	require.Len(t, catalog.Objects, 1)
 	object := catalog.Objects[0]
 	columnBindings, err := schemagen.TableColumnGoBindings(object.ID, accounts, schemagen.BindingSetOptions{})
@@ -54,10 +51,7 @@ func TestCompactHonoursColumnGoBinding(t *testing.T) {
 		Objects:        []compilerir.ObjectGoName{{ID: object.ID, File: "accounts_gen.go"}},
 		ColumnBindings: columnBindings,
 	}
-	model, diagnostics := compilerir.BuildGo(semantic, config)
-	require.Empty(t, diagnostics)
-
-	in, err := generate.NewEmitterInput(catalog, semantic, model, config, compilerir.MappingConfig{})
+	in, err := generate.NewEmitterInput(catalog, compilerir.MappingConfig{}, config)
 	require.NoError(t, err)
 	store, err := generate.RenderCompact(in)
 	require.NoError(t, err)
