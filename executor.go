@@ -433,62 +433,30 @@ func rowsPreparedRequired[R any](ctx context.Context, executor Executor, prepare
 		if consumer > policy {
 			policy = consumer
 		}
-		if policy != Many {
-			values := make([]R, 0, 2)
-			for len(values) < 2 && owned.Next() {
-				var value R
-				if err := decoder.DecodeRow(source, &value); err != nil {
-					finished := owned.Finish(err, true)
-					yield(zero, finished)
-					return
-				}
-				if len(values) == 0 {
-					owned.RecordRow()
-				}
-				values = append(values, value)
-			}
-			if err := owned.Err(); err != nil {
-				finished := owned.Finish(err, false)
-				yield(zero, finished)
-				return
-			}
-			if len(values) > 1 {
-				finished := owned.Finish(ErrMultipleRows, true)
-				yield(zero, finished)
-				return
-			}
-			if policy == ExactlyOne && len(values) == 0 {
-				cause := prepared.emptyErr
-				if cause == nil {
-					cause = ErrNoRows
-				}
-				finished := owned.Finish(cause, false)
-				yield(zero, finished)
-				return
-			}
-			terminal, _ := ctx.Value(rowTerminalKey{}).(*rowTerminal)
-			for _, value := range values {
-				if terminal != nil {
-					terminal.cause = nil
-				}
-				if !yield(value, nil) {
-					cause := error(nil)
-					if terminal != nil {
-						cause = terminal.cause
-					}
-					_ = owned.Finish(cause, true)
-					return
-				}
-			}
+		terminal, _ := ctx.Value(rowTerminalKey{}).(*rowTerminal)
+		// emit hands one row to the consumer. A false report means the consumer stopped early
+		// and consumption is already complete under whatever cause the consumer recorded, so
+		// the loop has nothing left to do but return.
+		emit := func(value R) bool {
 			if terminal != nil {
 				terminal.cause = nil
 			}
-			if err := owned.Finish(nil, false); err != nil {
-				yield(zero, err)
+			if yield(value, nil) {
+				return true
 			}
-			return
+			var cause error
+			if terminal != nil {
+				cause = terminal.cause
+			}
+			_ = owned.Finish(cause, true)
+			return false
 		}
-		count := 0
+		// A single-row policy holds its row back and reads once more before yielding anything, so
+		// a second row raises ErrMultipleRows while the consumer has still seen no row at all.
+		// Many yields each row as it decodes.
+		singleRow := policy != Many
+		var held R
+		holding := false
 		for owned.Next() {
 			var value R
 			if err := decoder.DecodeRow(source, &value); err != nil {
@@ -496,32 +464,27 @@ func rowsPreparedRequired[R any](ctx context.Context, executor Executor, prepare
 				yield(zero, finished)
 				return
 			}
-			count++
-			if policy != Many && count > 1 {
+			if !singleRow {
+				owned.RecordRow()
+				if !emit(value) {
+					return
+				}
+				continue
+			}
+			if holding {
 				finished := owned.Finish(ErrMultipleRows, true)
 				yield(zero, finished)
 				return
 			}
 			owned.RecordRow()
-			terminal, _ := ctx.Value(rowTerminalKey{}).(*rowTerminal)
-			if terminal != nil {
-				terminal.cause = nil
-			}
-			if !yield(value, nil) {
-				cause := error(nil)
-				if terminal != nil {
-					cause = terminal.cause
-				}
-				_ = owned.Finish(cause, true)
-				return
-			}
+			held, holding = value, true
 		}
 		if err := owned.Err(); err != nil {
 			finished := owned.Finish(err, false)
 			yield(zero, finished)
 			return
 		}
-		if policy == ExactlyOne && count == 0 {
+		if policy == ExactlyOne && !holding {
 			cause := prepared.emptyErr
 			if cause == nil {
 				cause = ErrNoRows
@@ -530,7 +493,9 @@ func rowsPreparedRequired[R any](ctx context.Context, executor Executor, prepare
 			yield(zero, finished)
 			return
 		}
-		terminal, _ := ctx.Value(rowTerminalKey{}).(*rowTerminal)
+		if holding && !emit(held) {
+			return
+		}
 		var terminalErr error
 		if terminal != nil {
 			terminalErr = terminal.cause
