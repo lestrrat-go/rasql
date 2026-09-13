@@ -94,7 +94,7 @@ type ColumnGoBinding struct {
 }
 
 // ColumnGoBindingFor returns the binding configured for object's column, if
-// any. BuildGo and generate.EmitterInput's own validation both need this
+// any. BuildGo and the compact emitter in internal/schemagen both need this
 // lookup, so it is exported rather than duplicated.
 func ColumnGoBindingFor(object ObjectID, column string, bindings []ColumnGoBinding) (ColumnGoBinding, bool) {
 	for _, binding := range bindings {

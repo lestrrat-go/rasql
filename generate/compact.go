@@ -31,69 +31,69 @@ type compactStoreInput struct {
 // RenderCompact renders canonical compiler input into a Store using the
 // compact common query/runtime contracts.
 func RenderCompact(in EmitterInput) (Store, error) {
-	copy := in.Clone()
-	if err := copy.Validate(); err != nil {
-		return Store{}, err
+	if in.generation.Package == "" {
+		return Store{}, errors.New("generate: compact renderer requires an input from NewEmitterInput")
 	}
-	if copy.Generation.Emitter != "compact" {
+	copy := in.clone()
+	if copy.generation.Emitter != "compact" {
 		return Store{}, errors.New("generate: compact renderer requires generation.emitter compact")
 	}
-	for _, object := range copy.Go.Objects {
+	for _, object := range copy.goModel.Objects {
 		for _, column := range object.Columns {
 			if !column.Nullable {
 				continue
 			}
-			for _, mapping := range copy.Mappings.Scalars {
+			for _, mapping := range copy.mappings.Scalars {
 				if mapping.Name == column.Scalar && mapping.NullableGoType != "" && !strings.HasPrefix(mapping.NullableGoType, "rasql.Nullable[") {
 					return Store{}, fmt.Errorf("generate: compact %s.%s uses unsupported distinct nullable Go type %q", object.ID, column.Name, mapping.NullableGoType)
 				}
 			}
 		}
 	}
-	tables, diagnostics := compilerir.TableDefsFromPhysical(copy.Catalog)
+	tables, diagnostics := compilerir.TableDefsFromPhysical(copy.catalog)
 	for _, diagnostic := range diagnostics {
 		if diagnostic.Level == compilerir.DiagnosticError {
 			return Store{}, fmt.Errorf("generate: compact: %s", diagnostic.Message)
 		}
 	}
-	byID := make(map[compilerir.ObjectID]compilerir.PhysicalObject, len(copy.Catalog.Objects))
-	for _, object := range copy.Catalog.Objects {
+	byID := make(map[compilerir.ObjectID]compilerir.PhysicalObject, len(copy.catalog.Objects))
+	for _, object := range copy.catalog.Objects {
 		byID[object.ID] = object
 	}
-	semantic := make(map[compilerir.ObjectID]compilerir.SemanticObject, len(copy.Semantic.Objects))
-	for _, object := range copy.Semantic.Objects {
+	semantic := make(map[compilerir.ObjectID]compilerir.SemanticObject, len(copy.semantic.Objects))
+	for _, object := range copy.semantic.Objects {
 		semantic[object.ID] = object
 	}
-	goObjects := make(map[compilerir.ObjectID]compilerir.GoObject, len(copy.Go.Objects))
-	for _, object := range copy.Go.Objects {
+	goObjects := make(map[compilerir.ObjectID]compilerir.GoObject, len(copy.goModel.Objects))
+	for _, object := range copy.goModel.Objects {
 		goObjects[object.ID] = object
 	}
-	configs := make(map[compilerir.ObjectID]compilerir.ObjectGoName, len(copy.Generation.Objects))
-	for _, config := range copy.Generation.Objects {
+	configs := make(map[compilerir.ObjectID]compilerir.ObjectGoName, len(copy.generation.Objects))
+	for _, config := range copy.generation.Objects {
 		configs[config.ID] = config
 	}
-	columnBindings := make(map[compilerir.ObjectID][]compilerir.ColumnGoBinding, len(copy.Generation.ColumnBindings))
-	for _, binding := range copy.Generation.ColumnBindings {
+	columnBindings := make(map[compilerir.ObjectID][]compilerir.ColumnGoBinding, len(copy.generation.ColumnBindings))
+	for _, binding := range copy.generation.ColumnBindings {
 		columnBindings[binding.Object] = append(columnBindings[binding.Object], binding)
 	}
-	tablesByID := make(map[compilerir.ObjectID]schema.TableDef, len(copy.Catalog.Objects))
-	for _, object := range copy.Catalog.Objects {
+	tablesByID := make(map[compilerir.ObjectID]schema.TableDef, len(copy.catalog.Objects))
+	for _, object := range copy.catalog.Objects {
 		if table, ok := findCompactTable(tables, object); ok {
 			tablesByID[object.ID] = table
 		}
 	}
-	targets := make(map[compilerir.ObjectID]schemagen.CompactObjectRef, len(copy.Catalog.Objects))
-	for _, object := range copy.Catalog.Objects {
+	targets := make(map[compilerir.ObjectID]schemagen.CompactObjectRef, len(copy.catalog.Objects))
+	for _, object := range copy.catalog.Objects {
 		targets[object.ID] = schemagen.CompactObjectRef{
 			Catalog: object, Semantic: semantic[object.ID], Go: goObjects[object.ID],
 			Generation: configs[object.ID], Table: tablesByID[object.ID],
 			ColumnBindings: columnBindings[object.ID],
 		}
 	}
-	files := make([]compactFile, 0, len(copy.Catalog.Objects)+2)
+	files := make([]compactFile, 0, len(copy.catalog.Objects)+2)
 	seenFiles := make(map[string]string)
 	seenDecls := make(map[string]string)
-	for _, object := range copy.Catalog.Objects {
+	for _, object := range copy.catalog.Objects {
 		config := configs[object.ID]
 		if config.File == "" {
 			return Store{}, fmt.Errorf("generate: compact object %q has no output file", object.ID)
@@ -102,9 +102,9 @@ func RenderCompact(in EmitterInput) (Store, error) {
 		if !ok {
 			return Store{}, fmt.Errorf("generate: compact object %q has no descriptor", object.ID)
 		}
-		source, err := schemagen.CompactObjectSource(copy.Generation.Package, schemagen.CompactObject{
+		source, err := schemagen.CompactObjectSource(copy.generation.Package, schemagen.CompactObject{
 			Catalog: object, Semantic: semantic[object.ID], Go: goObjects[object.ID],
-			Generation: config, Table: table, Mappings: copy.Generation.Scalars,
+			Generation: config, Table: table, Mappings: copy.generation.Scalars,
 			ColumnBindings: columnBindings[object.ID], Targets: targets,
 		})
 		if err != nil {
@@ -127,8 +127,8 @@ func RenderCompact(in EmitterInput) (Store, error) {
 		}
 		files = append(files, compactFile{name: name, source: append([]byte(nil), source...), declarations: declarations})
 	}
-	meta := []byte(compactMetadataSource(copy.Generation.Package))
-	test := []byte(genfile.Marker + "\n\npackage " + copy.Generation.Package + "\n")
+	meta := []byte(compactMetadataSource(copy.generation.Package))
+	test := []byte(genfile.Marker + "\n\npackage " + copy.generation.Package + "\n")
 	metaDeclarations, err := compactDeclarations(meta)
 	if err != nil {
 		return Store{}, fmt.Errorf("generate: compact metadata: %w", err)
@@ -143,9 +143,9 @@ func RenderCompact(in EmitterInput) (Store, error) {
 	files = append(files, compactFile{name: schemaDescriptorTestFilename, source: test})
 	sort.Slice(files, func(i, j int) bool { return files[i].name < files[j].name })
 	return Store{
-		Package: copy.Generation.Package,
-		Dir:     copy.Generation.Output,
-		Prune:   copy.Generation.Prune,
+		Package: copy.generation.Package,
+		Dir:     copy.generation.Output,
+		Prune:   copy.generation.Prune,
 		// RenderCompact owns schema declarations from EmitterInput. PlanContext
 		// appends configured SQL from Store.TypedQueries and checks it with the
 		// same file and identifier ledgers.

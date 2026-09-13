@@ -101,7 +101,9 @@ func TestCompactTypedQueryCollisionStopsBeforePublication(t *testing.T) {
 	command := fixture.command(t, &output, &diagnostics)
 	err := command.run([]string{"generate", "-config", fixture.configPath, "-scratch"})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "go model failed")
+	// The collision is two generated files claiming one path, which the Go
+	// model builder reports when NewEmitterInput derives the model.
+	require.Contains(t, err.Error(), "duplicate file")
 	require.NoDirExists(t, filepath.Join(fixture.root, "internal", "store"))
 }
 

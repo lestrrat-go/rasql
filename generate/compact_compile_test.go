@@ -103,8 +103,7 @@ func renderCompactCompileModule(t *testing.T, input generate.EmitterInput) strin
 
 func richCompactInputWithGeneratedColumn(t *testing.T) generate.EmitterInput {
 	t.Helper()
-	in := richCompactInput(t)
-	catalog := in.Catalog.Clone()
+	catalog, relations, config := richCompactParts(t)
 	for index := range catalog.Objects {
 		if catalog.Objects[index].ID != "users" {
 			continue
@@ -113,15 +112,7 @@ func richCompactInputWithGeneratedColumn(t *testing.T) generate.EmitterInput {
 			Name: "computed_id", Ordinal: 3, LogicalKind: "integer", GeneratedSQL: "id + 1", GeneratedStorage: "STORED",
 		})
 	}
-	semantic, diagnostics := compilerir.BuildSemantic(catalog, in.Mappings, nil)
-	for _, diagnostic := range diagnostics {
-		require.NotEqual(t, compilerir.DiagnosticError, diagnostic.Level, diagnostic.Message)
-	}
-	model, diagnostics := compilerir.BuildGo(semantic, in.Generation)
-	for _, diagnostic := range diagnostics {
-		require.NotEqual(t, compilerir.DiagnosticError, diagnostic.Level, diagnostic.Message)
-	}
-	result, err := generate.NewEmitterInput(catalog, semantic, model, in.Generation, in.Mappings)
+	result, err := generate.NewEmitterInput(catalog, relations, config)
 	require.NoError(t, err)
 	return result
 }

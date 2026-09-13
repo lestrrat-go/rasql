@@ -187,10 +187,6 @@ func (c command) prepareLiveGeneration(ctx context.Context, configPath string, c
 	if err != nil {
 		return liveGeneration{}, err
 	}
-	semantic, diagnostics := compilerir.BuildSemantic(result.Catalog, mappings, result.Queries)
-	if hasErrors(diagnostics) {
-		return liveGeneration{}, errors.New("semantic analysis failed")
-	}
 	prune := true
 	if cfg.Prune != nil {
 		prune = *cfg.Prune
@@ -225,21 +221,7 @@ func (c command) prepareLiveGeneration(ctx context.Context, configPath string, c
 		function := configured.Function
 		generation.Queries = append(generation.Queries, compilerir.QueryGoName{ID: query.ID, Function: function, Result: string(query.ID) + "Result", Projection: string(query.ID) + "Projection", Decoder: string(query.ID) + "Decoder", File: file})
 	}
-	goModel, diagnostics := compilerir.BuildGo(semantic, generation)
-	if hasErrors(diagnostics) {
-		return liveGeneration{}, errors.New("go model failed")
-	}
-	for i, object := range goModel.Objects {
-		generation.Objects[i].Source = exportGoName(object.SourceName)
-		generation.Objects[i].Row = exportGoName(object.Row.Name)
-		if object.Create != nil {
-			generation.Objects[i].Create = exportGoName(object.Create.Name)
-		}
-		if object.Patch != nil {
-			generation.Objects[i].Patch = exportGoName(object.Patch.Name)
-		}
-	}
-	input, err := generate.NewEmitterInput(result.Catalog, semantic, goModel, generation, mappings)
+	input, err := generate.NewEmitterInput(result.Catalog, mappings, generation, result.Queries...)
 	if err != nil {
 		return liveGeneration{}, err
 	}
@@ -247,6 +229,7 @@ func (c command) prepareLiveGeneration(ctx context.Context, configPath string, c
 	if err != nil {
 		return liveGeneration{}, err
 	}
+	goModel := input.GoModel()
 	store.Root = moduleRoot
 	store.Dir = outputAbs
 	goQueries := make(map[compilerir.QueryID]compilerir.GoQuery, len(goModel.Queries))
