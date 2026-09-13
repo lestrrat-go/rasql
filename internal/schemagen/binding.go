@@ -242,33 +242,9 @@ func SameBindingType(left, right BindingRef, nullable bool) bool {
 	return left.key == right.key
 }
 
-func sameColumnBindingType(left, right schema.ColumnDef) (string, bool) {
-	l, err := resolveBindingPackages(left, "")
-	if err != nil {
-		return "", false
-	}
-	r, err := resolveBindingPackages(right, "")
-	if err != nil {
-		return "", false
-	}
-	leftKey, _, err := canonicalBindingTypes(l)
-	if err != nil {
-		return "", false
-	}
-	rightKey, _, err := canonicalBindingTypes(r)
-	if err != nil || leftKey != rightKey {
-		return "", false
-	}
-	return l.For(false), true
-}
-
 func packageNameFor(path, dir string) string {
 	name, _ := (goPackagesNameResolver{}).Name(dir, path)
 	return name
-}
-
-func resolveBindingPackages(column schema.ColumnDef, dir string) (ResolvedBinding, error) {
-	return resolveBindingPackagesWithResolver(column, dir, nil)
 }
 
 func resolveBindingPackagesWithResolver(column schema.ColumnDef, dir string, resolver packageNameResolver) (ResolvedBinding, error) {
@@ -354,28 +330,6 @@ func rewriteBindingExpressionWithNames(expression string, imports []schema.GoImp
 		return "", err
 	}
 	return output.String(), nil
-}
-
-type generatedBindings struct {
-	set  *BindingSet
-	refs map[string]BindingRef
-}
-
-func bindingKey(table schema.TableDef, column schema.ColumnDef) string {
-	return table.Schema + "\x00" + table.Name + "\x00" + column.Name
-}
-
-func (b generatedBindings) ref(table schema.TableDef, column schema.ColumnDef) (BindingRef, bool) {
-	ref, ok := b.refs[bindingKey(table, column)]
-	return ref, ok
-}
-
-func (b generatedBindings) typeFor(table schema.TableDef, column schema.ColumnDef, nullable bool) (string, error) {
-	ref, ok := b.ref(table, column)
-	if !ok {
-		return "", fmt.Errorf("generate: missing binding reference for %s.%s", table.Name, column.Name)
-	}
-	return b.set.Type(ref, nullable)
 }
 
 // ResolvedBinding is the validated Go type and imports for one column.

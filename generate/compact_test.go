@@ -126,31 +126,6 @@ func TestCompactPlanRejectsTypedQuerySelfCollision(t *testing.T) {
 	require.Contains(t, err.Error(), "collides with its function declaration")
 }
 
-func TestCompactManifestMapsRenamedMutationSymbols(t *testing.T) {
-	in := plainEmitterFixture(t)
-	in.Generation.Emitter = "compact"
-	in.Generation.Objects[0].Source = "Account"
-	in.Generation.Objects[0].Row = "AccountRecord"
-	in.Generation.Objects[0].Create = "AccountInsert"
-	in.Generation.Objects[0].Patch = "AccountChange"
-	model, diagnostics := compilerir.BuildGo(in.Semantic, in.Generation)
-	require.Empty(t, diagnostics)
-	in.Go = model
-	store, err := generate.RenderCompact(in)
-	require.NoError(t, err)
-	manifest := store.APIManifest()
-	find := func(legacy string) generate.APIMapping {
-		for _, mapping := range manifest {
-			if mapping.Legacy == legacy {
-				return mapping
-			}
-		}
-		return generate.APIMapping{}
-	}
-	require.Equal(t, generate.APIMapping{Legacy: "AccountCreate", Compact: "store.AccountInsert", Status: "replacement"}, find("AccountCreate"))
-	require.Equal(t, generate.APIMapping{Legacy: "AccountPatch", Compact: "store.AccountChange", Status: "replacement"}, find("AccountPatch"))
-}
-
 func TestCompactRejectsGeneratedSymbolCollisions(t *testing.T) {
 	cases := []struct {
 		name, want string

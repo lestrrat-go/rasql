@@ -17,24 +17,6 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 )
 
-// APIMapping records one declaration's transition from legacy output to the
-// compact surface. It is kept in the held render snapshot for diagnostics.
-type APIMapping struct {
-	Legacy  string `json:"legacy"`
-	Compact string `json:"compact"`
-	Status  string `json:"status"`
-}
-
-// APIManifest returns the compact renderer's immutable declaration mapping.
-// The returned slice can be changed by the caller without changing the held
-// render snapshot.
-func (s Store) APIManifest() []APIMapping {
-	if s.compact == nil {
-		return nil
-	}
-	return append([]APIMapping(nil), s.compact.manifest...)
-}
-
 type compactFile struct {
 	name         string
 	source       []byte
@@ -42,9 +24,8 @@ type compactFile struct {
 }
 
 type compactStoreInput struct {
-	input    EmitterInput
-	files    []compactFile
-	manifest []APIMapping
+	input EmitterInput
+	files []compactFile
 }
 
 // RenderCompact renders canonical compiler input into a Store using the
@@ -161,10 +142,6 @@ func RenderCompact(in EmitterInput) (Store, error) {
 	files = append(files, compactFile{name: schemaDescriptorFilename, source: meta, declarations: metaDeclarations})
 	files = append(files, compactFile{name: schemaDescriptorTestFilename, source: test})
 	sort.Slice(files, func(i, j int) bool { return files[i].name < files[j].name })
-	manifest, err := compactManifest(copy, tables, seenDecls)
-	if err != nil {
-		return Store{}, err
-	}
 	return Store{
 		Package: copy.Generation.Package,
 		Dir:     copy.Generation.Output,
@@ -172,7 +149,7 @@ func RenderCompact(in EmitterInput) (Store, error) {
 		// RenderCompact owns schema declarations from EmitterInput. PlanContext
 		// appends configured SQL from Store.TypedQueries and checks it with the
 		// same file and identifier ledgers.
-		compact: &compactStoreInput{input: copy, files: cloneCompactFiles(files), manifest: append([]APIMapping(nil), manifest...)},
+		compact: &compactStoreInput{input: copy, files: cloneCompactFiles(files)},
 	}, nil
 }
 
@@ -293,129 +270,6 @@ func compactDeclarations(source []byte) ([]string, error) {
 	}
 	sort.Strings(result)
 	return result, nil
-}
-
-func compactManifest(in EmitterInput, tables []schema.TableDef, declarations map[string]string) ([]APIMapping, error) {
-	legacyNames := make(map[schema.ObjectName]legacyObjectNames, len(in.Generation.Objects))
-	for _, object := range in.Catalog.Objects {
-		var table schema.TableDef
-		for _, candidate := range tables {
-			if candidate.Schema == object.Schema && candidate.Name == object.Name {
-				table = candidate
-				break
-			}
-		}
-		for _, config := range in.Generation.Objects {
-			if config.ID != object.ID {
-				continue
-			}
-			legacyNames[table.ObjectName()] = legacyObjectNames{Accessor: config.Source, RowType: config.Row, FileBase: strings.TrimSuffix(config.File, "_gen.go")}
-			break
-		}
-	}
-	resolved, err := schemagen.ResolveNames(in.Generation.Package, tables, toNameOverrides(legacyNames))
-	if err != nil {
-		return nil, fmt.Errorf("generate: compact manifest: %w", err)
-	}
-	legacy := resolved.PackageLevelNames()
-	for _, object := range in.Catalog.Objects {
-		if object.Kind == "view" {
-			continue
-		}
-		config := configsForObject(in.Generation.Objects, object.ID)
-		accessor := config.Source
-		if accessor == "" {
-			accessor = schemagenObjectName(object.Name)
-		}
-		legacy = append(legacy, accessor+"Create", "New"+accessor+"Create", accessor+"Patch", "New"+accessor+"Patch")
-	}
-	sort.Strings(legacy)
-	compactNames := make(map[string]struct{}, len(in.Generation.Objects)*8)
-	legacyReplacement := make(map[string]string, len(in.Generation.Objects)*4)
-	for _, object := range in.Catalog.Objects {
-		config := configsForObject(in.Generation.Objects, object.ID)
-		accessor := config.Source
-		if accessor == "" {
-			accessor = schemagenObjectName(object.Name)
-		}
-		row := config.Row
-		if row == "" {
-			row = accessor + "Row"
-		}
-		create, patch := config.Create, config.Patch
-		if create == "" {
-			create = accessor + "Create"
-		}
-		if patch == "" {
-			patch = accessor + "Patch"
-		}
-		for _, name := range []string{accessor, row, accessor + "Table", create, patch, "New" + create, "New" + patch} {
-			if name != "" {
-				compactNames[name] = struct{}{}
-			}
-		}
-		legacyReplacement[accessor+"Create"] = create
-		legacyReplacement["New"+accessor+"Create"] = "New" + create
-		legacyReplacement[accessor+"Patch"] = patch
-		legacyReplacement["New"+accessor+"Patch"] = "New" + patch
-	}
-	result := make([]APIMapping, 0, len(legacy))
-	seenLegacy := make(map[string]struct{}, len(legacy))
-	for _, name := range legacy {
-		if _, duplicate := seenLegacy[name]; duplicate {
-			return nil, fmt.Errorf("generate: compact manifest duplicate legacy symbol %q", name)
-		}
-		seenLegacy[name] = struct{}{}
-		replacement := name
-		if value, ok := legacyReplacement[name]; ok {
-			replacement = value
-		}
-		if _, intended := compactNames[replacement]; intended {
-			if _, exists := declarations[replacement]; !exists {
-				return nil, fmt.Errorf("generate: compact manifest replacement %q is not emitted", replacement)
-			}
-			result = append(result, APIMapping{Legacy: name, Compact: in.Generation.Package + "." + replacement, Status: "replacement"})
-			continue
-		}
-		result = append(result, APIMapping{Legacy: name, Status: "removed"})
-	}
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].Legacy != result[j].Legacy {
-			return result[i].Legacy < result[j].Legacy
-		}
-		return result[i].Compact < result[j].Compact
-	})
-	return result, nil
-}
-
-func configsForObject(configs []compilerir.ObjectGoName, id compilerir.ObjectID) compilerir.ObjectGoName {
-	for _, config := range configs {
-		if config.ID == id {
-			return config
-		}
-	}
-	return compilerir.ObjectGoName{}
-}
-
-func schemagenObjectName(name string) string {
-	var result strings.Builder
-	upper := true
-	for _, r := range name {
-		if r == '_' || r == '-' || r == ' ' || r == '.' {
-			upper = true
-			continue
-		}
-		if upper {
-			result.WriteString(strings.ToUpper(string(r)))
-			upper = false
-		} else {
-			result.WriteRune(r)
-		}
-	}
-	if result.Len() == 0 {
-		return "Object"
-	}
-	return result.String()
 }
 
 func (s Store) planCompactContext(ctx context.Context) (Plan, error) {
