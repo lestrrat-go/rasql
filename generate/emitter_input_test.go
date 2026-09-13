@@ -8,26 +8,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func plainEmitterFixture(t *testing.T) generate.EmitterInput {
+// plainEmitterParts is the smallest catalog and policy an emitter input can be
+// built from: one table, one column, no mappings. The parts are returned rather
+// than the input itself so a test can alter one of them and see what
+// NewEmitterInput derives from the altered set.
+func plainEmitterParts(t *testing.T) (compilerir.PhysicalCatalog, compilerir.MappingConfig, compilerir.GoConfig) {
 	t.Helper()
 	catalog := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "sqlite", Version: "3"}, Objects: []compilerir.PhysicalObject{{ID: "users", Kind: "table", Name: "users", Columns: []compilerir.PhysicalColumn{{Name: "id", Ordinal: 0, LogicalKind: "integer"}}}}}
-	semantic, diagnostics := compilerir.BuildSemantic(catalog, compilerir.MappingConfig{}, nil)
-	if len(diagnostics) != 0 {
-		t.Fatalf("semantic diagnostics: %#v", diagnostics)
-	}
-	config := compilerir.GoConfig{Package: "store", Output: "generated", Emitter: "legacy", Objects: []compilerir.ObjectGoName{{ID: "users", File: "users_gen.go"}}}
-	model, diagnostics := compilerir.BuildGo(semantic, config)
-	if len(diagnostics) != 0 {
-		t.Fatalf("Go diagnostics: %#v", diagnostics)
-	}
-	in, err := generate.NewEmitterInput(catalog, semantic, model, config, compilerir.MappingConfig{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	config := compilerir.GoConfig{Package: "store", Output: "generated", Emitter: "compact", Objects: []compilerir.ObjectGoName{{ID: "users", File: "users_gen.go"}}}
+	return catalog, compilerir.MappingConfig{}, config
+}
+
+func plainEmitterFixture(t *testing.T) generate.EmitterInput {
+	t.Helper()
+	catalog, mappings, config := plainEmitterParts(t)
+	in, err := generate.NewEmitterInput(catalog, mappings, config)
+	require.NoError(t, err)
 	return in
 }
 
-func emitterFixture(t *testing.T) (generate.EmitterInput, compilerir.GoConfig) {
+// emitterParts adds a nullable column carrying a scalar mapping, so a test can
+// check what the derived Go model binds that column to.
+func emitterParts(t *testing.T) (compilerir.PhysicalCatalog, compilerir.MappingConfig, compilerir.GoConfig) {
 	t.Helper()
 	catalog := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "sqlite", Version: "3"}, Objects: []compilerir.PhysicalObject{{
 		ID: "users", Kind: "table", Name: "users", Columns: []compilerir.PhysicalColumn{
@@ -36,125 +38,182 @@ func emitterFixture(t *testing.T) (generate.EmitterInput, compilerir.GoConfig) {
 		},
 	}}}
 	mapping := compilerir.ScalarMapping{Name: "status", Match: compilerir.NativeMatch{LogicalKind: "text"}, GoType: "Status", NullableGoType: "NullableStatus", Codec: "status"}
-	semantic, diagnostics := compilerir.BuildSemantic(catalog, compilerir.MappingConfig{Scalars: []compilerir.ScalarMapping{mapping}}, nil)
-	if len(diagnostics) != 0 {
-		t.Fatalf("semantic diagnostics: %#v", diagnostics)
-	}
-	config := compilerir.GoConfig{Package: "store", Output: "generated", Emitter: "legacy", Scalars: []compilerir.ScalarMapping{mapping}, Objects: []compilerir.ObjectGoName{{ID: "users", File: "users_gen.go"}}}
-	model, diagnostics := compilerir.BuildGo(semantic, config)
-	if len(diagnostics) != 0 {
-		t.Fatalf("Go diagnostics: %#v", diagnostics)
-	}
-	in, err := generate.NewEmitterInput(catalog, semantic, model, config, compilerir.MappingConfig{Scalars: []compilerir.ScalarMapping{mapping}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return in, config
+	mappings := compilerir.MappingConfig{Scalars: []compilerir.ScalarMapping{mapping}}
+	config := compilerir.GoConfig{Package: "store", Output: "generated", Emitter: "compact", Objects: []compilerir.ObjectGoName{{ID: "users", File: "users_gen.go"}}}
+	return catalog, mappings, config
 }
 
-func TestEmitterInputCloneOwnsNestedValues(t *testing.T) {
-	in, _ := emitterFixture(t)
-	clone := in.Clone()
-	clone.Catalog.Objects[0].Columns[0].Name = "changed"
-	clone.Semantic.Objects[0].Columns[0].Name = "changed"
-	clone.Go.Objects[0].Columns[0].GoType = "Changed"
-	clone.Generation.Scalars[0].Imports = append(clone.Generation.Scalars[0].Imports, compilerir.GoImport{Path: "example.com/changed"})
-	if in.Catalog.Objects[0].Columns[0].Name != "id" || in.Semantic.Objects[0].Columns[0].Name != "id" || in.Go.Objects[0].Columns[0].GoType == "Changed" || len(in.Generation.Scalars[0].Imports) != 0 {
-		t.Fatal("clone mutation changed emitter input")
-	}
+func emitterFixture(t *testing.T) generate.EmitterInput {
+	t.Helper()
+	catalog, mappings, config := emitterParts(t)
+	in, err := generate.NewEmitterInput(catalog, mappings, config)
+	require.NoError(t, err)
+	return in
+}
+
+// TestNewEmitterInputDerivesTheCanonicalModels pins the invariant the input's
+// unexported models rest on: they are what BuildSemantic and BuildGo produce
+// for the same catalog and policy, not something a caller chose.
+func TestNewEmitterInputDerivesTheCanonicalModels(t *testing.T) {
+	catalog, mappings, config := emitterParts(t)
+	in, err := generate.NewEmitterInput(catalog, mappings, config)
+	require.NoError(t, err)
+
+	semantic, diagnostics := compilerir.BuildSemantic(catalog, mappings, nil)
+	require.Empty(t, diagnostics)
+	config.Scalars = mappings.Scalars
+	want, diagnostics := compilerir.BuildGo(semantic, config)
+	require.Empty(t, diagnostics)
+	require.Equal(t, want, in.GoModel())
+}
+
+// TestNewEmitterInputFillsGenerationScalars covers a caller that configures its
+// scalar mappings once, in the mapping config. The Go builder reads them from
+// the generation config, and the constructor is what carries them across.
+func TestNewEmitterInputFillsGenerationScalars(t *testing.T) {
+	catalog, mappings, config := emitterParts(t)
+	require.Empty(t, config.Scalars, "the fixture leaves generation scalars unset")
+	in, err := generate.NewEmitterInput(catalog, mappings, config)
+	require.NoError(t, err)
+
+	status, ok := goColumn(in.GoModel(), "users", "status")
+	require.True(t, ok)
+	require.Equal(t, "NullableStatus", status.GoType)
+	require.Equal(t, "status", status.Codec)
 }
 
 func TestNewEmitterInputOwnsConstructorInputs(t *testing.T) {
-	in, _ := emitterFixture(t)
-	constructed, err := generate.NewEmitterInput(in.Catalog, in.Semantic, in.Go, in.Generation, in.Mappings)
+	catalog, mappings, config := emitterParts(t)
+	in, err := generate.NewEmitterInput(catalog, mappings, config)
 	require.NoError(t, err)
+	before := in.GoModel()
 
-	in.Catalog.Objects[0].Columns[0].Name = "changed"
-	in.Semantic.Objects[0].Columns[0].Name = "changed"
-	in.Go.Objects[0].Columns[0].GoType = "Changed"
-	in.Generation.Objects[0].File = "changed.go"
-	in.Mappings.Scalars[0].GoType = "Changed"
+	catalog.Objects[0].Columns[0].Name = "changed"
+	mappings.Scalars[0].GoType = "Changed"
+	config.Objects[0].File = "changed.go"
 
-	require.Equal(t, "id", constructed.Catalog.Objects[0].Columns[0].Name)
-	require.Equal(t, "id", constructed.Semantic.Objects[0].Columns[0].Name)
-	require.NotEqual(t, "Changed", constructed.Go.Objects[0].Columns[0].GoType)
-	require.Equal(t, "users_gen.go", constructed.Generation.Objects[0].File)
-	require.Equal(t, "Status", constructed.Mappings.Scalars[0].GoType)
+	require.Equal(t, before, in.GoModel())
 }
 
-func TestEmitterInputRejectsMissingOrConflictingPolicy(t *testing.T) {
-	in, config := emitterFixture(t)
+// TestGoModelHandsBackACopy covers the other direction: what an accessor
+// returns is the caller's to mutate.
+func TestGoModelHandsBackACopy(t *testing.T) {
+	in := emitterFixture(t)
+	model := in.GoModel()
+	model.Objects[0].Columns[0].GoType = "Changed"
+	require.NotEqual(t, "Changed", in.GoModel().Objects[0].Columns[0].GoType)
+}
+
+func TestNewEmitterInputRejectsUnusableGenerationPolicy(t *testing.T) {
 	cases := []struct {
-		name string
-		edit func(*generate.EmitterInput)
+		name, want string
+		edit       func(*compilerir.GoConfig)
 	}{
-		{name: "missing object policy", edit: func(value *generate.EmitterInput) { value.Generation.Objects = nil }},
-		{name: "semantic kind", edit: func(value *generate.EmitterInput) { value.Semantic.Objects[0].Kind = "view" }},
-		{name: "codec", edit: func(value *generate.EmitterInput) { value.Go.Objects[0].Columns[1].Codec = "other" }},
-		{name: "relation coverage", edit: func(value *generate.EmitterInput) {
-			value.Go.Objects[0].Relations = []compilerir.GoRelation{{Name: "missing", Target: "users", Kind: "belongs_to"}}
-		}},
+		{
+			name: "no object policy",
+			want: "does not cover every catalog object",
+			edit: func(config *compilerir.GoConfig) { config.Objects = nil },
+		},
+		{
+			name: "object absent from catalog",
+			want: "is absent from catalog",
+			edit: func(config *compilerir.GoConfig) {
+				config.Objects[0].ID = "ghosts"
+			},
+		},
+		{
+			name: "duplicated object",
+			want: "is duplicated",
+			edit: func(config *compilerir.GoConfig) {
+				// The copy names no output file, so it reaches the duplicate
+				// check rather than tripping ValidateGo's duplicate-file check
+				// on the way there.
+				second := config.Objects[0]
+				second.File = ""
+				config.Objects = append(config.Objects, second)
+			},
+		},
+		{
+			name: "query names no semantic query",
+			want: "is absent from semantic model",
+			edit: func(config *compilerir.GoConfig) {
+				config.Queries = []compilerir.QueryGoName{{ID: "find_users", Function: "FindUsers"}}
+			},
+		},
+		{
+			name: "no emitter",
+			want: "must be compact or legacy",
+			edit: func(config *compilerir.GoConfig) { config.Emitter = "" },
+		},
+		{
+			name: "no output",
+			want: "package and output are required",
+			edit: func(config *compilerir.GoConfig) { config.Output = "" },
+		},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			candidate := in.Clone()
-			test.edit(&candidate)
-			if err := candidate.Validate(); err == nil {
-				t.Fatal("inconsistent emitter input was accepted")
-			}
+			catalog, mappings, config := plainEmitterParts(t)
+			test.edit(&config)
+			_, err := generate.NewEmitterInput(catalog, mappings, config)
+			require.ErrorContains(t, err, test.want)
 		})
 	}
-	config.Objects = nil
-	if _, err := generate.NewEmitterInput(in.Catalog, in.Semantic, in.Go, config, in.Mappings); err == nil {
-		t.Fatal("missing generation policy was accepted")
-	}
 }
 
-func TestEmitterInputAcceptsCanonicalViewWithoutWriteShapes(t *testing.T) {
-	in := plainEmitterFixture(t)
-	in.Catalog.Objects[0].Kind = "view"
-	in.Semantic.Objects[0].Kind = "view"
-	in.Semantic.Objects[0].Columns[0].InsertState = "forbidden"
-	in.Semantic.Objects[0].Columns[0].PatchState = "forbidden"
-	in.Go.Objects[0].Columns[0].InsertState = "forbidden"
-	in.Go.Objects[0].Columns[0].PatchState = "forbidden"
-	in.Go.Objects[0].Create = nil
-	in.Go.Objects[0].Patch = nil
-	if err := in.Validate(); err != nil {
-		t.Fatalf("view without write shapes rejected: %v", err)
-	}
+// TestNewEmitterInputRejectsAnUnmappedCatalog covers a catalog the mapping
+// config does not cover: the semantic builder has no scalar for the column, and
+// the constructor reports that rather than emitting a store around it.
+func TestNewEmitterInputRejectsAnUnmappedCatalog(t *testing.T) {
+	catalog, mappings, config := plainEmitterParts(t)
+	catalog.Objects[0].Columns = append(catalog.Objects[0].Columns, compilerir.PhysicalColumn{
+		Name: "balance", Ordinal: 1, LogicalKind: "native",
+		Native: &compilerir.NativeType{Dialect: "sqlite", Name: "MONEY", Kind: "other"},
+	})
+	_, err := generate.NewEmitterInput(catalog, mappings, config)
+	require.ErrorContains(t, err, "opaque native type requires an explicit mapping")
 }
 
-func TestEmitterInputRequiresCanonicalRelationMappings(t *testing.T) {
-	in := manyThroughEmitterFixture(t)
-	clone := in.Clone()
-	clone.Mappings.Relations[0].Through.SourceFrom[0] = "changed"
-	require.Equal(t, "user_id", in.Mappings.Relations[0].Through.SourceFrom[0])
-	require.Error(t, clone.Validate())
+// TestNewEmitterInputDerivesViewWriteShapes covers a view, whose columns are
+// all forbidden to write: the derived Go model still carries create and patch
+// shapes, and they carry no fields.
+func TestNewEmitterInputDerivesViewWriteShapes(t *testing.T) {
+	catalog, mappings, config := plainEmitterParts(t)
+	catalog.Objects[0].Kind = "view"
+	in, err := generate.NewEmitterInput(catalog, mappings, config)
+	require.NoError(t, err)
 
-	_, err := generate.NewEmitterInput(in.Catalog, in.Semantic, in.Go, in.Generation)
-	require.ErrorContains(t, err, "semantic model disagrees")
-
-	fabricated := in.Clone()
-	fabricated.Mappings = compilerir.MappingConfig{}
-	require.ErrorContains(t, fabricated.Validate(), "semantic model disagrees")
-
-	changedGo := in.Clone()
-	var found bool
-	for index := range changedGo.Go.Objects[0].Relations {
-		relation := &changedGo.Go.Objects[0].Relations[index]
-		if relation.Name != "Roles" || relation.Through == nil {
-			continue
-		}
-		relation.Through.TargetFrom[0] = "user_id"
-		found = true
-		break
-	}
-	require.True(t, found, "canonical many-through relation Roles was not found")
-	require.ErrorContains(t, changedGo.Validate(), "path disagrees")
+	object := in.GoModel().Objects[0]
+	require.NotNil(t, object.Create)
+	require.NotNil(t, object.Patch)
+	require.Empty(t, object.Create.Fields)
+	require.Empty(t, object.Patch.Fields)
 }
 
-func manyThroughEmitterFixture(t *testing.T) generate.EmitterInput {
+// TestNewEmitterInputDerivesRelationsFromMappings covers a many-through
+// relation that exists only because the mapping config declares it: it is in
+// the derived Go model when the mappings are passed and gone when they are not.
+func TestNewEmitterInputDerivesRelationsFromMappings(t *testing.T) {
+	catalog, mappings, config := manyThroughEmitterParts(t)
+	in, err := generate.NewEmitterInput(catalog, mappings, config)
+	require.NoError(t, err)
+
+	relation, ok := goRelation(in.GoModel(), "users", "Roles")
+	require.True(t, ok, "the mapped many-through relation reached the Go model")
+	require.Equal(t, "many_through", relation.Kind)
+	require.Equal(t, compilerir.ObjectID("roles"), relation.Target)
+	require.NotNil(t, relation.Through)
+	require.Equal(t, compilerir.ObjectID("user_roles"), relation.Through.Object)
+	require.Equal(t, []string{"user_id"}, relation.Through.SourceFrom)
+	require.Equal(t, []string{"role_id"}, relation.Through.TargetFrom)
+
+	without, err := generate.NewEmitterInput(catalog, compilerir.MappingConfig{}, config)
+	require.NoError(t, err)
+	_, ok = goRelation(without.GoModel(), "users", "Roles")
+	require.False(t, ok, "the relation exists only because the mappings declare it")
+}
+
+func manyThroughEmitterParts(t *testing.T) (compilerir.PhysicalCatalog, compilerir.MappingConfig, compilerir.GoConfig) {
 	t.Helper()
 	integer := func(name string, ordinal int) compilerir.PhysicalColumn {
 		return compilerir.PhysicalColumn{Name: name, Ordinal: ordinal, LogicalKind: "integer"}
@@ -167,12 +226,34 @@ func manyThroughEmitterFixture(t *testing.T) generate.EmitterInput {
 	}}
 	catalog := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "sqlite", Version: "3"}, Objects: []compilerir.PhysicalObject{users, roles, userRoles}}
 	mappings := compilerir.MappingConfig{Relations: []compilerir.RelationMapping{{Name: "Roles", Source: "users", From: []string{"id"}, Target: "roles", To: []string{"id"}, Through: compilerir.ThroughMapping{Object: "user_roles", SourceFrom: []string{"user_id"}, SourceTo: []string{"id"}, TargetFrom: []string{"role_id"}, TargetTo: []string{"id"}}}}}
-	semantic, diagnostics := compilerir.BuildSemantic(catalog, mappings, nil)
-	require.Empty(t, diagnostics)
-	config := compilerir.GoConfig{Package: "store", Output: "generated", Emitter: "legacy", Objects: []compilerir.ObjectGoName{{ID: "users"}, {ID: "roles"}, {ID: "user_roles"}}}
-	model, diagnostics := compilerir.BuildGo(semantic, config)
-	require.Empty(t, diagnostics)
-	in, err := generate.NewEmitterInput(catalog, semantic, model, config, mappings)
-	require.NoError(t, err)
-	return in
+	config := compilerir.GoConfig{Package: "store", Output: "generated", Emitter: "compact", Objects: []compilerir.ObjectGoName{{ID: "users"}, {ID: "roles"}, {ID: "user_roles"}}}
+	return catalog, mappings, config
+}
+
+func goColumn(model compilerir.GoModel, object compilerir.ObjectID, name string) (compilerir.GoColumn, bool) {
+	for _, candidate := range model.Objects {
+		if candidate.ID != object {
+			continue
+		}
+		for _, column := range candidate.Columns {
+			if column.Name == name {
+				return column, true
+			}
+		}
+	}
+	return compilerir.GoColumn{}, false
+}
+
+func goRelation(model compilerir.GoModel, object compilerir.ObjectID, name string) (compilerir.GoRelation, bool) {
+	for _, candidate := range model.Objects {
+		if candidate.ID != object {
+			continue
+		}
+		for _, relation := range candidate.Relations {
+			if relation.Name == name {
+				return relation, true
+			}
+		}
+	}
+	return compilerir.GoRelation{}, false
 }

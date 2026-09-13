@@ -39,9 +39,9 @@ func Example_schema_table_definition() {
 	//
 	// RowNamed states the Go row type rasqlgen generates for the table: here
 	// it makes the row type User instead of the default UsersRow, so calling
-	// code reads store.User rather than store.UsersRow. Like RelationshipNamed
-	// below, it is a code-generation hint only — rasqlgen reads it, but
-	// nothing else in rasql does, and it never appears in rendered SQL.
+	// code reads store.User rather than store.UsersRow. It is a
+	// code-generation hint only — rasqlgen reads it, but nothing else in
+	// rasql does, and it never appears in rendered SQL.
 	users := schema.MustTableDef("users",
 		schema.Integer("id"),
 		schema.Text("email"),
@@ -55,12 +55,10 @@ func Example_schema_table_definition() {
 		schema.RowNamed("User"),
 	)
 
-	// A foreign key's Named, References, and OnDelete options configure the
-	// constraint itself. RelationshipNamed additionally derives the belongs-to
-	// schema.RelationshipDef that rasqlgen would otherwise name on its own
-	// from the local column, letting the generated method read
-	// orders.Buyer() rather than orders.Customer(). InverseNamed pins the
-	// public inverse method when a child has several links to one parent.
+	// A foreign key's Named, References, OnDelete, and OnUpdate options
+	// configure the constraint itself. Named states the constraint name the
+	// dialect renders, and leaving it out lets the server name the constraint
+	// on its own.
 	orders := schema.MustTableDef("orders",
 		schema.Integer("id"),
 		schema.Integer("customer_id"),
@@ -68,17 +66,16 @@ func Example_schema_table_definition() {
 		schema.ForeignKey("customer_id",
 			schema.Named("orders_customer_fkey"),
 			schema.References("customers", "id"),
-			schema.OnDelete(schema.Cascade),
-			schema.RelationshipNamed("buyer")),
+			schema.OnDelete(schema.Cascade)),
 	)
 
 	fmt.Printf("%s: %d columns, primary key %v, row type %s\n", users.Name, len(users.Columns), users.PrimaryKey, users.RowName)
-	fmt.Printf("%s: foreign key %s references %s, relationship %q\n",
-		orders.Name, orders.ForeignKeys[0].Name, orders.ForeignKeys[0].ReferencedTable, orders.Relationships[0].Name)
+	fmt.Printf("%s: foreign key %s references %s on delete %s\n",
+		orders.Name, orders.ForeignKeys[0].Name, orders.ForeignKeys[0].ReferencedTable, orders.ForeignKeys[0].OnDelete)
 
 	// Output:
 	// users: 5 columns, primary key [id], row type User
-	// orders: foreign key orders_customer_fkey references customers, relationship "buyer"
+	// orders: foreign key orders_customer_fkey references customers on delete CASCADE
 }
 ```
 source: [examples/schema_table_definition_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/schema_table_definition_example_test.go)
@@ -133,7 +130,6 @@ Both take the same `schema.ForeignKeyOption` values.
 | `schema.References` | The target table and columns. |
 | `schema.ReferencesIn` | The same, for a target qualified by schema. |
 | `schema.OnDelete` / `schema.OnUpdate` | A reference action: `schema.Cascade`, `schema.Restrict`, `schema.SetNull`, `schema.SetDefault`, or `schema.NoAction`. |
-| `schema.RelationshipNamed` | A belongs-to `RelationshipDef` derived alongside the constraint. |
 
 Together these constructors cover every shape a struct literal can express.
 A composite foreign key, a named unique constraint or check, and a unique index all have an option-form constructor, so none of them needs a struct literal.
@@ -162,7 +158,6 @@ So reading a descriptor back means reading this struct rather than a list of opt
 | `Checks` | Check constraints. |
 | `Indexes` | Secondary indexes. |
 | `ForeignKeys` | References to other tables, with their update and delete actions. |
-| `Relationships` | Optional named relationship metadata used by generated relationship APIs. |
 
 A struct literal remains a fully supported way to build a `schema.TableDef` directly.
 Every field takes a keyed composite literal such as `schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{...}, ...}`.
@@ -179,25 +174,11 @@ A live database can attach facts to a table that `rasql` records but cannot writ
 [Inspection-only facts](08-inspection-facts.md) lists every one of them.
 Skip that page while writing a descriptor by hand, since none of those facts has an option-form constructor.
 
-## Relationships
+## Reading across tables
 
-`ForeignKeys` is the only field that renders into a database constraint.
-`rasqlgen` derives a `schema.RelationshipDef` with kind `schema.RelationshipBelongsTo` for each foreign key that has no matching entry in `Relationships`.
-The `schema.RelationshipNamed` foreign-key option states one explicitly instead.
-Set `Relationships` yourself for logical direct links or through-table links.
-A direct link may describe the same columns as a physical foreign key, and a logical link changes no DDL at all.
-Use `schema.Relationship` with `schema.Through` for many-to-many links.
-
-An inverse method uses the child table shorthand only when that child has one relationship to the parent.
-Multiple relationships receive names that include the relationship name, so adding a foreign key cannot silently change an existing method's join.
-Use `schema.InverseNamed` with `schema.RelationshipNamed` to pin a public inverse method across descriptor changes.
-
-The generated API supports nullable and composite direct links, unique has-one inverses, through-table many-to-many links, bounded `LoadWith` options, and nested `LoadThen` callbacks.
-When both tables are generated in the package, each relation exposes `Join`, `Load`, and `LoadWith`, and a collection relation also exposes `LoadThen`.
-Loads omit missing nullable keys, preserve ordered composite keys, group rows by source key, and split binds within the configured relationship budget.
-
-Polymorphic links, and relationships whose target table is not generated in the package, are not supported.
-Write an ordinary SQL join over the foreign key for those.
+`ForeignKeys` describes the database constraint and nothing more.
+`rasqlgen` generates no traversal methods from it, so reach a related table through an ordinary join or through a graph plan.
+[The SQL builder](02-sql-builder.md) covers joins, and [Typed queries](../orm/03-typed-queries.md) covers `rasql.NewGraphPlan`, which loads related rows in bounded batches and takes each edge explicitly.
 
 ## Name the generated row type
 
@@ -1062,7 +1043,7 @@ Native identities render only on a matching dialect, and cross-dialect DDL retur
 ## Typed read surfaces for views
 
 Inspected views expose `schema.ObjectView` and read-only operations.
-Generated view wrappers embed `rasql.ReadTable[T]`, so typed selects and relationship loads compile, while insert, update, delete, and table DDL require `rasql.Table[T]` and fail at compile time.
+Generated view wrappers embed `rasql.ReadTable[T]`, so typed selects compile, while insert, update, delete, and table DDL require `rasql.Table[T]` and fail at compile time.
 
 Use `rasql.ReadTableOf[T]` for a hand-built queryable descriptor.
 Use `catalog.Options{IncludeViews: true}` when generating a store that includes inspected views.

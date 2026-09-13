@@ -32,13 +32,6 @@ func TestTableCloneCopiesDescriptor(t *testing.T) {
 		Name:     "orders_no_overlap",
 		Elements: []schema.ExclusionElementDef{{Expression: "customer_id", Operator: "="}},
 	}}
-	descriptor.Relationships = []schema.RelationshipDef{{
-		Name:              "Customer",
-		Kind:              schema.RelationshipBelongsTo,
-		Columns:           []string{"customer_id"},
-		ReferencedTable:   "customers",
-		ReferencedColumns: []string{"id"},
-	}}
 	table := descriptor.Clone()
 
 	descriptor.Columns[0].Name = "changed"
@@ -46,7 +39,6 @@ func TestTableCloneCopiesDescriptor(t *testing.T) {
 	descriptor.Indexes[0].Columns[0] = "changed"
 	descriptor.ForeignKeys[0].ReferencedColumns[0] = "changed"
 	descriptor.ExclusionConstraints[0].Elements[0].Expression = "changed"
-	descriptor.Relationships[0].Columns[0] = "changed"
 	descriptor.Schema = "changed"
 	descriptor.RowName = "changed"
 
@@ -57,7 +49,6 @@ func TestTableCloneCopiesDescriptor(t *testing.T) {
 	require.Equal(t, "customer_id", table.Indexes[0].Columns[0])
 	require.Equal(t, "id", table.ForeignKeys[0].ReferencedColumns[0])
 	require.Equal(t, sqltext.Text("customer_id"), table.ExclusionConstraints[0].Elements[0].Expression)
-	require.Equal(t, "customer_id", table.Relationships[0].Columns[0])
 
 	amount, ok := table.Column("amount")
 	require.True(t, ok)
@@ -86,25 +77,14 @@ func TestObjectNameIdentityAndJSON(t *testing.T) {
 	require.Equal(t, `{"name":"users"}`, string(encoded))
 }
 
-func TestRelationshipsFromForeignKeysInfersOptionality(t *testing.T) {
-	table := schema.TableDef{
-		Columns:     []schema.ColumnDef{{Name: "user_id", Type: schema.IntegerType{}, Nullable: true}},
-		ForeignKeys: []schema.ForeignKeyDef{{Columns: []string{"user_id"}, ReferencedTable: "users", ReferencedColumns: []string{"id"}}},
-	}
-	relationships := schema.RelationshipsFromForeignKeys(table)
-	require.Len(t, relationships, 1)
-	require.Equal(t, schema.RelationshipOptional, relationships[0].Optionality)
-}
-
 // TestTableCloneNilSlicesRoundTrip covers the empty descriptor Clone's
 // TestTableCloneCopiesDescriptor case never exercises: a TableDef whose
 // nine slice fields (Columns, PrimaryKey, VirtualTableModuleArguments,
-// UniqueConstraints, Checks, ExclusionConstraints, Indexes, ForeignKeys,
-// Relationships) are all left nil must clone to a value that is
-// reflect.DeepEqual to itself, rather than to one where any of those
-// fields turned into a non-nil empty slice. Its second case makes the same
-// demand of every container a constraint, index, foreign key or
-// relationship owns.
+// UniqueConstraints, Checks, ExclusionConstraints, Indexes, ForeignKeys) are
+// all left nil must clone to a value that is reflect.DeepEqual to itself,
+// rather than to one where any of those fields turned into a non-nil empty
+// slice. Its second case makes the same demand of every container a
+// constraint, index or foreign key owns.
 func TestTableCloneNilSlicesRoundTrip(t *testing.T) {
 	t.Run("table level", func(t *testing.T) {
 		descriptor := schema.TableDef{Name: "orders"}
@@ -119,7 +99,6 @@ func TestTableCloneNilSlicesRoundTrip(t *testing.T) {
 		require.Nil(t, clone.ExclusionConstraints)
 		require.Nil(t, clone.Indexes)
 		require.Nil(t, clone.ForeignKeys)
-		require.Nil(t, clone.Relationships)
 	})
 
 	t.Run("within an element", func(t *testing.T) {
@@ -129,7 +108,6 @@ func TestTableCloneNilSlicesRoundTrip(t *testing.T) {
 			ExclusionConstraints: []schema.ExclusionDef{{Name: "orders_no_overlap"}},
 			Indexes:              []schema.IndexDef{{Name: "orders_id_idx"}},
 			ForeignKeys:          []schema.ForeignKeyDef{{Name: "orders_customer_fk"}},
-			Relationships:        []schema.RelationshipDef{{Name: "Customer"}},
 		}
 		clone := descriptor.Clone()
 
@@ -148,8 +126,6 @@ func TestTableCloneNilSlicesRoundTrip(t *testing.T) {
 		require.Nil(t, clone.ForeignKeys[0].Columns)
 		require.Nil(t, clone.ForeignKeys[0].ReferencedColumns)
 		require.Nil(t, clone.ForeignKeys[0].DeleteSetColumns)
-		require.Nil(t, clone.Relationships[0].Columns)
-		require.Nil(t, clone.Relationships[0].ReferencedColumns)
 	})
 }
 
@@ -170,7 +146,6 @@ func TestTableCloneEmptyContainersStayNonNil(t *testing.T) {
 			ExclusionConstraints:        []schema.ExclusionDef{},
 			Indexes:                     []schema.IndexDef{},
 			ForeignKeys:                 []schema.ForeignKeyDef{},
-			Relationships:               []schema.RelationshipDef{},
 		}
 		clone := descriptor.Clone()
 
@@ -183,7 +158,6 @@ func TestTableCloneEmptyContainersStayNonNil(t *testing.T) {
 		require.NotNil(t, clone.ExclusionConstraints)
 		require.NotNil(t, clone.Indexes)
 		require.NotNil(t, clone.ForeignKeys)
-		require.NotNil(t, clone.Relationships)
 	})
 
 	t.Run("within an element", func(t *testing.T) {
@@ -215,11 +189,6 @@ func TestTableCloneEmptyContainersStayNonNil(t *testing.T) {
 				ReferencedColumns: []string{},
 				DeleteSetColumns:  []string{},
 			}},
-			Relationships: []schema.RelationshipDef{{
-				Name:              "Customer",
-				Columns:           []string{},
-				ReferencedColumns: []string{},
-			}},
 		}
 		clone := descriptor.Clone()
 
@@ -238,8 +207,6 @@ func TestTableCloneEmptyContainersStayNonNil(t *testing.T) {
 		require.NotNil(t, clone.ForeignKeys[0].Columns)
 		require.NotNil(t, clone.ForeignKeys[0].ReferencedColumns)
 		require.NotNil(t, clone.ForeignKeys[0].DeleteSetColumns)
-		require.NotNil(t, clone.Relationships[0].Columns)
-		require.NotNil(t, clone.Relationships[0].ReferencedColumns)
 	})
 }
 
@@ -269,49 +236,6 @@ func TestTableCloneContainersAreIndependent(t *testing.T) {
 
 		require.True(t, reflect.DeepEqual(containerTableDef(), descriptor))
 	})
-}
-
-// TestRelationshipCloneContainers covers RelationshipDef.Clone on its own,
-// since it is exported and TableDef.Clone is not its only caller: it must
-// keep each column list's nilness and hand back lists independent of the
-// source's in both directions.
-func TestRelationshipCloneContainers(t *testing.T) {
-	unset := schema.RelationshipDef{Name: "Customer", Kind: schema.RelationshipBelongsTo}
-	require.True(t, reflect.DeepEqual(unset, unset.Clone()))
-	require.Nil(t, unset.Clone().Columns)
-	require.Nil(t, unset.Clone().ReferencedColumns)
-
-	empty := schema.RelationshipDef{
-		Name:              "Customer",
-		Kind:              schema.RelationshipBelongsTo,
-		Columns:           []string{},
-		ReferencedColumns: []string{},
-	}
-	require.True(t, reflect.DeepEqual(empty, empty.Clone()))
-	require.NotNil(t, empty.Clone().Columns)
-	require.NotNil(t, empty.Clone().ReferencedColumns)
-
-	populated := schema.RelationshipDef{
-		Name:              "Customer",
-		Kind:              schema.RelationshipBelongsTo,
-		Columns:           []string{"customer_id"},
-		ReferencedTable:   "customers",
-		ReferencedColumns: []string{"id"},
-	}
-
-	fromSource := populated.Clone()
-	populated.Columns[0] = "changed"
-	populated.ReferencedColumns[0] = "changed"
-	require.Equal(t, "customer_id", fromSource.Columns[0])
-	require.Equal(t, "id", fromSource.ReferencedColumns[0])
-
-	populated.Columns[0] = "customer_id"
-	populated.ReferencedColumns[0] = "id"
-	fromClone := populated.Clone()
-	fromClone.Columns[0] = "changed"
-	fromClone.ReferencedColumns[0] = "changed"
-	require.Equal(t, "customer_id", populated.Columns[0])
-	require.Equal(t, "id", populated.ReferencedColumns[0])
 }
 
 // TestTableCloneCoversEveryContainerField is the mechanical half of the same
@@ -438,13 +362,6 @@ func containerTableDef() schema.TableDef {
 			OnDelete:          schema.SetNull,
 			DeleteSetColumns:  []string{"customer_id"},
 		}},
-		Relationships: []schema.RelationshipDef{{
-			Name:              "Customer",
-			Kind:              schema.RelationshipBelongsTo,
-			Columns:           []string{"customer_id"},
-			ReferencedTable:   "customers",
-			ReferencedColumns: []string{"id"},
-		}},
 	}
 }
 
@@ -485,11 +402,6 @@ func mutateContainers(table *schema.TableDef) {
 	key.Columns[0] = "changed"
 	key.ReferencedColumns[0] = "changed"
 	key.DeleteSetColumns[0] = "changed"
-
-	relationship := &table.Relationships[0]
-	relationship.Name = "changed"
-	relationship.Columns[0] = "changed"
-	relationship.ReferencedColumns[0] = "changed"
 }
 
 // TestTableCloneMixedNilAndPopulatedSlices covers a descriptor with some of
@@ -523,7 +435,6 @@ func TestTableCloneMixedNilAndPopulatedSlices(t *testing.T) {
 	require.Nil(t, clone.UniqueConstraints)
 	require.Nil(t, clone.Checks)
 	require.Nil(t, clone.ExclusionConstraints)
-	require.Nil(t, clone.Relationships)
 
 	descriptor.Indexes[0].Columns[0] = "changed"
 	descriptor.ForeignKeys[0].ReferencedColumns[0] = "changed"
@@ -1763,59 +1674,6 @@ func TestTableValidateAllowsRepeatedEmptyConstraintNames(t *testing.T) {
 		ForeignKeys: []schema.ForeignKeyDef{{
 			Columns:           []string{"org_id"},
 			ReferencedTable:   "orgs",
-			ReferencedColumns: []string{"id"},
-		}},
-	}
-
-	require.NoError(t, table.Validate())
-}
-
-func TestTableValidatesRelationshipMetadata(t *testing.T) {
-	table := schema.TableDef{
-		Name: "orders",
-		Columns: []schema.ColumnDef{
-			{Name: "id", Type: schema.IntegerType{}},
-			{Name: "customer_id", Type: schema.IntegerType{}},
-		},
-		ForeignKeys: []schema.ForeignKeyDef{{
-			Name:              "orders_customer_id_fkey",
-			Columns:           []string{"customer_id"},
-			ReferencedTable:   "customers",
-			ReferencedColumns: []string{"id"},
-		}},
-		Relationships: []schema.RelationshipDef{{
-			Name:              "Customer",
-			Kind:              schema.RelationshipBelongsTo,
-			Columns:           []string{"customer_id"},
-			ReferencedTable:   "customers",
-			ReferencedColumns: []string{"id"},
-		}},
-	}
-	require.NoError(t, table.Validate())
-
-	table.Relationships[0].Columns = []string{"missing"}
-	err := table.Validate()
-	require.ErrorContains(t, err, "relationships[0].columns[0]")
-}
-
-func TestTableAllowsRelationshipWithoutMatchingForeignKey(t *testing.T) {
-	table := schema.TableDef{
-		Name: "orders",
-		Columns: []schema.ColumnDef{
-			{Name: "id", Type: schema.IntegerType{}},
-			{Name: "user_id", Type: schema.IntegerType{}},
-			{Name: "other_id", Type: schema.IntegerType{}},
-		},
-		ForeignKeys: []schema.ForeignKeyDef{{
-			Columns:           []string{"user_id"},
-			ReferencedTable:   "users",
-			ReferencedColumns: []string{"id"},
-		}},
-		Relationships: []schema.RelationshipDef{{
-			Name:              "User",
-			Kind:              schema.RelationshipBelongsTo,
-			Columns:           []string{"other_id"},
-			ReferencedTable:   "users",
 			ReferencedColumns: []string{"id"},
 		}},
 	}

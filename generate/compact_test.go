@@ -17,7 +17,6 @@ import (
 
 func TestRenderCompactConcurrent(t *testing.T) {
 	in := plainEmitterFixture(t)
-	in.Generation.Emitter = "compact"
 	ctx := t.Context()
 	const renders = 100
 	dirs := make([]string, renders)
@@ -64,7 +63,6 @@ func TestRenderCompactConcurrent(t *testing.T) {
 
 func TestCompactPlanIncludesTypedQueries(t *testing.T) {
 	in := plainEmitterFixture(t)
-	in.Generation.Emitter = "compact"
 	store, err := generate.RenderCompact(in)
 	require.NoError(t, err)
 	store.Root, store.Dir = t.TempDir(), "generated"
@@ -92,13 +90,11 @@ func TestCompactPlanIncludesTypedQueries(t *testing.T) {
 }
 
 func TestCompactPlanRejectsTypedQueryDeclarationCollision(t *testing.T) {
-	in := plainEmitterFixture(t)
-	in.Generation.Emitter = "compact"
-	in.Generation.Objects[0].Source = "FindBindings"
-	in.Generation.Objects[0].Row = "FindBindingsRow"
-	model, diagnostics := compilerir.BuildGo(in.Semantic, in.Generation)
-	require.Empty(t, diagnostics)
-	in.Go = model
+	catalog, mappings, config := plainEmitterParts(t)
+	config.Objects[0].Source = "FindBindings"
+	config.Objects[0].Row = "FindBindingsRow"
+	in, err := generate.NewEmitterInput(catalog, mappings, config)
+	require.NoError(t, err)
 	store, err := generate.RenderCompact(in)
 	require.NoError(t, err)
 	store.Root, store.Dir = t.TempDir(), "generated"
@@ -113,7 +109,6 @@ func TestCompactPlanRejectsTypedQueryDeclarationCollision(t *testing.T) {
 
 func TestCompactPlanRejectsTypedQuerySelfCollision(t *testing.T) {
 	in := plainEmitterFixture(t)
-	in.Generation.Emitter = "compact"
 	store, err := generate.RenderCompact(in)
 	require.NoError(t, err)
 	store.Root, store.Dir = t.TempDir(), "generated"
@@ -124,31 +119,6 @@ func TestCompactPlanRejectsTypedQuerySelfCollision(t *testing.T) {
 	_, err = store.Plan()
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "collides with its function declaration")
-}
-
-func TestCompactManifestMapsRenamedMutationSymbols(t *testing.T) {
-	in := plainEmitterFixture(t)
-	in.Generation.Emitter = "compact"
-	in.Generation.Objects[0].Source = "Account"
-	in.Generation.Objects[0].Row = "AccountRecord"
-	in.Generation.Objects[0].Create = "AccountInsert"
-	in.Generation.Objects[0].Patch = "AccountChange"
-	model, diagnostics := compilerir.BuildGo(in.Semantic, in.Generation)
-	require.Empty(t, diagnostics)
-	in.Go = model
-	store, err := generate.RenderCompact(in)
-	require.NoError(t, err)
-	manifest := store.APIManifest()
-	find := func(legacy string) generate.APIMapping {
-		for _, mapping := range manifest {
-			if mapping.Legacy == legacy {
-				return mapping
-			}
-		}
-		return generate.APIMapping{}
-	}
-	require.Equal(t, generate.APIMapping{Legacy: "AccountCreate", Compact: "store.AccountInsert", Status: "replacement"}, find("AccountCreate"))
-	require.Equal(t, generate.APIMapping{Legacy: "AccountPatch", Compact: "store.AccountChange", Status: "replacement"}, find("AccountPatch"))
 }
 
 func TestCompactRejectsGeneratedSymbolCollisions(t *testing.T) {
@@ -169,12 +139,8 @@ func TestCompactRejectsGeneratedSymbolCollisions(t *testing.T) {
 				ID: "users", Kind: "table", Name: "users", Columns: columns,
 				Constraints: []compilerir.PhysicalConstraint{{Kind: "primary_key", Columns: []string{"id"}}},
 			}}}
-			semantic, diagnostics := compilerir.BuildSemantic(catalog, compilerir.MappingConfig{}, nil)
-			require.Empty(t, diagnostics)
 			config := compilerir.GoConfig{Package: "store", Output: "generated", Emitter: "compact", Objects: []compilerir.ObjectGoName{{ID: "users", File: "users_gen.go"}}}
-			model, diagnostics := compilerir.BuildGo(semantic, config)
-			require.Empty(t, diagnostics)
-			input, err := generate.NewEmitterInput(catalog, semantic, model, config, compilerir.MappingConfig{})
+			input, err := generate.NewEmitterInput(catalog, compilerir.MappingConfig{}, config)
 			require.NoError(t, err)
 			_, err = generate.RenderCompact(input)
 			require.Error(t, err)
@@ -189,12 +155,8 @@ func TestCompactImportsOnlyUsedMappings(t *testing.T) {
 		{ID: "projects", Kind: "table", Name: "projects", Columns: []compilerir.PhysicalColumn{{Name: "id", LogicalKind: "integer"}, {Name: "title", Ordinal: 1, LogicalKind: "text"}}},
 	}}
 	mapping := compilerir.ScalarMapping{Name: "status", Match: compilerir.NativeMatch{Name: "status"}, GoType: "domain.Status", Codec: "status", Imports: []compilerir.GoImport{{Path: "example.com/domain", Alias: "domain"}}}
-	semantic, diagnostics := compilerir.BuildSemantic(catalog, compilerir.MappingConfig{Scalars: []compilerir.ScalarMapping{mapping}}, nil)
-	require.Empty(t, diagnostics)
-	config := compilerir.GoConfig{Package: "store", Output: "generated", Emitter: "compact", Scalars: []compilerir.ScalarMapping{mapping}, Objects: []compilerir.ObjectGoName{{ID: "users", File: "users_gen.go"}, {ID: "projects", File: "projects_gen.go"}}}
-	model, diagnostics := compilerir.BuildGo(semantic, config)
-	require.Empty(t, diagnostics)
-	in, err := generate.NewEmitterInput(catalog, semantic, model, config, compilerir.MappingConfig{Scalars: []compilerir.ScalarMapping{mapping}})
+	config := compilerir.GoConfig{Package: "store", Output: "generated", Emitter: "compact", Objects: []compilerir.ObjectGoName{{ID: "users", File: "users_gen.go"}, {ID: "projects", File: "projects_gen.go"}}}
+	in, err := generate.NewEmitterInput(catalog, compilerir.MappingConfig{Scalars: []compilerir.ScalarMapping{mapping}}, config)
 	require.NoError(t, err)
 	store, err := generate.RenderCompact(in)
 	require.NoError(t, err)
@@ -214,12 +176,8 @@ func TestCompactEmitsGraphAndPageFactories(t *testing.T) {
 			{Name: "id", LogicalKind: "integer"}, {Name: "deleted_at", Ordinal: 1, LogicalKind: "text", Nullable: true},
 		}, Constraints: []compilerir.PhysicalConstraint{{Kind: "primary_key", Columns: []string{"id"}}}},
 	}}
-	semantic, diagnostics := compilerir.BuildSemantic(catalog, compilerir.MappingConfig{}, nil)
-	require.Empty(t, diagnostics)
 	config := compilerir.GoConfig{Package: "store", Output: "generated", Emitter: "compact", Objects: []compilerir.ObjectGoName{{ID: "users", File: "users_gen.go"}}}
-	model, diagnostics := compilerir.BuildGo(semantic, config)
-	require.Empty(t, diagnostics)
-	in, err := generate.NewEmitterInput(catalog, semantic, model, config, compilerir.MappingConfig{})
+	in, err := generate.NewEmitterInput(catalog, compilerir.MappingConfig{}, config)
 	require.NoError(t, err)
 	store, err := generate.RenderCompact(in)
 	require.NoError(t, err)
@@ -243,12 +201,8 @@ func TestCompactGeneratedGraphAliasReproducer(t *testing.T) {
 		{ID: "users", Kind: "table", Name: "users", Columns: []compilerir.PhysicalColumn{{Name: "id", LogicalKind: "integer"}}, Constraints: []compilerir.PhysicalConstraint{{Kind: "primary_key", Columns: []string{"id"}}}},
 		{ID: "projects", Kind: "table", Name: "projects", Columns: []compilerir.PhysicalColumn{{Name: "id", LogicalKind: "integer"}, {Name: "owner_id", Ordinal: 1, LogicalKind: "integer"}}, Constraints: []compilerir.PhysicalConstraint{{Kind: "primary_key", Columns: []string{"id"}}, {Kind: "foreign_key", Name: "projects_owner_fk", Columns: []string{"owner_id"}, Reference: &compilerir.ForeignReference{Object: "users", Columns: []string{"id"}}}}},
 	}}
-	semantic, diagnostics := compilerir.BuildSemantic(catalog, compilerir.MappingConfig{}, nil)
-	require.Empty(t, diagnostics)
 	config := compilerir.GoConfig{Package: "store", Output: "generated", Emitter: "compact", Objects: []compilerir.ObjectGoName{{ID: "users", File: "users_gen.go"}, {ID: "projects", File: "projects_gen.go"}}}
-	model, diagnostics := compilerir.BuildGo(semantic, config)
-	require.Empty(t, diagnostics)
-	in, err := generate.NewEmitterInput(catalog, semantic, model, config, compilerir.MappingConfig{})
+	in, err := generate.NewEmitterInput(catalog, compilerir.MappingConfig{}, config)
 	require.NoError(t, err)
 	store, err := generate.RenderCompact(in)
 	require.NoError(t, err)
@@ -507,10 +461,6 @@ func compactGraphMismatchInput(t *testing.T) generate.EmitterInput {
 			TargetFrom: []string{"role_id"}, TargetTo: []string{"id"},
 		},
 	}}}
-	semantic, diagnostics := compilerir.BuildSemantic(catalog, relations, nil)
-	for _, diagnostic := range diagnostics {
-		require.NotEqual(t, compilerir.DiagnosticError, diagnostic.Level, diagnostic.Message)
-	}
 	config := compilerir.GoConfig{
 		Package: "store", Output: "generated", Emitter: "compact",
 		Objects: []compilerir.ObjectGoName{
@@ -520,11 +470,7 @@ func compactGraphMismatchInput(t *testing.T) generate.EmitterInput {
 			{ID: "user_roles", Source: "Membership", Row: "MembershipRecord", File: "user_roles_gen.go"},
 		},
 	}
-	model, diagnostics := compilerir.BuildGo(semantic, config)
-	for _, diagnostic := range diagnostics {
-		require.NotEqual(t, compilerir.DiagnosticError, diagnostic.Level, diagnostic.Message)
-	}
-	in, err := generate.NewEmitterInput(catalog, semantic, model, config, relations)
+	in, err := generate.NewEmitterInput(catalog, relations, config)
 	require.NoError(t, err)
 	return in
 }

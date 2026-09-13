@@ -5,19 +5,11 @@ type ForeignKeyOption interface {
 	applyForeignKey(*foreignKeyBuilder) error
 }
 
-// foreignKeyBuilder accumulates a ForeignKeyDef and, when RelationshipNamed
-// names one, the belongs-to Relationship derived from it. The relationship is kept apart
-// from ForeignKeyDef itself: it is a distinct descriptor, appended to the
-// table's own Relationships rather than carried on the foreign key.
+// foreignKeyBuilder accumulates a ForeignKeyDef while ForeignKeyOptions run,
+// so ForeignKeyOn can assemble the descriptor once every option has applied.
 type foreignKeyBuilder struct {
-	key              ForeignKeyDef
-	relationshipName string
-	relationshipOpts []RelationshipOption
-	hasRelationship  bool
+	key ForeignKeyDef
 }
-
-// RelationshipOption configures the relationship derived by RelationshipNamed.
-type RelationshipOption func(*RelationshipDef)
 
 // foreignKeyTableOption carries either a built foreignKeyBuilder or the
 // first error a ForeignKeyOption reported, the same deferred-error shape
@@ -32,24 +24,6 @@ func (o foreignKeyTableOption) applyTable(b *tableBuilder) error {
 		return o.err
 	}
 	b.foreignKeys = append(b.foreignKeys, o.builder.key)
-	if !o.builder.hasRelationship {
-		return nil
-	}
-	if o.builder.relationshipName == "" {
-		return validationError("foreign_keys", "RelationshipNamed name must not be empty")
-	}
-	relationship := RelationshipDef{
-		Name:              o.builder.relationshipName,
-		Kind:              RelationshipBelongsTo,
-		Columns:           append([]string(nil), o.builder.key.Columns...),
-		ReferencedSchema:  o.builder.key.ReferencedSchema,
-		ReferencedTable:   o.builder.key.ReferencedTable,
-		ReferencedColumns: append([]string(nil), o.builder.key.ReferencedColumns...),
-	}
-	for _, option := range o.builder.relationshipOpts {
-		option(&relationship)
-	}
-	b.relationships = append(b.relationships, relationship)
 	return nil
 }
 
@@ -139,33 +113,4 @@ func OnUpdate(action ReferenceAction) ForeignKeyOption {
 func (o onUpdateForeignKeyOption) applyForeignKey(b *foreignKeyBuilder) error {
 	b.key.OnUpdate = ReferenceAction(o)
 	return nil
-}
-
-// RelationshipNamed derives a schema.RelationshipDef of kind
-// RelationshipBelongsTo from the foreign key, named name, exactly as
-// schema.TableDef{Relationships: ...} would state one by hand. Set it when
-// the generated method name should differ from the one rasqlgen would
-// otherwise derive from the local column name. Relationship options can pin
-// the public inverse method when shorthand would be ambiguous.
-func RelationshipNamed(name string, options ...RelationshipOption) ForeignKeyOption {
-	return asForeignKeyOption{name: name, options: options}
-}
-
-type asForeignKeyOption struct {
-	name    string
-	options []RelationshipOption
-}
-
-func (o asForeignKeyOption) applyForeignKey(b *foreignKeyBuilder) error {
-	b.hasRelationship = true
-	b.relationshipName = o.name
-	b.relationshipOpts = append([]RelationshipOption(nil), o.options...)
-	return nil
-}
-
-// InverseNamed pins the generated inverse method name on the referenced table.
-func InverseNamed(name string) RelationshipOption {
-	return func(relationship *RelationshipDef) {
-		relationship.InverseName = name
-	}
 }

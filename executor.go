@@ -33,6 +33,54 @@ type returnedColumnBinder[R any] interface {
 	bindReturnedColumns([]string) (RowDecoder[R], ResultSchema, error)
 }
 
+// executorUnwrapper hands back the executor a wrapper wraps, so that
+// executorCapability can look past a wrapper that carries a capability without
+// implementing it. Every wrapper this package builds implements it.
+type executorUnwrapper interface{ unwrapExecutor() Executor }
+
+// executorCapability finds the first executor in a wrapper chain that
+// implements T, and reports whether it found one. It reads the value it is
+// given before unwrapping, so a wrapper carrying its own value for a capability
+// still shadows the one further in, the way profiledExecutor's compiler shadows
+// the compiler of the executor it wraps. A provider found this way wins even
+// when its method returns nil; every caller already treats a nil result the way
+// it treats no provider at all, and walking on until a non-nil one turned up
+// would change which executors report engine_profile_unavailable.
+//
+// Only compilerProvider and executionDurabilityProvider are looked up this way.
+// Both are unexported, so no executor written outside this package implements
+// one, and a chain holding neither reports false rather than a wrapper's
+// stand-in value. That is what lets a wrapper stay one type instead of one type
+// per combination of the capabilities its base happens to carry.
+//
+// Five capabilities are deliberately left out, and each wrapper still declares
+// them only when the executor it wraps has one:
+//
+//   - CodecProvider and ScopeBeginner, SavepointBeginner and ScopeState are
+//     exported, so a caller outside this package reads their presence off the
+//     wrapper and steers on it, as Within and ExecMutationBatch do.
+//   - logicalInvocationProvider must not be looked up past a layer, because
+//     every layer rewraps the child executor the inner call hands back. A walk
+//     that skipped layers would give a batch an unwrapped child and lose the
+//     codec registry and the compiler the skipped layers carried.
+//
+// scopeContextProvider is left out for the same reason as the exported ones,
+// stated where profiledScopedExecutor forwards it.
+func executorCapability[T any](executor Executor) (T, bool) {
+	for executor != nil {
+		if value, ok := any(executor).(T); ok {
+			return value, true
+		}
+		unwrapper, ok := executor.(executorUnwrapper)
+		if !ok {
+			break
+		}
+		executor = unwrapper.unwrapExecutor()
+	}
+	var zero T
+	return zero, false
+}
+
 type dbExecutor struct {
 	db       DB
 	compiler *querycompile.Compiler
@@ -182,6 +230,7 @@ type profiledExecutor struct {
 }
 
 func (e profiledExecutor) queryCompiler() *querycompile.Compiler { return e.compiler }
+func (e profiledExecutor) unwrapExecutor() Executor              { return e.Executor }
 
 type profiledCodecExecutor struct{ profiledExecutor }
 
@@ -205,16 +254,17 @@ func (e logicalProfiledCodecExecutor) beginLogicalInvocation(ctx context.Context
 	return callCtx, wrapProfiledChildWithCodecs(child, e.compiler, e.Codecs()), completion
 }
 
+// A wrapper reports what the executor it wraps reports, nil included, so that
+// executorCodecs raises the one error rather than each wrapper deciding for
+// itself. Substituting the builtin registry here used to hide a nil behind an
+// unrelated fact, because WithEngineProfile picks this type for an executor
+// that opens no scope and profiledCodecScopedExecutor for one that does.
 func (e profiledCodecExecutor) Codecs() CodecRegistry {
 	provider, _ := e.Executor.(CodecProvider)
 	if provider == nil {
-		return builtinCodecs
+		return nil
 	}
-	registry := provider.Codecs()
-	if registry == nil {
-		return builtinCodecs
-	}
-	return registry
+	return provider.Codecs()
 }
 
 // WithEngineProfile wraps executor so every statement it compiles is rendered
@@ -231,43 +281,7 @@ func WithEngineProfile(executor Executor, profile EngineProfile) (Executor, erro
 	if err != nil {
 		return nil, err
 	}
-	base := profiledExecutor{Executor: executor, compiler: c}
-	logical, hasLogical := executor.(logicalInvocationProvider)
-	_ = logical
-	if _, scope := executor.(ScopeBeginner); scope {
-		if _, evidence := executor.(executionDurabilityProvider); evidence {
-			if _, codecs := executor.(CodecProvider); codecs {
-				if hasLogical {
-					return logicalProfiledCodecScopedEvidenceExecutor{profiledCodecScopedEvidenceExecutor{profiledCodecScopedExecutor{profiledScopedExecutor{base}}}}, nil
-				}
-				return profiledCodecScopedEvidenceExecutor{profiledCodecScopedExecutor: profiledCodecScopedExecutor{profiledScopedExecutor: profiledScopedExecutor{profiledExecutor: base}}}, nil
-			}
-			if hasLogical {
-				return logicalProfiledScopedEvidenceExecutor{profiledScopedEvidenceExecutor{profiledScopedExecutor{base}}}, nil
-			}
-			return profiledScopedEvidenceExecutor{profiledScopedExecutor: profiledScopedExecutor{profiledExecutor: base}}, nil
-		}
-		if _, codecs := executor.(CodecProvider); codecs {
-			if hasLogical {
-				return logicalProfiledCodecScopedExecutor{profiledCodecScopedExecutor{profiledScopedExecutor{base}}}, nil
-			}
-			return profiledCodecScopedExecutor{profiledScopedExecutor: profiledScopedExecutor{profiledExecutor: base}}, nil
-		}
-		if hasLogical {
-			return logicalProfiledScopedExecutor{profiledScopedExecutor{base}}, nil
-		}
-		return profiledScopedExecutor{profiledExecutor: base}, nil
-	}
-	if _, codecs := executor.(CodecProvider); codecs {
-		if hasLogical {
-			return logicalProfiledCodecExecutor{profiledCodecExecutor{base}}, nil
-		}
-		return profiledCodecExecutor{profiledExecutor: base}, nil
-	}
-	if hasLogical {
-		return logicalProfiledExecutor{base}, nil
-	}
-	return base, nil
+	return wrapProfiledChild(executor, c), nil
 }
 
 type preparedRows[R any] struct {
@@ -286,7 +300,7 @@ func prepareRows[R any](executor Executor, q Query[R], compiled compiledQuery) (
 	if err := q.Validate(); err != nil {
 		return result, err
 	}
-	provider, ok := executor.(compilerProvider)
+	provider, ok := executorCapability[compilerProvider](executor)
 	if !ok {
 		return result, &PlanError{Code: "engine_profile_unavailable", Detail: "executor has no retained compiler"}
 	}
@@ -322,13 +336,9 @@ func prepareRows[R any](executor Executor, q Query[R], compiled compiledQuery) (
 			}
 		}
 	}
-	registry := builtinCodecs
-	if cp, ok := executor.(CodecProvider); ok {
-		provided := cp.Codecs()
-		if provided == nil {
-			return result, &PlanError{Code: "codec_registry_unavailable", Detail: "executor returned a nil codec registry"}
-		}
-		registry = provided
+	registry, err := executorCodecs(executor)
+	if err != nil {
+		return result, err
 	}
 	columns := q.Schema().Columns()
 	slots := append([]bindSlot(nil), compiled.Slots...)
@@ -507,7 +517,7 @@ func rowsPreparedRequired[R any](ctx context.Context, executor Executor, prepare
 }
 
 func Rows[R any](ctx context.Context, executor Executor, q Query[R]) (iter.Seq2[R, error], error) {
-	provider, ok := executor.(compilerProvider)
+	provider, ok := executorCapability[compilerProvider](executor)
 	if !ok {
 		return nil, &PlanError{Code: "engine_profile_unavailable", Detail: "executor has no retained compiler"}
 	}
@@ -573,7 +583,7 @@ func Maybe[R any](ctx context.Context, executor Executor, q Query[R]) (R, bool, 
 }
 
 func rowsFor[R any](ctx context.Context, executor Executor, q Query[R], consumer Cardinality) (iter.Seq2[R, error], error) {
-	provider, ok := executor.(compilerProvider)
+	provider, ok := executorCapability[compilerProvider](executor)
 	if !ok {
 		return nil, &PlanError{Code: "engine_profile_unavailable", Detail: "executor has no retained compiler"}
 	}

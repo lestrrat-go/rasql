@@ -180,7 +180,7 @@ func ExecMutation(ctx context.Context, executor Executor, plan MutationPlan) (Mu
 }
 
 func compileMutationParts(executor Executor, statement query.WriteStatement) (compiledQuery, error) {
-	provider, ok := executor.(compilerProvider)
+	provider, ok := executorCapability[compilerProvider](executor)
 	if !ok || provider.queryCompiler() == nil {
 		return compiledQuery{}, &PlanError{Code: "engine_profile_unavailable", Detail: "executor has no retained compiler"}
 	}
@@ -200,9 +200,9 @@ func compileMutation(executor Executor, statement query.WriteStatement) (stmt.St
 	if err != nil {
 		return stmt.Statement{}, err
 	}
-	registry := builtinCodecs
-	if cp, ok := executor.(CodecProvider); ok && cp.Codecs() != nil {
-		registry = cp.Codecs()
+	registry, err := executorCodecs(executor)
+	if err != nil {
+		return stmt.Statement{}, err
 	}
 	return encodeStatement(statementCopy, compiledQuery.Slots, registry)
 }
@@ -216,7 +216,7 @@ func compileNativeMutation(executor Executor, native nativeMutationPlanAccessor)
 	if dialect == nil || dialect.Name() != plan.engine {
 		return stmt.Statement{}, planError("engine_mismatch", "native.engine", "executor dialect does not match native SQL")
 	}
-	provider, ok := executor.(compilerProvider)
+	provider, ok := executorCapability[compilerProvider](executor)
 	if !ok || provider.queryCompiler() == nil {
 		return stmt.Statement{}, &PlanError{Code: "engine_profile_unavailable", Detail: "executor has no retained compiler"}
 	}
@@ -232,7 +232,7 @@ func compileNativeMutation(executor Executor, native nativeMutationPlanAccessor)
 }
 
 func executorDurability(executor Executor) Durability {
-	provider, ok := executor.(executionDurabilityProvider)
+	provider, ok := executorCapability[executionDurabilityProvider](executor)
 	if !ok {
 		return DurabilityUnknown
 	}
@@ -477,9 +477,9 @@ func encodeCompiledMutation(compiled compiledQuery, executor Executor) (stmt.Sta
 	if err != nil {
 		return stmt.Statement{}, err
 	}
-	registry := builtinCodecs
-	if cp, ok := executor.(CodecProvider); ok && cp.Codecs() != nil {
-		registry = cp.Codecs()
+	registry, err := executorCodecs(executor)
+	if err != nil {
+		return stmt.Statement{}, err
 	}
 	return encodeStatement(copy, compiled.Slots, registry)
 }
@@ -518,7 +518,7 @@ func execPreparedMutationBatches(ctx context.Context, executor Executor, prepare
 
 func mutationBindLimit(executor Executor, override int) int {
 	limit := 0
-	if provider, ok := executor.(compilerProvider); ok && provider.queryCompiler() != nil {
+	if provider, ok := executorCapability[compilerProvider](executor); ok && provider.queryCompiler() != nil {
 		limit = provider.queryCompiler().EngineProfile().Limits.MaxBindParameters
 	}
 	if override > 0 && (limit == 0 || override < limit) {

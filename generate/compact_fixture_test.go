@@ -61,10 +61,6 @@ func newCompactStore(dir string, tables ...schema.TableDef) (Store, error) {
 	if len(diagnostics) != 0 {
 		return Store{}, diagnosticError("identity", diagnostics)
 	}
-	semantic, diagnostics := compilerir.BuildSemantic(catalog, compilerir.MappingConfig{}, nil)
-	if len(diagnostics) != 0 {
-		return Store{}, diagnosticError("semantic", diagnostics)
-	}
 	objects := make([]compilerir.ObjectGoName, len(catalog.Objects))
 	for i, object := range catalog.Objects {
 		// Lowercased to match filenameKey's documented invariant in store.go:
@@ -73,11 +69,7 @@ func newCompactStore(dir string, tables ...schema.TableDef) (Store, error) {
 		objects[i] = compilerir.ObjectGoName{ID: object.ID, File: strings.ToLower(object.Name) + "_gen.go"}
 	}
 	config := compilerir.GoConfig{Package: "store", Output: dir, Emitter: "compact", Objects: objects}
-	model, diagnostics := compilerir.BuildGo(semantic, config)
-	if len(diagnostics) != 0 {
-		return Store{}, diagnosticError("go", diagnostics)
-	}
-	in, err := NewEmitterInput(catalog, semantic, model, config, compilerir.MappingConfig{})
+	in, err := NewEmitterInput(catalog, compilerir.MappingConfig{}, config)
 	if err != nil {
 		return Store{}, err
 	}

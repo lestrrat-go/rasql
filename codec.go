@@ -7,7 +7,6 @@ import (
 	"fmt"
 
 	"github.com/lestrrat-go/rasql/internal/bindplan"
-	"github.com/lestrrat-go/rasql/internal/querycompile"
 	"github.com/lestrrat-go/rasql/stmt"
 )
 
@@ -91,29 +90,22 @@ type codecExec struct {
 	codecs CodecRegistry
 }
 
-func (e codecExec) Codecs() CodecRegistry { return e.codecs }
+func (e codecExec) Codecs() CodecRegistry    { return e.codecs }
+func (e codecExec) unwrapExecutor() Executor { return e.Executor }
 
-type codecCompilerExec struct{ codecExec }
-
+// The codec executor exposes a transaction scope only when the executor it
+// wraps has one, and forwards a logical invocation only when the executor it
+// wraps opens one, because each layer has to rewrap the child that invocation
+// returns. The compiler and the durability evidence need no variant of their
+// own: both are unexported, so executorCapability reaches them through
+// unwrapExecutor.
 type logicalCodecExec struct{ codecExec }
-type logicalCodecCompilerExec struct{ codecCompilerExec }
 
 func (e logicalCodecExec) beginLogicalInvocation(ctx context.Context, kind EventKind) (context.Context, Executor, logicalInvocationCompletion) {
 	callCtx, child, completion := beginLogicalFrom(e.Executor, ctx, kind)
 	return callCtx, wrapCodecExecutor(child, e.codecs), completion
 }
-func (e logicalCodecCompilerExec) beginLogicalInvocation(ctx context.Context, kind EventKind) (context.Context, Executor, logicalInvocationCompletion) {
-	callCtx, child, completion := beginLogicalFrom(e.Executor, ctx, kind)
-	return callCtx, wrapCodecExecutor(child, e.codecs), completion
-}
 
-func (e codecCompilerExec) queryCompiler() *querycompile.Compiler {
-	provider, _ := e.Executor.(compilerProvider)
-	if provider == nil {
-		return nil
-	}
-	return provider.queryCompiler()
-}
 // WithCodecs wraps executor so every value it binds and every column it decodes
 // passes through codecs.
 //
@@ -130,47 +122,39 @@ func WithCodecs(executor Executor, codecs CodecRegistry) (Executor, error) {
 
 func wrapCodecExecutor(executor Executor, codecs CodecRegistry) Executor {
 	base := codecExec{Executor: executor, codecs: codecs}
-	hasLogical := false
-	if _, ok := executor.(logicalInvocationProvider); ok {
-		hasLogical = true
-	}
-	_, compiler := executor.(compilerProvider)
+	_, hasLogical := executor.(logicalInvocationProvider)
 	_, scope := executor.(ScopeBeginner)
-	_, evidence := executor.(executionDurabilityProvider)
 	if scope {
-		if compiler {
-			if evidence {
-				if hasLogical {
-					return logicalCodecCompilerScopedEvidenceExecutor{codecCompilerScopedEvidenceExecutor{codecCompilerScopedExecutor{codecScopedExecutor{base}}}}
-				}
-				return codecCompilerScopedEvidenceExecutor{codecCompilerScopedExecutor: codecCompilerScopedExecutor{codecScopedExecutor: codecScopedExecutor{codecExec: base}}}
-			}
-			if hasLogical {
-				return logicalCodecCompilerScopedExecutor{codecCompilerScopedExecutor{codecScopedExecutor{base}}}
-			}
-			return codecCompilerScopedExecutor{codecScopedExecutor: codecScopedExecutor{codecExec: base}}
-		}
-		if evidence {
-			if hasLogical {
-				return logicalCodecScopedEvidenceExecutor{codecScopedEvidenceExecutor{codecScopedExecutor{base}}}
-			}
-			return codecScopedEvidenceExecutor{codecScopedExecutor: codecScopedExecutor{codecExec: base}}
-		}
 		if hasLogical {
 			return logicalCodecScopedExecutor{codecScopedExecutor{base}}
 		}
 		return codecScopedExecutor{codecExec: base}
 	}
-	if compiler {
-		if hasLogical {
-			return logicalCodecCompilerExec{codecCompilerExec{base}}
-		}
-		return codecCompilerExec{codecExec: base}
-	}
 	if hasLogical {
 		return logicalCodecExec{base}
 	}
 	return base
+}
+
+// executorCodecs reports the codec registry an executor carries, and the
+// builtin registry for an executor that carries none.
+//
+// An executor that implements CodecProvider and returns nil from it is an
+// error rather than an executor without codecs. WithCodecs already refuses a
+// nil registry, so nil never means "no codecs" anywhere a caller could have
+// written it deliberately, and a nil registry answers no lookup: every caller
+// that reached for one would either substitute the builtin registry and decode
+// against the wrong codecs, or dereference nil.
+func executorCodecs(executor Executor) (CodecRegistry, error) {
+	provider, ok := executor.(CodecProvider)
+	if !ok {
+		return builtinCodecs, nil
+	}
+	registry := provider.Codecs()
+	if registry == nil {
+		return nil, &PlanError{Code: "codec_registry_unavailable", Detail: "executor returned a nil codec registry"}
+	}
+	return registry, nil
 }
 
 func codecFor(reg CodecRegistry, id string) (ValueCodec, error) {

@@ -208,16 +208,8 @@ func sizeGateEmitterFixtureState(t *testing.T, ordinaryColumns int, nullable, de
 		columns = append(columns, column)
 	}
 	catalog := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "sqlite", Version: "3"}, Objects: []compilerir.PhysicalObject{{ID: "users", Kind: "table", Name: "users", Columns: columns, Constraints: []compilerir.PhysicalConstraint{{Kind: "primary_key", Columns: []string{"id"}}}}}}
-	semantic, diagnostics := compilerir.BuildSemantic(catalog, compilerir.MappingConfig{}, nil)
-	for _, diagnostic := range diagnostics {
-		require.NotEqual(t, compilerir.DiagnosticError, diagnostic.Level, diagnostic.Message)
-	}
 	config := compilerir.GoConfig{Package: "store", Output: "generated", Emitter: "compact", Objects: []compilerir.ObjectGoName{{ID: "users", File: "users_gen.go"}}}
-	model, diagnostics := compilerir.BuildGo(semantic, config)
-	for _, diagnostic := range diagnostics {
-		require.NotEqual(t, compilerir.DiagnosticError, diagnostic.Level, diagnostic.Message)
-	}
-	in, err := generate.NewEmitterInput(catalog, semantic, model, config, compilerir.MappingConfig{})
+	in, err := generate.NewEmitterInput(catalog, compilerir.MappingConfig{}, config)
 	require.NoError(t, err)
 	return in
 }

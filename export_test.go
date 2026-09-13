@@ -224,7 +224,7 @@ func Q1TypedRelation[R any](source Source) TypedRelation[R] {
 // the compiler itself to show that a wrapper reused one rather than built a
 // second.
 func Q1QueryCompilerOf(executor Executor) any {
-	provider, ok := executor.(compilerProvider)
+	provider, ok := executorCapability[compilerProvider](executor)
 	if !ok {
 		return nil
 	}
@@ -240,7 +240,7 @@ func Q1QueryCompilerOf(executor Executor) any {
 // unexported so that an executor written outside this package cannot claim a
 // statement was committed, which leaves no public route to read it either.
 func Q1DurabilityOf(executor Executor) (int, bool) {
-	provider, ok := executor.(executionDurabilityProvider)
+	provider, ok := executorCapability[executionDurabilityProvider](executor)
 	if !ok {
 		return Q1DurabilityUnknown, false
 	}

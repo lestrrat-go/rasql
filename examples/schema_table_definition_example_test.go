@@ -17,9 +17,9 @@ func Example_schema_table_definition() {
 	//
 	// RowNamed states the Go row type rasqlgen generates for the table: here
 	// it makes the row type User instead of the default UsersRow, so calling
-	// code reads store.User rather than store.UsersRow. Like RelationshipNamed
-	// below, it is a code-generation hint only — rasqlgen reads it, but
-	// nothing else in rasql does, and it never appears in rendered SQL.
+	// code reads store.User rather than store.UsersRow. It is a
+	// code-generation hint only — rasqlgen reads it, but nothing else in
+	// rasql does, and it never appears in rendered SQL.
 	users := schema.MustTableDef("users",
 		schema.Integer("id"),
 		schema.Text("email"),
@@ -33,12 +33,10 @@ func Example_schema_table_definition() {
 		schema.RowNamed("User"),
 	)
 
-	// A foreign key's Named, References, and OnDelete options configure the
-	// constraint itself. RelationshipNamed additionally derives the belongs-to
-	// schema.RelationshipDef that rasqlgen would otherwise name on its own
-	// from the local column, letting the generated method read
-	// orders.Buyer() rather than orders.Customer(). InverseNamed pins the
-	// public inverse method when a child has several links to one parent.
+	// A foreign key's Named, References, OnDelete, and OnUpdate options
+	// configure the constraint itself. Named states the constraint name the
+	// dialect renders, and leaving it out lets the server name the constraint
+	// on its own.
 	orders := schema.MustTableDef("orders",
 		schema.Integer("id"),
 		schema.Integer("customer_id"),
@@ -46,15 +44,14 @@ func Example_schema_table_definition() {
 		schema.ForeignKey("customer_id",
 			schema.Named("orders_customer_fkey"),
 			schema.References("customers", "id"),
-			schema.OnDelete(schema.Cascade),
-			schema.RelationshipNamed("buyer")),
+			schema.OnDelete(schema.Cascade)),
 	)
 
 	fmt.Printf("%s: %d columns, primary key %v, row type %s\n", users.Name, len(users.Columns), users.PrimaryKey, users.RowName)
-	fmt.Printf("%s: foreign key %s references %s, relationship %q\n",
-		orders.Name, orders.ForeignKeys[0].Name, orders.ForeignKeys[0].ReferencedTable, orders.Relationships[0].Name)
+	fmt.Printf("%s: foreign key %s references %s on delete %s\n",
+		orders.Name, orders.ForeignKeys[0].Name, orders.ForeignKeys[0].ReferencedTable, orders.ForeignKeys[0].OnDelete)
 
 	// Output:
 	// users: 5 columns, primary key [id], row type User
-	// orders: foreign key orders_customer_fkey references customers, relationship "buyer"
+	// orders: foreign key orders_customer_fkey references customers on delete CASCADE
 }

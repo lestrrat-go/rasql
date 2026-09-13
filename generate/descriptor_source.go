@@ -20,11 +20,10 @@ const descriptorSourceIdentity = "generate.DescriptorSource"
 // returns the concatenated Go source RenderCompact would write for them: for
 // every table, its row type, table descriptor, and accessors, plus the
 // package's shared runtime helpers. It drives the same pipeline rasqlgen
-// does -- PhysicalFromTableDefs, AssignObjectIDs, BuildSemantic, BuildGo,
-// NewEmitterInput, RenderCompact -- entirely in memory and touches no
-// filesystem, so a consumer module that cannot import internal/compilerir or
-// internal/schemagen directly can still re-render a descriptor and diff it
-// against an earlier generation.
+// does -- PhysicalFromTableDefs, AssignObjectIDs, NewEmitterInput,
+// RenderCompact -- entirely in memory and touches no filesystem, so a consumer
+// module that cannot import internal/compilerir or internal/schemagen directly
+// can still re-render a descriptor and diff it against an earlier generation.
 //
 // This replaces the deleted legacy-emitter DescriptorSource, which returned
 // only a package's descriptor-only file. The compact emitter has no such
@@ -38,10 +37,6 @@ func DescriptorSource(packageName string, tables []schema.TableDef) ([]byte, err
 	}
 	catalog, diagnostics = compilerir.AssignObjectIDs(catalog, compilerir.IdentityInput{SourceIdentity: descriptorSourceIdentity})
 	if err := firstDiagnosticError("identity", diagnostics); err != nil {
-		return nil, err
-	}
-	semantic, diagnostics := compilerir.BuildSemantic(catalog, compilerir.MappingConfig{}, nil)
-	if err := firstDiagnosticError("semantic", diagnostics); err != nil {
 		return nil, err
 	}
 	objects := make([]compilerir.ObjectGoName, len(catalog.Objects))
@@ -59,11 +54,7 @@ func DescriptorSource(packageName string, tables []schema.TableDef) ([]byte, err
 		columnBindings = append(columnBindings, bound...)
 	}
 	config := compilerir.GoConfig{Package: packageName, Output: ".", Emitter: "compact", Objects: objects, ColumnBindings: columnBindings}
-	model, diagnostics := compilerir.BuildGo(semantic, config)
-	if err := firstDiagnosticError("go", diagnostics); err != nil {
-		return nil, err
-	}
-	in, err := NewEmitterInput(catalog, semantic, model, config, compilerir.MappingConfig{})
+	in, err := NewEmitterInput(catalog, compilerir.MappingConfig{}, config)
 	if err != nil {
 		return nil, err
 	}

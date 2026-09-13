@@ -87,7 +87,7 @@ type graphQuery[R, G any] struct {
 
 func (q graphQuery[R, G]) validate() error { return q.value.Validate() }
 func (q graphQuery[R, G]) compile(executor Executor) (compiledQuery, error) {
-	provider, ok := executor.(compilerProvider)
+	provider, ok := executorCapability[compilerProvider](executor)
 	if !ok || provider.queryCompiler() == nil {
 		return compiledQuery{}, planError("engine_profile_unavailable", "executor", "compiler unavailable")
 	}
@@ -138,7 +138,10 @@ func (q graphQuery[R, G]) prepareCompiledMode(executor Executor, compiled compil
 	}}, nil
 }
 func (q graphQuery[R, G]) validateCompiled(executor Executor, compiled compiledQuery) error {
-	registry := graphCodecs(executor)
+	registry, err := graphCodecs(executor)
+	if err != nil {
+		return err
+	}
 	for index, column := range q.value.Schema().Columns() {
 		if _, err := codecFor(registry, column.Codec); err != nil {
 			return planError("codec_unavailable", fmt.Sprintf("result.columns[%d].codec", index), column.Codec)

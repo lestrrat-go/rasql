@@ -55,11 +55,18 @@ func preparePageAfter[R any](executor Executor, q Query[R], spec PageSpec[R], po
 	if limit < 0 || limit > policy.MaxLimit {
 		return result, planError("invalid_page_limit", "request.limit", "limit is outside policy")
 	}
+	// The registry resolves once, before the keys, so that an executor carrying
+	// no usable registry reports that rather than naming whichever key happened
+	// to be read first.
+	registry, err := executorCodecs(executor)
+	if err != nil {
+		return result, err
+	}
 	for i, key := range spec.keys {
 		if key.codec == "" {
 			continue
 		}
-		if _, err := cursorCodec(executor, key.codec); err != nil {
+		if _, err := cursorCodecFrom(registry, key.codec); err != nil {
 			return result, planerr.Wrap("codec_unavailable", fmt.Sprintf("page.order[%d].codec", i), err.Error(), err)
 		}
 	}
@@ -70,7 +77,7 @@ func preparePageAfter[R any](executor Executor, q Query[R], spec PageSpec[R], po
 	if err := ordered.Validate(); err != nil {
 		return result, err
 	}
-	provider, ok := executor.(compilerProvider)
+	provider, ok := executorCapability[compilerProvider](executor)
 	if !ok || provider.queryCompiler() == nil {
 		return result, planError("engine_profile_unavailable", "executor", "executor has no retained compiler")
 	}
@@ -219,9 +226,9 @@ func decodePageCursor[R any](cursor Cursor, spec PageSpec[R], executor Executor)
 	}
 	expected := pageKeyFields(spec.keys)
 	values := make([]decodedCursor, len(spec.keys))
-	registry := builtinCodecs
-	if cp, ok := executor.(CodecProvider); ok {
-		registry = cp.Codecs()
+	registry, err := executorCodecs(executor)
+	if err != nil {
+		return nil, fp, err
 	}
 	for i, key := range spec.keys {
 		if envelope.Fields[i] != expected[i] {
@@ -274,10 +281,14 @@ func decodePageValue[R any](key *pageKey[R], data []byte, registry CodecRegistry
 	return cursorCodec.DecodeCursor(data)
 }
 func cursorCodec(executor Executor, id string) (CursorValueCodec, error) {
-	registry := builtinCodecs
-	if cp, ok := executor.(CodecProvider); ok {
-		registry = cp.Codecs()
+	registry, err := executorCodecs(executor)
+	if err != nil {
+		return nil, err
 	}
+	return cursorCodecFrom(registry, id)
+}
+
+func cursorCodecFrom(registry CodecRegistry, id string) (CursorValueCodec, error) {
 	codec, ok := registry.Lookup(CodecID(id))
 	if !ok {
 		return nil, fmt.Errorf("codec %q unavailable", id)
