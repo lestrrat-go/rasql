@@ -243,7 +243,9 @@ func (r Runner) revertMySQL(ctx context.Context, connection *sql.Conn, target Re
 func (r Runner) revertNonTransactional(ctx context.Context, connection *sql.Conn, migration preparedMigration) ([]Migration, error) {
 	for _, statement := range migration.down {
 		if _, err := connection.ExecContext(ctx, string(statement.SQL)); err != nil {
-			return nil, fmt.Errorf("migrate: execute migration %q reverse SQL source %q: %w", migration.id, statement.Source, err)
+			if !r.toleratedAsReverted(migration.id, statement.Source, err) {
+				return nil, fmt.Errorf("migrate: execute migration %q reverse SQL source %q: %w", migration.id, statement.Source, err)
+			}
 		}
 	}
 	if err := r.forget(ctx, connection, migration.id); err != nil {
@@ -274,8 +276,10 @@ func (r Runner) revertAtomicMySQL(ctx context.Context, connection *sql.Conn, mig
 	}
 	for _, statement := range migration.down {
 		if _, err := transaction.ExecContext(ctx, string(statement.SQL)); err != nil {
-			rollback()
-			return nil, fmt.Errorf("migrate: execute migration %q reverse SQL source %q: %w", migration.id, statement.Source, err)
+			if !r.toleratedAsReverted(migration.id, statement.Source, err) {
+				rollback()
+				return nil, fmt.Errorf("migrate: execute migration %q reverse SQL source %q: %w", migration.id, statement.Source, err)
+			}
 		}
 	}
 	if err := r.forget(ctx, transaction, migration.id); err != nil {

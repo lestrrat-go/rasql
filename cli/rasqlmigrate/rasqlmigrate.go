@@ -703,7 +703,7 @@ func openRunner(ctx context.Context, directory string, dialectName string, dsn s
 		closeDatabase()
 		return migrate.Runner{}, nil, func() {}, err
 	}
-	return runner, migrations, closeDatabase, nil
+	return runner.WithNotices(commandDiagnostics), migrations, closeDatabase, nil
 }
 
 func openMigrationDatabase(ctx context.Context, d dialect.Dialect, dsn string) (*sql.DB, func(), error) {

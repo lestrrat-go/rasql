@@ -230,7 +230,9 @@ func (r Runner) applyMySQL(ctx context.Context, connection *sql.Conn, target App
 func (r Runner) applyNonTransactional(ctx context.Context, connection *sql.Conn, migration preparedMigration) ([]Migration, error) {
 	for _, statement := range migration.statements {
 		if _, err := connection.ExecContext(ctx, string(statement.SQL)); err != nil {
-			return nil, fmt.Errorf("migrate: execute migration %q SQL source %q: %w", migration.id, statement.Source, err)
+			if !r.toleratedAsApplied(migration.id, statement.Source, err) {
+				return nil, fmt.Errorf("migrate: execute migration %q SQL source %q: %w", migration.id, statement.Source, err)
+			}
 		}
 	}
 	if err := r.record(ctx, connection, migration); err != nil {
@@ -260,8 +262,10 @@ func (r Runner) applyAtomicMySQL(ctx context.Context, connection *sql.Conn, migr
 	}
 	for _, statement := range migration.statements {
 		if _, err := transaction.ExecContext(ctx, string(statement.SQL)); err != nil {
-			rollback()
-			return nil, fmt.Errorf("migrate: execute migration %q SQL source %q: %w", migration.id, statement.Source, err)
+			if !r.toleratedAsApplied(migration.id, statement.Source, err) {
+				rollback()
+				return nil, fmt.Errorf("migrate: execute migration %q SQL source %q: %w", migration.id, statement.Source, err)
+			}
 		}
 	}
 	if err := r.record(ctx, transaction, migration); err != nil {

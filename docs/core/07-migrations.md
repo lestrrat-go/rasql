@@ -241,9 +241,16 @@ recorded at all: `status` reports it as `pending`, and the next `apply` runs it 
 On PostgreSQL and SQLite an atomic migration runs in one transaction, so the failure undoes every source that already ran
 and the retry starts from an unchanged database. A `nontransactional` migration's sources each take effect as they run, and
 MySQL commits DDL implicitly whatever mode the migration declares, so the sources that already succeeded stay in effect. The
-retry runs those sources a second time and the engine decides what that means. `CREATE TABLE IF NOT EXISTS` succeeds; a
-plain `CREATE TABLE` fails with PostgreSQL SQLSTATE `42P07` or MySQL error 1050 and the migration stays pending. Spell those
-sources idempotently, as [Migration directories](#migration-directories) describes.
+retry runs those sources a second time and the engine decides what that means. `CREATE TABLE IF NOT EXISTS` succeeds, so
+spell a source idempotently wherever the engine offers the spelling, as
+[Migration directories](#migration-directories) describes. A plain `CREATE TABLE` fails with PostgreSQL SQLSTATE `42P07`,
+and the migration stays pending.
+
+On MySQL the retry does not fail on a source whose work the server reports was already done. MySQL accepts `IF NOT EXISTS`
+on little more than `CREATE TABLE`, so a repeated `ADD COLUMN`, `CREATE INDEX`, or `DROP COLUMN` has no idempotent spelling
+to reach for: rasql reads the MySQL errors that mean "already done" as success, warns about each one, and runs the next
+source. PostgreSQL and SQLite get nothing of the sort and need nothing: PostgreSQL spells nearly every form idempotently,
+and SQLite runs a whole migration in one transaction, so a failed SQLite migration leaves nothing behind to tolerate.
 
 `apply` prints the engine's own error text for the source that failed, naming the migration and the file:
 
@@ -251,8 +258,13 @@ sources idempotently, as [Migration directories](#migration-directories) describ
 migrate: execute migration "002_add_user_nickname" SQL source "002_backfill.up.sql": Error 1146 (42S02): Table 'app.audits' doesn't exist
 ```
 
-Fix the source that failed, or clear whatever it tripped over, then run `apply` again. Where a MySQL source has no
-idempotent spelling, such as `ADD COLUMN`, undo that source by hand before the retry.
+It names a tolerated MySQL source the same way, on standard error, before it goes on with the migration:
+
+```text
+migrate: warning: migration "002_add_user_nickname" SQL source "001_add_nickname.up.sql" was already applied: Error 1060 (42S21): Duplicate column name 'nickname'
+```
+
+Fix the source that failed, or clear whatever it tripped over, then run `apply` again.
 
 ## Revert a migration
 

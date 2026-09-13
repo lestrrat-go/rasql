@@ -53,3 +53,14 @@ func TestClassifyMappingsAndWrappers(t *testing.T) {
 	require.False(t, ok)
 	require.Equal(t, dberror.Metadata{}, metadata)
 }
+
+func TestAlreadyApplied(t *testing.T) {
+	for _, number := range []uint16{1050, 1060, 1061, 1091, 3821, 3940} {
+		require.True(t, mysqlerr.AlreadyApplied(fmt.Errorf("exec: %w", &mysql.MySQLError{Number: number})), "%d means the work was already done", number)
+	}
+	for _, number := range []uint16{1051, 1064, 1146, 1826, 3822} {
+		require.False(t, mysqlerr.AlreadyApplied(&mysql.MySQLError{Number: number}), "%d means something else", number)
+	}
+	require.False(t, mysqlerr.AlreadyApplied(nil))
+	require.False(t, mysqlerr.AlreadyApplied(context.Canceled))
+}
