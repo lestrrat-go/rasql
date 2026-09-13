@@ -138,7 +138,10 @@ func (q graphQuery[R, G]) prepareCompiledMode(executor Executor, compiled compil
 	}}, nil
 }
 func (q graphQuery[R, G]) validateCompiled(executor Executor, compiled compiledQuery) error {
-	registry := graphCodecs(executor)
+	registry, err := graphCodecs(executor)
+	if err != nil {
+		return err
+	}
 	for index, column := range q.value.Schema().Columns() {
 		if _, err := codecFor(registry, column.Codec); err != nil {
 			return planError("codec_unavailable", fmt.Sprintf("result.columns[%d].codec", index), column.Codec)

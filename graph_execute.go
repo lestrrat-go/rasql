@@ -10,12 +10,7 @@ import (
 	"github.com/lestrrat-go/rasql/query"
 )
 
-func graphCodecs(executor Executor) CodecRegistry {
-	if provider, ok := executor.(CodecProvider); ok && provider.Codecs() != nil {
-		return provider.Codecs()
-	}
-	return builtinCodecs
-}
+func graphCodecs(executor Executor) (CodecRegistry, error) { return executorCodecs(executor) }
 
 // executorCompilerProfile reads the engine profile an executor retained, which
 // is where a graph stage reads the engine's bind limit and capabilities.
@@ -194,7 +189,10 @@ func validateManyThroughEdge(edge *graphEdgeSpec, executor Executor, path string
 }
 
 func validateGraphKeys(node *graphPlanNode, executor Executor) error {
-	codecs := graphCodecs(executor)
+	codecs, err := graphCodecs(executor)
+	if err != nil {
+		return err
+	}
 	for _, edge := range node.edges {
 		if edge == nil {
 			continue
@@ -453,7 +451,10 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 	if edge.kind == graphManyThrough {
 		return executeManyThrough(ctx, executor, edge, parents, rowCount, deferred)
 	}
-	codecs := graphCodecs(executor)
+	codecs, err := graphCodecs(executor)
+	if err != nil {
+		return nil, err
+	}
 	tuples := make([]keyTuple, 0, len(parents))
 	parentKeys := make([]string, len(parents))
 	parentPresent := make([]bool, len(parents))
@@ -599,7 +600,10 @@ func executeGraphEdge(ctx context.Context, executor Executor, edge *graphEdgeSpe
 }
 
 func executeManyThrough(ctx context.Context, executor Executor, edge *graphEdgeSpec, parents []graphWork, rowCount *int64, deferred *[]graphDeferred) ([]graphWork, error) {
-	codecs := graphCodecs(executor)
+	codecs, err := graphCodecs(executor)
+	if err != nil {
+		return nil, err
+	}
 	parentTuples := make([]keyTuple, 0, len(parents))
 	parentKeys := make([]string, len(parents))
 	parentPresent := make([]bool, len(parents))

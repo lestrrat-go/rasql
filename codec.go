@@ -136,6 +136,27 @@ func wrapCodecExecutor(executor Executor, codecs CodecRegistry) Executor {
 	return base
 }
 
+// executorCodecs reports the codec registry an executor carries, and the
+// builtin registry for an executor that carries none.
+//
+// An executor that implements CodecProvider and returns nil from it is an
+// error rather than an executor without codecs. WithCodecs already refuses a
+// nil registry, so nil never means "no codecs" anywhere a caller could have
+// written it deliberately, and a nil registry answers no lookup: every caller
+// that reached for one would either substitute the builtin registry and decode
+// against the wrong codecs, or dereference nil.
+func executorCodecs(executor Executor) (CodecRegistry, error) {
+	provider, ok := executor.(CodecProvider)
+	if !ok {
+		return builtinCodecs, nil
+	}
+	registry := provider.Codecs()
+	if registry == nil {
+		return nil, &PlanError{Code: "codec_registry_unavailable", Detail: "executor returned a nil codec registry"}
+	}
+	return registry, nil
+}
+
 func codecFor(reg CodecRegistry, id string) (ValueCodec, error) {
 	if id == "" {
 		return nil, nil
