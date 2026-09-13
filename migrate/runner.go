@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
+	"os"
 	"sort"
 
 	"github.com/lestrrat-go/rasql/dialect"
@@ -23,6 +25,7 @@ type Runner struct {
 	idSQL        string
 	checksumSQL  string
 	appliedAtSQL string
+	notices      io.Writer
 }
 
 // New creates a Runner with the default migration-history table.
@@ -70,7 +73,23 @@ func NewWithHistoryTable(database *sql.DB, d dialect.Dialect, historyTable strin
 		idSQL:        idSQL,
 		checksumSQL:  checksumSQL,
 		appliedAtSQL: appliedAtSQL,
+		notices:      os.Stderr,
 	}, nil
+}
+
+// WithNotices returns a copy of r that writes its notices to w, leaving r
+// unchanged. New and NewWithHistoryTable return a Runner that writes them to
+// os.Stderr, so a tolerated error is reported rather than swallowed by a
+// caller that never asked for it; pass io.Discard to silence them, and a
+// command's own writer to fold them into its output.
+//
+// A notice is written for one thing only: a statement MySQL reported as
+// already done, which Apply and Revert treat as success. See
+// migrate/mysql_already_applied.go. Each notice is one Fprintf call, so a w
+// shared between concurrent Apply calls must be safe for concurrent writes.
+func (r Runner) WithNotices(w io.Writer) Runner {
+	r.notices = w
+	return r
 }
 
 func (r Runner) validate() error {

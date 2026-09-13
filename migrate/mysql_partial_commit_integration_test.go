@@ -3,6 +3,7 @@
 package migrate_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -20,7 +21,7 @@ func TestMySQLPartialCommitVerification(t *testing.T) {
 	t.Run("apply pure DML", testMySQLApplyPureDML)
 	t.Run("revert pure DML", testMySQLRevertPureDML)
 	t.Run("apply implicit commit DDL", testMySQLApplyImplicitCommitDDL)
-	t.Run("apply non-idempotent DDL stays pending", testMySQLApplyNonIdempotentDDLStaysPending)
+	t.Run("apply non-idempotent DDL is tolerated on retry", testMySQLApplyNonIdempotentDDLIsTolerated)
 	t.Run("revert implicit commit DDL", testMySQLRevertImplicitCommitDDL)
 }
 
@@ -114,15 +115,19 @@ func testMySQLApplyImplicitCommitDDL(t *testing.T) {
 	require.Equal(t, 1, mysqlHistoryCount(t, ctx, database, "sec_t1_apply_ddl_history", migration.ID))
 }
 
-// testMySQLApplyNonIdempotentDDLStaysPending is the other half of the lesson:
-// the same failure with a plain CREATE TABLE leaves the migration pending and
-// the retry fails on the first source with MySQL error 1050, because MySQL
-// reports the table the earlier attempt created.
-func testMySQLApplyNonIdempotentDDLStaysPending(t *testing.T) {
+// testMySQLApplyNonIdempotentDDLIsTolerated is the other half of the lesson:
+// the same failure with a plain CREATE TABLE leaves the migration pending, and
+// the retry meets MySQL error 1050 on the first source, because MySQL reports
+// the table the earlier attempt created. rasql tolerates that number as proof
+// the source's work was already done, warns about it, and finishes the
+// migration.
+func testMySQLApplyNonIdempotentDDLIsTolerated(t *testing.T) {
 	database := dbtest.MySQLDB(t)
 	ctx := t.Context()
+	notices := &bytes.Buffer{}
 	runner, err := migrate.NewWithHistoryTable(database, dialect.MySQL(), "sec_t1_apply_plain_history")
 	require.NoError(t, err)
+	runner = runner.WithNotices(notices)
 	migration := migrate.Migration{ID: "001_apply_plain", Mode: migrate.ExecutionModeNonTransactional, Statements: []migrate.Statement{
 		{Source: "001_create.up.sql", SQL: sqltext.Text("CREATE TABLE sec_t1_apply_plain_object (id BIGINT NOT NULL PRIMARY KEY) ENGINE=InnoDB")},
 		{Source: "002_fail.up.sql", SQL: sqltext.Text("INSERT INTO sec_t1_apply_plain_missing VALUES (1)")},
@@ -130,13 +135,16 @@ func testMySQLApplyNonIdempotentDDLStaysPending(t *testing.T) {
 	_, firstErr := runner.Apply(ctx, migrate.AllPending(), migration)
 	requireMySQLNativeError(t, firstErr, 1146)
 	require.Equal(t, 0, mysqlHistoryCount(t, ctx, database, "sec_t1_apply_plain_history", migration.ID))
+	require.Empty(t, notices.String(), "the first attempt tolerated nothing")
 	mysqlExec(t, ctx, database, "CREATE TABLE sec_t1_apply_plain_missing (id BIGINT NOT NULL) ENGINE=InnoDB")
-	_, retryErr := runner.Apply(ctx, migrate.AllPending(), migration)
-	requireMySQLNativeError(t, retryErr, 1050)
-	require.ErrorContains(t, retryErr, `migrate: execute migration "001_apply_plain" SQL source "001_create.up.sql"`)
+	completed, retryErr := runner.Apply(ctx, migrate.AllPending(), migration)
+	require.NoError(t, retryErr)
+	require.Len(t, completed, 1)
+	require.Equal(t, 1, mysqlHistoryCount(t, ctx, database, "sec_t1_apply_plain_history", migration.ID))
+	require.Equal(t, "migrate: warning: migration \"001_apply_plain\" SQL source \"001_create.up.sql\" was already applied: Error 1050 (42S01): Table 'sec_t1_apply_plain_object' already exists\n", notices.String())
 	status, statusErr := runner.Status(ctx, migration)
 	require.NoError(t, statusErr)
-	require.Equal(t, migrate.StatusPending, status[0].State)
+	require.Equal(t, migrate.StatusApplied, status[0].State)
 }
 
 func testMySQLRevertImplicitCommitDDL(t *testing.T) {
