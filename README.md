@@ -15,9 +15,10 @@ Most applications start with the ORM layer. [Getting started](docs/01-getting-st
 ## Features
 
 * **DDL migrations.** Run checked-in SQL migration directories in order with [`rasql migrate apply`](docs/core/07-migrations.md),
-  reconcile interrupted MySQL work with [`rasql migrate reconcile`](docs/core/07-migrations.md), revert them with
-  [`rasql migrate revert`](docs/core/07-migrations.md#revert-a-migration), and generate a PostgreSQL, MySQL, or SQLite
-  migration from desired-schema sources when that helps. See [Migrations](docs/core/07-migrations.md).
+  revert them with [`rasql migrate revert`](docs/core/07-migrations.md#revert-a-migration), and generate a PostgreSQL,
+  MySQL, or SQLite migration from desired-schema sources when that helps. A migration is recorded only once every one of
+  its sources has succeeded, so one that fails part way through stays pending and runs again. See
+  [Migrations](docs/core/07-migrations.md).
 * **Query builder.** The `query` package builds a dialect-neutral statement and validates it, and `render` turns that statement into SQL text with its arguments in placeholder order. Both packages import only `schema` and `dialect`, so this layer runs with no database handle and no Go row type. See [The SQL builder](docs/core/02-sql-builder.md).
 * **ORM.** Run `rasql codegen generate` against a database to write typed rows, sources, projections, mutation builders,
   graph descriptors, and static queries as checked-in Go. Build reads with `rasql.Select`, writes with mutation plans, and consume

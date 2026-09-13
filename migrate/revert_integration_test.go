@@ -114,11 +114,10 @@ func TestForwardOnlyMigrationDirectoryAgainstLiveDatabases(t *testing.T) {
 }
 
 // TestFailedRevertAgainstLiveDatabases pins the asymmetry Revert documents
-// rather than trusting the doc comment: PostgreSQL rolls a failed revert
-// back whole, while explicitly nontransactional migrations retain durable
-// progress when their DDL commits implicitly. The
-// MySQL half is the reason the doc tells a user to resolve the state by
-// hand, so it is asserted here rather than described.
+// rather than trusting the doc comment: both engines keep the reverse
+// statement that already succeeded, because the failing one ran outside the
+// transaction that would have undone it. The migration stays recorded either
+// way, so a later revert runs its reverse sources again from the first one.
 func TestFailedRevertAgainstLiveDatabases(t *testing.T) {
 	for _, test := range []struct {
 		name string

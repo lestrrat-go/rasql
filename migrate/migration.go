@@ -2,11 +2,8 @@
 package migrate
 
 import (
-	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -29,51 +26,6 @@ const (
 	ExecutionModeAtomic           ExecutionMode = ""
 	ExecutionModeNonTransactional ExecutionMode = "nontransactional"
 )
-
-type IncompleteMigration struct {
-	ID          string
-	Checksum    string
-	Source      string
-	Direction   Direction
-	SourceIndex int
-}
-
-type ExecutionResult struct {
-	Completed  []Migration
-	Incomplete *IncompleteMigration
-}
-
-type IncompleteMigrationError struct {
-	Incomplete IncompleteMigration
-	Cause      error
-}
-
-func (e *IncompleteMigrationError) Error() string {
-	return fmt.Sprintf("migrate: incomplete %s migration %q at source %q (index %d): %v", e.Incomplete.Direction, e.Incomplete.ID, e.Incomplete.Source, e.Incomplete.SourceIndex, e.Cause)
-}
-
-func (e *IncompleteMigrationError) Unwrap() error { return e.Cause }
-
-type ReconcileDecision string
-
-const (
-	ReconcileExecuted    ReconcileDecision = "executed"
-	ReconcileNotExecuted ReconcileDecision = "not_executed"
-)
-
-type ReconcileCheck interface {
-	Check(context.Context, *sql.Conn, IncompleteMigration) (ReconcileDecision, error)
-}
-
-func executionResult(completed []Migration, err error) (ExecutionResult, error) {
-	result := ExecutionResult{Completed: append([]Migration(nil), completed...)}
-	var incomplete *IncompleteMigrationError
-	if errors.As(err, &incomplete) {
-		value := incomplete.Incomplete
-		result.Incomplete = &value
-	}
-	return result, err
-}
 
 // Migration is one ordered database change and the sources that undo it.
 //

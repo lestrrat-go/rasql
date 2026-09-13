@@ -19,8 +19,7 @@ const (
 	// StatusOutOfOrder identifies a recorded migration after a pending migration.
 	StatusOutOfOrder StatusState = "out_of_order"
 	// StatusUnknown identifies a recorded migration absent from the supplied set.
-	StatusUnknown    StatusState = "unknown"
-	StatusIncomplete StatusState = "incomplete"
+	StatusUnknown StatusState = "unknown"
 )
 
 // StatusEntry reports the database state of one migration ID.
@@ -34,7 +33,6 @@ const (
 type StatusEntry struct {
 	ID         string
 	State      StatusState
-	Incomplete *IncompleteMigration
 	Reversible bool
 }
 
@@ -60,38 +58,11 @@ func (r Runner) Status(ctx context.Context, migrations ...Migration) ([]StatusEn
 		if err := r.ensureHistory(ctx, connection); err != nil {
 			return err
 		}
-		var progress *progressEntry
-		if r.dialect.Name() == "mysql" || (r.dialect.Name() == "postgresql" && needsProgress(prepared)) {
-			if err := r.ensureProgress(ctx, connection); err != nil {
-				return err
-			}
-			var err error
-			progress, err = r.progress(ctx, connection)
-			if err != nil {
-				return err
-			}
-			if progress != nil {
-				if err := r.validateProgress(progress, prepared); err != nil {
-					return err
-				}
-				if progress.direction != DirectionUp && progress.direction != DirectionDown {
-					return fmt.Errorf("migrate: invalid progress direction %q", progress.direction)
-				}
-				migration := findProgressMigration(prepared, progress.id)
-				statements, _ := progressStatements(migration, progress.direction)
-				if progress.nextIndex == len(statements) && progress.nextIndex == progress.sourceIndex+1 {
-					if err := r.finalizeProgress(ctx, connection, *progress, migration); err != nil {
-						return incompleteError(*progress, err)
-					}
-					progress = nil
-				}
-			}
-		}
 		applied, err := r.applied(ctx, connection)
 		if err != nil {
 			return err
 		}
-		result = statusEntries(applied, prepared, progress)
+		result = statusEntries(applied, prepared)
 		return nil
 	}
 	if r.dialect.Name() == "mysql" {
@@ -108,7 +79,7 @@ func (r Runner) Status(ctx context.Context, migrations ...Migration) ([]StatusEn
 	return result, nil
 }
 
-func statusEntries(applied map[string]string, migrations []preparedMigration, progress *progressEntry) []StatusEntry {
+func statusEntries(applied map[string]string, migrations []preparedMigration) []StatusEntry {
 	expected := make(map[string]struct{}, len(migrations))
 	entries := make([]StatusEntry, 0, len(applied)+len(migrations))
 	for _, migration := range migrations {
@@ -129,11 +100,6 @@ func statusEntries(applied map[string]string, migrations []preparedMigration, pr
 	for _, migration := range migrations {
 		reversible := len(migration.down) > 0
 		recordedChecksum, exists := applied[migration.id]
-		if progress != nil && progress.id == migration.id {
-			value := IncompleteMigration{ID: progress.id, Checksum: progress.checksum, Source: progress.source, Direction: progress.direction, SourceIndex: progress.sourceIndex}
-			entries = append(entries, StatusEntry{ID: migration.id, State: StatusIncomplete, Incomplete: &value, Reversible: reversible})
-			continue
-		}
 		if !exists {
 			pending = true
 			entries = append(entries, StatusEntry{ID: migration.id, State: StatusPending, Reversible: reversible})
