@@ -50,40 +50,37 @@ func ApplyThrough(id string) ApplyTarget {
 // Apply executes pending migrations in ID order, up to target, and returns
 // what it applied in the order it applied them.
 //
-// Atomic PostgreSQL, MySQL, and SQLite migrations run in a transaction. A
-// nontransactional migration may leave a source outcome uncertain; reconcile
-// that state before running Apply again.
+// A migration is recorded only once every one of its sources has succeeded.
+// Atomic PostgreSQL, MySQL, and SQLite migrations run in a transaction, so a
+// failure leaves nothing behind at all. A nontransactional migration's
+// sources run one at a time and it is recorded after the last one succeeds: a
+// failure part way through leaves it unrecorded, so it stays pending and runs
+// again from its first source, while the sources that already succeeded stay
+// in effect. Write such a migration's sources so re-running them is harmless;
+// see docs/core/07-migrations.md.
 func (r Runner) Apply(ctx context.Context, target ApplyTarget, migrations ...Migration) ([]Migration, error) {
-	result, err := r.ApplyResult(ctx, target, migrations...)
-	return result.Completed, err
-}
-
-func (r Runner) ApplyResult(ctx context.Context, target ApplyTarget, migrations ...Migration) (ExecutionResult, error) {
 	if err := r.validate(); err != nil {
-		return ExecutionResult{}, err
+		return nil, err
 	}
 	prepared, err := prepareMigrations(migrations)
 	if err != nil {
-		return ExecutionResult{}, err
+		return nil, err
 	}
 	connection, err := r.database.Conn(ctx)
 	if err != nil {
-		return ExecutionResult{}, fmt.Errorf("migrate: open database connection: %w", err)
+		return nil, fmt.Errorf("migrate: open database connection: %w", err)
 	}
 	defer func() { _ = connection.Close() }()
 
 	switch r.dialect.Name() {
 	case "postgresql":
-		completed, err := r.applyPostgreSQL(ctx, connection, target, prepared)
-		return executionResult(completed, err)
+		return r.applyPostgreSQL(ctx, connection, target, prepared)
 	case "mysql":
-		completed, err := r.applyMySQL(ctx, connection, target, prepared)
-		return executionResult(completed, err)
+		return r.applyMySQL(ctx, connection, target, prepared)
 	case "sqlite":
-		completed, err := r.applySQLite(ctx, connection, target, prepared)
-		return executionResult(completed, err)
+		return r.applySQLite(ctx, connection, target, prepared)
 	default:
-		return ExecutionResult{}, fmt.Errorf("migrate: dialect %q is not supported", r.dialect.Name())
+		return nil, fmt.Errorf("migrate: dialect %q is not supported", r.dialect.Name())
 	}
 }
 
@@ -111,45 +108,8 @@ func (r Runner) ApplyPlan(ctx context.Context, target ApplyTarget, migrations ..
 	defer func() { _ = connection.Close() }()
 	var result []Migration
 	plan := func() error {
-		var progress *progressEntry
-		var progressMigration preparedMigration
 		if err := r.ensureHistory(ctx, connection); err != nil {
 			return err
-		}
-		if r.dialect.Name() == "mysql" || (r.dialect.Name() == "postgresql" && needsProgress(prepared)) {
-			if err := r.ensureProgress(ctx, connection); err != nil {
-				return err
-			}
-			var err error
-			progress, err = r.progress(ctx, connection)
-			if err != nil {
-				return err
-			}
-			if progress != nil {
-				if err := r.validateProgress(progress, prepared); err != nil {
-					return err
-				}
-				if progress.direction != DirectionUp {
-					return fmt.Errorf("migrate: apply plan cannot inspect %s progress", progress.direction)
-				}
-				if progress.nextIndex <= progress.sourceIndex {
-					return incompleteError(*progress, errors.New("source outcome is uncertain; reconcile it before retrying"))
-				}
-				progressMigration = findProgressMigration(prepared, progress.id)
-				statements, err := progressStatements(progressMigration, progress.direction)
-				if err != nil {
-					return err
-				}
-				if progress.nextIndex == len(statements) {
-					if err := r.finalizeProgress(ctx, connection, *progress, progressMigration); err != nil {
-						return incompleteError(*progress, err)
-					}
-					progress = nil
-				} else {
-					progressMigration.statements = append([]Statement(nil), statements[progress.nextIndex:]...)
-					progressMigration.down = append([]Statement(nil), progressMigration.down...)
-				}
-			}
 		}
 		applied, err := r.applied(ctx, connection)
 		if err != nil {
@@ -158,16 +118,6 @@ func (r Runner) ApplyPlan(ctx context.Context, target ApplyTarget, migrations ..
 		selected, err := selectApplies(applied, prepared, target)
 		if err != nil {
 			return err
-		}
-		if progress != nil {
-			ordered := make([]preparedMigration, 0, len(selected)+1)
-			ordered = append(ordered, progressMigration)
-			for _, migration := range selected {
-				if migration.id != progress.id {
-					ordered = append(ordered, migration)
-				}
-			}
-			selected = ordered
 		}
 		result = exportMigrations(selected)
 		return nil
@@ -202,10 +152,7 @@ func (r Runner) applyPostgreSQL(ctx context.Context, connection *sql.Conn, targe
 		completed := make([]Migration, 0, len(selected))
 		for _, migration := range selected {
 			if migration.mode == ExecutionModeNonTransactional {
-				if err := r.ensureProgress(ctx, connection); err != nil {
-					return completed, err
-				}
-				applied, err := r.applyPreparedMySQL(ctx, connection, ApplyThrough(migration.id), migrations)
+				applied, err := r.applyNonTransactional(ctx, connection, migration)
 				completed = append(completed, applied...)
 				if err != nil {
 					return completed, err
@@ -257,10 +204,7 @@ func (r Runner) applyMySQL(ctx context.Context, connection *sql.Conn, target App
 		completed := make([]Migration, 0, len(selected))
 		for _, migration := range selected {
 			if migration.mode == ExecutionModeNonTransactional {
-				if err := r.ensureProgress(ctx, connection); err != nil {
-					return completed, err
-				}
-				applied, err := r.applyPreparedMySQL(ctx, connection, ApplyThrough(migration.id), migrations)
+				applied, err := r.applyNonTransactional(ctx, connection, migration)
 				completed = append(completed, applied...)
 				if err != nil {
 					return completed, err
@@ -275,6 +219,24 @@ func (r Runner) applyMySQL(ctx context.Context, connection *sql.Conn, target App
 		}
 		return completed, nil
 	})
+}
+
+// applyNonTransactional runs one migration's forward sources outside a
+// transaction, in order, and records the migration only after the last one
+// succeeds. A failure leaves it unrecorded, so it stays pending and runs
+// again from its first source, while the sources that already succeeded stay
+// in effect: MySQL commits DDL implicitly, and a PostgreSQL source is in this
+// path precisely because it cannot run in a transaction.
+func (r Runner) applyNonTransactional(ctx context.Context, connection *sql.Conn, migration preparedMigration) ([]Migration, error) {
+	for _, statement := range migration.statements {
+		if _, err := connection.ExecContext(ctx, string(statement.SQL)); err != nil {
+			return nil, fmt.Errorf("migrate: execute migration %q SQL source %q: %w", migration.id, statement.Source, err)
+		}
+	}
+	if err := r.record(ctx, connection, migration); err != nil {
+		return nil, err
+	}
+	return exportMigrations([]preparedMigration{migration}), nil
 }
 
 func (r Runner) applyAtomicMySQL(ctx context.Context, connection *sql.Conn, migration preparedMigration) ([]Migration, error) {

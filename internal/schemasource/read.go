@@ -74,10 +74,7 @@ func (r ReadResult) Clone() ReadResult {
 // Status calls ensureHistory, which would otherwise create rasql_schema_migrations on a
 // database rasql did not build the first time Read looked at it. Once the table is known to
 // exist, ensureHistory is a no-op, so calling Status creates nothing new on that front either
-// way. One residual case is deliberately not covered by this check: on MySQL, Status also
-// ensures a "_progress" companion table exists, and if the history table is present but that
-// companion is not, calling Status still creates it. Avoiding that would mean changing
-// migrate.Runner.Status's contract, which is out of scope here.
+// way.
 func Read(ctx context.Context, req ReadRequest, deps Dependencies) (ReadResult, error) {
 	if err := validateReadRequest(req); err != nil {
 		return ReadResult{}, err

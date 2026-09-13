@@ -20,6 +20,7 @@ func TestMySQLPartialCommitVerification(t *testing.T) {
 	t.Run("apply pure DML", testMySQLApplyPureDML)
 	t.Run("revert pure DML", testMySQLRevertPureDML)
 	t.Run("apply implicit commit DDL", testMySQLApplyImplicitCommitDDL)
+	t.Run("apply non-idempotent DDL stays pending", testMySQLApplyNonIdempotentDDLStaysPending)
 	t.Run("revert implicit commit DDL", testMySQLRevertImplicitCommitDDL)
 }
 
@@ -90,24 +91,52 @@ func testMySQLApplyImplicitCommitDDL(t *testing.T) {
 	runner, err := migrate.NewWithHistoryTable(database, dialect.MySQL(), "sec_t1_apply_ddl_history")
 	require.NoError(t, err)
 	migration := migrate.Migration{ID: "001_apply_ddl", Mode: migrate.ExecutionModeNonTransactional, Statements: []migrate.Statement{
-		{Source: "001_create.up.sql", SQL: sqltext.Text("CREATE TABLE sec_t1_apply_ddl_object (id BIGINT NOT NULL PRIMARY KEY) ENGINE=InnoDB")},
+		{Source: "001_create.up.sql", SQL: sqltext.Text("CREATE TABLE IF NOT EXISTS sec_t1_apply_ddl_object (id BIGINT NOT NULL PRIMARY KEY) ENGINE=InnoDB")},
 		{Source: "002_fail.up.sql", SQL: sqltext.Text("INSERT INTO sec_t1_apply_ddl_missing VALUES (1)")},
 	}}
 	_, firstErr := runner.Apply(ctx, migrate.AllPending(), migration)
 	requireMySQLNativeError(t, firstErr, 1146)
-	require.True(t, mysqlTableExists(t, ctx, database, "sec_t1_apply_ddl_object"))
+	require.True(t, mysqlTableExists(t, ctx, database, "sec_t1_apply_ddl_object"), "MySQL commits DDL implicitly, so the first source's table survives the second source's failure")
 	require.Equal(t, "InnoDB", mysqlTableEngine(t, ctx, database, "sec_t1_apply_ddl_object"))
-	require.Equal(t, 0, mysqlHistoryCount(t, ctx, database, "sec_t1_apply_ddl_history", migration.ID))
+	require.Equal(t, 0, mysqlHistoryCount(t, ctx, database, "sec_t1_apply_ddl_history", migration.ID), "a migration is recorded only when every one of its sources succeeded")
 	status, statusErr := runner.Status(ctx, migration)
 	require.NoError(t, statusErr)
-	require.Equal(t, migrate.StatusIncomplete, status[0].State)
-	require.NoError(t, runner.Reconcile(ctx, mysqlNotExecutedCheck{}, migration))
+	require.Equal(t, migrate.StatusPending, status[0].State, "an unrecorded migration is pending; nothing else is recorded about the failed attempt")
+
+	// Clear the obstacle and re-run. The first source is spelled
+	// CREATE TABLE IF NOT EXISTS, so running it a second time is not an
+	// error and the retry reaches the second source.
 	mysqlExec(t, ctx, database, "CREATE TABLE sec_t1_apply_ddl_missing (id BIGINT NOT NULL) ENGINE=InnoDB")
 	completed, retryErr := runner.Apply(ctx, migrate.AllPending(), migration)
 	require.NoError(t, retryErr)
 	require.Len(t, completed, 1)
 	require.True(t, mysqlTableExists(t, ctx, database, "sec_t1_apply_ddl_object"))
 	require.Equal(t, 1, mysqlHistoryCount(t, ctx, database, "sec_t1_apply_ddl_history", migration.ID))
+}
+
+// testMySQLApplyNonIdempotentDDLStaysPending is the other half of the lesson:
+// the same failure with a plain CREATE TABLE leaves the migration pending and
+// the retry fails on the first source with MySQL error 1050, because MySQL
+// reports the table the earlier attempt created.
+func testMySQLApplyNonIdempotentDDLStaysPending(t *testing.T) {
+	database := dbtest.MySQLDB(t)
+	ctx := t.Context()
+	runner, err := migrate.NewWithHistoryTable(database, dialect.MySQL(), "sec_t1_apply_plain_history")
+	require.NoError(t, err)
+	migration := migrate.Migration{ID: "001_apply_plain", Mode: migrate.ExecutionModeNonTransactional, Statements: []migrate.Statement{
+		{Source: "001_create.up.sql", SQL: sqltext.Text("CREATE TABLE sec_t1_apply_plain_object (id BIGINT NOT NULL PRIMARY KEY) ENGINE=InnoDB")},
+		{Source: "002_fail.up.sql", SQL: sqltext.Text("INSERT INTO sec_t1_apply_plain_missing VALUES (1)")},
+	}}
+	_, firstErr := runner.Apply(ctx, migrate.AllPending(), migration)
+	requireMySQLNativeError(t, firstErr, 1146)
+	require.Equal(t, 0, mysqlHistoryCount(t, ctx, database, "sec_t1_apply_plain_history", migration.ID))
+	mysqlExec(t, ctx, database, "CREATE TABLE sec_t1_apply_plain_missing (id BIGINT NOT NULL) ENGINE=InnoDB")
+	_, retryErr := runner.Apply(ctx, migrate.AllPending(), migration)
+	requireMySQLNativeError(t, retryErr, 1050)
+	require.ErrorContains(t, retryErr, `migrate: execute migration "001_apply_plain" SQL source "001_create.up.sql"`)
+	status, statusErr := runner.Status(ctx, migration)
+	require.NoError(t, statusErr)
+	require.Equal(t, migrate.StatusPending, status[0].State)
 }
 
 func testMySQLRevertImplicitCommitDDL(t *testing.T) {
@@ -121,7 +150,7 @@ func testMySQLRevertImplicitCommitDDL(t *testing.T) {
 		Mode:       migrate.ExecutionModeNonTransactional,
 		Statements: []migrate.Statement{{Source: "001_create.up.sql", SQL: sqltext.Text("CREATE TABLE sec_t1_revert_ddl_object (id BIGINT NOT NULL PRIMARY KEY) ENGINE=InnoDB")}},
 		Down: []migrate.Statement{
-			{Source: "001_drop.down.sql", SQL: sqltext.Text("DROP TABLE sec_t1_revert_ddl_object")},
+			{Source: "001_drop.down.sql", SQL: sqltext.Text("DROP TABLE IF EXISTS sec_t1_revert_ddl_object")},
 			{Source: "002_fail.down.sql", SQL: sqltext.Text("INSERT INTO sec_t1_revert_ddl_missing VALUES (1)")},
 		},
 	}
@@ -131,23 +160,20 @@ func testMySQLRevertImplicitCommitDDL(t *testing.T) {
 	_, firstErr := runner.Revert(ctx, migrate.Steps(1), migration)
 	requireMySQLNativeError(t, firstErr, 1146)
 	require.False(t, mysqlTableExists(t, ctx, database, "sec_t1_revert_ddl_object"))
-	require.Equal(t, 1, mysqlHistoryCount(t, ctx, database, "sec_t1_revert_ddl_history", migration.ID))
+	require.Equal(t, 1, mysqlHistoryCount(t, ctx, database, "sec_t1_revert_ddl_history", migration.ID), "the history record is deleted only after every reverse source succeeded")
 	status, statusErr := runner.Status(ctx, migration)
 	require.NoError(t, statusErr)
-	require.Equal(t, migrate.StatusIncomplete, status[0].State)
-	require.NoError(t, runner.Reconcile(ctx, mysqlNotExecutedCheck{}, migration))
+	require.Equal(t, migrate.StatusApplied, status[0].State, "a migration whose revert failed is still recorded, so it is still applied")
+
+	// Clear the obstacle and revert again. The first reverse source is
+	// spelled DROP TABLE IF EXISTS, so running it on the table the earlier
+	// attempt already dropped is not an error.
 	mysqlExec(t, ctx, database, "CREATE TABLE sec_t1_revert_ddl_missing (id BIGINT NOT NULL) ENGINE=InnoDB")
 	completed, retryErr := runner.Revert(ctx, migrate.Steps(1), migration)
 	require.NoError(t, retryErr)
 	require.Len(t, completed, 1)
 	require.False(t, mysqlTableExists(t, ctx, database, "sec_t1_revert_ddl_object"))
 	require.Equal(t, 0, mysqlHistoryCount(t, ctx, database, "sec_t1_revert_ddl_history", migration.ID))
-}
-
-type mysqlNotExecutedCheck struct{}
-
-func (mysqlNotExecutedCheck) Check(context.Context, *sql.Conn, migrate.IncompleteMigration) (migrate.ReconcileDecision, error) {
-	return migrate.ReconcileNotExecuted, nil
 }
 
 func logMySQLDiagnostics(t *testing.T, ctx context.Context, database *sql.DB) {

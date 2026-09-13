@@ -95,7 +95,7 @@ func TestApplyPlanReportsPendingMigrationsAndChangesNothing(t *testing.T) {
 
 // recordingConnector refuses every connection and counts the attempts, so a
 // test can prove a Runner call reached the pool and still returned the zero
-// ExecutionResult rather than a partly filled one.
+// empty slice rather than a partly filled one.
 type recordingConnector struct{ calls *int }
 
 func (c recordingConnector) Connect(context.Context) (driver.Conn, error) {
@@ -120,11 +120,11 @@ func TestApplyAndRevertResultReportNothingWhenTheConnectionFails(t *testing.T) {
 		Statements: []migrate.Statement{{Source: "001.sql", SQL: sqltext.Text("SELECT 1")}},
 		Down:       []migrate.Statement{{Source: "001.down.sql", SQL: sqltext.Text("SELECT 1")}},
 	}
-	applyResult, applyErr := runner.ApplyResult(t.Context(), migrate.AllPending(), migration)
-	require.Equal(t, migrate.ExecutionResult{}, applyResult)
+	applied, applyErr := runner.Apply(t.Context(), migrate.AllPending(), migration)
+	require.Empty(t, applied)
 	require.EqualError(t, applyErr, "migrate: open database connection: driver: bad connection")
-	revertResult, revertErr := runner.RevertResult(t.Context(), migrate.Steps(1), migration)
-	require.Equal(t, migrate.ExecutionResult{}, revertResult)
+	reverted, revertErr := runner.Revert(t.Context(), migrate.Steps(1), migration)
+	require.Empty(t, reverted)
 	require.EqualError(t, revertErr, "migrate: open database connection: driver: bad connection")
 	require.NotZero(t, calls)
 }

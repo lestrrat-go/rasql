@@ -5,6 +5,7 @@ package migrate
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -15,62 +16,54 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPostgreSQLNonTransactionalCheckpointRecovery(t *testing.T) {
-	config := dbtest.PostgreSQLConfig(t)
+// TestPostgreSQLNonTransactionalFailureStaysPending pins rule 1 against a live
+// PostgreSQL server: a nontransactional migration whose second source fails is
+// not recorded, so it stays pending, while the first source's effect survives
+// because a nontransactional source runs outside any transaction. It then pins
+// rule 2's payoff: once the obstacle is cleared, the same migration re-runs
+// from its first source and succeeds, because that source is spelled
+// idempotently.
+func TestPostgreSQLNonTransactionalFailureStaysPending(t *testing.T) {
 	database := dbtest.PostgreSQLDB(t)
-	history := dbtest.UniqueName(t, "p8_pg_recovery_history")
-	table := dbtest.UniqueName(t, "p8_pg_recovery_table")
-	index := dbtest.UniqueName(t, "p8_pg_recovery_index")
+	history := dbtest.UniqueName(t, "rofs_pg_history")
+	table := dbtest.UniqueName(t, "rofs_pg_table")
+	index := dbtest.UniqueName(t, "rofs_pg_index")
+	missing := dbtest.UniqueName(t, "rofs_pg_absent")
 	migration := Migration{ID: "001_pg_concurrent", Mode: ExecutionModeNonTransactional, Statements: []Statement{
-		{Source: "001_table.up.sql", SQL: sqltext.Text("CREATE TABLE " + table + " (id BIGINT PRIMARY KEY)")},
-		{Source: "002_index.up.sql", SQL: sqltext.Text("CREATE INDEX CONCURRENTLY " + index + " ON " + table + " (id)")},
+		{Source: "001_table.up.sql", SQL: sqltext.Text("CREATE TABLE IF NOT EXISTS " + table + " (id BIGINT PRIMARY KEY)")},
+		{Source: "002_index.up.sql", SQL: sqltext.Text("CREATE INDEX CONCURRENTLY IF NOT EXISTS " + index + " ON " + missing + " (id)")},
 	}, Down: []Statement{
-		{Source: "002_index.down.sql", SQL: sqltext.Text("DROP INDEX CONCURRENTLY " + index)},
-		{Source: "001_table.down.sql", SQL: sqltext.Text("DROP TABLE " + table)},
+		{Source: "002_index.down.sql", SQL: sqltext.Text("DROP INDEX CONCURRENTLY IF EXISTS " + index)},
+		{Source: "001_table.down.sql", SQL: sqltext.Text("DROP TABLE IF EXISTS " + table)},
 	}}
 	runner, err := NewWithHistoryTable(database, dialect.PostgreSQL(), history)
 	require.NoError(t, err)
-	previousHook := journalWriteHook
-	checkpointCount := 0
-	journalWriteHook = func(operation string) error {
-		if operation == "checkpoint" {
-			checkpointCount++
-			if checkpointCount == 2 {
-				return errPostgreSQLLiveJournalFailure
-			}
-		}
-		return nil
-	}
-	t.Cleanup(func() { journalWriteHook = previousHook })
+
 	_, err = runner.Apply(t.Context(), AllPending(), migration)
-	require.ErrorIs(t, err, errPostgreSQLLiveJournalFailure)
-	var sourceIndex, nextIndex int
-	require.NoError(t, database.QueryRowContext(t.Context(), "SELECT source_index, next_index FROM "+history+"_progress").Scan(&sourceIndex, &nextIndex))
-	require.Equal(t, 1, sourceIndex)
-	require.Equal(t, 1, nextIndex)
-	require.NoError(t, database.Close())
-	restartedDatabase := stdlib.OpenDB(*config)
-	t.Cleanup(func() { _ = restartedDatabase.Close() })
-	restarted, err := NewWithHistoryTable(restartedDatabase, dialect.PostgreSQL(), history)
+	require.ErrorContains(t, err, `migrate: execute migration "001_pg_concurrent" SQL source "002_index.up.sql"`)
+	require.ErrorContains(t, err, missing)
+	require.True(t, postgreSQLRelationExists(t, database, table), "the first source ran outside a transaction, so its table survives the later failure")
+	status, err := runner.Status(t.Context(), migration)
 	require.NoError(t, err)
-	_, err = restarted.Apply(t.Context(), AllPending(), migration)
-	var incomplete *IncompleteMigrationError
-	require.ErrorAs(t, err, &incomplete)
-	require.Contains(t, err.Error(), "reconcile")
-	check := &postgresqlIndexCheck{index: index}
-	require.NoError(t, restarted.Reconcile(t.Context(), check, migration))
-	require.Equal(t, ReconcileExecuted, check.decision)
-	completed, err := restarted.Apply(t.Context(), AllPending(), migration)
+	require.Equal(t, StatusPending, status[0].State, "an unrecorded migration is pending, with nothing else recorded about the attempt")
+
+	// Clear the obstacle the second source tripped over and re-run. The first
+	// source is spelled CREATE TABLE IF NOT EXISTS, so running it a second
+	// time is not an error.
+	_, err = database.ExecContext(t.Context(), "CREATE TABLE "+missing+" (id BIGINT PRIMARY KEY)")
 	require.NoError(t, err)
-	require.Empty(t, completed)
-	status, err := restarted.Status(t.Context(), migration)
+	t.Cleanup(func() { _, _ = database.Exec("DROP TABLE IF EXISTS " + missing) })
+	completed, err := runner.Apply(t.Context(), AllPending(), migration)
+	require.NoError(t, err)
+	require.Len(t, completed, 1)
+	status, err = runner.Status(t.Context(), migration)
 	require.NoError(t, err)
 	require.Equal(t, StatusApplied, status[0].State)
-	_, err = restarted.Revert(t.Context(), Steps(1), migration)
+
+	_, err = runner.Revert(t.Context(), Steps(1), migration)
 	require.NoError(t, err)
-	var remaining int
-	require.NoError(t, restartedDatabase.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM pg_class WHERE relname = $1", index).Scan(&remaining))
-	require.Zero(t, remaining)
+	require.False(t, postgreSQLRelationExists(t, database, index))
+	require.False(t, postgreSQLRelationExists(t, database, table))
 }
 
 func TestPostgreSQLTwoRunnersAndStatusShareMigrationLock(t *testing.T) {
@@ -89,22 +82,22 @@ func TestPostgreSQLTwoRunnersAndStatusShareMigrationLock(t *testing.T) {
 	require.NoError(t, err)
 	entered := make(chan struct{})
 	release := make(chan struct{})
-	previousHook := journalWriteHook
-	var checkpoint bool
-	journalWriteHook = func(operation string) error {
-		if operation == "checkpoint" && !checkpoint {
-			checkpoint = true
+	previousHook := historyWriteHook
+	var held bool
+	historyWriteHook = func(operation string) error {
+		if operation == "history" && !held {
+			held = true
 			close(entered)
 			select {
 			case <-release:
 			case <-time.After(10 * time.Second):
-				return errPostgreSQLLiveJournalFailure
+				return errPostgreSQLLiveHistoryFailure
 			}
 		}
 		return nil
 	}
 	t.Cleanup(func() {
-		journalWriteHook = previousHook
+		historyWriteHook = previousHook
 		select {
 		case <-release:
 		default:
@@ -135,23 +128,13 @@ func TestPostgreSQLTwoRunnersAndStatusShareMigrationLock(t *testing.T) {
 	require.Equal(t, 1, count)
 }
 
-var errPostgreSQLLiveJournalFailure = errorString("postgresql live journal failure")
+var errPostgreSQLLiveHistoryFailure = errors.New("postgresql live history failure")
 
-type postgresqlIndexCheck struct {
-	index    string
-	decision ReconcileDecision
-}
-
-func (c *postgresqlIndexCheck) Check(ctx context.Context, connection *sql.Conn, _ IncompleteMigration) (ReconcileDecision, error) {
-	var valid, ready bool
-	if err := connection.QueryRowContext(ctx, "SELECT indisvalid, indisready FROM pg_index WHERE indexrelid = $1::regclass", c.index).Scan(&valid, &ready); err == sql.ErrNoRows {
-		c.decision = ReconcileNotExecuted
-	} else if err != nil {
-		return "", err
-	} else if valid && ready {
-		c.decision = ReconcileExecuted
-	} else {
-		c.decision = ReconcileNotExecuted
-	}
-	return c.decision, nil
+// postgreSQLRelationExists asks the server's own catalog, which covers a table
+// and an index alike, rather than going through rasql's inspection.
+func postgreSQLRelationExists(t *testing.T, database *sql.DB, name string) bool {
+	t.Helper()
+	var count int
+	require.NoError(t, database.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM pg_class WHERE relname = $1", name).Scan(&count))
+	return count > 0
 }

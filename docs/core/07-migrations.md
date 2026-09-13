@@ -1,6 +1,6 @@
 # Migrations
 
-`rasql migrate` applies checked-in SQL migrations, reverts them, and records every completed migration with a SHA-256 checksum. It supports PostgreSQL, MySQL, and SQLite. Atomic migrations use one transaction per migration on all three engines. Explicit `nontransactional` migrations use durable progress and reconciliation when their sources cannot run in a transaction, including MySQL DDL.
+`rasql migrate` applies checked-in SQL migrations, reverts them, and records every completed migration with a SHA-256 checksum. It supports PostgreSQL, MySQL, and SQLite. Atomic migrations use one transaction per migration on all three engines. Explicit `nontransactional` migrations run their sources one at a time, for sources that cannot run in a transaction, including MySQL DDL. A migration is recorded only once every one of its sources has succeeded, so one that fails part way through stays pending and runs again from its first source.
 
 Run the command outside the application, before it starts. The application then opens a database whose schema is already in place.
 
@@ -31,6 +31,19 @@ db/migrations/
 Give each engine its own root, such as `db/migrations/postgresql` and `db/migrations/sqlite`, only when the same application really ships DDL for more than one engine. Two engines mean two histories that must not share a root, and each `rasql migrate` run then names the one it is for with `-dir`. An application on a single engine needs no such level.
 
 Each `.sql` file contains one native database statement. `rasql migrate` sends its bytes unchanged to the database driver. It does not parse, split, or render SQL, so a migration can use the database's own DDL syntax.
+
+Keep each file to one change as well as one statement. `ALTER TABLE t ADD COLUMN a INT, ADD COLUMN b INT` that fails on `b`
+adds neither column on PostgreSQL 17 or MySQL 8.4, and reports only `b`, so the whole statement has to be understood before
+it can be run again. Two files, one column each, fail one at a time and name the one that failed.
+
+Write each statement so that running it a second time is harmless, wherever the engine offers a spelling for that. A
+`nontransactional` migration that fails part way through runs again from its first source, and that source then meets a
+database it has already changed. All three engines accept `CREATE TABLE IF NOT EXISTS`, `DROP TABLE IF EXISTS`, and
+`DROP VIEW IF EXISTS`. PostgreSQL and SQLite also accept `CREATE INDEX IF NOT EXISTS` and `DROP INDEX IF EXISTS`, and
+PostgreSQL alone accepts `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` and `ALTER TABLE ... DROP COLUMN IF EXISTS`. MySQL 8.4
+rejects every `IF [NOT] EXISTS` clause outside `CREATE`/`DROP TABLE` and `CREATE`/`DROP VIEW` as a syntax error, so a MySQL
+`ADD COLUMN`, `CREATE INDEX`, or `ADD CONSTRAINT` has no idempotent spelling to reach for; see
+[Retry a failed migration](#retry-a-failed-migration) for what a retry does with one.
 
 Forward migration IDs, source filenames, source order, and source bytes are part of the recorded checksum. Do not edit, rename, move, add to, or remove the forward sources of an applied migration. Create a new migration directory for every later change, or revert the migration first with [`down`](#revert-a-migration).
 
@@ -218,19 +231,28 @@ rasql migrate verify \
 
 `apply` runs every pending migration, oldest first, and prints one `applied<TAB>ID` line per migration followed by a count. Pass `-to ID` to stop at a chosen migration, which applies `ID` and every pending migration before it and leaves the rest pending. Naming a migration that is already applied applies nothing. Pass `-dry-run` to print the forward SQL the run would execute without running it. That dry run reads the history table, so it prints only what is still pending, while [`plan`](#create-and-review-a-migration) prints every supplied source and never opens a database.
 
-`status` reports `applied`, `pending`, `changed`, `out_of_order`, `unknown`, and `incomplete` migrations, and prints `irreversible` beside any migration that has no `.down.sql` sources, so a rollback can be planned before it is attempted. `verify` succeeds only when every supplied migration is `applied`; whether a migration can be reverted is a separate question from whether it is applied, so `verify` does not report it and a caller checks `status` instead. The command redacts the exact DSN from returned errors. Pass `-history-table` to each database command when the default `rasql_schema_migrations` table name conflicts with an existing application table.
+`status` reports `applied`, `pending`, `changed`, `out_of_order`, and `unknown` migrations, and prints `irreversible` beside any migration that has no `.down.sql` sources, so a rollback can be planned before it is attempted. `verify` succeeds only when every supplied migration is `applied`; whether a migration can be reverted is a separate question from whether it is applied, so `verify` does not report it and a caller checks `status` instead. The command redacts the exact DSN from returned errors. Pass `-history-table` to each database command when the default `rasql_schema_migrations` table name conflicts with an existing application table.
 
-### Reconcile an interrupted migration
+### Retry a failed migration
 
-If MySQL stops during a migration, `status` shows the source and direction that need review. Use a read-only query returning one non-NULL boolean to reconcile it after checking the database:
+A migration is recorded only once every one of its sources has succeeded. One that fails part way through is therefore not
+recorded at all: `status` reports it as `pending`, and the next `apply` runs it again from its first source.
 
-```sh
-rasql migrate reconcile \
-  -dir db/migrations -dialect mysql -dsn "$DATABASE_URL" \
-  -id 20240901_add_owner -check 'SELECT EXISTS (SELECT 1 FROM owners WHERE id = 1)'
+On PostgreSQL and SQLite an atomic migration runs in one transaction, so the failure undoes every source that already ran
+and the retry starts from an unchanged database. A `nontransactional` migration's sources each take effect as they run, and
+MySQL commits DDL implicitly whatever mode the migration declares, so the sources that already succeeded stay in effect. The
+retry runs those sources a second time and the engine decides what that means. `CREATE TABLE IF NOT EXISTS` succeeds; a
+plain `CREATE TABLE` fails with PostgreSQL SQLSTATE `42P07` or MySQL error 1050 and the migration stays pending. Spell those
+sources idempotently, as [Migration directories](#migration-directories) describes.
+
+`apply` prints the engine's own error text for the source that failed, naming the migration and the file:
+
+```text
+migrate: execute migration "002_add_user_nickname" SQL source "002_backfill.up.sql": Error 1146 (42S02): Table 'app.audits' doesn't exist
 ```
 
-`true` records the source as executed and `false` removes its pending intent so the source can run later. The command never executes migration SQL or accepts a force outcome.
+Fix the source that failed, or clear whatever it tripped over, then run `apply` again. Where a MySQL source has no
+idempotent spelling, such as `ADD COLUMN`, undo that source by hand before the retry.
 
 ## Revert a migration
 
@@ -258,7 +280,7 @@ A reverted migration becomes `pending` again, so `apply` runs it once more. That
 
 The whole run is refused, before any statement runs, when a selected migration's forward sources no longer match their recorded checksum, when `-to` names a migration that is not applied, when `-steps` exceeds the number applied, or when the history disagrees with the supplied migrations. A refused run changes nothing.
 
-Atomic migrations revert atomically on PostgreSQL, MySQL, and SQLite, so a failed revert leaves the database and history unchanged. An explicit `nontransactional` migration leaves a progress row behind when a source outcome is uncertain, and blocks replay until someone reconciles it. Both behaviors are pinned by live tests in `migrate/revert_integration_test.go` and the engine-specific recovery fixtures.
+Atomic migrations revert atomically on PostgreSQL, MySQL, and SQLite, so a failed revert leaves the database and history unchanged. An explicit `nontransactional` migration runs its reverse sources one at a time and deletes its history record only after the last one succeeds, so a revert that fails part way leaves the migration `applied` and the next `revert` runs its reverse sources again from the first one. Spell those sources idempotently for the same reason a forward source is spelled that way. Both behaviors are pinned by live tests in `migrate/revert_integration_test.go` and `migrate/mysql_partial_commit_integration_test.go`.
 
 ## Generate PostgreSQL, MySQL, and SQLite migrations
 

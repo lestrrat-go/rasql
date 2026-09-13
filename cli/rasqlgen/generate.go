@@ -283,9 +283,10 @@ func (c command) prepareLiveGeneration(ctx context.Context, configPath string, c
 
 // catalogScope builds a live catalog read's scope from the table selection settings, the way both
 // the offline schema-update path and the new live path need it: it excludes the migration history
-// table itself and the two companion tables migrate.Runner and migrate's plan preparation create
-// beside it (history+"_progress" and history+"_plan_progress"), neither of which any project
-// configures directly, so that neither is ever mistaken for a table to generate.
+// table itself and the two companion tables an earlier rasql kept beside it
+// (history+"_progress" and history+"_plan_progress"). No current version creates either, and no
+// project configures either, so the exclusion only keeps a leftover from an older database out of
+// the generated source.
 func catalogScope(cfg config) catalogread.Scope {
 	scope := catalogread.Scope{IncludeViews: cfg.Tables.IncludeViews, Namespaces: append([]string(nil), cfg.Tables.Namespaces...)}
 	for _, name := range cfg.Tables.Include {
