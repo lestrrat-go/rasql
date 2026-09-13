@@ -200,9 +200,9 @@ func compileMutation(executor Executor, statement query.WriteStatement) (stmt.St
 	if err != nil {
 		return stmt.Statement{}, err
 	}
-	registry := builtinCodecs
-	if cp, ok := executor.(CodecProvider); ok && cp.Codecs() != nil {
-		registry = cp.Codecs()
+	registry, err := executorCodecs(executor)
+	if err != nil {
+		return stmt.Statement{}, err
 	}
 	return encodeStatement(statementCopy, compiledQuery.Slots, registry)
 }
@@ -477,9 +477,9 @@ func encodeCompiledMutation(compiled compiledQuery, executor Executor) (stmt.Sta
 	if err != nil {
 		return stmt.Statement{}, err
 	}
-	registry := builtinCodecs
-	if cp, ok := executor.(CodecProvider); ok && cp.Codecs() != nil {
-		registry = cp.Codecs()
+	registry, err := executorCodecs(executor)
+	if err != nil {
+		return stmt.Statement{}, err
 	}
 	return encodeStatement(copy, compiled.Slots, registry)
 }

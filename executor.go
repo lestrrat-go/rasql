@@ -254,16 +254,17 @@ func (e logicalProfiledCodecExecutor) beginLogicalInvocation(ctx context.Context
 	return callCtx, wrapProfiledChildWithCodecs(child, e.compiler, e.Codecs()), completion
 }
 
+// A wrapper reports what the executor it wraps reports, nil included, so that
+// executorCodecs raises the one error rather than each wrapper deciding for
+// itself. Substituting the builtin registry here used to hide a nil behind an
+// unrelated fact, because WithEngineProfile picks this type for an executor
+// that opens no scope and profiledCodecScopedExecutor for one that does.
 func (e profiledCodecExecutor) Codecs() CodecRegistry {
 	provider, _ := e.Executor.(CodecProvider)
 	if provider == nil {
-		return builtinCodecs
+		return nil
 	}
-	registry := provider.Codecs()
-	if registry == nil {
-		return builtinCodecs
-	}
-	return registry
+	return provider.Codecs()
 }
 
 // WithEngineProfile wraps executor so every statement it compiles is rendered
@@ -335,13 +336,9 @@ func prepareRows[R any](executor Executor, q Query[R], compiled compiledQuery) (
 			}
 		}
 	}
-	registry := builtinCodecs
-	if cp, ok := executor.(CodecProvider); ok {
-		provided := cp.Codecs()
-		if provided == nil {
-			return result, &PlanError{Code: "codec_registry_unavailable", Detail: "executor returned a nil codec registry"}
-		}
-		registry = provided
+	registry, err := executorCodecs(executor)
+	if err != nil {
+		return result, err
 	}
 	columns := q.Schema().Columns()
 	slots := append([]bindSlot(nil), compiled.Slots...)
