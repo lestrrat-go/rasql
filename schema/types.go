@@ -24,7 +24,6 @@ package schema
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -272,74 +271,6 @@ func (n NullsOrder) valid() bool {
 	default:
 		return false
 	}
-}
-
-// RelationshipKind identifies the relationship shape represented by a
-// descriptor.
-type RelationshipKind string
-
-const (
-	// RelationshipBelongsTo identifies a row that points at one related row
-	// through a foreign key.
-	RelationshipBelongsTo RelationshipKind = "belongs_to"
-	RelationshipHasOne    RelationshipKind = "has_one"
-	// RelationshipHasMany identifies the inverse collection of a belongs-to
-	// relationship.
-	RelationshipHasMany    RelationshipKind = "has_many"
-	RelationshipManyToMany RelationshipKind = "many_to_many"
-)
-
-type RelationshipOptionality string
-
-const (
-	RelationshipOptionalityInferred RelationshipOptionality = ""
-	RelationshipRequired            RelationshipOptionality = "required"
-	RelationshipOptional            RelationshipOptionality = "optional"
-)
-
-type RelationshipThrough struct {
-	Table         ObjectName
-	SourceColumns []string
-	TargetColumns []string
-}
-
-func (r RelationshipThrough) GoString() string {
-	return fmt.Sprintf("schema.RelationshipThrough{Table:schema.ObjectName{Schema:%q, Name:%q}, SourceColumns:%#v, TargetColumns:%#v}", r.Table.Schema, r.Table.Name, r.SourceColumns, r.TargetColumns)
-}
-
-// RelationshipDef describes a navigable relationship derived from a foreign key.
-// The first relationship slice supports belongs-to relationships. The column
-// lists are copied by Table.Relationships, so callers may inspect them safely.
-type RelationshipDef struct {
-	Name string
-	// InverseName overrides the generated method name on the referenced table.
-	// Empty lets the generator derive an unambiguous name. It does not affect DDL.
-	InverseName      string `json:",omitempty"`
-	Kind             RelationshipKind
-	Optionality      RelationshipOptionality `json:",omitempty"`
-	Columns          []string
-	ReferencedSchema string
-	// ResolvedReferencedSchema is the catalog-resolved schema identity used to
-	// match ReferencedTable. Empty means use ReferencedSchema. It does not affect DDL.
-	ResolvedReferencedSchema string `json:",omitempty"`
-	ReferencedTable          string
-	ReferencedColumns        []string
-	Through                  *RelationshipThrough `json:",omitempty"`
-}
-
-// Clone returns a copy of r that shares no slice with r. Each field keeps
-// the source's own nilness: a nil field clones to nil, and a
-// stated-but-empty one clones to a non-nil empty slice.
-func (r RelationshipDef) Clone() RelationshipDef {
-	r.Columns = slices.Clone(r.Columns)
-	r.ReferencedColumns = slices.Clone(r.ReferencedColumns)
-	if r.Through != nil {
-		through := *r.Through
-		through.SourceColumns = slices.Clone(through.SourceColumns)
-		through.TargetColumns = slices.Clone(through.TargetColumns)
-		r.Through = &through
-	}
-	return r
 }
 
 // ValidationError identifies an invalid part of a schema descriptor.

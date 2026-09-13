@@ -130,18 +130,10 @@ func ColumnGoType(column schema.ColumnDef) string {
 	}
 }
 
-// writeTable emits table as a schema.MustTableDef call built from the option
-// constructors: a column constructor per column, PrimaryKey, Unique or
-// UniqueNamed, Check or CheckNamed, Index or UniqueIndex, ForeignKey or
-// ForeignKeyOn with RelationshipNamed for a matching relationship, and
-// InSchema when table names a schema.
 // writeTableDefLiteral writes a schema.TableDef composite literal describing
 // table, stating every field the option form folds. It emits a field only
 // when it is non-zero, so a simple table stays short; format.Source handles
-// alignment. table.Relationships is written verbatim rather than derived, so
-// a table that matched two relationships to one foreign key keeps both,
-// where writeForeignKeyOptions's RelationshipNamed option kept only the
-// first.
+// alignment.
 func writeTableDefLiteral(source *bytes.Buffer, table schema.TableDef) {
 	source.WriteString("schema.TableDef{\n")
 	if table.Schema != "" {
@@ -305,13 +297,6 @@ func writeTableDefLiteral(source *bytes.Buffer, table schema.TableDef) {
 		source.WriteString("ForeignKeys: []schema.ForeignKeyDef{\n")
 		for _, key := range table.ForeignKeys {
 			writeForeignKeyDefLiteral(source, key)
-		}
-		source.WriteString("},\n")
-	}
-	if len(table.Relationships) > 0 {
-		source.WriteString("Relationships: []schema.RelationshipDef{\n")
-		for _, relationship := range table.Relationships {
-			writeRelationshipDefLiteral(source, relationship)
 		}
 		source.WriteString("},\n")
 	}
@@ -732,63 +717,6 @@ func writeForeignKeyDefLiteral(source *bytes.Buffer, key schema.ForeignKeyDef) {
 		writeStringLiteralSlice(source, key.DeleteSetColumns)
 	}
 	source.WriteString("},\n")
-}
-
-func writeRelationshipDefLiteral(source *bytes.Buffer, relationship schema.RelationshipDef) {
-	source.WriteString("{Name: ")
-	source.WriteString(quote(relationship.Name))
-	if relationship.InverseName != "" {
-		source.WriteString(", InverseName: ")
-		source.WriteString(quote(relationship.InverseName))
-	}
-	source.WriteString(", Kind: ")
-	source.WriteString(relationshipKindConstant(relationship.Kind))
-	if relationship.Optionality != "" {
-		source.WriteString(", Optionality: schema.RelationshipOptionality(")
-		source.WriteString(quote(string(relationship.Optionality)))
-		source.WriteString(")")
-	}
-	source.WriteString(", Columns: ")
-	writeStringLiteralSlice(source, relationship.Columns)
-	if relationship.ReferencedSchema != "" {
-		source.WriteString(", ReferencedSchema: ")
-		source.WriteString(quote(relationship.ReferencedSchema))
-	}
-	if relationship.ResolvedReferencedSchema != "" {
-		source.WriteString(", ResolvedReferencedSchema: ")
-		source.WriteString(quote(relationship.ResolvedReferencedSchema))
-	}
-	source.WriteString(", ReferencedTable: ")
-	source.WriteString(quote(relationship.ReferencedTable))
-	source.WriteString(", ReferencedColumns: ")
-	writeStringLiteralSlice(source, relationship.ReferencedColumns)
-	if relationship.Through != nil {
-		source.WriteString(", Through: &schema.RelationshipThrough{Table: schema.ObjectName{Schema: ")
-		source.WriteString(quote(relationship.Through.Table.Schema))
-		source.WriteString(", Name: ")
-		source.WriteString(quote(relationship.Through.Table.Name))
-		source.WriteString("}, SourceColumns: ")
-		writeStringLiteralSlice(source, relationship.Through.SourceColumns)
-		source.WriteString(", TargetColumns: ")
-		writeStringLiteralSlice(source, relationship.Through.TargetColumns)
-		source.WriteString("}")
-	}
-	source.WriteString("},\n")
-}
-
-func relationshipKindConstant(kind schema.RelationshipKind) string {
-	switch kind {
-	case schema.RelationshipBelongsTo:
-		return "schema.RelationshipBelongsTo"
-	case schema.RelationshipHasMany:
-		return "schema.RelationshipHasMany"
-	case schema.RelationshipHasOne:
-		return "schema.RelationshipHasOne"
-	case schema.RelationshipManyToMany:
-		return "schema.RelationshipManyToMany"
-	default:
-		return "schema.RelationshipKind(" + quote(string(kind)) + ")"
-	}
 }
 
 // writeStringLiteralSlice writes values as a []string composite literal.

@@ -101,7 +101,6 @@ type DB struct {
 	handle                Handle
 	dialect               dialect.Dialect
 	hooks                 []Hook
-	relationshipBindLimit int
 	observers             []Observer
 	extensionErrorHandler ExtensionErrorHandler
 	invocationObservers   []InvocationObserver
@@ -111,21 +110,8 @@ type DB struct {
 	tx *sql.Tx
 }
 
-// Option configures the DB that New returns. WithRelationshipBindLimit returns
-// one.
+// Option configures the DB that New returns.
 type Option interface{ apply(*DB) error }
-
-type relationshipBindLimitOption int
-
-func (o relationshipBindLimitOption) apply(db *DB) error {
-	if o < 1 {
-		return fmt.Errorf("rasql: relationship bind limit must be positive")
-	}
-	db.relationshipBindLimit = int(o)
-	return nil
-}
-
-func WithRelationshipBindLimit(limit int) Option { return relationshipBindLimitOption(limit) }
 
 // New pairs a database/sql handle with the dialect used to render SQL for it.
 // handle may be a *sql.DB for a connection pool, a *sql.Conn for one pinned
@@ -171,9 +157,6 @@ func New(handle Handle, d dialect.Dialect, options ...any) (DB, error) {
 	}
 	return db, nil
 }
-
-// RelationshipBindLimit returns the configured application bind budget.
-func (db DB) RelationshipBindLimit() int { return db.relationshipBindLimit }
 
 // WithHooks returns a copy of db that runs hooks around rendered queries and
 // mutations, appended after the hooks db already carries. Every transaction

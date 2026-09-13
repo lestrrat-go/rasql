@@ -13,7 +13,6 @@ import (
 	"github.com/lestrrat-go/rasql/catalog"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/inspect"
-	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 
 	_ "modernc.org/sqlite"
@@ -202,48 +201,6 @@ func TestFromQueryerReadsThroughTheCallersTransaction(t *testing.T) {
 	got, err := catalog.FromQueryer(context.Background(), tx, catalog.Options{Dialect: dialect.SQLite()})
 	require.NoError(t, err)
 	require.Equal(t, expected, got)
-}
-
-func TestSQLiteRelationshipsKeepDeclaredAndResolvedSchemas(t *testing.T) {
-	database := mustCreateSQLiteDB(t,
-		"CREATE TABLE users (id INTEGER PRIMARY KEY)",
-		"CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users (id))",
-	)
-	tables, err := catalog.FromDatabase(t.Context(), database, catalog.Options{Dialect: dialect.SQLite()})
-	require.NoError(t, err)
-	var orders schema.TableDef
-	for _, table := range tables {
-		if table.Name == "orders" {
-			orders = table
-		}
-	}
-	require.Equal(t, "main", orders.Schema)
-	require.Len(t, orders.ForeignKeys, 1)
-	require.Empty(t, orders.ForeignKeys[0].ReferencedSchema)
-	require.Len(t, orders.Relationships, 1)
-	require.Empty(t, orders.Relationships[0].ReferencedSchema)
-	require.Equal(t, "main", orders.Relationships[0].ResolvedReferencedSchema)
-}
-
-func TestSQLiteAttachedRelationshipsResolveConnectionScope(t *testing.T) {
-	database := mustCreateSQLiteDB(t)
-	conn, err := database.Conn(t.Context())
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = conn.Close() })
-	_, err = conn.ExecContext(t.Context(), "ATTACH DATABASE ':memory:' AS aux")
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), "CREATE TABLE aux.customers (id INTEGER PRIMARY KEY); CREATE TABLE aux.purchases (id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL REFERENCES customers(id))")
-	require.NoError(t, err)
-	tables, err := catalog.FromQueryer(t.Context(), conn, catalog.Options{Dialect: dialect.SQLite()})
-	require.NoError(t, err)
-	for _, table := range tables {
-		if table.Name != "purchases" {
-			continue
-		}
-		require.Equal(t, "aux", table.Schema)
-		require.Empty(t, table.ForeignKeys[0].ReferencedSchema)
-		require.Equal(t, "aux", table.Relationships[0].ResolvedReferencedSchema)
-	}
 }
 
 // TestFromDatabaseReportsACommitFailure pins the commit-error path
