@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"github.com/lestrrat-go/rasql/internal/querycompile"
 	"github.com/lestrrat-go/rasql/stmt"
 )
 
@@ -158,19 +157,14 @@ func (e eventExecutor) beginLogicalInvocation(ctx context.Context, kind EventKin
 	}
 }
 
+// The observed executor exposes a transaction scope and a codec registry only
+// when the executor it wraps has one, because both interfaces are exported and
+// a caller reads their presence. The compiler and the durability evidence need
+// no variant of their own: both are unexported, so executorCapability reaches
+// them through unwrapExecutor.
 type eventScopedExecutor struct{ eventExecutor }
-type eventCompilerExecutor struct{ eventExecutor }
 type eventCodecExecutor struct{ eventExecutor }
-type eventCompilerScopedExecutor struct{ eventScopedExecutor }
 type eventCodecScopedExecutor struct{ eventScopedExecutor }
-type eventCompilerCodecExecutor struct{ eventCodecExecutor }
-type eventScopedEvidenceExecutor struct{ eventScopedExecutor }
-type eventCompilerScopedEvidenceExecutor struct{ eventCompilerScopedExecutor }
-type eventCodecScopedEvidenceExecutor struct{ eventCodecScopedExecutor }
-type eventCompilerCodecScopedExecutor struct{ eventCompilerScopedExecutor }
-type eventCompilerCodecScopedEvidenceExecutor struct {
-	eventCompilerCodecScopedExecutor
-}
 
 // WithEventObservers wraps executor so every observer sees the start and the
 // terminal event of each scope, statement and mutation batch it runs, and
@@ -258,27 +252,6 @@ func (e eventScopedExecutor) IsTransaction() bool {
 	return ok && state.IsTransaction()
 }
 
-func (e eventScopedEvidenceExecutor) executionDurability() executionDurabilityEvidence {
-	provider, ok := e.Executor.(executionDurabilityProvider)
-	if !ok {
-		return executionDurabilityUnknown
-	}
-	return provider.executionDurability()
-}
-func (e eventCompilerExecutor) queryCompiler() *querycompile.Compiler {
-	provider, _ := e.Executor.(compilerProvider)
-	if provider == nil {
-		return nil
-	}
-	return provider.queryCompiler()
-}
-func (e eventCompilerScopedExecutor) queryCompiler() *querycompile.Compiler {
-	provider, _ := e.Executor.(compilerProvider)
-	if provider == nil {
-		return nil
-	}
-	return provider.queryCompiler()
-}
 func (e eventCodecExecutor) Codecs() CodecRegistry {
 	provider, _ := e.Executor.(CodecProvider)
 	if provider == nil {
@@ -293,49 +266,6 @@ func (e eventCodecScopedExecutor) Codecs() CodecRegistry {
 	}
 	return provider.Codecs()
 }
-func (e eventCompilerCodecExecutor) queryCompiler() *querycompile.Compiler {
-	provider, _ := e.Executor.(compilerProvider)
-	if provider == nil {
-		return nil
-	}
-	return provider.queryCompiler()
-}
-func (e eventCompilerCodecExecutor) Codecs() CodecRegistry {
-	provider, _ := e.Executor.(CodecProvider)
-	if provider == nil {
-		return nil
-	}
-	return provider.Codecs()
-}
-func (e eventCompilerScopedEvidenceExecutor) executionDurability() executionDurabilityEvidence {
-	provider, _ := e.Executor.(executionDurabilityProvider)
-	if provider == nil {
-		return executionDurabilityUnknown
-	}
-	return provider.executionDurability()
-}
-func (e eventCodecScopedEvidenceExecutor) executionDurability() executionDurabilityEvidence {
-	provider, _ := e.Executor.(executionDurabilityProvider)
-	if provider == nil {
-		return executionDurabilityUnknown
-	}
-	return provider.executionDurability()
-}
-
-func (e eventCompilerCodecScopedEvidenceExecutor) executionDurability() executionDurabilityEvidence {
-	provider, _ := e.Executor.(executionDurabilityProvider)
-	if provider == nil {
-		return executionDurabilityUnknown
-	}
-	return provider.executionDurability()
-}
-func (e eventCompilerCodecScopedExecutor) Codecs() CodecRegistry {
-	provider, _ := e.Executor.(CodecProvider)
-	if provider == nil {
-		return nil
-	}
-	return provider.Codecs()
-}
 
 func (e eventExecutor) childScope(child Executor, ctx context.Context, parentID string, counter *atomic.Int64) Executor {
 	base := eventExecutor{Executor: child, handler: e.handler, observers: e.observers, parentID: parentID, statement: e.statement, counter: counter, scopeCtx: ctx}
@@ -343,6 +273,7 @@ func (e eventExecutor) childScope(child Executor, ctx context.Context, parentID 
 }
 
 func (e eventExecutor) scopeContext() context.Context { return e.scopeCtx }
+func (e eventExecutor) unwrapExecutor() Executor      { return e.Executor }
 
 type observedFinalizer struct {
 	ScopeFinalizer
@@ -375,39 +306,13 @@ func (f *observedFinalizer) Rollback(ctx context.Context) error {
 }
 
 func wrapEventExecutor(base eventExecutor) Executor {
-	_, compiler := base.Executor.(compilerProvider)
 	_, codecs := base.Executor.(CodecProvider)
 	_, scope := base.Executor.(ScopeBeginner)
-	_, evidence := base.Executor.(executionDurabilityProvider)
 	if scope {
-		if compiler && codecs && evidence {
-			return eventCompilerCodecScopedEvidenceExecutor{eventCompilerCodecScopedExecutor{eventCompilerScopedExecutor{eventScopedExecutor{base}}}}
-		}
-		if compiler && codecs {
-			return eventCompilerCodecScopedExecutor{eventCompilerScopedExecutor{eventScopedExecutor{base}}}
-		}
-		if compiler && evidence {
-			return eventCompilerScopedEvidenceExecutor{eventCompilerScopedExecutor{eventScopedExecutor{base}}}
-		}
-		if codecs && evidence {
-			return eventCodecScopedEvidenceExecutor{eventCodecScopedExecutor{eventScopedExecutor{base}}}
-		}
-		if compiler {
-			return eventCompilerScopedExecutor{eventScopedExecutor{base}}
-		}
 		if codecs {
 			return eventCodecScopedExecutor{eventScopedExecutor{base}}
 		}
-		if evidence {
-			return eventScopedEvidenceExecutor{eventScopedExecutor{base}}
-		}
 		return eventScopedExecutor{eventExecutor: base}
-	}
-	if compiler && codecs {
-		return eventCompilerCodecExecutor{eventCodecExecutor{base}}
-	}
-	if compiler {
-		return eventCompilerExecutor{eventExecutor: base}
 	}
 	if codecs {
 		return eventCodecExecutor{eventExecutor: base}

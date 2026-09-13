@@ -20,7 +20,7 @@ func graphCodecs(executor Executor) CodecRegistry {
 // executorCompilerProfile reads the engine profile an executor retained, which
 // is where a graph stage reads the engine's bind limit and capabilities.
 func executorCompilerProfile(executor Executor) engineprofile.Profile {
-	provider, ok := executor.(compilerProvider)
+	provider, ok := executorCapability[compilerProvider](executor)
 	if !ok || provider.queryCompiler() == nil {
 		return engineprofile.Profile{}
 	}
@@ -228,7 +228,7 @@ func LoadGraph[R, G any](ctx context.Context, executor Executor, plan GraphPlan[
 	if err != nil {
 		return nil, err
 	}
-	provider, ok := executor.(compilerProvider)
+	provider, ok := executorCapability[compilerProvider](executor)
 	if !ok || provider.queryCompiler() == nil {
 		return nil, planError("engine_profile_unavailable", "executor", "compiler unavailable")
 	}

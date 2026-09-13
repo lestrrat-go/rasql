@@ -75,37 +75,20 @@ var (
 	_ executionDurabilityProvider = dbExecutor{}
 )
 
+// A wrapper varies over the transaction scope and the codec registry, which a
+// caller reads off it, and over the logical invocation, which every layer has
+// to rewrap the child of. The compiler and the durability evidence need no
+// variant of their own, because executorCapability reaches both by unwrapping.
 type profiledScopedExecutor struct{ profiledExecutor }
-
-type profiledScopedEvidenceExecutor struct{ profiledScopedExecutor }
-
 type profiledCodecScopedExecutor struct{ profiledScopedExecutor }
 
-type profiledCodecScopedEvidenceExecutor struct{ profiledCodecScopedExecutor }
-
 type codecScopedExecutor struct{ codecExec }
-type codecCompilerScopedExecutor struct{ codecScopedExecutor }
-type codecScopedEvidenceExecutor struct{ codecScopedExecutor }
-type codecCompilerScopedEvidenceExecutor struct{ codecCompilerScopedExecutor }
 
 type logicalProfiledScopedExecutor struct{ profiledScopedExecutor }
-type logicalProfiledScopedEvidenceExecutor struct{ profiledScopedEvidenceExecutor }
 type logicalProfiledCodecScopedExecutor struct{ profiledCodecScopedExecutor }
-type logicalProfiledCodecScopedEvidenceExecutor struct {
-	profiledCodecScopedEvidenceExecutor
-}
 type logicalCodecScopedExecutor struct{ codecScopedExecutor }
-type logicalCodecCompilerScopedExecutor struct{ codecCompilerScopedExecutor }
-type logicalCodecScopedEvidenceExecutor struct{ codecScopedEvidenceExecutor }
-type logicalCodecCompilerScopedEvidenceExecutor struct {
-	codecCompilerScopedEvidenceExecutor
-}
 
 func (e logicalProfiledScopedExecutor) beginLogicalInvocation(ctx context.Context, kind EventKind) (context.Context, Executor, logicalInvocationCompletion) {
-	callCtx, child, completion := beginLogicalFrom(e.Executor, ctx, kind)
-	return callCtx, wrapProfiledChild(child, e.compiler), completion
-}
-func (e logicalProfiledScopedEvidenceExecutor) beginLogicalInvocation(ctx context.Context, kind EventKind) (context.Context, Executor, logicalInvocationCompletion) {
 	callCtx, child, completion := beginLogicalFrom(e.Executor, ctx, kind)
 	return callCtx, wrapProfiledChild(child, e.compiler), completion
 }
@@ -113,23 +96,7 @@ func (e logicalProfiledCodecScopedExecutor) beginLogicalInvocation(ctx context.C
 	callCtx, child, completion := beginLogicalFrom(e.Executor, ctx, kind)
 	return callCtx, wrapProfiledChildWithCodecs(child, e.compiler, e.Codecs()), completion
 }
-func (e logicalProfiledCodecScopedEvidenceExecutor) beginLogicalInvocation(ctx context.Context, kind EventKind) (context.Context, Executor, logicalInvocationCompletion) {
-	callCtx, child, completion := beginLogicalFrom(e.Executor, ctx, kind)
-	return callCtx, wrapProfiledChildWithCodecs(child, e.compiler, e.Codecs()), completion
-}
 func (e logicalCodecScopedExecutor) beginLogicalInvocation(ctx context.Context, kind EventKind) (context.Context, Executor, logicalInvocationCompletion) {
-	callCtx, child, completion := beginLogicalFrom(e.Executor, ctx, kind)
-	return callCtx, wrapCodecExecutor(child, e.codecs), completion
-}
-func (e logicalCodecCompilerScopedExecutor) beginLogicalInvocation(ctx context.Context, kind EventKind) (context.Context, Executor, logicalInvocationCompletion) {
-	callCtx, child, completion := beginLogicalFrom(e.Executor, ctx, kind)
-	return callCtx, wrapCodecExecutor(child, e.codecs), completion
-}
-func (e logicalCodecScopedEvidenceExecutor) beginLogicalInvocation(ctx context.Context, kind EventKind) (context.Context, Executor, logicalInvocationCompletion) {
-	callCtx, child, completion := beginLogicalFrom(e.Executor, ctx, kind)
-	return callCtx, wrapCodecExecutor(child, e.codecs), completion
-}
-func (e logicalCodecCompilerScopedEvidenceExecutor) beginLogicalInvocation(ctx context.Context, kind EventKind) (context.Context, Executor, logicalInvocationCompletion) {
 	callCtx, child, completion := beginLogicalFrom(e.Executor, ctx, kind)
 	return callCtx, wrapCodecExecutor(child, e.codecs), completion
 }
@@ -138,6 +105,12 @@ func (e profiledScopedExecutor) IsTransaction() bool {
 	state, ok := e.Executor.(ScopeState)
 	return ok && state.IsTransaction()
 }
+
+// A scope context stays forwarded rather than looked up, because Within reads
+// it off the child a scope returned and takes the caller's context when the
+// child reports none. A lookup that unwrapped would reach an observer's derived
+// context through a child that carries no scope of its own, which is a
+// different context than the one Within uses today.
 func (e profiledScopedExecutor) scopeContext() context.Context {
 	provider, _ := e.Executor.(scopeContextProvider)
 	if provider == nil {
@@ -178,22 +151,6 @@ func (e profiledCodecScopedExecutor) BeginSavepoint(ctx context.Context) (Execut
 	return wrapProfiledChildWithCodecs(child, e.compiler, e.Codecs()), finalizer, nil
 }
 
-func (e profiledScopedEvidenceExecutor) executionDurability() executionDurabilityEvidence {
-	provider, _ := e.Executor.(executionDurabilityProvider)
-	if provider == nil {
-		return executionDurabilityUnknown
-	}
-	return provider.executionDurability()
-}
-
-func (e profiledCodecScopedEvidenceExecutor) executionDurability() executionDurabilityEvidence {
-	provider, _ := e.Executor.(executionDurabilityProvider)
-	if provider == nil {
-		return executionDurabilityUnknown
-	}
-	return provider.executionDurability()
-}
-
 func (e codecScopedExecutor) IsTransaction() bool {
 	state, ok := e.Executor.(ScopeState)
 	return ok && state.IsTransaction()
@@ -230,30 +187,6 @@ func (e codecScopedExecutor) BeginSavepoint(ctx context.Context) (Executor, Scop
 	return wrapCodecExecutor(child, e.codecs), finalizer, nil
 }
 
-func (e codecCompilerScopedExecutor) queryCompiler() *querycompile.Compiler {
-	provider, _ := e.Executor.(compilerProvider)
-	if provider == nil {
-		return nil
-	}
-	return provider.queryCompiler()
-}
-
-func (e codecScopedEvidenceExecutor) executionDurability() executionDurabilityEvidence {
-	provider, ok := e.Executor.(executionDurabilityProvider)
-	if !ok {
-		return executionDurabilityUnknown
-	}
-	return provider.executionDurability()
-}
-
-func (e codecCompilerScopedEvidenceExecutor) executionDurability() executionDurabilityEvidence {
-	provider, ok := e.Executor.(executionDurabilityProvider)
-	if !ok {
-		return executionDurabilityUnknown
-	}
-	return provider.executionDurability()
-}
-
 func (e profiledScopedExecutor) BeginScope(ctx context.Context, opts *sql.TxOptions) (Executor, ScopeFinalizer, error) {
 	beginner, ok := e.Executor.(ScopeBeginner)
 	if !ok {
@@ -287,24 +220,10 @@ func wrapProfiledChildWithCodecs(child Executor, compiler *querycompile.Compiler
 		child = wrapCodecExecutor(child, codecs)
 	}
 	base := profiledExecutor{Executor: child, compiler: compiler}
-	hasLogical := false
-	if _, ok := child.(logicalInvocationProvider); ok {
-		hasLogical = true
-	}
+	_, hasLogical := child.(logicalInvocationProvider)
+	_, hasCodecs := child.(CodecProvider)
 	if _, scope := child.(ScopeBeginner); scope {
-		if _, evidence := child.(executionDurabilityProvider); evidence {
-			if _, codecs := child.(CodecProvider); codecs {
-				if hasLogical {
-					return logicalProfiledCodecScopedEvidenceExecutor{profiledCodecScopedEvidenceExecutor{profiledCodecScopedExecutor{profiledScopedExecutor{base}}}}
-				}
-				return profiledCodecScopedEvidenceExecutor{profiledCodecScopedExecutor: profiledCodecScopedExecutor{profiledScopedExecutor: profiledScopedExecutor{profiledExecutor: base}}}
-			}
-			if hasLogical {
-				return logicalProfiledScopedEvidenceExecutor{profiledScopedEvidenceExecutor{profiledScopedExecutor{base}}}
-			}
-			return profiledScopedEvidenceExecutor{profiledScopedExecutor: profiledScopedExecutor{profiledExecutor: base}}
-		}
-		if _, codecs := child.(CodecProvider); codecs {
+		if hasCodecs {
 			if hasLogical {
 				return logicalProfiledCodecScopedExecutor{profiledCodecScopedExecutor{profiledScopedExecutor{base}}}
 			}
@@ -315,7 +234,7 @@ func wrapProfiledChildWithCodecs(child Executor, compiler *querycompile.Compiler
 		}
 		return profiledScopedExecutor{profiledExecutor: base}
 	}
-	if _, codecs := child.(CodecProvider); codecs {
+	if hasCodecs {
 		if hasLogical {
 			return logicalProfiledCodecExecutor{profiledCodecExecutor{base}}
 		}
