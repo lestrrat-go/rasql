@@ -414,6 +414,34 @@ func TestScopeCapabilities(t *testing.T) {
 		require.NoError(t, finalizer.Rollback(t.Context()))
 	})
 
+	t.Run("a wrapper rejects a savepoint the executor it wraps cannot open", func(t *testing.T) {
+		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+		require.NoError(t, err)
+		withCodecs, err := rasql.WithCodecs(scopeOnlyExecutor{}, mustEmptyRegistry(t))
+		require.NoError(t, err)
+		profiled, err := rasql.WithEngineProfile(scopeOnlyExecutor{}, profile)
+		require.NoError(t, err)
+		profiledCodecs, err := rasql.WithEngineProfile(withCodecs, profile)
+		require.NoError(t, err)
+		for _, test := range []struct {
+			name     string
+			executor rasql.Executor
+		}{
+			{name: "codecs", executor: withCodecs},
+			{name: "profile", executor: profiled},
+			{name: "profile over codecs", executor: profiledCodecs},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				beginner, ok := test.executor.(rasql.SavepointBeginner)
+				require.True(t, ok)
+				_, _, err := beginner.BeginSavepoint(t.Context())
+				var planErr *rasql.PlanError
+				require.ErrorAs(t, err, &planErr)
+				require.Equal(t, "savepoint_unsupported", planErr.Code)
+			})
+		}
+	})
+
 	t.Run("children retain the registry whatever the wrapper order", func(t *testing.T) {
 		database, err := sql.Open("sqlite", ":memory:")
 		require.NoError(t, err)
@@ -623,6 +651,21 @@ func (capabilityScopedExecutor) BeginSavepoint(context.Context) (rasql.Executor,
 	return capabilityScopedExecutor{}, capabilityFinalizer{}, nil
 }
 func (capabilityScopedExecutor) IsTransaction() bool { return false }
+
+// scopeOnlyExecutor opens a transaction and no savepoint, which is what a
+// wrapper's BeginSavepoint has to reject.
+type scopeOnlyExecutor struct{}
+
+func (scopeOnlyExecutor) Dialect() dialect.Dialect { return dialect.SQLite() }
+func (scopeOnlyExecutor) Query(context.Context, stmt.Statement) (rasql.ResultRows, error) {
+	return nil, nil
+}
+func (scopeOnlyExecutor) Exec(context.Context, stmt.Statement) (sql.Result, error) {
+	return nil, nil
+}
+func (scopeOnlyExecutor) BeginScope(context.Context, *sql.TxOptions) (rasql.Executor, rasql.ScopeFinalizer, error) {
+	return capabilityScopedExecutor{}, capabilityFinalizer{}, nil
+}
 
 type capabilityFinalizer struct{}
 
