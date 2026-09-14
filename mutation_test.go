@@ -338,6 +338,28 @@ func TestMutationBatch(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []rasql.InputOutcome{rasql.InputApplied, rasql.InputApplied}, outcome.Inputs)
 	})
+
+	t.Run("a caller limit cuts a run on its last fitting row", func(t *testing.T) {
+		executor, table, id := mutationFixture(t)
+		value := query.TypedColumnOf[mutationRow, string](table.Column("value"))
+		// Two bound arguments per row against a limit of five puts two rows in
+		// each statement. The fourth input repeats the first key, so the batch
+		// that fails names the rows the second statement carries.
+		plans := make([]rasql.MutationPlan, 0, 6)
+		for _, key := range []int64{1, 2, 3, 1, 5, 6} {
+			plan, planErr := rasql.NewCreatePlan(table, rasql.SetField(id, key), rasql.SetField(value, "v"))
+			require.NoError(t, planErr)
+			plans = append(plans, plan)
+		}
+		outcome, err := rasql.ExecMutationBatch(t.Context(), executor, plans, rasql.BulkOptions{MaxRows: 6, MaxBindParameters: 5, Classifier: mutationRejectClassifier{}})
+		require.Error(t, err)
+		require.Equal(t, []int{2, 3}, outcome.FailedBatch)
+		require.Equal(t, []rasql.InputOutcome{
+			rasql.InputApplied, rasql.InputApplied,
+			rasql.InputRejected, rasql.InputRejected,
+			rasql.InputUnattempted, rasql.InputUnattempted,
+		}, outcome.Inputs)
+	})
 }
 
 type mutationAcceptanceItem struct {
