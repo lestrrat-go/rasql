@@ -103,14 +103,12 @@ func resolveDestinationInDirectory(path string) (string, fs.FileInfo, error) {
 // the explicit prune choice when Store.Plan builds it. Check and Commit rescan
 // ownership and refuse generated outputs that appear afterwards; call
 // Store.Plan again to decide whether a newly found file should be kept or
-// pruned. File-backed query inputs are applicability guards: changing their
-// bytes after planning makes held Check and Commit refuse, while inline SQL
-// remains a snapshot. The directory itself is the one exception: a plan
-// records the deepest directory on Dir's own path that already existed, and
-// Commit refuses to act when that path no longer names that same directory,
-// since every orphan it would delete was recorded relative to it and every
-// file it would write lands under it. A Dir that did not exist at all is
-// recorded the same way, through the closest existing directory above it.
+// pruned. The directory itself is the one exception: a plan records the
+// deepest directory on Dir's own path that already existed, and Commit
+// refuses to act when that path no longer names that same directory, since
+// every orphan it would delete was recorded relative to it and every file it
+// would write lands under it. A Dir that did not exist at all is recorded
+// the same way, through the closest existing directory above it.
 //
 // The zero Plan is not a plan: its Files and Orphans report empty, Commit
 // refuses it naming Store.Plan, and nothing but Store.Plan builds one that
@@ -118,7 +116,6 @@ func resolveDestinationInDirectory(path string) (string, fs.FileInfo, error) {
 type Plan struct {
 	files   []File
 	orphans []string
-	inputs  []queryInputSnapshot
 	// dir is the store's resolved output directory: the directory every
 	// File.Path is a direct child of. It is empty only for the zero Plan,
 	// which is what Commit checks to tell the two apart.
@@ -256,8 +253,7 @@ func (p Plan) Orphans() []string {
 //     directory has changed underneath it. A generated entry gained after
 //     Plan is refused rather than added to the old prune set. When Prune is
 //     false and there is at least one orphan, Commit refuses here, naming every
-//     one of them. Recorded query inputs are reread and must retain their
-//     captured bytes before publication begins.
+//     one of them.
 //  2. Write every per-table file and every query file, in path order.
 //  3. Delete this run's leftovers: every path Orphans reported, in path
 //     order, and only when Prune is set -- otherwise step 1 already
@@ -312,9 +308,6 @@ func (p Plan) commit(ctx context.Context, publication *Publication) error {
 	}
 	if p.dir == "" {
 		return errors.New("generate: zero Plan cannot be committed; only Store.Plan builds a Plan that Commit can act on")
-	}
-	if err := validateStoreInputs(p.inputs, p.root); err != nil {
-		return err
 	}
 
 	// Step 1: resolve and authorize everything; write nothing.
@@ -445,9 +438,6 @@ func (p Plan) commit(ctx context.Context, publication *Publication) error {
 	}
 	if !p.prune && len(p.orphans) > 0 {
 		return fmt.Errorf("generate: %s holds %d file(s) rasqlgen wrote that this plan does not write, and Store.Prune is false: %s; set Prune to delete them, or remove them yourself", p.dir, len(p.orphans), strings.Join(p.orphans, ", "))
-	}
-	if err := p.validateQueryInputs(); err != nil {
-		return err
 	}
 
 	// The aggregator files are singled out here, once, so steps 2 and 4
@@ -966,19 +956,6 @@ func writePublicationFile(root *os.Root, name string, source []byte, requestedMo
 // else does.
 var ErrStale = errors.New("generate: generated package is stale")
 
-func validateStoreInputs(inputs []queryInputSnapshot, root string) error {
-	for _, input := range inputs {
-		data, err := readQueryInput(input.path)
-		if err != nil {
-			return fmt.Errorf("generate: query input %s changed after Store.Plan: %w; rerun Store.Plan", formatCheckPath(root, input.path), err)
-		}
-		if sha256.Sum256(data) != input.digest {
-			return fmt.Errorf("generate: query input %s changed after Store.Plan; rerun Store.Plan", formatCheckPath(root, input.path))
-		}
-	}
-	return nil
-}
-
 // Check compares the plan with what is on disk, without writing anything.
 //
 // It returns nil exactly when Commit would write no file and delete no
@@ -1002,9 +979,8 @@ func validateStoreInputs(inputs []queryInputSnapshot, root string) error {
 // marker. It also rescans package ownership and generated entries through
 // that directory before any planned file is compared. Each planned file is
 // then compared through the very directory the matching write would go
-// through, and rereads recorded query inputs before comparing bytes, so what Check compares is the file
-// Commit would replace rather than whatever that path reaches on a second
-// resolution.
+// through, so what Check compares is the file Commit would replace rather
+// than whatever that path reaches on a second resolution.
 //
 // That comparison reads no more of a destination than the planned file it is
 // compared against, plus the one byte that says the destination goes on past
@@ -1026,9 +1002,6 @@ func validateStoreInputs(inputs []queryInputSnapshot, root string) error {
 // read-only counterpart to make: it guards a deletion Check never performs,
 // and the marker it re-reads is the one Check already read here.
 func (p Plan) Check() error {
-	if err := validateStoreInputs(p.inputs, p.root); err != nil {
-		return err
-	}
 	if p.dir == "" {
 		return errors.New("generate: zero Plan cannot be checked; only Store.Plan builds a Plan that Check can act on")
 	}
@@ -1144,9 +1117,6 @@ func (p Plan) Check() error {
 	if !p.prune && len(p.orphans) > 0 {
 		return fmt.Errorf("generate: %s holds %d file(s) rasqlgen wrote that this plan does not write, and Store.Prune is false: %s; set Prune to delete them, or remove them yourself", p.dir, len(p.orphans), strings.Join(p.orphans, ", "))
 	}
-	if err := p.validateQueryInputs(); err != nil {
-		return err
-	}
 
 	// Past the refusal checks, every remaining difference is staleness: a
 	// Write right now would change something, but nothing here stops it.
@@ -1172,19 +1142,6 @@ func (p Plan) Check() error {
 	}
 	sort.Strings(stale)
 	return fmt.Errorf("%w: %s", ErrStale, strings.Join(stale, "; "))
-}
-
-func (p Plan) validateQueryInputs() error {
-	for _, input := range p.inputs {
-		data, err := readQueryInput(input.path)
-		if err != nil {
-			return fmt.Errorf("generate: query input %s changed after Store.Plan: %w; rerun Store.Plan", formatCheckPath(p.root, input.path), err)
-		}
-		if sha256.Sum256(data) != input.digest {
-			return fmt.Errorf("generate: query input %s changed after Store.Plan; rerun Store.Plan", formatCheckPath(p.root, input.path))
-		}
-	}
-	return nil
 }
 
 // formatCheckPath reports path the way Check's error names it: relative to

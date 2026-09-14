@@ -2,12 +2,9 @@ package generate
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"go/token"
-	"io"
-	"os"
 	"path/filepath"
 	"strings"
 	"unicode"
@@ -17,13 +14,6 @@ import (
 	"github.com/lestrrat-go/rasql/internal/modroot"
 	"github.com/lestrrat-go/rasql/internal/querygen"
 )
-
-const maxQueryInputBytes = 64 << 20
-
-type queryInputSnapshot struct {
-	path   string
-	digest [sha256.Size]byte
-}
 
 // Store describes one generated store package: which tables it is
 // generated from, where it goes, and what else belongs in the same
@@ -125,9 +115,8 @@ func (s Store) Write() error {
 // writing anything. It returns nil when a Write would change nothing at
 // all, an error wrapping ErrStale when the generated package differs from
 // what the current inputs produce, and the error Commit itself would return
-// when Commit would refuse the run instead of writing anything. A held Plan
-// guards file-backed query inputs by their captured bytes; a fresh Store.Check
-// evaluates the current inputs. See Plan.Check.
+// when Commit would refuse the run instead of writing anything. See
+// Plan.Check.
 func (s Store) Check() error {
 	plan, err := s.Plan()
 	if err != nil {
@@ -191,27 +180,6 @@ func (s Store) planTypedQuery(dir string, q TypedQuery, filenames, identifiers m
 		}
 	}
 	return File{Path: filepath.Join(dir, q.Output), Source: source}, nil
-}
-
-// readQueryInput reads a query through a bounded reader. A size check before
-// reading is not enough because a path can name a fifo or another stream that
-// reports no useful size. Reading one byte beyond the limit catches both
-// regular files and streaming inputs without allocating unbounded memory.
-func readQueryInput(path string) ([]byte, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = file.Close() }()
-
-	data, err := io.ReadAll(io.LimitReader(file, int64(maxQueryInputBytes)+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(data) > maxQueryInputBytes {
-		return nil, fmt.Errorf("input file %s exceeds maximum size of %d bytes", path, maxQueryInputBytes)
-	}
-	return data, nil
 }
 
 // validateQueryOutputName checks that output is the plain file name
