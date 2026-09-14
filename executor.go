@@ -81,6 +81,42 @@ func executorCapability[T any](executor Executor) (T, bool) {
 	return zero, false
 }
 
+// The three functions below hold the body every wrapper repeats for a capability
+// it declares only because the executor it wraps declares one. Each reads the
+// executor one layer in and never unwraps further, for the reasons
+// executorCapability's comment gives.
+
+func scopeStateFrom(inner Executor) bool {
+	state, ok := inner.(ScopeState)
+	return ok && state.IsTransaction()
+}
+
+// A scope context stays forwarded rather than looked up, because Within reads
+// it off the child a scope returned and takes the caller's context when the
+// child reports none. A lookup that unwrapped would reach an observer's derived
+// context through a child that carries no scope of its own, which is a
+// different context than the one Within uses today.
+func scopeContextFrom(inner Executor) context.Context {
+	provider, _ := inner.(scopeContextProvider)
+	if provider == nil {
+		return nil
+	}
+	return provider.scopeContext()
+}
+
+// A wrapper reports what the executor it wraps reports, nil included, so that
+// executorCodecs raises the one error rather than each wrapper deciding for
+// itself. Substituting the builtin registry here used to hide a nil behind an
+// unrelated fact, because WithEngineProfile picks profiledCodecExecutor for an
+// executor that opens no scope and profiledCodecScopedExecutor for one that does.
+func codecsFrom(inner Executor) CodecRegistry {
+	provider, _ := inner.(CodecProvider)
+	if provider == nil {
+		return nil
+	}
+	return provider.Codecs()
+}
+
 type dbExecutor struct {
 	db       DB
 	compiler *querycompile.Compiler
@@ -254,18 +290,7 @@ func (e logicalProfiledCodecExecutor) beginLogicalInvocation(ctx context.Context
 	return callCtx, wrapProfiledChildWithCodecs(child, e.compiler, e.Codecs()), completion
 }
 
-// A wrapper reports what the executor it wraps reports, nil included, so that
-// executorCodecs raises the one error rather than each wrapper deciding for
-// itself. Substituting the builtin registry here used to hide a nil behind an
-// unrelated fact, because WithEngineProfile picks this type for an executor
-// that opens no scope and profiledCodecScopedExecutor for one that does.
-func (e profiledCodecExecutor) Codecs() CodecRegistry {
-	provider, _ := e.Executor.(CodecProvider)
-	if provider == nil {
-		return nil
-	}
-	return provider.Codecs()
-}
+func (e profiledCodecExecutor) Codecs() CodecRegistry { return codecsFrom(e.Executor) }
 
 // WithEngineProfile wraps executor so every statement it compiles is rendered
 // for profile. It reports ErrInvalidEngineProfile when profile is zero and

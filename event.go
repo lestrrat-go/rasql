@@ -228,9 +228,9 @@ func (e eventScopedExecutor) BeginSavepoint(ctx context.Context) (Executor, Scop
 	callCtx, completion := e.start(ctx, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventStart})
 	beginner, ok := e.Executor.(SavepointBeginner)
 	if !ok {
-		err := planError("savepoint_unsupported", "scope", "executor does not support savepoints")
+		err := unsupportedSavepointError()
 		e.complete(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
-		return nil, nil, planError("savepoint_unsupported", "scope", "executor does not support savepoints")
+		return nil, nil, err
 	}
 	child, finalizer, err := beginner.BeginSavepoint(callCtx)
 	if err != nil {
@@ -247,25 +247,10 @@ func (e eventScopedExecutor) BeginSavepoint(ctx context.Context) (Executor, Scop
 	}}, nil
 }
 
-func (e eventScopedExecutor) IsTransaction() bool {
-	state, ok := e.Executor.(ScopeState)
-	return ok && state.IsTransaction()
-}
+func (e eventScopedExecutor) IsTransaction() bool { return scopeStateFrom(e.Executor) }
 
-func (e eventCodecExecutor) Codecs() CodecRegistry {
-	provider, _ := e.Executor.(CodecProvider)
-	if provider == nil {
-		return nil
-	}
-	return provider.Codecs()
-}
-func (e eventCodecScopedExecutor) Codecs() CodecRegistry {
-	provider, _ := e.Executor.(CodecProvider)
-	if provider == nil {
-		return nil
-	}
-	return provider.Codecs()
-}
+func (e eventCodecExecutor) Codecs() CodecRegistry       { return codecsFrom(e.Executor) }
+func (e eventCodecScopedExecutor) Codecs() CodecRegistry { return codecsFrom(e.Executor) }
 
 func (e eventExecutor) childScope(child Executor, ctx context.Context, parentID string, counter *atomic.Int64) Executor {
 	base := eventExecutor{Executor: child, handler: e.handler, observers: e.observers, parentID: parentID, statement: e.statement, counter: counter, scopeCtx: ctx}
