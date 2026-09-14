@@ -277,6 +277,32 @@ type Select struct {
 	distinct     bool
 	lock         Lock
 	hasLock      bool
+	// checked records that this value already passed Validate. Every
+	// constructor and With... method in this file returns through validated(),
+	// so a Select a caller can hold has always been validated, and Validate
+	// answers a second call on it without walking the statement again. A
+	// Select a caller declares as a zero value carries false and is validated
+	// in full.
+	//
+	// clone copies this field along with the rest of the struct, so anything
+	// that changes a clone and then validates it MUST clear the field first or
+	// the changed value is waved through unchecked. validated() and
+	// ValidateCompilerExpression are the only two places that do this, and they
+	// both clear it. A new one has to as well.
+	checked bool
+}
+
+// validated walks the statement and, when it passes, records that on the value
+// returned. It clears checked first, so it validates the statement in front of
+// it rather than trusting a mark a clone carried over from the value it was
+// copied from.
+func (s Select) validated() (Select, error) {
+	s.checked = false
+	if err := s.Validate(); err != nil {
+		return Select{}, err
+	}
+	s.checked = true
+	return s, nil
 }
 
 // NewSelect creates a validated SELECT statement.
@@ -326,10 +352,7 @@ func NewCorrelatedJoinedSelect(from RelationSource, correlations []RelationSourc
 		groupBy:      append([]Expression(nil), groupBy...),
 		projections:  append([]Projection(nil), projections...),
 	}
-	if err := statement.Validate(); err != nil {
-		return Select{}, err
-	}
-	return statement, nil
+	return statement.validated()
 }
 
 // WithCorrelation returns a copy of s that may read the columns of tables, the
@@ -378,20 +401,14 @@ func NewCorrelatedJoinedSelect(from RelationSource, correlations []RelationSourc
 func (s Select) WithCorrelation(tables ...RelationSource) (Select, error) {
 	copy := s.clone()
 	copy.correlations = append(copy.correlations, normalizeSources(tables)...)
-	if err := copy.Validate(); err != nil {
-		return Select{}, err
-	}
-	return copy, nil
+	return copy.validated()
 }
 
 // WithCTEs returns a copy of s with common table expressions prepended.
 func (s Select) WithCTEs(ctes ...CTE) (Select, error) {
 	copy := s.clone()
 	copy.ctes = append(copy.ctes, ctes...)
-	if err := copy.Validate(); err != nil {
-		return Select{}, err
-	}
-	return copy, nil
+	return copy.validated()
 }
 
 func (s Select) CTEs() []CTE { return append([]CTE(nil), s.ctes...) }
@@ -406,20 +423,14 @@ func (s Select) Correlations() []RelationRef {
 func (s Select) WithJoin(join Join) (Select, error) {
 	copy := s.clone()
 	copy.joins = append(copy.joins, join)
-	if err := copy.Validate(); err != nil {
-		return Select{}, err
-	}
-	return copy, nil
+	return copy.validated()
 }
 
 // WithWhere returns a copy of s with expression as its predicate.
 func (s Select) WithWhere(expression Expression) (Select, error) {
 	copy := s.clone()
 	copy.where = expression
-	if err := copy.Validate(); err != nil {
-		return Select{}, err
-	}
-	return copy, nil
+	return copy.validated()
 }
 
 // WithGroupBy returns a copy of s with expressions appended to its grouping.
@@ -430,10 +441,7 @@ func (s Select) WithWhere(expression Expression) (Select, error) {
 func (s Select) WithGroupBy(expressions ...Expression) (Select, error) {
 	copy := s.clone()
 	copy.groupBy = append(copy.groupBy, expressions...)
-	if err := copy.Validate(); err != nil {
-		return Select{}, err
-	}
-	return copy, nil
+	return copy.validated()
 }
 
 // WithDistinct returns a copy of s that de-duplicates its result rows. It
@@ -449,9 +457,11 @@ func (s Select) WithGroupBy(expressions ...Expression) (Select, error) {
 func (s Select) WithDistinct() (Select, error) {
 	copy := s.clone()
 	copy.distinct = true
-	if err := copy.Validate(); err != nil {
-		return Select{}, err
+	if !s.checked {
+		return copy.validated()
 	}
+	// Validate reads no other field this method touches, and it never reads
+	// distinct at all, so a statement that was already valid stays valid.
 	return copy, nil
 }
 
@@ -467,20 +477,14 @@ func (s Select) WithDistinct() (Select, error) {
 func (s Select) WithHaving(expression Expression) (Select, error) {
 	copy := s.clone()
 	copy.having = expression
-	if err := copy.Validate(); err != nil {
-		return Select{}, err
-	}
-	return copy, nil
+	return copy.validated()
 }
 
 // WithOrder returns a copy of s with orders appended.
 func (s Select) WithOrder(orders ...Order) (Select, error) {
 	copy := s.clone()
 	copy.orderBy = append(copy.orderBy, orders...)
-	if err := copy.Validate(); err != nil {
-		return Select{}, err
-	}
-	return copy, nil
+	return copy.validated()
 }
 
 // WithLimit returns a copy of s with a result limit.
@@ -488,8 +492,13 @@ func (s Select) WithLimit(limit int) (Select, error) {
 	copy := s.clone()
 	copy.limit = limit
 	copy.hasLimit = true
-	if err := copy.Validate(); err != nil {
-		return Select{}, err
+	if !s.checked {
+		return copy.validated()
+	}
+	// One clause of Validate reads limit, and nothing else in the walk depends
+	// on it, so a statement that was already valid needs only that clause.
+	if limit < 0 {
+		return Select{}, validationError("limit", "must not be negative")
 	}
 	return copy, nil
 }
@@ -499,8 +508,11 @@ func (s Select) WithOffset(offset int) (Select, error) {
 	copy := s.clone()
 	copy.offset = offset
 	copy.hasOffset = true
-	if err := copy.Validate(); err != nil {
-		return Select{}, err
+	if !s.checked {
+		return copy.validated()
+	}
+	if offset < 0 {
+		return Select{}, validationError("offset", "must not be negative")
 	}
 	return copy, nil
 }
@@ -510,7 +522,13 @@ func (s Select) WithLock(lock Lock) (Select, error) {
 	copy := s.clone()
 	copy.lock = lock.clone()
 	copy.hasLock = true
-	if err := copy.Validate(); err != nil {
+	if !s.checked {
+		return copy.validated()
+	}
+	// validateLock reads the lock, the FROM table, and the joins. This method
+	// changes only the lock, and the other two came from a statement that
+	// already passed.
+	if err := validateLock(copy.lock, copy.from, copy.joins); err != nil {
 		return Select{}, err
 	}
 	return copy, nil
@@ -581,7 +599,18 @@ func (s Select) Offset() (int, bool) {
 // validated before any statement encloses it. Nesting it checks the same
 // declaration against the statement that really encloses it, and render.Select
 // refuses one rendered on its own.
+//
+// A statement that already passed is reported valid without being walked again.
+// Every constructor and With... method in this package validates what it
+// returns, and every field of a Select is unexported, so the only statement
+// that can reach a second Validate without having passed a first one is a zero
+// value a caller declared, which carries no mark and is walked in full. That is
+// what lets a builder chain, ResultOf, and render each call Validate on the
+// same statement while the walk itself runs once.
 func (s Select) Validate() error {
+	if s.checked {
+		return nil
+	}
 	if err := validateVisibleCTE(s.from, s.ctes, "from"); err != nil {
 		return err
 	}
@@ -759,6 +788,10 @@ func (s Select) ValidateCompilerExpression(expression Expression, clause string,
 	default:
 		return fmt.Errorf("query: unknown compiler expression clause %q", clause)
 	}
+	// The clone carried s's checked mark over, and this method just replaced an
+	// expression in it. Clearing the mark is what makes the call below judge the
+	// compiler's expression rather than report the statement s already passed.
+	copy.checked = false
 	return copy.Validate()
 }
 

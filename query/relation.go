@@ -54,6 +54,7 @@ func (n NativeResult) Engine() string    { return n.engine }
 func (n NativeResult) SQL() sqltext.Text { return n.sql }
 func (n NativeResult) Args() []any       { return append([]any(nil), n.args...) }
 func (NativeResult) queryBody()          {}
+
 func (n NativeResult) Validate() error {
 	if strings.TrimSpace(n.engine) == "" {
 		return fmt.Errorf("native result engine must not be empty")
@@ -391,6 +392,7 @@ func (c Compound) Validate() error {
 
 func (Compound) queryBody() {}
 
+
 type CTE struct {
 	name  string
 	query ResultQuery
@@ -423,3 +425,4 @@ func (c CTE) Ref(alias string) (RelationRef, error) {
 }
 
 func (s Select) queryBody() {}
+
