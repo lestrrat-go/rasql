@@ -484,7 +484,12 @@ func rowsPreparedRequired[R any](ctx context.Context, executor Executor, prepare
 		for i, column := range expected {
 			codecs[i], _ = codecFor(prepared.codecs, column.Codec)
 		}
-		source := codecScanSource{source: owned, columns: expected, codecs: codecs}
+		source := &codecScanSource{source: owned, columns: expected, codecs: codecs}
+		// Converted to the ScanSource interface once here rather than at each
+		// DecodeRow call: DecodeRow's parameter is an interface, so passing the
+		// concrete *codecScanSource directly would convert it to that interface
+		// fresh on every row.
+		var rowSource ScanSource = source
 		policy := prepared.cardinality
 		if consumer > policy {
 			policy = consumer
@@ -515,7 +520,7 @@ func rowsPreparedRequired[R any](ctx context.Context, executor Executor, prepare
 		holding := false
 		for owned.Next() {
 			var value R
-			if err := decoder.DecodeRow(source, &value); err != nil {
+			if err := decoder.DecodeRow(rowSource, &value); err != nil {
 				finished := owned.Finish(err, true)
 				yield(zero, finished)
 				return

@@ -12,18 +12,36 @@ type codecScanSource struct {
 	source  ScanSource
 	columns []ResultColumn
 	codecs  []ValueCodec
+
+	// rawValues and raw are reused across every row of one execution rather
+	// than allocated per row, on the same reasoning as scanSource in
+	// internal/rowvalue/scan.go: s.source.Scan writes through the *any
+	// destinations in raw, which rebinds each rawValues[i] to a new
+	// interface value on each call and never mutates the object the old one
+	// pointed at. What Scan does with a rawValues[i] afterward -- hand it to
+	// a codec, or through rowvalue.AssignValue, which clones before
+	// assigning -- copies out of it synchronously within this same call, so
+	// nothing outlives the next Scan's overwrite. A codecScanSource is
+	// built fresh per query execution in rowsPreparedRequired and never
+	// shared across executions, so this buffer never widens past the one
+	// execution it belongs to.
+	rawValues []any
+	raw       []any
 }
 
-func (s codecScanSource) Scan(destinations ...any) error {
+func (s *codecScanSource) Scan(destinations ...any) error {
 	if len(destinations) != len(s.columns) {
 		return fmt.Errorf("rasql: scan destination count %d does not match result column count %d", len(destinations), len(s.columns))
 	}
-	rawValues := make([]any, len(destinations))
-	raw := make([]any, len(destinations))
-	for i := range raw {
-		raw[i] = &rawValues[i]
+	if s.rawValues == nil {
+		s.rawValues = make([]any, len(destinations))
+		s.raw = make([]any, len(destinations))
+		for i := range s.raw {
+			s.raw[i] = &s.rawValues[i]
+		}
 	}
-	if err := s.source.Scan(raw...); err != nil {
+	rawValues := s.rawValues
+	if err := s.source.Scan(s.raw...); err != nil {
 		return err
 	}
 	for i, destination := range destinations {
