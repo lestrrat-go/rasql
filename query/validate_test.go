@@ -108,3 +108,35 @@ func ordersTableForCheckedTest() schema.TableDef {
 		PrimaryKey: []string{"id"},
 	}
 }
+
+// TestValidationClearsTheMarkBeforeJudgingAChangedStatement guards the one way
+// this design fails open. clone copies the checked mark, so a value that is
+// changed and then validated would be reported valid on the strength of what
+// the statement said before the change. validated() and
+// ValidateCompilerExpression both clear the mark first; dropping either clear
+// makes one of these subtests report nil where it wants an error.
+func TestValidationClearsTheMarkBeforeJudgingAChangedStatement(t *testing.T) {
+	users, err := NewTableRef(usersTableForCheckedTest())
+	require.NoError(t, err)
+	id := users.Column("id")
+	base, err := NewSelect(users, Project(id))
+	require.NoError(t, err)
+	require.True(t, base.checked, "the statement under test has to carry the mark")
+
+	// WithWhere goes through validated(). An aggregate is not allowed in a
+	// WHERE clause, so the walk has to run and refuse it rather than report
+	// the statement base already passed.
+	t.Run("validated", func(t *testing.T) {
+		_, err := base.WithWhere(GreaterThan(Count(id), Bind(int64(1))))
+		require.Error(t, err)
+		require.ErrorContains(t, err, "where")
+	})
+
+	// ValidateCompilerExpression substitutes an expression into a clone and
+	// validates that, so it has to judge the substituted expression.
+	t.Run("ValidateCompilerExpression", func(t *testing.T) {
+		err := base.ValidateCompilerExpression(Count(id), "where", 0)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "where")
+	})
+}

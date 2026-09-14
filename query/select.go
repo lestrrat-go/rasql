@@ -279,17 +279,25 @@ type Select struct {
 	hasLock      bool
 	// checked records that this value already passed Validate. Every
 	// constructor and With... method in this file returns through validated(),
-	// so a Select a caller can hold has always been validated, and a builder
-	// call that changes one field need only check that field rather than walk
-	// the whole statement again. A Select a caller declares as a zero value
-	// carries false and is validated in full.
+	// so a Select a caller can hold has always been validated, and Validate
+	// answers a second call on it without walking the statement again. A
+	// Select a caller declares as a zero value carries false and is validated
+	// in full.
+	//
+	// clone copies this field along with the rest of the struct, so anything
+	// that changes a clone and then validates it MUST clear the field first or
+	// the changed value is waved through unchecked. validated() and
+	// ValidateCompilerExpression are the only two places that do this, and they
+	// both clear it. A new one has to as well.
 	checked bool
 }
 
-// validated reports the result of Validate and, when it passes, records that on
-// the value returned. Validate itself stays a pure value method and sets
-// nothing, so a caller calling it directly sees no change.
+// validated walks the statement and, when it passes, records that on the value
+// returned. It clears checked first, so it validates the statement in front of
+// it rather than trusting a mark a clone carried over from the value it was
+// copied from.
 func (s Select) validated() (Select, error) {
+	s.checked = false
 	if err := s.Validate(); err != nil {
 		return Select{}, err
 	}
@@ -591,7 +599,18 @@ func (s Select) Offset() (int, bool) {
 // validated before any statement encloses it. Nesting it checks the same
 // declaration against the statement that really encloses it, and render.Select
 // refuses one rendered on its own.
+//
+// A statement that already passed is reported valid without being walked again.
+// Every constructor and With... method in this package validates what it
+// returns, and every field of a Select is unexported, so the only statement
+// that can reach a second Validate without having passed a first one is a zero
+// value a caller declared, which carries no mark and is walked in full. That is
+// what lets a builder chain, ResultOf, and render each call Validate on the
+// same statement while the walk itself runs once.
 func (s Select) Validate() error {
+	if s.checked {
+		return nil
+	}
 	if err := validateVisibleCTE(s.from, s.ctes, "from"); err != nil {
 		return err
 	}
@@ -769,6 +788,10 @@ func (s Select) ValidateCompilerExpression(expression Expression, clause string,
 	default:
 		return fmt.Errorf("query: unknown compiler expression clause %q", clause)
 	}
+	// The clone carried s's checked mark over, and this method just replaced an
+	// expression in it. Clearing the mark is what makes the call below judge the
+	// compiler's expression rather than report the statement s already passed.
+	copy.checked = false
 	return copy.Validate()
 }
 

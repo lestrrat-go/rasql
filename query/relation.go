@@ -19,14 +19,8 @@ type ResultColumn struct {
 }
 
 // QueryBody is a validated relational query body.
-//
-// alreadyValidated lets a caller that is about to validate a body skip the walk
-// when the body carries proof it already passed. A body type that tracks no
-// such proof returns false and is validated as before. The method is
-// unexported, as queryBody() already is, so only this package implements it.
 type QueryBody interface {
 	Validate() error
-	alreadyValidated() bool
 	queryBody()
 }
 
@@ -61,9 +55,6 @@ func (n NativeResult) SQL() sqltext.Text { return n.sql }
 func (n NativeResult) Args() []any       { return append([]any(nil), n.args...) }
 func (NativeResult) queryBody()          {}
 
-// alreadyValidated reports false: a native result carries no record of having
-// been validated, so every caller validates it.
-func (NativeResult) alreadyValidated() bool { return false }
 func (n NativeResult) Validate() error {
 	if strings.TrimSpace(n.engine) == "" {
 		return fmt.Errorf("native result engine must not be empty")
@@ -88,10 +79,8 @@ func ResultOf(body QueryBody, columns ...ResultColumn) (ResultQuery, error) {
 	if body == nil {
 		return ResultQuery{}, fmt.Errorf("result query body must not be nil")
 	}
-	if !body.alreadyValidated() {
-		if err := body.Validate(); err != nil {
-			return ResultQuery{}, err
-		}
+	if err := body.Validate(); err != nil {
+		return ResultQuery{}, err
 	}
 	for i, column := range columns {
 		if err := schema.ValidateIdentifier(column.Name); err != nil {
@@ -403,9 +392,6 @@ func (c Compound) Validate() error {
 
 func (Compound) queryBody() {}
 
-// alreadyValidated reports false: a compound holds two bodies of its own and
-// tracks no record of having been validated, so every caller validates it.
-func (Compound) alreadyValidated() bool { return false }
 
 type CTE struct {
 	name  string
@@ -440,6 +426,3 @@ func (c CTE) Ref(alias string) (RelationRef, error) {
 
 func (s Select) queryBody() {}
 
-// alreadyValidated reports whether s reached here through a constructor or a
-// With... method, each of which validates what it returns.
-func (s Select) alreadyValidated() bool { return s.checked }
