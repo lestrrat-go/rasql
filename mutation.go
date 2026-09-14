@@ -387,63 +387,20 @@ func prepareMutationBatches(executor Executor, plans []MutationPlan, maxRows, bi
 	prepared := make([]preparedMutationBatch, 0, len(plans))
 	for i := 0; i < len(plans); {
 		if batch, ok := plans[i].(mutationBatchPlan); ok {
-			end := i + 1
 			first, err := batch.mutationInsert()
 			if err != nil {
 				return nil, err
 			}
-			columns := first.Columns()
-			rows := mutationRows(first.Rows())
-			var best compiledQuery
-			compileCandidate := func(insert query.Insert) (compiledQuery, error) { return compileMutationParts(executor, insert) }
-			if first.UsesDefaultValues() {
-				best, err = compileCandidate(first)
-				if err != nil {
-					return nil, err
-				}
-			} else {
-				best, err = compileCandidate(first)
-				if err != nil {
-					return nil, err
-				}
-				if bindLimit > 0 && len(best.Statement.BoundArgs()) > bindLimit {
-					return nil, &PlanError{Code: "bind_limit", Path: "args", Detail: "mutation batch exceeds bind parameter limit"}
-				}
-			}
-			for end < len(plans) && !first.UsesDefaultValues() && end-i < maxRows {
-				next, ok := plans[end].(mutationBatchPlan)
-				if !ok {
-					break
-				}
-				insert, insertErr := next.mutationInsert()
-				if insertErr != nil || !sameColumns(columns, insert.Columns()) || insert.UsesDefaultValues() != first.UsesDefaultValues() {
-					break
-				}
-				candidateRows := append(append([][]any(nil), rows...), mutationRows(insert.Rows())...)
-				candidate, candidateErr := query.NewInsertRows(first.Into(), columns, candidateRows)
-				if candidateErr != nil {
-					return nil, candidateErr
-				}
-				compiled, candidateErr := compileCandidate(candidate)
-				if candidateErr != nil {
-					if end > i && isMutationBindLimit(candidateErr) {
-						break
-					}
-					return nil, candidateErr
-				}
-				if bindLimit > 0 && len(compiled.Statement.BoundArgs()) > bindLimit {
-					break
-				}
-				rows = candidateRows
-				best = compiled
-				end++
+			best, count, err := compileMutationGroup(executor, plans[i:], first, maxRows, bindLimit)
+			if err != nil {
+				return nil, err
 			}
 			encoded, err := encodeCompiledMutation(best, executor)
 			if err != nil {
 				return nil, err
 			}
-			prepared = append(prepared, preparedMutationBatch{start: i, end: end, statement: encoded})
-			i = end
+			prepared = append(prepared, preparedMutationBatch{start: i, end: i + count, statement: encoded})
+			i += count
 			continue
 		}
 		statement, err := plans[i].mutationPlan()
@@ -465,6 +422,107 @@ func prepareMutationBatches(executor Executor, plans []MutationPlan, maxRows, bi
 		i++
 	}
 	return prepared, nil
+}
+
+// compileMutationGroup compiles the longest run of plans at the head of `plans`
+// that `first` can share a multi-row insert with, and reports how many plans
+// that run covers. `first` MUST be the insert `plans[0]` carries.
+//
+// The run stops at the first plan that breaks the shape — a different column
+// list, DEFAULT VALUES, a plan that is not a batch plan at all — at `maxRows`
+// plans, and at the point where the compiled statement would carry more than
+// `bindLimit` bound arguments.
+func compileMutationGroup(executor Executor, plans []MutationPlan, first query.Insert, maxRows, bindLimit int) (compiledQuery, int, error) {
+	if first.UsesDefaultValues() {
+		compiled, err := compileMutationParts(executor, first)
+		if err != nil {
+			return compiledQuery{}, 0, err
+		}
+		return compiled, 1, nil
+	}
+	columns := first.Columns()
+	rows := mutationRows(first.Rows())
+	// A plan may carry more than one row, and a batch may only be cut on a plan
+	// boundary, so rowEnds[n] records how many rows the first n+1 plans hold.
+	rowEnds := []int{len(rows)}
+	for count := 1; count < len(plans) && count < maxRows; count++ {
+		next, ok := plans[count].(mutationBatchPlan)
+		if !ok {
+			break
+		}
+		insert, insertErr := next.mutationInsert()
+		if insertErr != nil || insert.UsesDefaultValues() || !sameColumns(columns, insert.Columns()) {
+			break
+		}
+		rows = append(rows, mutationRows(insert.Rows())...)
+		rowEnds = append(rowEnds, len(rows))
+	}
+	if len(rowEnds) == 1 {
+		compiled, err := compileMutationParts(executor, first)
+		if err != nil {
+			return compiledQuery{}, 0, err
+		}
+		if bindLimit > 0 && len(compiled.Statement.BoundArgs()) > bindLimit {
+			return compiledQuery{}, 0, &PlanError{Code: "bind_limit", Path: "args", Detail: "mutation batch exceeds bind parameter limit"}
+		}
+		return compiled, 1, nil
+	}
+	// Taking the whole run is the common case, and it costs one compile.
+	whole, fits, err := compileMutationPrefix(executor, first, columns, rows, bindLimit)
+	if err != nil {
+		return compiledQuery{}, 0, err
+	}
+	if fits {
+		return whole, len(rowEnds), nil
+	}
+	// The bind limit cuts the run somewhere. A compiled insert never loses bound
+	// arguments as rows are added to it, so bisection finds the same cut the run
+	// would reach by compiling one plan at a time, and compiles log2(n)
+	// statements instead of n.
+	best, err := compileMutationParts(executor, first)
+	if err != nil {
+		return compiledQuery{}, 0, err
+	}
+	if bindLimit > 0 && len(best.Statement.BoundArgs()) > bindLimit {
+		return compiledQuery{}, 0, &PlanError{Code: "bind_limit", Path: "args", Detail: "mutation batch exceeds bind parameter limit"}
+	}
+	count := 1
+	for low, high := 2, len(rowEnds)-1; low <= high; {
+		middle := low + (high-low)/2
+		compiled, middleFits, prefixErr := compileMutationPrefix(executor, first, columns, rows[:rowEnds[middle-1]], bindLimit)
+		if prefixErr != nil {
+			return compiledQuery{}, 0, prefixErr
+		}
+		if !middleFits {
+			high = middle - 1
+			continue
+		}
+		best, count = compiled, middle
+		low = middle + 1
+	}
+	return best, count, nil
+}
+
+// compileMutationPrefix compiles `rows` as one insert into the table `first`
+// targets, and reports whether the result stays within `bindLimit`. A limit the
+// engine profile enforces itself surfaces as a compile error, and counts as not
+// fitting rather than as a failure.
+func compileMutationPrefix(executor Executor, first query.Insert, columns []query.ColumnRef, rows [][]any, bindLimit int) (compiledQuery, bool, error) {
+	candidate, err := query.NewInsertRows(first.Into(), columns, rows)
+	if err != nil {
+		return compiledQuery{}, false, err
+	}
+	compiled, err := compileMutationParts(executor, candidate)
+	if err != nil {
+		if isMutationBindLimit(err) {
+			return compiledQuery{}, false, nil
+		}
+		return compiledQuery{}, false, err
+	}
+	if bindLimit > 0 && len(compiled.Statement.BoundArgs()) > bindLimit {
+		return compiledQuery{}, false, nil
+	}
+	return compiled, true, nil
 }
 
 func isMutationBindLimit(err error) bool {
