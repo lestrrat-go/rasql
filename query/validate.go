@@ -294,12 +294,7 @@ func validateRowValueExpression(expression Expression, sources sourceScope, clau
 }
 
 func relationColumn(source RelationRef, name string) (schema.ColumnDef, bool) {
-	for _, column := range source.Columns() {
-		if column.Name == name {
-			return schema.ColumnDef{Name: column.Name, Type: column.Type}, true
-		}
-	}
-	return schema.ColumnDef{}, false
+	return source.lookupColumn(name)
 }
 
 func validateExpression(expression Expression, ctx expressionContext, path string) (expressionUsage, error) {

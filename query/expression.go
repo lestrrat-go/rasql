@@ -42,10 +42,8 @@ func (c ColumnRef) Validate() error {
 	if err := c.source.validate(); err != nil {
 		return fmt.Errorf("query column: %q: %w", c.name, err)
 	}
-	for _, column := range c.source.Columns() {
-		if column.Name == c.name {
-			return nil
-		}
+	if _, exists := c.source.lookupColumn(c.name); exists {
+		return nil
 	}
 	return fmt.Errorf("query column: table %q has no column %q", c.source.QualifiedName(), c.name)
 }
