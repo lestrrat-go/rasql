@@ -675,25 +675,33 @@ func (p Prepared[R]) Rows(ctx context.Context, executor Executor) (iter.Seq2[R, 
 
 // All runs p against executor and collects every row into a freshly
 // allocated slice. A zero-row run returns a non-nil, empty slice, not nil.
+// It returns nil on error.
 //
 // A caller that runs the same Prepared repeatedly and wants to reuse the
 // slice's storage across calls should use AppendAll instead.
 func (p Prepared[R]) All(ctx context.Context, executor Executor) ([]R, error) {
-	return p.AppendAll(ctx, make([]R, 0), executor)
+	values, err := p.AppendAll(ctx, make([]R, 0), executor)
+	if err != nil {
+		return nil, err
+	}
+	return values, nil
 }
 
 // AppendAll runs p against executor and appends every row to dst, returning
 // the possibly-reallocated result, in the manner of the built-in append. A
-// zero-row run returns dst unchanged. On error it returns nil, discarding
-// any rows already appended to dst during the run.
+// zero-row run returns dst unchanged. A failed run returns dst holding
+// exactly the elements it held before the call, dropping any rows appended
+// during the run, so the caller's own contents and capacity survive an
+// error instead of being discarded.
 //
 // Passing a slice returned by an earlier AppendAll call, reset to length
 // zero with dst[:0], lets repeated calls against the same Prepared reuse
-// its storage instead of allocating a fresh slice each time.
+// its storage instead of allocating a fresh slice each time, including
+// after a call that failed.
 func (p Prepared[R]) AppendAll(ctx context.Context, dst []R, executor Executor) ([]R, error) {
 	rows, err := p.Rows(ctx, executor)
 	if err != nil {
-		return nil, err
+		return dst, err
 	}
 	return appendRows(dst, rows)
 }
@@ -753,36 +761,49 @@ func Rows[R any](ctx context.Context, executor Executor, q Query[R]) (iter.Seq2[
 
 // All runs q against executor and collects every row into a freshly
 // allocated slice. A zero-row run returns a non-nil, empty slice, not nil.
+// It returns nil on error.
 //
 // A caller that runs the same query repeatedly and wants to reuse the
 // slice's storage across calls should use AppendAll instead.
 func All[R any](ctx context.Context, executor Executor, q Query[R]) ([]R, error) {
-	return AppendAll(ctx, make([]R, 0), executor, q)
+	values, err := AppendAll(ctx, make([]R, 0), executor, q)
+	if err != nil {
+		return nil, err
+	}
+	return values, nil
 }
 
 // AppendAll runs q against executor and appends every row to dst, returning
 // the possibly-reallocated result, in the manner of the built-in append. A
-// zero-row run returns dst unchanged. On error it returns nil, discarding
-// any rows already appended to dst during the run.
+// zero-row run returns dst unchanged. A failed run returns dst holding
+// exactly the elements it held before the call, dropping any rows appended
+// during the run, so the caller's own contents and capacity survive an
+// error instead of being discarded.
 //
 // Passing a slice returned by an earlier AppendAll call, reset to length
 // zero with dst[:0], lets repeated calls against the same query reuse its
-// storage instead of allocating a fresh slice each time.
+// storage instead of allocating a fresh slice each time, including after a
+// call that failed.
 func AppendAll[R any](ctx context.Context, dst []R, executor Executor, q Query[R]) ([]R, error) {
 	rows, err := Rows(ctx, executor, q)
 	if err != nil {
-		return nil, err
+		return dst, err
 	}
 	return appendRows(dst, rows)
 }
 
 // appendRows drains rows into dst and returns the possibly-reallocated
-// result. On error it returns nil rather than the rows appended so far, so
-// All and AppendAll never hand back a partial result.
+// result. On error it returns dst truncated back to the length it had on
+// entry: append may already have reallocated dst's backing array, but
+// growth always copies the caller's original elements into the new array
+// first, so slicing back to the starting length recovers exactly those
+// elements (and, incidentally, the larger capacity). All and AppendAll
+// never hand back a partial result.
 func appendRows[R any](dst []R, rows iter.Seq2[R, error]) ([]R, error) {
+	start := len(dst)
 	for value, err := range rows {
 		if err != nil {
-			return nil, err
+			return dst[:start], err
 		}
 		dst = append(dst, value)
 	}

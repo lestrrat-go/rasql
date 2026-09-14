@@ -498,6 +498,30 @@ func TestAllAppendAllZeroRows(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []int64{1, 2}, values)
 	})
+
+	t.Run("a failed run leaves the caller's own elements and capacity intact", func(t *testing.T) {
+		failure := errors.New("boom")
+		// A fresh runtimeFakeRows per call, since iterErr fires only after
+		// Next() has yielded every value once, so a reused fake would report
+		// the failure immediately on a second run instead of partway through.
+		newFailingExecutor := func() rasql.Executor {
+			rows := &runtimeFakeRows{values: [][]any{{int64(1)}, {int64(2)}}, iterErr: failure}
+			return runtimeRowsProfiled(t, rows)
+		}
+
+		original := []int64{100, 200}
+		dst := make([]int64, len(original), len(original)+8)
+		copy(dst, original)
+
+		got, err := rasql.AppendAll(t.Context(), dst, newFailingExecutor(), q)
+		require.ErrorIs(t, err, failure)
+		require.Equal(t, original, got)
+		require.Equal(t, cap(dst), cap(got), "capacity survives a failed run")
+
+		values, err := rasql.All(t.Context(), newFailingExecutor(), q)
+		require.ErrorIs(t, err, failure)
+		require.Nil(t, values)
+	})
 }
 
 func TestExecutor(t *testing.T) {
