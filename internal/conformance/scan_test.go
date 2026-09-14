@@ -337,6 +337,150 @@ func BenchmarkConformanceScanRowsRasqlPrepared(b *testing.B) {
 	}
 }
 
+// BenchmarkConformanceScanRowsRasqlAll runs the same query as
+// BenchmarkConformanceScanRowsRasqlPrepared through Prepared.All, which
+// allocates a fresh zero-capacity slice on every call, so it measures the
+// baseline collection cost BenchmarkConformanceScanRowsRasqlAppendAll
+// compares against.
+func BenchmarkConformanceScanRowsRasqlAll(b *testing.B) {
+	fixture, err := newTypedFixture()
+	if err != nil {
+		b.Fatal(err)
+	}
+	query, err := scanTypedTaskQuery(fixture)
+	if err != nil {
+		b.Fatal(err)
+	}
+	state := &recordingDriverState{strict: true, cols: scanColumns()}
+	database := openRecordingDB(state)
+	b.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			b.Error(err)
+		}
+	})
+	raw, err := rasql.New(database, dialect.SQLite())
+	if err != nil {
+		b.Fatal(err)
+	}
+	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+	if err != nil {
+		b.Fatal(err)
+	}
+	executor, err := rasql.AsExecutor(raw, profile)
+	if err != nil {
+		b.Fatal(err)
+	}
+	expected := scanExpectedRows()
+	rows := scanFixtureRows(expected)
+	state.responses = []recordingResponse{{Kind: "query", Columns: scanColumns(), Rows: rows}}
+	prepared, err := rasql.Prepare(executor, query)
+	if err != nil {
+		b.Fatal(err)
+	}
+	actual, err := prepared.All(b.Context(), executor)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if len(actual) != len(expected) {
+		b.Fatalf("rasql semantic rows = %d, want %d", len(actual), len(expected))
+	}
+	if digest := scanTaskDigest(actual); digest != scanDigest(expected) {
+		b.Fatalf("rasql semantic digest = %s, want %s", digest, scanDigest(expected))
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		state.mu.Lock()
+		state.responses = []recordingResponse{{Kind: "query", Columns: scanColumns(), Rows: rows}}
+		state.mu.Unlock()
+		actual, err := prepared.All(b.Context(), executor)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(actual) != len(expected) {
+			b.Fatalf("rasql rows = %d, want %d", len(actual), len(expected))
+		}
+		scanBenchmarkSink = scanTaskDigest(actual)
+		if scanBenchmarkSink != scanDigest(expected) {
+			b.Fatalf("rasql digest = %s, want %s", scanBenchmarkSink, scanDigest(expected))
+		}
+	}
+}
+
+// BenchmarkConformanceScanRowsRasqlAppendAll runs the same query as
+// BenchmarkConformanceScanRowsRasqlAll through Prepared.AppendAll, resetting
+// the same destination slice to length zero (dst = dst[:0]) between
+// iterations so its backing array is reused across the whole run instead of
+// reallocated on every call.
+func BenchmarkConformanceScanRowsRasqlAppendAll(b *testing.B) {
+	fixture, err := newTypedFixture()
+	if err != nil {
+		b.Fatal(err)
+	}
+	query, err := scanTypedTaskQuery(fixture)
+	if err != nil {
+		b.Fatal(err)
+	}
+	state := &recordingDriverState{strict: true, cols: scanColumns()}
+	database := openRecordingDB(state)
+	b.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			b.Error(err)
+		}
+	})
+	raw, err := rasql.New(database, dialect.SQLite())
+	if err != nil {
+		b.Fatal(err)
+	}
+	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+	if err != nil {
+		b.Fatal(err)
+	}
+	executor, err := rasql.AsExecutor(raw, profile)
+	if err != nil {
+		b.Fatal(err)
+	}
+	expected := scanExpectedRows()
+	rows := scanFixtureRows(expected)
+	state.responses = []recordingResponse{{Kind: "query", Columns: scanColumns(), Rows: rows}}
+	prepared, err := rasql.Prepare(executor, query)
+	if err != nil {
+		b.Fatal(err)
+	}
+	dst := make([]scanTaskRow, 0, len(expected))
+	actual, err := prepared.AppendAll(b.Context(), dst, executor)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if len(actual) != len(expected) {
+		b.Fatalf("rasql semantic rows = %d, want %d", len(actual), len(expected))
+	}
+	if digest := scanTaskDigest(actual); digest != scanDigest(expected) {
+		b.Fatalf("rasql semantic digest = %s, want %s", digest, scanDigest(expected))
+	}
+	dst = actual
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		state.mu.Lock()
+		state.responses = []recordingResponse{{Kind: "query", Columns: scanColumns(), Rows: rows}}
+		state.mu.Unlock()
+		dst = dst[:0]
+		actual, err := prepared.AppendAll(b.Context(), dst, executor)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(actual) != len(expected) {
+			b.Fatalf("rasql rows = %d, want %d", len(actual), len(expected))
+		}
+		dst = actual
+		scanBenchmarkSink = scanTaskDigest(actual)
+		if scanBenchmarkSink != scanDigest(expected) {
+			b.Fatalf("rasql digest = %s, want %s", scanBenchmarkSink, scanDigest(expected))
+		}
+	}
+}
+
 func BenchmarkConformanceScanRowsHandwritten(b *testing.B) {
 	state := &recordingDriverState{strict: true, cols: scanColumns()}
 	database := openRecordingDB(state)
