@@ -302,7 +302,7 @@ func TestNativeComposition(t *testing.T) {
 		}
 	})
 
-	t.Run("an engine mismatch precedes the codec lookup and taking a handle", func(t *testing.T) {
+	t.Run("an engine mismatch precedes taking a handle", func(t *testing.T) {
 		resultSchema, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "value", Type: schema.IntegerType{}, Codec: "missing"})
 		require.NoError(t, err)
 		projection, err := rasql.NativeProjection(nativeCompositionStringDecoder{schema: resultSchema})
@@ -323,14 +323,17 @@ func TestNativeComposition(t *testing.T) {
 		require.NoError(t, err)
 		executor, err := rasql.WithEngineProfile(spy, profile)
 		require.NoError(t, err)
-		registry := &nativeCompositionSpyRegistry{}
+		registry, err := rasql.NewCodecRegistry(nil)
+		require.NoError(t, err)
 		executor, err = rasql.WithCodecs(executor, registry)
 		require.NoError(t, err)
 		_, err = rasql.All(t.Context(), executor, query)
 		var planErr *rasql.PlanError
 		require.ErrorAs(t, err, &planErr)
 		require.Equal(t, "engine_mismatch", planErr.Code)
-		require.Equal(t, int64(0), registry.calls.Load())
+		// CodecRegistry is sealed to *codecRegistry, whose Lookup is a pure map
+		// read with no side effects, so whether a lookup ran is no longer
+		// observable here; only the handle stays checked.
 		require.Equal(t, int64(0), spy.calls.Load())
 	})
 
@@ -357,14 +360,17 @@ func TestNativeComposition(t *testing.T) {
 		require.NoError(t, err)
 		executor, err := rasql.WithEngineProfile(spy, profile)
 		require.NoError(t, err)
-		registry := &nativeCompositionSpyRegistry{}
+		registry, err := rasql.NewCodecRegistry(nil)
+		require.NoError(t, err)
 		executor, err = rasql.WithCodecs(executor, registry)
 		require.NoError(t, err)
 		_, err = rasql.All(t.Context(), executor, query)
 		var planErr *rasql.PlanError
 		require.ErrorAs(t, err, &planErr)
+		// Every producer of codec_unavailable in this package reaches it through
+		// a Lookup call, so this code already proves a lookup ran; a separate
+		// call count would be redundant.
 		require.Equal(t, "codec_unavailable", planErr.Code)
-		require.Greater(t, registry.calls.Load(), int64(0))
 		require.Equal(t, int64(0), spy.calls.Load())
 	})
 
@@ -499,15 +505,6 @@ func (e *nativeCompositionSpyExecutor) Query(context.Context, stmt.Statement) (r
 func (e *nativeCompositionSpyExecutor) Exec(context.Context, stmt.Statement) (sql.Result, error) {
 	e.calls.Add(1)
 	return driver.RowsAffected(0), nil
-}
-
-type nativeCompositionSpyRegistry struct {
-	calls atomic.Int64
-}
-
-func (r *nativeCompositionSpyRegistry) Lookup(rasql.CodecID) (rasql.ValueCodec, bool) {
-	r.calls.Add(1)
-	return nil, false
 }
 
 type nativeCompositionLifecycleRows struct {

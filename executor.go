@@ -655,7 +655,10 @@ func (p Prepared[R]) checkExecutor(executor Executor) error {
 	if err != nil {
 		return err
 	}
-	if !codecRegistrySame(p.codecs, codecs) {
+	// A plain comparison is sound here because CodecRegistry is sealed: every
+	// registry is the one pointer type this package builds, which is always
+	// comparable.
+	if p.codecs != codecs {
 		return &PlanError{Code: "prepared_executor_mismatch", Detail: "executor carries a different codec registry than Prepare captured"}
 	}
 	return nil
