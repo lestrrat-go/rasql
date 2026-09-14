@@ -11,6 +11,7 @@ import (
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/exec"
 	"github.com/lestrrat-go/rasql/internal/querycompile"
+	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/stmt"
 )
 
@@ -300,6 +301,18 @@ func prepareRows[R any](executor Executor, q Query[R], compiled compiledQuery) (
 	if err := q.Validate(); err != nil {
 		return result, err
 	}
+	composed, err := lowerQuery(q)
+	if err != nil {
+		return result, err
+	}
+	return prepareRowsLowered(executor, q, compiled, composed)
+}
+
+// prepareRowsLowered prepares q against the lowered form a caller already
+// produced for it. q MUST have passed Query.Validate, and composed MUST come
+// from lowerQuery called on the same q.
+func prepareRowsLowered[R any](executor Executor, q Query[R], compiled compiledQuery, composed query.ResultQuery) (preparedRows[R], error) {
+	var result preparedRows[R]
 	provider, ok := executorCapability[compilerProvider](executor)
 	if !ok {
 		return result, &PlanError{Code: "engine_profile_unavailable", Detail: "executor has no retained compiler"}
@@ -318,10 +331,6 @@ func prepareRows[R any](executor Executor, q Query[R], compiled compiledQuery) (
 			return result, planError("engine_mismatch", "native.engine", "executor dialect does not match native SQL")
 		}
 	} else if q.plan.mutation == nil {
-		composed, err := resultQuery(q)
-		if err != nil {
-			return result, err
-		}
 		engines := querycompile.NativeEngines(composed)
 		for _, required := range engines {
 			if engine != "" && required != engine {
@@ -516,20 +525,40 @@ func rowsPreparedRequired[R any](ctx context.Context, executor Executor, prepare
 	}, nil
 }
 
-func Rows[R any](ctx context.Context, executor Executor, q Query[R]) (iter.Seq2[R, error], error) {
+// compileAndPrepare compiles q and prepares it against executor, validating and
+// lowering q once for both steps. A caller that compiles one query and prepares
+// a different one, as the graph loader does, calls compileQuery and prepareRows
+// separately instead.
+func compileAndPrepare[R any](executor Executor, q Query[R]) (compiledQuery, preparedRows[R], error) {
+	var prepared preparedRows[R]
 	provider, ok := executorCapability[compilerProvider](executor)
 	if !ok {
-		return nil, &PlanError{Code: "engine_profile_unavailable", Detail: "executor has no retained compiler"}
+		return compiledQuery{}, prepared, &PlanError{Code: "engine_profile_unavailable", Detail: "executor has no retained compiler"}
 	}
 	compiler := provider.queryCompiler()
 	if compiler == nil {
-		return nil, &PlanError{Code: "engine_profile_unavailable", Detail: "executor has no retained compiler"}
+		return compiledQuery{}, prepared, &PlanError{Code: "engine_profile_unavailable", Detail: "executor has no retained compiler"}
 	}
-	compiled, err := compileQuery(compiler, q)
+	if err := q.Validate(); err != nil {
+		return compiledQuery{}, prepared, mapCompileError(err)
+	}
+	composed, err := lowerQuery(q)
 	if err != nil {
-		return nil, err
+		return compiledQuery{}, prepared, err
 	}
-	prepared, err := prepareRows(executor, q, compiled)
+	compiled, err := compileQueryLowered(compiler, q, composed)
+	if err != nil {
+		return compiledQuery{}, prepared, err
+	}
+	prepared, err = prepareRowsLowered(executor, q, compiled, composed)
+	if err != nil {
+		return compiledQuery{}, prepared, err
+	}
+	return compiled, prepared, nil
+}
+
+func Rows[R any](ctx context.Context, executor Executor, q Query[R]) (iter.Seq2[R, error], error) {
+	_, prepared, err := compileAndPrepare(executor, q)
 	if err != nil {
 		return nil, err
 	}
@@ -583,19 +612,7 @@ func Maybe[R any](ctx context.Context, executor Executor, q Query[R]) (R, bool, 
 }
 
 func rowsFor[R any](ctx context.Context, executor Executor, q Query[R], consumer Cardinality) (iter.Seq2[R, error], error) {
-	provider, ok := executorCapability[compilerProvider](executor)
-	if !ok {
-		return nil, &PlanError{Code: "engine_profile_unavailable", Detail: "executor has no retained compiler"}
-	}
-	compiler := provider.queryCompiler()
-	if compiler == nil {
-		return nil, &PlanError{Code: "engine_profile_unavailable", Detail: "executor has no retained compiler"}
-	}
-	compiled, err := compileQuery(compiler, q)
-	if err != nil {
-		return nil, err
-	}
-	prepared, err := prepareRows(executor, q, compiled)
+	_, prepared, err := compileAndPrepare(executor, q)
 	if err != nil {
 		return nil, err
 	}
