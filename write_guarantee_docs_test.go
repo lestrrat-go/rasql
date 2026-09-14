@@ -33,10 +33,16 @@ import (
 // paraphrase shares none of these words and has to be caught by reading, so
 // a passing run here is evidence about the copies and not a certificate that
 // every restatement is qualified.
+//
+// A phrase earns a place here by being wording no paragraph about something
+// else would reach for. "partial write" and "old or new" both stated the
+// promise too and both were dropped, because each is ordinary English about
+// anything that has two versions or that stopped halfway -- an old or new
+// schema, a buffer flushed partway -- and matching them failed this guard on
+// sentences that never made the promise, telling their author to name a
+// platform the sentence has no business naming.
 var writeGuaranteeClaims = []string{
 	"previous content or its new content",
-	"partial write",
-	"old or new",
 }
 
 // writeGuaranteePlatform is the qualifier a block making one of those claims
@@ -176,10 +182,10 @@ func markdownClaimsMissingPlatform(path string) ([]string, error) {
 
 // TestClaimMissingPlatformReadsAClaimAndItsQualifier pins what the guard
 // answers for the shapes the checked-in tree cannot show it: a claim with no
-// qualifier, and a qualifier that arrives in a different block than the claim
-// it belongs to. Every sentence below is invented for this test and appears
-// nowhere in this module, so no line here can be read as a report about real
-// text.
+// qualifier, the same claim with one, and the loose wording the guard stopped
+// reading as the claim at all. Every sentence below is invented for this test
+// and appears nowhere in this module, so no line here can be read as a report
+// about real text.
 func TestClaimMissingPlatformReadsAClaimAndItsQualifier(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -198,18 +204,21 @@ func TestClaimMissingPlatformReadsAClaimAndItsQualifier(t *testing.T) {
 		},
 		{
 			name:  "a lowercase qualifier counts",
-			block: "//go:build unix\n\nA halted run leaves each output old or new.",
+			block: "//go:build unix\n\nEach output is left at its previous content or its new content.",
 			want:  "",
 		},
 		{
-			name:  "the shorter spelling is caught too",
-			block: "Nothing a halted run leaves behind is a partial write.",
-			want:  "partial write",
+			// A paragraph about a write that stopped halfway is not this
+			// promise, and the guard no longer asks it to name a platform.
+			name:  "a sentence about a halfway write is left alone",
+			block: "A buffer flushed partway leaves a partial write behind.",
+			want:  "",
 		},
 		{
-			name:  "old or new is caught on its own",
-			block: "Whatever is on disk afterwards is old or new.",
-			want:  "old or new",
+			// Nor is a paragraph about anything else that has two versions.
+			name:  "old or new about something else is left alone",
+			block: "Whichever the old or new schema names, the column keeps its type.",
+			want:  "",
 		},
 		{
 			name:  "prose about neither is left alone",
