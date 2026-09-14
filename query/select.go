@@ -10,11 +10,17 @@ import (
 // expression.
 //
 // The interface carries no unexported method, so code outside this package may
-// implement it. What such an implementation can express is still bounded:
-// Expression is sealed by its own unexported method, so the only expressions it
-// can return are ones this package built, and the alias it reports is checked
-// by the statement's validation and again by the dialect when the statement
-// renders.
+// implement it. Expression is not sealed either: it too carries only the
+// exported ExpressionNode marker, so ProjectedExpression may return a type
+// this package never built. Statement validation does not reject such a type;
+// it passes an expression it does not recognize through unchanged. Rendering
+// is what refuses it: render.Select fails with an "unsupported expression"
+// error unless the target dialect supplies a dialect.Compiler whose
+// CompileExpression recognizes the type and writes SQL for it itself. An
+// outside Projection therefore reaches SQL only when paired with a
+// dialect.Compiler built for its expression, and the alias it reports is
+// checked by the statement's validation and again by the dialect when the
+// statement renders.
 //
 // The methods are not named Expression and Alias. Order, Not, NullTest and
 // Membership already have an Expression() Expression method and would satisfy
