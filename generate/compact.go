@@ -24,7 +24,6 @@ type compactFile struct {
 }
 
 type compactStoreInput struct {
-	input EmitterInput
 	files []compactFile
 }
 
@@ -149,7 +148,7 @@ func RenderCompact(in EmitterInput) (Store, error) {
 		// RenderCompact owns schema declarations from EmitterInput. PlanContext
 		// appends configured SQL from Store.TypedQueries and checks it with the
 		// same file and identifier ledgers.
-		compact: &compactStoreInput{input: copy, files: cloneCompactFiles(files)},
+		compact: &compactStoreInput{files: cloneCompactFiles(files)},
 	}, nil
 }
 
