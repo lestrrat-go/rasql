@@ -198,36 +198,32 @@ func (r RelationRef) Columns() []ResultColumn {
 	return cloneResultColumns(r.result.columns)
 }
 
-// lookupColumn finds the column named name without any of the copying
-// Columns does: no Clone of a table's definition, no new []ResultColumn.
-// It exists for callers that only test for, or read, one column and discard
-// the rest, such as expression validation on a hot path. Columns keeps its
-// full-copy contract for exported callers that may retain and mutate what it
-// returns; this method must never hand out a slice, map, or pointer that
-// aliases a table's stored definition to a caller that could mutate it.
+// hasColumn reports whether r holds a column named name, without any of the
+// copying Columns does: no Clone of a table's definition, no new
+// []ResultColumn. It exists for callers that only need to test for a
+// column's existence, such as expression validation on a hot path. Columns
+// keeps its full-copy contract for exported callers that may retain and
+// mutate what it returns; this method returns only a bool precisely so no
+// caller can be handed a schema.ColumnDef aliasing the table descriptor's
+// own storage, such as its GoBinding pointer.
 //
 // For a table source it reads through TableRef.column, which answers from
-// the descriptor's own index without touching Clone. The schema.ColumnDef it
-// returns does alias the descriptor's GoBinding pointer, exactly as
-// TableRef.column already does for query/write.go's own existence check;
-// every caller of lookupColumn here reads only Name and Type from the
-// result and never retains the value, so that aliasing is never exercised.
-// For a derived-result or CTE source it scans r.result.columns in place;
-// ResultColumn holds no field Columns deep-copies beyond the struct itself,
-// so no extra copying is owed there either.
-func (r RelationRef) lookupColumn(name string) (schema.ColumnDef, bool) {
+// the descriptor's own index without touching Clone. For a derived-result or
+// CTE source it scans r.result.columns in place.
+func (r RelationRef) hasColumn(name string) bool {
 	if r.kind == relationTable && r.table != nil {
-		return r.table.column(name)
+		_, exists := r.table.column(name)
+		return exists
 	}
 	if r.result == nil {
-		return schema.ColumnDef{}, false
+		return false
 	}
 	for _, column := range r.result.columns {
 		if column.Name == name {
-			return schema.ColumnDef{Name: column.Name, Type: column.Type}, true
+			return true
 		}
 	}
-	return schema.ColumnDef{}, false
+	return false
 }
 
 func (r RelationRef) Alias() string { return r.alias }
