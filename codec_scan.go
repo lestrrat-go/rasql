@@ -87,9 +87,5 @@ func scanValueAny(destination any, value any) error {
 	return scanValueReflect(v, value)
 }
 func scanValueReflect(destination reflect.Value, value any) error {
-	row, err := rowvalue.NewRow([]string{scanValueColumn}, []any{value})
-	if err != nil {
-		return err
-	}
-	return rowvalue.AssignReflect(row, scanValueColumn, destination.Elem())
+	return rowvalue.AssignValue(destination.Elem(), value)
 }
