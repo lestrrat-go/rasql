@@ -105,6 +105,22 @@ func TestScanValue(t *testing.T) {
 		err := rasql.ScanValue(&destination, "not a Stringer")
 		require.ErrorContains(t, err, "expected fmt.Stringer, got string")
 	})
+
+	// ScanValue used to route its one value through a row: it built a column
+	// header, a name index, and a value slice, looked the value straight back
+	// out, and threw all three away. That cost five allocations per value on
+	// the ordinary scan path, so a ceiling of one fails loudly if the pattern
+	// comes back, without pinning a count that ordinary churn would break.
+	t.Run("decodes a value without allocating a row", func(t *testing.T) {
+		var destination int64
+		allocations := testing.AllocsPerRun(100, func() {
+			if err := rasql.ScanValue(&destination, int64(42)); err != nil {
+				t.Fatal(err)
+			}
+		})
+		require.LessOrEqual(t, allocations, 1.0)
+		require.Equal(t, int64(42), destination)
+	})
 }
 
 func TestScanMask(t *testing.T) {

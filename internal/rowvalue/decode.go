@@ -50,17 +50,23 @@ func Assign[T any](r Row, name string, destination *T) error {
 	return nil
 }
 
-// AssignReflect applies the same conversion rules as Assign to a destination
-// supplied by a runtime decoder.
-func AssignReflect(r Row, name string, destination reflect.Value) error {
+// AssignValue applies the same conversion rules as Assign to one value, for a
+// caller that holds the value itself rather than a row to look it up in.
+//
+// It exists so decoding a single value costs no Row. Routing one value through
+// NewRow and a lookup built a column header, its name index, and a value slice
+// for every value decoded, and every one of those was discarded as soon as the
+// lookup found the value again.
+//
+// The value is cloned the way NewRow clones it, because the clone is
+// observable: assign hands a []byte straight to an sql.Scanner destination and
+// stores it directly into an any destination, so without the clone both would
+// alias the caller's buffer.
+func AssignValue(destination reflect.Value, value any) error {
 	if !destination.IsValid() || !destination.CanSet() {
-		return fmt.Errorf("row: destination for column %q must be settable", name)
+		return errors.New("row: destination must be settable")
 	}
-	value, ok := r.lookup(name)
-	if !ok {
-		return fmt.Errorf("row: column %q is not present", name)
-	}
-	return assign(destination, value)
+	return assign(destination, cloneValue(value))
 }
 
 // Decode populates T from rasql-tagged fields and snake-cased exported field
