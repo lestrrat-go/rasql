@@ -5,6 +5,80 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 )
 
+// capabilityRule is what a profile says about one dialect capability: the name
+// ValidateDialect reports for it, and whether the profile allows it.
+type capabilityRule struct {
+	name    string
+	allowed bool
+}
+
+// profileCapability reports what c says about capability. ok is false for a capability the
+// profile does not decide, which constrainedDialect leaves to the dialect underneath.
+//
+// This is the only place a dialect capability maps onto the profile field behind it, so a
+// new capability is one new case here.
+func profileCapability(c Capabilities, capability dialect.Capability) (capabilityRule, bool) {
+	switch capability {
+	case dialect.CapabilityReturning:
+		return capabilityRule{"returning", c.Returning != ReturningNone}, true
+	case dialect.CapabilityUpsert:
+		return capabilityRule{"upsert", c.Upsert != UpsertNone}, true
+	case dialect.CapabilityConflictTarget:
+		return capabilityRule{"conflict target", c.ConflictTarget}, true
+	case dialect.CapabilityDefaultValues:
+		return capabilityRule{"default values", c.DefaultValues}, true
+	case dialect.CapabilityEmptyInsert:
+		return capabilityRule{"empty insert", c.EmptyInsert}, true
+	case dialect.CapabilityDefaultValuesUpsert:
+		return capabilityRule{"default values upsert", c.DefaultValuesUpsert}, true
+	case dialect.CapabilitySubqueryLimit:
+		return capabilityRule{"subquery limit", c.SubqueryLimit}, true
+	case dialect.CapabilityWriteSubqueryTarget:
+		return capabilityRule{"write subquery target", c.WriteSubqueryTarget}, true
+	case dialect.CapabilityQualifiedReference:
+		return capabilityRule{"qualified reference", c.QualifiedReference}, true
+	case dialect.CapabilityQualifiedIndexTarget:
+		return capabilityRule{"qualified index target", c.QualifiedIndexTarget}, true
+	case dialect.CapabilityQualifiedIndexName:
+		return capabilityRule{"qualified index name", c.QualifiedIndexName}, true
+	case dialect.CapabilityPartialIndex:
+		return capabilityRule{"partial index", c.PartialIndex}, true
+	case dialect.CapabilityMatchOperator:
+		return capabilityRule{"match operator", c.MatchOperator}, true
+	case dialect.CapabilityAggregateFilter:
+		return capabilityRule{"aggregate filter", c.AggregateFilter}, true
+	case dialect.CapabilitySelectForUpdate:
+		return capabilityRule{"select for update", c.SelectForUpdate}, true
+	case dialect.CapabilitySelectForShare:
+		return capabilityRule{"select for share", c.SelectForShare}, true
+	case dialect.CapabilitySelectLockOf:
+		return capabilityRule{"select lock of", c.SelectLockOf}, true
+	case dialect.CapabilitySelectLockNoWait:
+		return capabilityRule{"select lock no wait", c.SelectLockNoWait}, true
+	case dialect.CapabilitySelectLockSkipLocked:
+		return capabilityRule{"select lock skip locked", c.SelectLockSkipLocked}, true
+	case dialect.CapabilityUpsertConflictWhere:
+		return capabilityRule{"upsert conflict where", c.UpsertConflictWhere}, true
+	case dialect.CapabilityUpsertUpdateWhere:
+		return capabilityRule{"upsert update where", c.UpsertUpdateWhere}, true
+	case dialect.CapabilitySavepoint:
+		return capabilityRule{"savepoint", c.Savepoints}, true
+	}
+	return capabilityRule{}, false
+}
+
+// upsertStyle is the dialect style that form asks for.
+func upsertStyle(form UpsertForm) dialect.UpsertStyle {
+	switch form {
+	case UpsertOnConflict:
+		return dialect.UpsertOnConflict
+	case UpsertDuplicateKey:
+		return dialect.UpsertDuplicateKey
+	default:
+		return dialect.UpsertUnsupported
+	}
+}
+
 // ValidateDialect checks the syntax capabilities that the dialect interface
 // exposes. Runtime capabilities such as window functions remain profile data.
 //
@@ -19,47 +93,18 @@ func ValidateDialect(d dialect.Dialect, p Profile) error {
 	if p.Engine == Custom && d.Name() != p.CustomName {
 		return &ProfileError{Code: ErrInvalidProfile, Engine: p.Engine, Version: p.Version, Detail: "dialect and custom profile disagree"}
 	}
-	checks := []struct {
-		name string
-		cap  dialect.Capability
-		want bool
-	}{
-		{"returning", dialect.CapabilityReturning, p.Capabilities.Returning != ReturningNone},
-		{"upsert", dialect.CapabilityUpsert, p.Capabilities.Upsert != UpsertNone},
-		{"conflict target", dialect.CapabilityConflictTarget, p.Capabilities.ConflictTarget},
-		{"default values", dialect.CapabilityDefaultValues, p.Capabilities.DefaultValues},
-		{"empty insert", dialect.CapabilityEmptyInsert, p.Capabilities.EmptyInsert},
-		{"default values upsert", dialect.CapabilityDefaultValuesUpsert, p.Capabilities.DefaultValuesUpsert},
-		{"subquery limit", dialect.CapabilitySubqueryLimit, p.Capabilities.SubqueryLimit},
-		{"write subquery target", dialect.CapabilityWriteSubqueryTarget, p.Capabilities.WriteSubqueryTarget},
-		{"qualified reference", dialect.CapabilityQualifiedReference, p.Capabilities.QualifiedReference},
-		{"qualified index target", dialect.CapabilityQualifiedIndexTarget, p.Capabilities.QualifiedIndexTarget},
-		{"qualified index name", dialect.CapabilityQualifiedIndexName, p.Capabilities.QualifiedIndexName},
-		{"partial index", dialect.CapabilityPartialIndex, p.Capabilities.PartialIndex},
-		{"match operator", dialect.CapabilityMatchOperator, p.Capabilities.MatchOperator},
-		{"aggregate filter", dialect.CapabilityAggregateFilter, p.Capabilities.AggregateFilter},
-		{"select for update", dialect.CapabilitySelectForUpdate, p.Capabilities.SelectForUpdate},
-		{"select for share", dialect.CapabilitySelectForShare, p.Capabilities.SelectForShare},
-		{"select lock of", dialect.CapabilitySelectLockOf, p.Capabilities.SelectLockOf},
-		{"select lock no wait", dialect.CapabilitySelectLockNoWait, p.Capabilities.SelectLockNoWait},
-		{"select lock skip locked", dialect.CapabilitySelectLockSkipLocked, p.Capabilities.SelectLockSkipLocked},
-		{"upsert conflict where", dialect.CapabilityUpsertConflictWhere, p.Capabilities.UpsertConflictWhere},
-		{"upsert update where", dialect.CapabilityUpsertUpdateWhere, p.Capabilities.UpsertUpdateWhere},
-		{"savepoint", dialect.CapabilitySavepoint, p.Capabilities.Savepoints},
-	}
-	for _, check := range checks {
-		if d.Supports(check.cap) != check.want {
-			return &ProfileError{Code: ErrInvalidProfile, Engine: p.Engine, Version: p.Version, Feature: check.name, Detail: "dialect and capabilities disagree"}
+	// dialect.Capability is a bit flag, so walking the bits visits every capability
+	// profileCapability knows, in the order the constants declare them.
+	for capability := dialect.Capability(1); capability != 0; capability <<= 1 {
+		rule, ok := profileCapability(p.Capabilities, capability)
+		if !ok {
+			continue
+		}
+		if d.Supports(capability) != rule.allowed {
+			return &ProfileError{Code: ErrInvalidProfile, Engine: p.Engine, Version: p.Version, Feature: rule.name, Detail: "dialect and capabilities disagree"}
 		}
 	}
-	wantStyle := dialect.UpsertUnsupported
-	switch p.Capabilities.Upsert {
-	case UpsertOnConflict:
-		wantStyle = dialect.UpsertOnConflict
-	case UpsertDuplicateKey:
-		wantStyle = dialect.UpsertDuplicateKey
-	}
-	if d.UpsertStyle() != wantStyle {
+	if d.UpsertStyle() != upsertStyle(p.Capabilities.Upsert) {
 		return &ProfileError{Code: ErrInvalidProfile, Engine: p.Engine, Version: p.Version, Feature: "upsert style", Detail: "dialect and capabilities disagree"}
 	}
 	return nil
@@ -90,65 +135,14 @@ func (d constrainedDialect) QuoteIdentifier(s string) (string, error) {
 func (d constrainedDialect) Placeholder(n int) (string, error)           { return d.base.Placeholder(n) }
 func (d constrainedDialect) TypeName(c schema.ColumnDef) (string, error) { return d.base.TypeName(c) }
 func (d constrainedDialect) UpsertStyle() dialect.UpsertStyle {
-	switch d.profile.Capabilities.Upsert {
-	case UpsertOnConflict:
-		return dialect.UpsertOnConflict
-	case UpsertDuplicateKey:
-		return dialect.UpsertDuplicateKey
-	default:
-		return dialect.UpsertUnsupported
-	}
+	return upsertStyle(d.profile.Capabilities.Upsert)
 }
 func (d constrainedDialect) Supports(capability dialect.Capability) bool {
-	c := d.profile.Capabilities
-	switch capability {
-	case dialect.CapabilityReturning:
-		return c.Returning != ReturningNone
-	case dialect.CapabilityUpsert:
-		return c.Upsert != UpsertNone
-	case dialect.CapabilityConflictTarget:
-		return c.ConflictTarget
-	case dialect.CapabilityDefaultValues:
-		return c.DefaultValues
-	case dialect.CapabilityEmptyInsert:
-		return c.EmptyInsert
-	case dialect.CapabilityDefaultValuesUpsert:
-		return c.DefaultValuesUpsert
-	case dialect.CapabilitySubqueryLimit:
-		return c.SubqueryLimit
-	case dialect.CapabilityWriteSubqueryTarget:
-		return c.WriteSubqueryTarget
-	case dialect.CapabilityQualifiedReference:
-		return c.QualifiedReference
-	case dialect.CapabilityQualifiedIndexTarget:
-		return c.QualifiedIndexTarget
-	case dialect.CapabilityQualifiedIndexName:
-		return c.QualifiedIndexName
-	case dialect.CapabilityPartialIndex:
-		return c.PartialIndex
-	case dialect.CapabilityMatchOperator:
-		return c.MatchOperator
-	case dialect.CapabilityAggregateFilter:
-		return c.AggregateFilter
-	case dialect.CapabilitySelectForUpdate:
-		return c.SelectForUpdate
-	case dialect.CapabilitySelectForShare:
-		return c.SelectForShare
-	case dialect.CapabilitySelectLockOf:
-		return c.SelectLockOf
-	case dialect.CapabilitySelectLockNoWait:
-		return c.SelectLockNoWait
-	case dialect.CapabilitySelectLockSkipLocked:
-		return c.SelectLockSkipLocked
-	case dialect.CapabilityUpsertConflictWhere:
-		return c.UpsertConflictWhere
-	case dialect.CapabilityUpsertUpdateWhere:
-		return c.UpsertUpdateWhere
-	case dialect.CapabilitySavepoint:
-		return c.Savepoints
-	default:
+	rule, ok := profileCapability(d.profile.Capabilities, capability)
+	if !ok {
 		return d.base.Supports(capability)
 	}
+	return rule.allowed
 }
 func (d constrainedDialect) Compiler() dialect.Compiler {
 	if provider, ok := d.base.(dialect.CompilerProvider); ok {
