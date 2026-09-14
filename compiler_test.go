@@ -334,6 +334,54 @@ func TestCompileQuery(t *testing.T) {
 		require.Equal(t, []byte("original"), second.BoundArgs()[0])
 	})
 
+	// A parameter renders the same placeholder a Value at the same position
+	// would, in every dialect: nothing that decides how a bind is written
+	// reads the argument itself.
+	t.Run("renders a parameter like the Value it stands in for", func(t *testing.T) {
+		for _, tc := range []struct {
+			name    string
+			dialect dialect.Dialect
+			profile string
+			major   int
+			minor   int
+		}{
+			{name: "postgresql", dialect: dialect.PostgreSQL(), profile: "postgresql-17", major: 17},
+			{name: "mysql", dialect: dialect.MySQL(), profile: "mysql-8.4", major: 8, minor: 4},
+			{name: "sqlite", dialect: dialect.SQLite(), profile: "sqlite-3.35", major: 3, minor: 35},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				table, err := rasql.ReadTableOf[compilerCountRow](schema.TableDef{
+					Name:    "compiler_items",
+					Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+				})
+				require.NoError(t, err)
+				relation, err := rasql.SourceOf(table, "")
+				require.NoError(t, err)
+				id, err := rasql.BindColumn[compilerCountRow, int64](relation, "id", "")
+				require.NoError(t, err)
+				result, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}})
+				require.NoError(t, err)
+				projection, err := rasql.NewProjection(
+					[]rasql.ProjectionItem{rasql.Item("id", id.Expr(), schema.IntegerType{}, "")},
+					compilerCountDecoder{result: result},
+				)
+				require.NoError(t, err)
+
+				param := rasql.NewParameter[int64]()
+				paramQuery := rasql.Select(relation.Source(), projection).Where(rasql.EqualExpr(id.Expr(), param.Expr()))
+				valueQuery := rasql.Select(relation.Source(), projection).Where(rasql.EqualValue(id.Expr(), int64(7)))
+
+				compiler := compilerFor(t, tc.profile, tc.major, tc.minor, tc.dialect)
+				paramStatement, err := rasql.CompileQuery(compiler, paramQuery)
+				require.NoError(t, err)
+				valueStatement, err := rasql.CompileQuery(compiler, valueQuery)
+				require.NoError(t, err)
+				require.Equal(t, valueStatement.SQL(), paramStatement.SQL())
+				require.Equal(t, []any{nil}, paramStatement.Args())
+			})
+		}
+	})
+
 	t.Run("reports a compiler that carries no profile", func(t *testing.T) {
 		var zero rasql.Compiler
 		_, err := rasql.CompileQuery(zero, compilerSelect(t))

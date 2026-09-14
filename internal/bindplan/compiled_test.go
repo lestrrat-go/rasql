@@ -132,6 +132,17 @@ func TestUnwrap(t *testing.T) {
 			bindplan.Token{ID: 1, Value: value, Copy: copier, Codec: "not a codec"}))
 		require.Error(t, err)
 	})
+
+	// A parameter token carries no value until Prepared.Bind supplies one, so
+	// its Copy always returns (nil, nil) and Unwrap leaves the argument nil.
+	t.Run("copies Parameter into the slot and leaves a nil argument", func(t *testing.T) {
+		nilCopy := func() (any, error) { return nil, nil }
+		compiled, err := bindplan.Unwrap(stmt.New(sqltext.Text("SELECT ?"),
+			bindplan.Token{ID: 3, Codec: "age", Copy: nilCopy, Parameter: true}))
+		require.NoError(t, err)
+		require.Equal(t, []any{nil}, compiled.Statement.Args())
+		require.Equal(t, []bindplan.Slot{{ID: 3, Codec: "age", Parameter: true}}, compiled.Slots)
+	})
 }
 
 var errUnwrapProbe = errors.New("bind carried an error")

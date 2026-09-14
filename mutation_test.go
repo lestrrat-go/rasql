@@ -222,6 +222,23 @@ func mutationProjection(t *testing.T, table rasql.Table[mutationRow]) rasql.Proj
 	return projection
 }
 
+// A mutation carries no prepared form to bind a parameter into later, so
+// ExecMutation refuses one outright rather than sending NULL at its position.
+func TestMutationParameterUnsupported(t *testing.T) {
+	executor, table, idTyped := mutationFixture(t)
+	id, err := rasql.BindTypedColumn[mutationRow, int64](idTyped)
+	require.NoError(t, err)
+	value := query.TypedColumnOf[mutationRow, string](table.Column("value"))
+	param := rasql.NewParameter[int64]()
+	patch, err := rasql.NewPatchPlan(table, rasql.EqualExpr(id.Expr(), param.Expr()), rasql.SetField(value, "after"))
+	require.NoError(t, err)
+
+	_, err = rasql.ExecMutation(t.Context(), executor, patch)
+	var planErr *rasql.PlanError
+	require.ErrorAs(t, err, &planErr)
+	require.Equal(t, "parameter_unsupported", planErr.Code)
+}
+
 func TestMutationBatch(t *testing.T) {
 	t.Run("groups compatible creates", func(t *testing.T) {
 		executor, table, id := mutationFixture(t)

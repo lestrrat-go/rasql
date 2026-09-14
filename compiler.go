@@ -70,6 +70,9 @@ func (c Compiler) Mutation(plan MutationPlan) (stmt.Statement, error) {
 	if err != nil {
 		return stmt.Statement{}, err
 	}
+	if err := checkNoParameterSlots(compiled.Slots); err != nil {
+		return stmt.Statement{}, err
+	}
 	return compiled.Copy()
 }
 
