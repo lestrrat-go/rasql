@@ -111,7 +111,16 @@ func preparePageAfter[R any](executor Executor, q Query[R], spec PageSpec[R], po
 	if err != nil {
 		return result, err
 	}
-	paged, err := compileQuery(provider.queryCompiler(), final)
+	if err := final.Validate(); err != nil {
+		return result, mapCompileError(err)
+	}
+	// The paged query is compiled and prepared through the lowered form built
+	// here, so the page pays for one conversion rather than one per step.
+	composed, err := lowerQuery(final)
+	if err != nil {
+		return result, err
+	}
+	paged, err := compileQueryLowered(provider.queryCompiler(), final, composed)
 	if err != nil {
 		return result, err
 	}
@@ -119,7 +128,7 @@ func preparePageAfter[R any](executor Executor, q Query[R], spec PageSpec[R], po
 	if err != nil {
 		return result, err
 	}
-	prepared, err := prepareRows(executor, final, paged)
+	prepared, err := prepareRowsLowered(executor, final, paged, composed)
 	if err != nil {
 		return result, err
 	}

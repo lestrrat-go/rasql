@@ -284,12 +284,31 @@ func resultQuery[R any](q Query[R]) (query.ResultQuery, error) {
 	if err := q.Validate(); err != nil {
 		return query.ResultQuery{}, err
 	}
+	return lowerResultQuery(q)
+}
+
+// lowerResultQuery converts q into the query model without validating it, so a
+// caller that has already validated q does not pay for a second walk of the
+// plan and the result schema. q MUST have passed Query.Validate.
+func lowerResultQuery[R any](q Query[R]) (query.ResultQuery, error) {
 	body, err := queryBody(q.plan)
 	if err != nil {
 		return query.ResultQuery{}, err
 	}
 	columns := q.Schema().Columns()
 	return query.ResultOf(body, columns...)
+}
+
+// lowerQuery converts q once, for compilation and preparation to share. It
+// returns the zero result query for a mutation and for a native statement,
+// neither of which goes through lowerResultQuery, and which both compilation
+// and preparation recognise from the plan before reading the result. It does
+// not validate, so q MUST have passed Query.Validate.
+func lowerQuery[R any](q Query[R]) (query.ResultQuery, error) {
+	if q.plan.mutation != nil || q.plan.native != nil {
+		return query.ResultQuery{}, nil
+	}
+	return lowerResultQuery(q)
 }
 
 func queryBody(plan QueryPlan) (query.QueryBody, error) {
@@ -510,6 +529,20 @@ func compileQuery[R any](compiler *querycompile.Compiler, q Query[R]) (compiledQ
 	if err := q.Validate(); err != nil {
 		return compiledQuery{}, mapCompileError(err)
 	}
+	composed, err := lowerQuery(q)
+	if err != nil {
+		return compiledQuery{}, err
+	}
+	return compileQueryLowered(compiler, q, composed)
+}
+
+// compileQueryLowered compiles q against the lowered form a caller already
+// produced for it. q MUST have passed Query.Validate, and composed MUST come
+// from lowerQuery called on the same q.
+func compileQueryLowered[R any](compiler *querycompile.Compiler, q Query[R], composed query.ResultQuery) (compiledQuery, error) {
+	if compiler == nil {
+		return compiledQuery{}, planError("invalid_compiler", "compiler", "must not be nil")
+	}
 	var statement stmt.Statement
 	var err error
 	switch {
@@ -518,11 +551,7 @@ func compileQuery[R any](compiler *querycompile.Compiler, q Query[R]) (compiledQ
 	case q.plan.native != nil:
 		statement, err = compiler.Native(q.plan.native.statement)
 	default:
-		result, resultErr := resultQuery(q)
-		if resultErr != nil {
-			return compiledQuery{}, resultErr
-		}
-		statement, err = compiler.Select(result)
+		statement, err = compiler.Select(composed)
 	}
 	if err != nil {
 		return compiledQuery{}, mapCompileError(err)
