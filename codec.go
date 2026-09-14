@@ -5,6 +5,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/lestrrat-go/rasql/internal/bindplan"
 	"github.com/lestrrat-go/rasql/stmt"
@@ -22,11 +23,19 @@ type CodecRegistry interface {
 }
 type CodecProvider interface{ Codecs() CodecRegistry }
 
+// codecRegistry is stored and handed out as a pointer, not a value, purely so
+// that two CodecRegistry interface values holding it are safe and meaningful
+// to compare with ==: a map field makes the value type uncomparable (Go
+// panics comparing two interface values whose dynamic type holds one), while
+// a pointer is always comparable and, unlike a value copy, actually reports
+// whether two registries are the same one. Prepared.checkExecutor relies on
+// this to tell a caller's WithCodecs swap from a harmless executor rewrap;
+// see codecRegistrySame.
 type codecRegistry struct{ codecs map[CodecID]ValueCodec }
 
-func (r codecRegistry) Lookup(id CodecID) (ValueCodec, bool) { c, ok := r.codecs[id]; return c, ok }
+func (r *codecRegistry) Lookup(id CodecID) (ValueCodec, bool) { c, ok := r.codecs[id]; return c, ok }
 
-var builtinCodecs CodecRegistry = codecRegistry{codecs: map[CodecID]ValueCodec{}}
+var builtinCodecs CodecRegistry = &codecRegistry{codecs: map[CodecID]ValueCodec{}}
 
 // NewCodecRegistry copies values into a registry that a codec lookup reads by
 // ID. It reports an error for an empty ID.
@@ -46,7 +55,34 @@ func NewCodecRegistry(values map[CodecID]ValueCodec) (CodecRegistry, error) {
 		}
 		copyValues[id] = codec
 	}
-	return codecRegistry{codecs: copyValues}, nil
+	return &codecRegistry{codecs: copyValues}, nil
+}
+
+// codecRegistrySame reports whether a and b are the same codec registry, the
+// way Prepared.checkExecutor compares a compiler: by identity, not by
+// decoding the same values. rasql's own CodecRegistry is a pointer for
+// exactly this reason (see the comment on codecRegistry), so the common case
+// resolves with a plain, panic-free ==. CodecRegistry is a public interface
+// though, and a caller may implement it on a value type whose fields (a
+// slice, another map) make it uncomparable; comparing two interface values
+// of an identical uncomparable dynamic type panics, so reflect.Value.
+// Comparable checks that before Equal ever runs. When the type turns out not
+// to be comparable, this reports a match rather than risk the panic or
+// refuse every run against that registry: it cannot prove the two differ,
+// and it already cannot prove rasql's own registries differ any other way
+// than by identity.
+func codecRegistrySame(a, b CodecRegistry) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	av, bv := reflect.ValueOf(a), reflect.ValueOf(b)
+	if av.Type() != bv.Type() {
+		return false
+	}
+	if !av.Comparable() {
+		return true
+	}
+	return av.Equal(bv)
 }
 
 var (
