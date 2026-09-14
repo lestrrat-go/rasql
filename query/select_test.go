@@ -1470,3 +1470,62 @@ func ordersTable() schema.TableDef {
 		PrimaryKey: []string{"id"},
 	}
 }
+
+// TestNarrowedBuildersStillValidateAnUncheckedStatement covers WithLimit,
+// WithOffset, WithLock, and WithDistinct, which check only the field they set
+// when their receiver already passed Validate. A Select a caller declares as a
+// zero value never passed it, so each of the four has to fall back to the full
+// walk and report the same error it did when every call validated in full.
+func TestNarrowedBuildersStillValidateAnUncheckedStatement(t *testing.T) {
+	t.Run("WithLimit", func(t *testing.T) {
+		_, err := query.Select{}.WithLimit(10)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "table must not be nil")
+	})
+
+	t.Run("WithOffset", func(t *testing.T) {
+		_, err := query.Select{}.WithOffset(10)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "table must not be nil")
+	})
+
+	t.Run("WithLock", func(t *testing.T) {
+		_, err := query.Select{}.WithLock(query.RowLock(query.LockUpdate))
+		require.Error(t, err)
+		require.ErrorContains(t, err, "table must not be nil")
+	})
+
+	t.Run("WithDistinct", func(t *testing.T) {
+		_, err := query.Select{}.WithDistinct()
+		require.Error(t, err)
+		require.ErrorContains(t, err, "table must not be nil")
+	})
+}
+
+// TestNarrowedBuildersStillRejectTheirOwnArgument pins the one clause each of
+// the three narrowed builders that has a rule still runs against a statement
+// that did pass Validate.
+func TestNarrowedBuildersStillRejectTheirOwnArgument(t *testing.T) {
+	users, err := query.NewTableRef(usersTable())
+	require.NoError(t, err)
+	statement, err := query.NewSelect(users, query.Project(users.Column("id")))
+	require.NoError(t, err)
+
+	t.Run("negative limit", func(t *testing.T) {
+		_, err := statement.WithLimit(-1)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "limit")
+	})
+
+	t.Run("negative offset", func(t *testing.T) {
+		_, err := statement.WithOffset(-1)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "offset")
+	})
+
+	t.Run("unsupported lock strength", func(t *testing.T) {
+		_, err := statement.WithLock(query.RowLock(0))
+		require.Error(t, err)
+		require.ErrorContains(t, err, "lock.strength")
+	})
+}
