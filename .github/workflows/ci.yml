@@ -44,7 +44,7 @@ jobs:
         # runner can silently fail to produce.
         env:
           RASQL_CONFORMANCE_COMMIT: ${{ github.sha }}
-        run: go test -p 1 -count=1 -v ./...
+        run: ./scripts/test.sh check
       - run: go vet ./...
       # The sample runs on PostgreSQL, so its tests need a live server and run
       # in the "integration" job. This job has no database, and builds the
@@ -64,6 +64,11 @@ jobs:
   integration:
     name: Database integration
     runs-on: ubuntu-latest
+    # Every step below that reaches a database reads these two, so the job
+    # holds one copy each rather than a copy per step.
+    env:
+      RASQL_TEST_MYSQL_DSN: root:root@tcp(127.0.0.1:3306)/rasql?parseTime=true
+      RASQL_TEST_POSTGRES_DSN: postgres://rasql:rasql@127.0.0.1:5432/rasql?sslmode=disable
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -75,47 +80,25 @@ jobs:
           version: v5.4.0
       - name: Bring up live databases
         run: docker compose up -d --wait
+      # The script derives its package list from the tree, naming every
+      # package whose tests import internal/dbtest, and fixes the flags that
+      # keep this job from ending green without touching a database. Both
+      # rules, and why each matters, live in scripts/test.sh.
       - name: Run the suite against live databases
-        env:
-          RASQL_TEST_MYSQL_DSN: root:root@tcp(127.0.0.1:3306)/rasql?parseTime=true
-          RASQL_TEST_POSTGRES_DSN: postgres://rasql:rasql@127.0.0.1:5432/rasql?sslmode=disable
-        # -v and the package list are deliberate: every package here holds
-        # at least one test guarded by internal/dbtest, which skips
-        # silently when a DSN is unset. Without -v, a skip and a pass look
-        # identical in this job's own log, and go test ./... -v across the
-        # whole module (measured: ~4200 lines) buries the live tests under
-        # ~2000 unrelated unit tests. Naming just these packages keeps the
-        # log scoped to what this job exists to prove, while ./... still
-        # runs (with -v, and without a DSN) in the "check" job, so every
-        # package's assertions remain covered by one of the two jobs.
-        # TestIntegrationJobListsEveryDBTestGuardedPackage reads this exact
-        # step and fails when the command stops covering a package whose
-        # tests are guarded by internal/dbtest, or carries an argument its
-        # parser cannot classify. goTestArgs in
-        # ci_integration_coverage_test.go owns which flags this command may
-        # use, and is the complete list: it rejects every command that would
-        # leave this job green without running the tests these packages are
-        # listed for, or without naming them in the log, in each spelling go
-        # accepts -- and it reads the flags it allows for their effective
-        # value, since go's own parsing lets a later assignment overturn an
-        # earlier one.
-        run: go test -p 1 -count=1 -v ./catalog/... ./cli/rasqlgen/... ./cli/rasqlmigrate/... ./examples/... ./generate/... ./inspect/... ./internal/catalogread/... ./internal/engineprofile/... ./internal/rowvalue/... ./internal/schemasource/... ./migrate/... ./render/... .
+        run: ./scripts/test.sh live
 
+      # scripts/conformance.sh writes the evidence uploaded below, to the
+      # .tmp paths it defaults to, and fails when either DSN is unset.
       - name: Run D4 conformance matrix
-        env:
-          RASQL_TEST_MYSQL_DSN: root:root@tcp(127.0.0.1:3306)/rasql?parseTime=true
-          RASQL_TEST_POSTGRES_DSN: postgres://rasql:rasql@127.0.0.1:5432/rasql?sslmode=disable
-          RASQL_CONFORMANCE_OUTPUT: ${{ github.workspace }}/.tmp/d4-conformance.json
-          RASQL_CONFORMANCE_LOG: ${{ github.workspace }}/.tmp/d4-conformance.log
-        run: mkdir -p .tmp && ./scripts/conformance.sh live
+        run: ./scripts/conformance.sh live
       - name: Upload D4 conformance evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: d4-conformance-evidence
           path: |
-            .tmp/d4-conformance.log
-            .tmp/d4-conformance.json
+            .tmp/d4-conformance-live.log
+            .tmp/d4-conformance-live.json
           if-no-files-found: error
 
       # sample/taskboard is a module of its own. Its offline check ran in the

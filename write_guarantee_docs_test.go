@@ -67,6 +67,17 @@ func claimMissingPlatform(block string) string {
 	return ""
 }
 
+// goAlwaysSkipsDirName reports whether name is a directory the go tool passes
+// over whatever pattern asks for it, so a file below one is part of no package
+// of this module. The walk below stops at those directories, which keeps a
+// scratch copy of this repository under ".worktrees" from being read as a
+// second set of claims.
+func goAlwaysSkipsDirName(name string) bool {
+	return strings.HasPrefix(name, ".") ||
+		strings.HasPrefix(name, "_") ||
+		name == "testdata"
+}
+
 // TestWriteGuaranteeClaimsNameTheirPlatform reconciles every copy of the
 // promise in the tree against the qualifier it needs. It reads the checked-in
 // files rather than a fixture, so a copy added to a page or a doc comment
