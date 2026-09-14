@@ -321,6 +321,23 @@ type preparedRows[R any] struct {
 type rowTerminal struct{ cause error }
 type rowTerminalKey struct{}
 
+// executorCompiler returns the compiler executor retains, reporting
+// engine_profile_unavailable for one that retains none. Every caller that
+// needs to know an executor is usable for compiling or matching against a
+// prior compile goes through here, so the error stays the same wherever the
+// check runs.
+func executorCompiler(executor Executor) (*querycompile.Compiler, error) {
+	provider, ok := executorCapability[compilerProvider](executor)
+	if !ok {
+		return nil, &PlanError{Code: "engine_profile_unavailable", Detail: "executor has no retained compiler"}
+	}
+	compiler := provider.queryCompiler()
+	if compiler == nil {
+		return nil, &PlanError{Code: "engine_profile_unavailable", Detail: "executor has no retained compiler"}
+	}
+	return compiler, nil
+}
+
 func prepareRows[R any](executor Executor, q Query[R], compiled compiledQuery) (preparedRows[R], error) {
 	var result preparedRows[R]
 	if err := q.Validate(); err != nil {
@@ -338,13 +355,8 @@ func prepareRows[R any](executor Executor, q Query[R], compiled compiledQuery) (
 // from lowerQuery called on the same q.
 func prepareRowsLowered[R any](executor Executor, q Query[R], compiled compiledQuery, composed query.ResultQuery) (preparedRows[R], error) {
 	var result preparedRows[R]
-	provider, ok := executorCapability[compilerProvider](executor)
-	if !ok {
-		return result, &PlanError{Code: "engine_profile_unavailable", Detail: "executor has no retained compiler"}
-	}
-	compiler := provider.queryCompiler()
-	if compiler == nil {
-		return result, &PlanError{Code: "engine_profile_unavailable", Detail: "executor has no retained compiler"}
+	if _, err := executorCompiler(executor); err != nil {
+		return result, err
 	}
 	engine, cardinality, native := q.nativeInfo()
 	if native {
@@ -551,43 +563,164 @@ func rowsPreparedRequired[R any](ctx context.Context, executor Executor, prepare
 }
 
 // compileAndPrepare compiles q and prepares it against executor, validating and
-// lowering q once for both steps. A caller that compiles one query and prepares
-// a different one, as the graph loader does, calls compileQuery and prepareRows
-// separately instead.
-func compileAndPrepare[R any](executor Executor, q Query[R]) (compiledQuery, preparedRows[R], error) {
+// lowering q once for both steps, and returns the compiler it resolved
+// alongside the compiled and prepared forms. A caller that compiles one query
+// and prepares a different one, as the graph loader does, calls compileQuery
+// and prepareRows separately instead.
+func compileAndPrepare[R any](executor Executor, q Query[R]) (compiledQuery, preparedRows[R], *querycompile.Compiler, error) {
 	var prepared preparedRows[R]
-	provider, ok := executorCapability[compilerProvider](executor)
-	if !ok {
-		return compiledQuery{}, prepared, &PlanError{Code: "engine_profile_unavailable", Detail: "executor has no retained compiler"}
-	}
-	compiler := provider.queryCompiler()
-	if compiler == nil {
-		return compiledQuery{}, prepared, &PlanError{Code: "engine_profile_unavailable", Detail: "executor has no retained compiler"}
+	compiler, err := executorCompiler(executor)
+	if err != nil {
+		return compiledQuery{}, prepared, nil, err
 	}
 	if err := q.Validate(); err != nil {
-		return compiledQuery{}, prepared, mapCompileError(err)
+		return compiledQuery{}, prepared, nil, mapCompileError(err)
 	}
 	composed, err := lowerQuery(q)
 	if err != nil {
-		return compiledQuery{}, prepared, err
+		return compiledQuery{}, prepared, nil, err
 	}
 	compiled, err := compileQueryLowered(compiler, q, composed)
 	if err != nil {
-		return compiledQuery{}, prepared, err
+		return compiledQuery{}, prepared, nil, err
 	}
 	prepared, err = prepareRowsLowered(executor, q, compiled, composed)
 	if err != nil {
-		return compiledQuery{}, prepared, err
+		return compiledQuery{}, prepared, nil, err
 	}
-	return compiled, prepared, nil
+	return compiled, prepared, compiler, nil
 }
 
-func Rows[R any](ctx context.Context, executor Executor, q Query[R]) (iter.Seq2[R, error], error) {
-	_, prepared, err := compileAndPrepare(executor, q)
+// Prepared holds a query that has already been validated, lowered, rendered
+// to SQL and resolved against a codec registry, so that Rows, All, One and
+// Maybe below repeat none of that work across many runs of the same query.
+// Prepare captures the argument VALUES bound into q at the moment it is
+// called: nothing in rasql's query API names a placeholder, so a Prepared
+// cannot be re-bound to different arguments before a later run. Call Prepare
+// again to change the arguments; what a Prepared amortizes is validation,
+// lowering, rendering and codec lookup, not the bound values themselves.
+//
+// A Prepared's SQL is rendered for the dialect the executor passed to Prepare
+// spoke through its compiler. Its Rows, All, One and Maybe methods take an
+// executor argument again on every call, so the wrapper around it can change
+// (entering a transaction scope, for instance) without re-preparing, but each
+// checks that the executor it is given still carries the same compiler
+// Prepare captured, and reports a prepared_executor_mismatch PlanError
+// instead of sending SQL rendered for a different executor's dialect.
+//
+// A Prepared is never mutated after Prepare returns, so it is safe to store
+// and execute from multiple goroutines, and every call to Rows returns a
+// fresh sequence: the "may only be consumed once" rule applies to each
+// sequence Rows hands back, not to the Prepared it came from.
+type Prepared[R any] struct {
+	compiler *querycompile.Compiler
+	prepared preparedRows[R]
+}
+
+// Prepare validates, lowers, renders and resolves codecs for q against
+// executor once, returning a Prepared[R] whose Rows, All, One and Maybe
+// methods run that same work repeatedly with none of the cost. See the
+// [Prepared] doc comment for what stays fixed and what a later call may vary.
+//
+// `executor` must not be nil.
+func Prepare[R any](executor Executor, q Query[R]) (Prepared[R], error) {
+	_, prepared, compiler, err := compileAndPrepare(executor, q)
+	if err != nil {
+		return Prepared[R]{}, err
+	}
+	return Prepared[R]{compiler: compiler, prepared: prepared}, nil
+}
+
+// checkExecutor reports whether executor still carries the compiler Prepare
+// captured, so a Prepared[R] run against a different executor fails with a
+// clear error instead of sending SQL rendered for a different dialect.
+func (p Prepared[R]) checkExecutor(executor Executor) error {
+	compiler, err := executorCompiler(executor)
+	if err != nil {
+		return err
+	}
+	if compiler != p.compiler {
+		return &PlanError{Code: "prepared_executor_mismatch", Detail: "executor does not match the executor Prepare was called with"}
+	}
+	return nil
+}
+
+// Rows runs p against executor and returns a fresh row sequence, consumable
+// once like the sequence Rows(ctx, executor, q) returns.
+func (p Prepared[R]) Rows(ctx context.Context, executor Executor) (iter.Seq2[R, error], error) {
+	if err := p.checkExecutor(executor); err != nil {
+		return nil, err
+	}
+	return rowsPrepared(ctx, executor, p.prepared)
+}
+
+// All runs p against executor and collects every row.
+func (p Prepared[R]) All(ctx context.Context, executor Executor) ([]R, error) {
+	rows, err := p.Rows(ctx, executor)
 	if err != nil {
 		return nil, err
 	}
-	return rowsPrepared(ctx, executor, prepared)
+	values := make([]R, 0)
+	for value, err := range rows {
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	return values, nil
+}
+
+// One runs p against executor and returns its single row, reporting
+// ErrNoRows or ErrMultipleRows when the run does not produce exactly one.
+func (p Prepared[R]) One(ctx context.Context, executor Executor) (R, error) {
+	var zero R
+	if err := p.checkExecutor(executor); err != nil {
+		return zero, err
+	}
+	rows, err := rowsPreparedRequired(ctx, executor, p.prepared, ExactlyOne)
+	if err != nil {
+		return zero, err
+	}
+	var result R
+	for value, err := range rows {
+		if err != nil {
+			return zero, err
+		}
+		result = value
+	}
+	return result, nil
+}
+
+// Maybe runs p against executor and returns its row and true when the run
+// produces exactly one, or the zero value and false when it produces none.
+// It reports ErrMultipleRows when the run produces more than one.
+func (p Prepared[R]) Maybe(ctx context.Context, executor Executor) (R, bool, error) {
+	var zero R
+	if err := p.checkExecutor(executor); err != nil {
+		return zero, false, err
+	}
+	rows, err := rowsPreparedRequired(ctx, executor, p.prepared, AtMostOne)
+	if err != nil {
+		return zero, false, err
+	}
+	count := 0
+	var result R
+	for value, err := range rows {
+		if err != nil {
+			return zero, false, err
+		}
+		count++
+		result = value
+	}
+	return result, count == 1, nil
+}
+
+func Rows[R any](ctx context.Context, executor Executor, q Query[R]) (iter.Seq2[R, error], error) {
+	prepared, err := Prepare(executor, q)
+	if err != nil {
+		return nil, err
+	}
+	return rowsPrepared(ctx, executor, prepared.prepared)
 }
 func All[R any](ctx context.Context, executor Executor, q Query[R]) ([]R, error) {
 	rows, err := Rows(ctx, executor, q)
@@ -637,9 +770,9 @@ func Maybe[R any](ctx context.Context, executor Executor, q Query[R]) (R, bool, 
 }
 
 func rowsFor[R any](ctx context.Context, executor Executor, q Query[R], consumer Cardinality) (iter.Seq2[R, error], error) {
-	_, prepared, err := compileAndPrepare(executor, q)
+	prepared, err := Prepare(executor, q)
 	if err != nil {
 		return nil, err
 	}
-	return rowsPreparedRequired(ctx, executor, prepared, consumer)
+	return rowsPreparedRequired(ctx, executor, prepared.prepared, consumer)
 }
