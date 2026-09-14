@@ -293,13 +293,8 @@ func validateRowValueExpression(expression Expression, sources sourceScope, clau
 	return err
 }
 
-func relationColumn(source RelationRef, name string) (schema.ColumnDef, bool) {
-	for _, column := range source.Columns() {
-		if column.Name == name {
-			return schema.ColumnDef{Name: column.Name, Type: column.Type}, true
-		}
-	}
-	return schema.ColumnDef{}, false
+func relationColumn(source RelationRef, name string) bool {
+	return source.hasColumn(name)
 }
 
 func validateExpression(expression Expression, ctx expressionContext, path string) (expressionUsage, error) {
@@ -319,7 +314,7 @@ func validateExpression(expression Expression, ctx expressionContext, path strin
 		if !inSources {
 			return expressionUsage{}, validationError(path, "references table %q outside the statement", expression.source.QualifiedName())
 		}
-		if _, exists := relationColumn(expression.source, expression.name); !exists {
+		if !relationColumn(expression.source, expression.name) {
 			return expressionUsage{}, validationError(path, "references unknown column %q", expression.name)
 		}
 		return expressionUsage{bareColumn: ctx.aggregateDepth == 0}, nil
@@ -333,7 +328,7 @@ func validateExpression(expression Expression, ctx expressionContext, path strin
 		if _, exists := ctx.sources.keys[expression.column.source.key()]; !exists {
 			return expressionUsage{}, validationError(path, "references table %q outside the statement", expression.column.source.QualifiedName())
 		}
-		if _, exists := relationColumn(expression.column.source, expression.column.name); !exists {
+		if !relationColumn(expression.column.source, expression.column.name) {
 			return expressionUsage{}, validationError(path, "references unknown column %q", expression.column.name)
 		}
 		return expressionUsage{bareColumn: ctx.aggregateDepth == 0}, nil
