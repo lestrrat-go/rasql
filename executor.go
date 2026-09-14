@@ -601,12 +601,18 @@ func compileAndPrepare[R any](executor Executor, q Query[R]) (compiledQuery, pre
 // lowering, rendering and codec lookup, not the bound values themselves.
 //
 // A Prepared's SQL is rendered for the dialect the executor passed to Prepare
-// spoke through its compiler. Its Rows, All, One and Maybe methods take an
-// executor argument again on every call, so the wrapper around it can change
-// (entering a transaction scope, for instance) without re-preparing, but each
-// checks that the executor it is given still carries the same compiler
-// Prepare captured, and reports a prepared_executor_mismatch PlanError
-// instead of sending SQL rendered for a different executor's dialect.
+// spoke through its compiler, and its bind values are already encoded, and
+// its rows already decode, through the codec registry that executor carried
+// at that moment. Its Rows, All, One and Maybe methods take an executor
+// argument again on every call, so the wrapper around it can change (entering
+// a transaction scope, for instance) without re-preparing, but each checks
+// that the executor it is given still carries the same compiler AND the same
+// codec registry Prepare captured, and reports a prepared_executor_mismatch
+// PlanError instead of silently running with a stale registry or SQL rendered
+// for a different dialect. Wrapping the executor with WithCodecs after
+// Prepare, in particular, means calling Prepare again rather than reusing the
+// old Prepared: nothing re-reads the executor's registry per run, so the new
+// codecs would otherwise never take effect.
 //
 // A Prepared is never mutated after Prepare returns, so it is safe to store
 // and execute from multiple goroutines, and every call to Rows returns a
@@ -614,6 +620,7 @@ func compileAndPrepare[R any](executor Executor, q Query[R]) (compiledQuery, pre
 // sequence Rows hands back, not to the Prepared it came from.
 type Prepared[R any] struct {
 	compiler *querycompile.Compiler
+	codecs   CodecRegistry
 	prepared preparedRows[R]
 }
 
@@ -628,12 +635,14 @@ func Prepare[R any](executor Executor, q Query[R]) (Prepared[R], error) {
 	if err != nil {
 		return Prepared[R]{}, err
 	}
-	return Prepared[R]{compiler: compiler, prepared: prepared}, nil
+	return Prepared[R]{compiler: compiler, codecs: prepared.codecs, prepared: prepared}, nil
 }
 
-// checkExecutor reports whether executor still carries the compiler Prepare
-// captured, so a Prepared[R] run against a different executor fails with a
-// clear error instead of sending SQL rendered for a different dialect.
+// checkExecutor reports whether executor still carries the compiler AND the
+// codec registry Prepare captured, so a Prepared[R] run against a different
+// executor, or the same executor rewrapped with WithCodecs, fails with a
+// clear error instead of sending SQL rendered for a different dialect or
+// silently decoding through a registry the caller no longer intends.
 func (p Prepared[R]) checkExecutor(executor Executor) error {
 	compiler, err := executorCompiler(executor)
 	if err != nil {
@@ -641,6 +650,13 @@ func (p Prepared[R]) checkExecutor(executor Executor) error {
 	}
 	if compiler != p.compiler {
 		return &PlanError{Code: "prepared_executor_mismatch", Detail: "executor does not match the executor Prepare was called with"}
+	}
+	codecs, err := executorCodecs(executor)
+	if err != nil {
+		return err
+	}
+	if !codecRegistrySame(p.codecs, codecs) {
+		return &PlanError{Code: "prepared_executor_mismatch", Detail: "executor carries a different codec registry than Prepare captured"}
 	}
 	return nil
 }
