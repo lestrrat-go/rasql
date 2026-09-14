@@ -105,6 +105,7 @@ type runtimeFakeExecutor struct {
 	mu            sync.Mutex
 	lastStatement stmt.Statement
 }
+
 func (e *runtimeFakeExecutor) Dialect() dialect.Dialect { return e.dialect }
 func (e *runtimeFakeExecutor) Query(_ context.Context, statement stmt.Statement) (rasql.ResultRows, error) {
 	e.calls.Add(1)
@@ -437,6 +438,89 @@ func TestResultRows(t *testing.T) {
 		require.Len(t, got, 100)
 		got[0][0] = 99
 		require.Equal(t, byte(1), got[1][0])
+	})
+}
+
+// TestAllAppendAllZeroRows pins a deliberate difference: All and
+// Prepared.All return a non-nil, empty slice for a zero-row run, matching
+// what make([]R, 0) produced before AppendAll existed, while AppendAll and
+// Prepared.AppendAll follow the built-in append convention and return dst
+// unchanged, nil included.
+func TestAllAppendAllZeroRows(t *testing.T) {
+	q := runtimeQuery(t)
+
+	t.Run("All returns a non-nil empty slice", func(t *testing.T) {
+		executor, _ := runtimeExecutor(t, [][]any{})
+		values, err := rasql.All(t.Context(), executor, q)
+		require.NoError(t, err)
+		require.NotNil(t, values)
+		require.Empty(t, values)
+	})
+
+	t.Run("Prepared.All returns a non-nil empty slice", func(t *testing.T) {
+		executor, _ := runtimeExecutor(t, [][]any{})
+		prepared, err := rasql.Prepare(executor, q)
+		require.NoError(t, err)
+		values, err := prepared.All(t.Context(), executor)
+		require.NoError(t, err)
+		require.NotNil(t, values)
+		require.Empty(t, values)
+	})
+
+	t.Run("AppendAll returns a nil dst unchanged", func(t *testing.T) {
+		executor, _ := runtimeExecutor(t, [][]any{})
+		values, err := rasql.AppendAll[int64](t.Context(), nil, executor, q)
+		require.NoError(t, err)
+		require.Nil(t, values)
+	})
+
+	t.Run("Prepared.AppendAll returns a nil dst unchanged", func(t *testing.T) {
+		executor, _ := runtimeExecutor(t, [][]any{})
+		prepared, err := rasql.Prepare(executor, q)
+		require.NoError(t, err)
+		values, err := prepared.AppendAll(t.Context(), nil, executor)
+		require.NoError(t, err)
+		require.Nil(t, values)
+	})
+
+	t.Run("AppendAll reuses a caller's buffer across calls", func(t *testing.T) {
+		executor, _ := runtimeExecutor(t, [][]any{{int64(1)}, {int64(2)}})
+		prepared, err := rasql.Prepare(executor, q)
+		require.NoError(t, err)
+		dst := make([]int64, 0, 8)
+		values, err := prepared.AppendAll(t.Context(), dst, executor)
+		require.NoError(t, err)
+		require.Equal(t, []int64{1, 2}, values)
+		require.Equal(t, cap(dst), cap(values), "a buffer with enough capacity is reused, not reallocated")
+
+		values = values[:0]
+		values, err = prepared.AppendAll(t.Context(), values, executor)
+		require.NoError(t, err)
+		require.Equal(t, []int64{1, 2}, values)
+	})
+
+	t.Run("a failed run leaves the caller's own elements and capacity intact", func(t *testing.T) {
+		failure := errors.New("boom")
+		// A fresh runtimeFakeRows per call, since iterErr fires only after
+		// Next() has yielded every value once, so a reused fake would report
+		// the failure immediately on a second run instead of partway through.
+		newFailingExecutor := func() rasql.Executor {
+			rows := &runtimeFakeRows{values: [][]any{{int64(1)}, {int64(2)}}, iterErr: failure}
+			return runtimeRowsProfiled(t, rows)
+		}
+
+		original := []int64{100, 200}
+		dst := make([]int64, len(original), len(original)+8)
+		copy(dst, original)
+
+		got, err := rasql.AppendAll(t.Context(), dst, newFailingExecutor(), q)
+		require.ErrorIs(t, err, failure)
+		require.Equal(t, original, got)
+		require.Equal(t, cap(dst), cap(got), "capacity survives a failed run")
+
+		values, err := rasql.All(t.Context(), newFailingExecutor(), q)
+		require.ErrorIs(t, err, failure)
+		require.Nil(t, values)
 	})
 }
 
