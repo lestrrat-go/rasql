@@ -233,6 +233,65 @@ func ValueWithCodec[T any](value T, codec string) (Expr[T], error) {
 	}
 	return Expr[T]{node: query.Bind(bindToken{ID: id, Value: snapshot, Codec: codec, Copy: copier}), codec: codec}, nil
 }
+// Parameter is a placeholder for a value a caller supplies to a Prepared
+// before each run. Value binds a value now; a Parameter binds one later. A
+// Parameter is placed in a query through Expr, exactly where an Expr built by
+// Value would go.
+//
+// A Parameter built by neither NewParameter nor NewParameterWithCodec is
+// zero, and its Expr reports invalid_parameter at Validate; its Value reports
+// invalid_parameter at Prepared.Bind.
+type Parameter[T any] struct {
+	id    bindplan.ID
+	codec string
+}
+
+// NewParameter returns a parameter with a fresh identity and no codec.
+func NewParameter[T any]() Parameter[T] {
+	return Parameter[T]{id: bindplan.NextID()}
+}
+
+// NewParameterWithCodec returns a parameter whose value is encoded through
+// codec at bind time. It reports invalid_schema for a malformed codec
+// identifier, as ValueWithCodec does.
+func NewParameterWithCodec[T any](codec string) (Parameter[T], error) {
+	if codec != "" && !codecPattern.MatchString(codec) {
+		return Parameter[T]{}, planError("invalid_schema", "codec", "malformed codec identifier")
+	}
+	return Parameter[T]{id: bindplan.NextID(), codec: codec}, nil
+}
+
+// nilBindCopy backs a parameter token: there is nothing to copy until
+// Prepared.Bind supplies a value.
+func nilBindCopy() (any, error) { return nil, nil }
+
+// Expr places the parameter in a query. Every call returns an Expr carrying
+// the same identity, so a parameter used twice in one statement fills two
+// placeholders from one value.
+func (p Parameter[T]) Expr() Expr[T] {
+	if p.id == 0 {
+		err := planError("invalid_parameter", "parameter", "parameter must be built with NewParameter or NewParameterWithCodec")
+		return Expr[T]{node: query.Bind(bindToken{Err: err}), bindErr: err}
+	}
+	return Expr[T]{node: query.Bind(bindToken{ID: p.id, Codec: p.codec, Parameter: true, Copy: nilBindCopy}), codec: p.codec}
+}
+
+// Value pairs the parameter with the value one run should send for it. The
+// value is copied here, the way Value copies what it binds, so a later write
+// through the caller's copy does not change what a run sends.
+func (p Parameter[T]) Value(value T) ParameterValue {
+	snapshot, _, err := adoptBind(value, true)
+	return ParameterValue{id: p.id, snapshot: snapshot, err: err}
+}
+
+// ParameterValue is one parameter's value for one run. Only Parameter.Value
+// builds one.
+type ParameterValue struct {
+	id       bindplan.ID
+	snapshot any
+	err      error
+}
+
 func EqualExpr[T comparable](left, right Expr[T]) Predicate {
 	return Predicate{node: query.Equal(left.node, right.node), source: left.source, source2: right.source}
 }

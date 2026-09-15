@@ -30,6 +30,11 @@ type Token struct {
 	Err        error
 	Copy       ValueCopy
 	PreEncoded bool
+	// Parameter marks a token built for a caller-supplied value that arrives
+	// after rendering, through Prepared.Bind, rather than at build time. Its
+	// Copy always returns (nil, nil): there is nothing to copy until Bind
+	// supplies a value.
+	Parameter bool
 }
 
 var nextID uint64

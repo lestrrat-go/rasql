@@ -3,14 +3,118 @@ package rasql_test
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"sync"
 	"testing"
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/schema"
+	"github.com/lestrrat-go/rasql/stmt"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
+
+// runtimeParamQuery builds a query.[int64] whose WHERE clause compares the
+// "value" column against a fresh Parameter, so a caller can Prepare it once
+// and Bind a different value per run.
+func runtimeParamQuery(t *testing.T) (rasql.Query[int64], rasql.Parameter[int64]) {
+	t.Helper()
+	table, err := rasql.ReadTableOf[struct{}](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "value", Type: schema.IntegerType{}}}})
+	require.NoError(t, err)
+	relation, err := rasql.SourceOf(table, "i")
+	require.NoError(t, err)
+	column, err := rasql.BindColumn[struct{}, int64](relation, "value", "")
+	require.NoError(t, err)
+	resultSchema, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "value", Type: schema.IntegerType{}})
+	require.NoError(t, err)
+	projection, err := rasql.NewProjection([]rasql.ProjectionItem{rasql.Item("value", column.Expr(), schema.IntegerType{}, "")}, runtimeDecoder{schema: resultSchema})
+	require.NoError(t, err)
+	param := rasql.NewParameter[int64]()
+	query := rasql.Select(relation.Source(), projection).Where(rasql.EqualExpr(column.Expr(), param.Expr()))
+	return query, param
+}
+
+// runtimeParamTwiceQuery is runtimeParamQuery with the parameter placed in
+// two operands of one WHERE, so Bind must fill both from the one value it is
+// given.
+func runtimeParamTwiceQuery(t *testing.T) (rasql.Query[int64], rasql.Parameter[int64]) {
+	t.Helper()
+	table, err := rasql.ReadTableOf[struct{}](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "value", Type: schema.IntegerType{}}}})
+	require.NoError(t, err)
+	relation, err := rasql.SourceOf(table, "i")
+	require.NoError(t, err)
+	column, err := rasql.BindColumn[struct{}, int64](relation, "value", "")
+	require.NoError(t, err)
+	resultSchema, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "value", Type: schema.IntegerType{}})
+	require.NoError(t, err)
+	projection, err := rasql.NewProjection([]rasql.ProjectionItem{rasql.Item("value", column.Expr(), schema.IntegerType{}, "")}, runtimeDecoder{schema: resultSchema})
+	require.NoError(t, err)
+	param := rasql.NewParameter[int64]()
+	query := rasql.Select(relation.Source(), projection).Where(rasql.Or(
+		rasql.EqualExpr(column.Expr(), param.Expr()),
+		rasql.EqualExpr(column.Expr(), param.Expr()),
+	))
+	return query, param
+}
+
+// runtimeParamCodecQuery is runtimeParamQuery with the parameter built through
+// NewParameterWithCodec, so Bind encodes its value through the codec "age"
+// names.
+func runtimeParamCodecQuery(t *testing.T) (rasql.Query[int64], rasql.Parameter[int64]) {
+	t.Helper()
+	table, err := rasql.ReadTableOf[struct{}](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "value", Type: schema.IntegerType{}}}})
+	require.NoError(t, err)
+	relation, err := rasql.SourceOf(table, "i")
+	require.NoError(t, err)
+	column, err := rasql.BindColumn[struct{}, int64](relation, "value", "")
+	require.NoError(t, err)
+	resultSchema, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "value", Type: schema.IntegerType{}})
+	require.NoError(t, err)
+	projection, err := rasql.NewProjection([]rasql.ProjectionItem{rasql.Item("value", column.Expr(), schema.IntegerType{}, "")}, runtimeDecoder{schema: resultSchema})
+	require.NoError(t, err)
+	param, err := rasql.NewParameterWithCodec[int64]("age")
+	require.NoError(t, err)
+	query := rasql.Select(relation.Source(), projection).Where(rasql.EqualExpr(column.Expr(), param.Expr()))
+	return query, param
+}
+
+// passthroughParamCodec encodes and decodes an int64 unchanged, which is
+// enough to prove a bind travelled through it.
+type passthroughParamCodec struct{}
+
+func (passthroughParamCodec) Encode(v any) (driver.Value, error) { return v, nil }
+func (passthroughParamCodec) Decode(v any, dest any) error {
+	*dest.(*int64) = v.(int64)
+	return nil
+}
+
+// runtimeEchoExecutor answers Query with one row holding the first bound
+// argument, so a test can tell one run's parameter value from another's
+// without inspecting the statement the runtime sent.
+type runtimeEchoExecutor struct{ dialect dialect.Dialect }
+
+func (e runtimeEchoExecutor) Dialect() dialect.Dialect { return e.dialect }
+func (e runtimeEchoExecutor) Query(_ context.Context, statement stmt.Statement) (rasql.ResultRows, error) {
+	args := statement.BoundArgs()
+	var value int64
+	if len(args) > 0 {
+		value, _ = args[0].(int64)
+	}
+	return &runtimeFakeRows{values: [][]any{{value}}}, nil
+}
+func (runtimeEchoExecutor) Exec(context.Context, stmt.Statement) (sql.Result, error) {
+	return driver.RowsAffected(0), nil
+}
+
+func runtimeEchoExecutorFor(t *testing.T) rasql.Executor {
+	t.Helper()
+	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+	require.NoError(t, err)
+	executor, err := rasql.WithEngineProfile(runtimeEchoExecutor{dialect: dialect.SQLite()}, profile)
+	require.NoError(t, err)
+	return executor
+}
 
 func TestPrepare(t *testing.T) {
 	t.Run("executes many times with identical results", func(t *testing.T) {
@@ -166,5 +270,152 @@ func TestPrepare(t *testing.T) {
 		}
 		wg.Wait()
 		require.Equal(t, int64(100), raw.calls.Load())
+	})
+
+	t.Run("binds one parameter and runs with two different values", func(t *testing.T) {
+		q, param := runtimeParamQuery(t)
+		executor, raw := runtimeExecutor(t, [][]any{{int64(1)}})
+		prepared, err := rasql.Prepare(executor, q)
+		require.NoError(t, err)
+
+		adults, err := prepared.Bind(param.Value(int64(18)))
+		require.NoError(t, err)
+		_, err = adults.All(t.Context(), executor)
+		require.NoError(t, err)
+		firstSQL, firstArgs := raw.lastStatement.SQL(), raw.lastStatement.Args()
+
+		seniors, err := prepared.Bind(param.Value(int64(65)))
+		require.NoError(t, err)
+		_, err = seniors.All(t.Context(), executor)
+		require.NoError(t, err)
+		secondSQL, secondArgs := raw.lastStatement.SQL(), raw.lastStatement.Args()
+
+		require.Equal(t, firstSQL, secondSQL)
+		require.Equal(t, []any{int64(18)}, firstArgs)
+		require.Equal(t, []any{int64(65)}, secondArgs)
+	})
+
+	t.Run("a parameter placed twice in one WHERE fills both arguments from one value", func(t *testing.T) {
+		q, param := runtimeParamTwiceQuery(t)
+		executor, raw := runtimeExecutor(t, [][]any{{int64(1)}})
+		prepared, err := rasql.Prepare(executor, q)
+		require.NoError(t, err)
+		bound, err := prepared.Bind(param.Value(int64(7)))
+		require.NoError(t, err)
+		_, err = bound.All(t.Context(), executor)
+		require.NoError(t, err)
+		require.Equal(t, []any{int64(7), int64(7)}, raw.lastStatement.Args())
+	})
+
+	t.Run("running with a parameter unbound reports parameter_unbound and calls the executor zero times", func(t *testing.T) {
+		q, _ := runtimeParamQuery(t)
+		executor, raw := runtimeExecutor(t, [][]any{{int64(1)}})
+		prepared, err := rasql.Prepare(executor, q)
+		require.NoError(t, err)
+		_, err = prepared.All(t.Context(), executor)
+		var planErr *rasql.PlanError
+		require.ErrorAs(t, err, &planErr)
+		require.Equal(t, "parameter_unbound", planErr.Code)
+		require.Equal(t, "binds[0]", planErr.Path)
+		require.Equal(t, int64(0), raw.calls.Load())
+	})
+
+	t.Run("Bind reports invalid_parameter, unknown_parameter, and duplicate_parameter", func(t *testing.T) {
+		q, param := runtimeParamQuery(t)
+		executor, _ := runtimeExecutor(t, [][]any{{int64(1)}})
+		prepared, err := rasql.Prepare(executor, q)
+		require.NoError(t, err)
+
+		var planErr *rasql.PlanError
+
+		var zero rasql.Parameter[int64]
+		_, err = prepared.Bind(zero.Value(int64(1)))
+		require.ErrorAs(t, err, &planErr)
+		require.Equal(t, "invalid_parameter", planErr.Code)
+
+		other := rasql.NewParameter[int64]()
+		_, err = prepared.Bind(other.Value(int64(1)))
+		require.ErrorAs(t, err, &planErr)
+		require.Equal(t, "unknown_parameter", planErr.Code)
+
+		_, err = prepared.Bind(param.Value(int64(1)), param.Value(int64(2)))
+		require.ErrorAs(t, err, &planErr)
+		require.Equal(t, "duplicate_parameter", planErr.Code)
+	})
+
+	t.Run("Bind leaves the receiver unbound", func(t *testing.T) {
+		q, param := runtimeParamQuery(t)
+		executor, _ := runtimeExecutor(t, [][]any{{int64(1)}})
+		prepared, err := rasql.Prepare(executor, q)
+		require.NoError(t, err)
+		bound, err := prepared.Bind(param.Value(int64(1)))
+		require.NoError(t, err)
+
+		_, err = prepared.All(t.Context(), executor)
+		var planErr *rasql.PlanError
+		require.ErrorAs(t, err, &planErr)
+		require.Equal(t, "parameter_unbound", planErr.Code)
+
+		values, err := bound.All(t.Context(), executor)
+		require.NoError(t, err)
+		require.Equal(t, []int64{1}, values)
+	})
+
+	t.Run("100 goroutines each bind a different value on one shared Prepared and see their own rows", func(t *testing.T) {
+		q, param := runtimeParamQuery(t)
+		executor := runtimeEchoExecutorFor(t)
+		prepared, err := rasql.Prepare(executor, q)
+		require.NoError(t, err)
+		var wg sync.WaitGroup
+		for i := 0; i < 100; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				bound, err := prepared.Bind(param.Value(int64(i)))
+				require.NoError(t, err)
+				values, err := bound.All(context.Background(), executor)
+				require.NoError(t, err)
+				require.Equal(t, []int64{int64(i)}, values)
+			}(i)
+		}
+		wg.Wait()
+	})
+
+	t.Run("a parameter built with NewParameterWithCodec is encoded through the captured registry", func(t *testing.T) {
+		q, param := runtimeParamCodecQuery(t)
+		base, raw := runtimeExecutor(t, [][]any{{int64(1)}})
+		registryA, err := rasql.NewCodecRegistry(map[rasql.CodecID]rasql.ValueCodec{"age": passthroughParamCodec{}})
+		require.NoError(t, err)
+		executorA, err := rasql.WithCodecs(base, registryA)
+		require.NoError(t, err)
+
+		prepared, err := rasql.Prepare(executorA, q)
+		require.NoError(t, err)
+		bound, err := prepared.Bind(param.Value(int64(42)))
+		require.NoError(t, err)
+		values, err := bound.All(t.Context(), executorA)
+		require.NoError(t, err)
+		require.Equal(t, []int64{1}, values)
+		require.Equal(t, []any{int64(42)}, raw.lastStatement.Args())
+
+		registryB, err := rasql.NewCodecRegistry(map[rasql.CodecID]rasql.ValueCodec{"age": passthroughParamCodec{}})
+		require.NoError(t, err)
+		executorB, err := rasql.WithCodecs(base, registryB)
+		require.NoError(t, err)
+
+		_, err = bound.All(t.Context(), executorB)
+		var planErr *rasql.PlanError
+		require.ErrorAs(t, err, &planErr)
+		require.Equal(t, "prepared_executor_mismatch", planErr.Code)
+	})
+
+	t.Run("package-level All on a query with a parameter reports parameter_unbound", func(t *testing.T) {
+		q, _ := runtimeParamQuery(t)
+		executor, raw := runtimeExecutor(t, [][]any{{int64(1)}})
+		_, err := rasql.All(t.Context(), executor, q)
+		var planErr *rasql.PlanError
+		require.ErrorAs(t, err, &planErr)
+		require.Equal(t, "parameter_unbound", planErr.Code)
+		require.Equal(t, int64(0), raw.calls.Load())
 	})
 }

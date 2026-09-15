@@ -75,6 +75,48 @@ Use `rasql.DynamicProjection` when the result columns are known only at run time
 and produces a projection whose rows retain ordered names and values. Combine it with `Select` or `Native`; there is no
 separate dynamic builder or execution package.
 
+## Reusable prepared queries
+
+`rasql.Prepare` validates, lowers, renders and resolves codecs for a query once, and hands back a `Prepared[R]` whose
+`Rows`, `All`, `One` and `Maybe` methods repeat none of that work across many runs. Placing a `rasql.Parameter` where a
+`Value` would go lets one `Prepare` serve a different argument on each run: `Bind` returns a new `Prepared` carrying
+the value, and the `Prepared` `Bind` was called on stays unbound, so it can be shared and bound differently by every
+caller. Running a `Prepared` while a parameter has no value reports `parameter_unbound` before anything reaches the
+database.
+
+<!-- INCLUDE(examples/rasql_prepared_parameter_example_test.go#prepared_parameter) -->
+```go
+query, minTotal, err := preparedParamOrdersQuery()
+if err != nil {
+	fmt.Printf("failed to build orders query: %s\n", err)
+	return
+}
+// Prepare validates, lowers, renders and resolves codecs once. minTotal
+// still has no value, so running prepared as it stands would report
+// parameter_unbound.
+prepared, err := rasql.Prepare(executor, query)
+if err != nil {
+	fmt.Printf("failed to prepare query: %s\n", err)
+	return
+}
+
+// Bind returns a new Prepared and leaves prepared itself unbound, so the
+// same prepared form serves both minimum totals instead of preparing the
+// query twice.
+atLeast20, err := prepared.Bind(minTotal.Value(int64(20)))
+if err != nil {
+	fmt.Printf("failed to bind minimum total: %s\n", err)
+	return
+}
+atLeast80, err := prepared.Bind(minTotal.Value(int64(80)))
+if err != nil {
+	fmt.Printf("failed to bind minimum total: %s\n", err)
+	return
+}
+```
+source: [examples/rasql_prepared_parameter_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasql_prepared_parameter_example_test.go)
+<!-- END INCLUDE -->
+
 ## Choosing a terminal
 
 | Terminal | Contract |

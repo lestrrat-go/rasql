@@ -21,6 +21,9 @@ type Slot struct {
 	ID         ID
 	Codec      string
 	PreEncoded bool
+	// Parameter carries Token.Parameter through Unwrap, so a later pass can
+	// tell a slot that still awaits a value from one Prepare already filled.
+	Parameter bool
 }
 
 // Compiled is a rendered statement together with the bind metadata and the
@@ -78,7 +81,7 @@ func Unwrap(statement stmt.Statement) (Compiled, error) {
 			if token.ID == 0 || token.Copy == nil || (token.Codec != "" && !CodecPattern.MatchString(token.Codec)) || !token.PreEncoded && token.Value == nil && token.Copy == nil {
 				return Compiled{}, planerr.New("internal_plan", fmt.Sprintf("binds[%d]", i), "invalid bind token")
 			}
-			slots[i] = Slot{ID: token.ID, Codec: token.Codec, PreEncoded: token.PreEncoded}
+			slots[i] = Slot{ID: token.ID, Codec: token.Codec, PreEncoded: token.PreEncoded, Parameter: token.Parameter}
 			copyArgs[i] = token.Copy
 			value, err := token.Copy()
 			if err != nil {
@@ -98,7 +101,7 @@ func Unwrap(statement stmt.Statement) (Compiled, error) {
 				if token.ID == 0 || token.Copy == nil || (token.Codec != "" && !CodecPattern.MatchString(token.Codec)) {
 					return Compiled{}, planerr.New("internal_plan", fmt.Sprintf("binds[%d]", i), "invalid bind token")
 				}
-				slots[i] = Slot{ID: token.ID, Codec: token.Codec, PreEncoded: token.PreEncoded}
+				slots[i] = Slot{ID: token.ID, Codec: token.Codec, PreEncoded: token.PreEncoded, Parameter: token.Parameter}
 				name, tokenCopy := named.Name, token.Copy
 				copyArgs[i] = func() (any, error) {
 					value, err := tokenCopy()

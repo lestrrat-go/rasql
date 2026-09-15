@@ -10,6 +10,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/exec"
+	"github.com/lestrrat-go/rasql/internal/bindplan"
 	"github.com/lestrrat-go/rasql/internal/querycompile"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/stmt"
@@ -317,6 +318,17 @@ type preparedRows[R any] struct {
 	codecs      CodecRegistry
 	cardinality Cardinality
 	emptyErr    error
+	// parameters lists every slot a Parameter fills, in placeholder order.
+	// bound reports whether Prepared.Bind has supplied a value for it.
+	// rowsPreparedRequired refuses to run while any is false.
+	parameters []parameterSlot
+}
+
+type parameterSlot struct {
+	index int // position in the statement's arguments
+	id    bindplan.ID
+	codec string
+	bound bool
 }
 type rowTerminal struct{ cause error }
 type rowTerminalKey struct{}
@@ -404,6 +416,7 @@ func prepareRowsLowered[R any](executor Executor, q Query[R], compiled compiledQ
 		}
 		_ = i
 	}
+	var parameters []parameterSlot
 	for i, slot := range slots {
 		if _, err := codecFor(registry, slot.Codec); err != nil {
 			if planErr, ok := err.(*PlanError); ok {
@@ -411,13 +424,16 @@ func prepareRowsLowered[R any](executor Executor, q Query[R], compiled compiledQ
 			}
 			return result, err
 		}
-		_ = i
+		if slot.Parameter {
+			parameters = append(parameters, parameterSlot{index: i, id: slot.ID, codec: slot.Codec})
+		}
 	}
 	statement, err := encodeStatement(statementCopy, slots, registry)
 	if err != nil {
 		return result, err
 	}
 	result.statement, result.schema, result.decoder, result.codecs, result.cardinality, result.emptyErr = statement, q.Schema(), q.Projection().Decoder(), registry, cardinality, q.resultRequirement.emptyErr
+	result.parameters = parameters
 	return result, nil
 }
 
@@ -426,6 +442,11 @@ func rowsPrepared[R any](ctx context.Context, executor Executor, prepared prepar
 }
 
 func rowsPreparedRequired[R any](ctx context.Context, executor Executor, prepared preparedRows[R], consumer Cardinality) (iter.Seq2[R, error], error) {
+	for _, slot := range prepared.parameters {
+		if !slot.bound {
+			return nil, &PlanError{Code: "parameter_unbound", Path: fmt.Sprintf("binds[%d]", slot.index), Detail: "parameter has no value; call Prepared.Bind before running"}
+		}
+	}
 	used := false
 	return func(yield func(R, error) bool) {
 		if used {
@@ -599,11 +620,13 @@ func compileAndPrepare[R any](executor Executor, q Query[R]) (compiledQuery, pre
 // Prepared holds a query that has already been validated, lowered, rendered
 // to SQL and resolved against a codec registry, so that Rows, All, One and
 // Maybe below repeat none of that work across many runs of the same query.
-// Prepare captures the argument VALUES bound into q at the moment it is
-// called: nothing in rasql's query API names a placeholder, so a Prepared
-// cannot be re-bound to different arguments before a later run. Call Prepare
-// again to change the arguments; what a Prepared amortizes is validation,
-// lowering, rendering and codec lookup, not the bound values themselves.
+// Prepare captures the argument values bound into q at the moment it is
+// called, except for a value placed through Parameter: a Prepared carrying
+// one or more unbound parameters refuses to run until Bind supplies a value
+// for each, which is what lets one Prepare serve many different runs. What a
+// Prepared amortizes either way is validation, lowering, rendering and codec
+// lookup, not a Value-bound argument's value; call Prepare again to change
+// one of those.
 //
 // A Prepared's SQL is rendered for the dialect the executor passed to Prepare
 // spoke through its compiler, and its bind values are already encoded, and
@@ -667,6 +690,67 @@ func (p Prepared[R]) checkExecutor(executor Executor) error {
 		return &PlanError{Code: "prepared_executor_mismatch", Detail: "executor carries a different codec registry than Prepare captured"}
 	}
 	return nil
+}
+
+// Bind returns a copy of p in which each named parameter carries its value,
+// encoded through the codec registry Prepare captured. p itself is
+// unchanged, so a Prepared with unbound parameters can be shared and bound
+// differently by every caller.
+//
+// It reports invalid_parameter for a value built from a zero Parameter,
+// unknown_parameter for a value naming a parameter the query does not carry,
+// and duplicate_parameter for two values naming the same parameter in one
+// call. A value whose Parameter.Value could not snapshot its argument is
+// returned as that unsnapshotable_bind error.
+func (p Prepared[R]) Bind(values ...ParameterValue) (Prepared[R], error) {
+	snapshots := make(map[bindplan.ID]any, len(values))
+	for i, value := range values {
+		if value.id == 0 {
+			return Prepared[R]{}, planError("invalid_parameter", fmt.Sprintf("params[%d]", i), "parameter must be built with NewParameter or NewParameterWithCodec")
+		}
+		if value.err != nil {
+			return Prepared[R]{}, value.err
+		}
+		known := false
+		for _, slot := range p.prepared.parameters {
+			if slot.id == value.id {
+				known = true
+				break
+			}
+		}
+		if !known {
+			return Prepared[R]{}, planError("unknown_parameter", fmt.Sprintf("params[%d]", i), "query has no parameter with this identity")
+		}
+		if _, duplicate := snapshots[value.id]; duplicate {
+			return Prepared[R]{}, planError("duplicate_parameter", fmt.Sprintf("params[%d]", i), "parameter already given a value in this call")
+		}
+		snapshots[value.id] = value.snapshot
+	}
+
+	args := p.prepared.statement.Args()
+	parameters := append([]parameterSlot(nil), p.prepared.parameters...)
+	encoder := bindStatementEncoder{registry: p.codecs}
+	for i, slot := range parameters {
+		snapshot, ok := snapshots[slot.id]
+		if !ok {
+			continue
+		}
+		bound := snapshot
+		if slot.codec != "" && snapshot != nil {
+			encoded, err := encoder.EncodeBind(slot.index, slot.codec, snapshot)
+			if err != nil {
+				return Prepared[R]{}, err
+			}
+			bound = encoded
+		}
+		args[slot.index] = bound
+		parameters[i].bound = true
+	}
+
+	prepared := p.prepared
+	prepared.statement = stmt.New(p.prepared.statement.Text(), args...)
+	prepared.parameters = parameters
+	return Prepared[R]{compiler: p.compiler, codecs: p.codecs, prepared: prepared}, nil
 }
 
 // Rows runs p against executor and returns a fresh row sequence, consumable

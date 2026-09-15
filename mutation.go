@@ -180,6 +180,18 @@ func ExecMutation(ctx context.Context, executor Executor, plan MutationPlan) (Mu
 	return outcome, nil
 }
 
+// checkNoParameterSlots refuses a mutation that carries a Parameter: there is
+// no prepared form for a mutation to bind into, and encoding would otherwise
+// send NULL at the parameter's position without complaint.
+func checkNoParameterSlots(slots []bindSlot) error {
+	for i, slot := range slots {
+		if slot.Parameter {
+			return planError("parameter_unsupported", fmt.Sprintf("binds[%d]", i), "a mutation cannot carry a parameter; bind a value with Value")
+		}
+	}
+	return nil
+}
+
 func compileMutationParts(executor Executor, statement query.WriteStatement) (compiledQuery, error) {
 	provider, ok := executorCapability[compilerProvider](executor)
 	if !ok || provider.queryCompiler() == nil {
@@ -189,7 +201,14 @@ func compileMutationParts(executor Executor, statement query.WriteStatement) (co
 	if err != nil {
 		return compiledQuery{}, err
 	}
-	return unwrapBindTokens(compiled)
+	parts, err := unwrapBindTokens(compiled)
+	if err != nil {
+		return compiledQuery{}, err
+	}
+	if err := checkNoParameterSlots(parts.Slots); err != nil {
+		return compiledQuery{}, err
+	}
+	return parts, nil
 }
 
 func compileMutation(executor Executor, statement query.WriteStatement) (stmt.Statement, error) {
@@ -571,6 +590,9 @@ func isMutationBindLimit(err error) bool {
 }
 
 func encodeCompiledMutation(compiled compiledQuery, executor Executor) (stmt.Statement, error) {
+	if err := checkNoParameterSlots(compiled.Slots); err != nil {
+		return stmt.Statement{}, err
+	}
 	copy, err := compiled.Copy()
 	if err != nil {
 		return stmt.Statement{}, err
