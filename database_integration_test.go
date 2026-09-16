@@ -9,7 +9,6 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/exec"
 	"github.com/lestrrat-go/rasql/inspect"
 	"github.com/lestrrat-go/rasql/internal/dbtest"
 	"github.com/lestrrat-go/rasql/query"
@@ -293,7 +292,7 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	} else {
 		returningInsert, returningErr := insert.WithReturning(recordIDRef, recordActiveRef, recordEmailRef, recordAmountRef)
 		require.NoError(t, returningErr)
-		_, err := exec.RenderWrite(db, returningInsert)
+		_, err := rasql.RenderWrite(db, returningInsert)
 		require.ErrorContains(t, err, "RETURNING is not supported")
 	}
 

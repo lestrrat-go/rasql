@@ -69,10 +69,10 @@ type executionDurabilityProvider interface {
 }
 
 var (
-	_ ScopeBeginner               = dbExecutor{}
-	_ SavepointBeginner           = dbExecutor{}
+	_ ScopeBeginner               = DB{}
+	_ SavepointBeginner           = DB{}
 	_ ScopeFinalizer              = guardedScopeFinalizer{}
-	_ executionDurabilityProvider = dbExecutor{}
+	_ executionDurabilityProvider = DB{}
 )
 
 // A wrapper varies over the transaction scope and the codec registry, which a

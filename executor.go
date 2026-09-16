@@ -3,13 +3,10 @@ package rasql
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"iter"
-	"sync/atomic"
 
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/exec"
 	"github.com/lestrrat-go/rasql/internal/bindplan"
 	"github.com/lestrrat-go/rasql/internal/querycompile"
 	"github.com/lestrrat-go/rasql/query"
@@ -119,120 +116,10 @@ func codecsFrom(inner Executor) CodecRegistry {
 	return provider.Codecs()
 }
 
-type dbExecutor struct {
-	db       DB
-	compiler *querycompile.Compiler
-	busy     *executorBusy
-}
-
-type executorBusy struct{ token chan struct{} }
-
-func newExecutorBusy() *executorBusy { return &executorBusy{token: make(chan struct{}, 1)} }
-func (b *executorBusy) acquire() bool {
-	select {
-	case b.token <- struct{}{}:
-		return true
-	default:
-		return false
-	}
-}
-func (b *executorBusy) release() { <-b.token }
-
-func (e dbExecutor) IsTransaction() bool { return e.db.IsTransaction() }
-
-func (e dbExecutor) Dialect() dialect.Dialect { return e.db.Dialect() }
-func (e dbExecutor) Query(ctx context.Context, statement stmt.Statement) (ResultRows, error) {
-	if e.busy != nil && !e.busy.acquire() {
-		return nil, planError("transaction_concurrent_use", "executor", "transaction executor is already in use")
-	}
-	rows, err := e.db.QueryOwned(ctx, statement)
-	if err != nil {
-		if e.busy != nil {
-			e.busy.release()
-		}
-		return nil, err
-	}
-	if rows == nil {
-		if e.busy != nil {
-			e.busy.release()
-		}
-		return nil, nil
-	}
-	if e.busy == nil {
-		return rows, nil
-	}
-	return &exclusiveRows{ResultRows: rows, release: e.busy.release}, nil
-}
-func (e dbExecutor) Exec(ctx context.Context, statement stmt.Statement) (sql.Result, error) {
-	if e.busy != nil && !e.busy.acquire() {
-		return nil, planError("transaction_concurrent_use", "executor", "transaction executor is already in use")
-	}
-	if e.busy != nil {
-		defer e.busy.release()
-	}
-	return e.db.ExecRendered(ctx, statement)
-}
-func (e dbExecutor) queryCompiler() *querycompile.Compiler { return e.compiler }
-
-func (e dbExecutor) executionDurability() executionDurabilityEvidence {
-	if !e.db.IsTransaction() {
-		return executionDurabilityCommitted
-	}
-	return executionDurabilityPending
-}
-
-func (e dbExecutor) BeginScope(ctx context.Context, opts *sql.TxOptions) (Executor, ScopeFinalizer, error) {
-	db, finalizer, err := e.db.BeginScope(ctx, opts)
-	if err != nil {
-		return nil, nil, err
-	}
-	child := dbExecutor{db: db, compiler: e.compiler, busy: newExecutorBusy()}
-	return child, guardedScopeFinalizer{ScopeFinalizer: finalizer, busy: child.busy}, nil
-}
-
-func (e dbExecutor) BeginSavepoint(ctx context.Context) (Executor, ScopeFinalizer, error) {
-	if e.busy != nil && !e.busy.acquire() {
-		return nil, nil, planError("transaction_concurrent_use", "executor", "transaction executor is already in use")
-	}
-	db, finalizer, err := e.db.BeginSavepoint(ctx)
-	if e.busy != nil {
-		e.busy.release()
-	}
-	if err != nil {
-		var planErr *PlanError
-		if errors.As(err, &planErr) {
-			return nil, nil, err
-		}
-		return nil, nil, planError("savepoint_unsupported", "scope", err.Error())
-	}
-	child := dbExecutor{db: db, compiler: e.compiler, busy: e.busy}
-	return child, guardedScopeFinalizer{ScopeFinalizer: finalizer, busy: e.busy}, nil
-}
-
-type guardedScopeFinalizer struct {
-	exec.ScopeFinalizer
-	busy *executorBusy
-}
-
-func (f guardedScopeFinalizer) Commit(ctx context.Context) error {
-	if f.busy != nil && !f.busy.acquire() {
-		return planError("transaction_concurrent_use", "executor", "transaction executor is already in use")
-	}
-	if f.busy != nil {
-		defer f.busy.release()
-	}
-	return f.ScopeFinalizer.Commit(ctx)
-}
-func (f guardedScopeFinalizer) Rollback(ctx context.Context) error {
-	if f.busy != nil && !f.busy.acquire() {
-		return planError("transaction_concurrent_use", "executor", "transaction executor is already in use")
-	}
-	if f.busy != nil {
-		defer f.busy.release()
-	}
-	return f.ScopeFinalizer.Rollback(ctx)
-}
-
+// AsExecutor validates db and attaches profile's compiler to it, returning
+// the same DB as an Executor. A DB bound to a transaction gets a fresh busy
+// token, so a statement run on it while another is still in flight is
+// rejected rather than racing the same *sql.Tx.
 func AsExecutor(db DB, profile EngineProfile) (Executor, error) {
 	if err := db.Validate(); err != nil {
 		return nil, err
@@ -241,25 +128,13 @@ func AsExecutor(db DB, profile EngineProfile) (Executor, error) {
 	if err != nil {
 		return nil, err
 	}
-	var busy *executorBusy
+	db.profile = profile
+	db.compiler = c
+	db.busy = nil
 	if db.IsTransaction() {
-		busy = newExecutorBusy()
+		db.busy = newExecutorBusy()
 	}
-	return dbExecutor{db: db, compiler: c, busy: busy}, nil
-}
-
-type exclusiveRows struct {
-	ResultRows
-	release  func()
-	released atomic.Bool
-}
-
-func (r *exclusiveRows) Finish(err error, early bool) error {
-	result := r.ResultRows.Finish(err, early)
-	if r.released.CompareAndSwap(false, true) {
-		r.release()
-	}
-	return result
+	return db, nil
 }
 
 type profiledExecutor struct {
