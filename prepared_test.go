@@ -109,8 +109,7 @@ func (runtimeEchoExecutor) Exec(context.Context, stmt.Statement) (sql.Result, er
 
 func runtimeEchoExecutorFor(t *testing.T) rasql.Executor {
 	t.Helper()
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
+	profile := rasql.SQLite335()
 	executor, err := rasql.WithEngineProfile(runtimeEchoExecutor{dialect: dialect.SQLite()}, profile)
 	require.NoError(t, err)
 	return executor
@@ -228,11 +227,7 @@ func TestPrepare(t *testing.T) {
 		require.NoError(t, err)
 		_, err = database.ExecContext(t.Context(), `INSERT INTO items VALUES (1), (2)`)
 		require.NoError(t, err)
-		db, err := rasql.New(database, dialect.SQLite())
-		require.NoError(t, err)
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
-		base, err := rasql.AsExecutor(db, profile)
+		base, err := rasql.Open(t.Context(), database, dialect.SQLite())
 		require.NoError(t, err)
 		registry, err := rasql.NewCodecRegistry(nil)
 		require.NoError(t, err)

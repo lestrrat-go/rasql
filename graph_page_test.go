@@ -401,11 +401,7 @@ func pageFixture(t *testing.T) (rasql.Executor, rasql.Query[pageParentRow], rasq
 		_, err = database.Exec(`INSERT INTO page_task_labels VALUES (?, ?, ?, ?), (?, ?, ?, ?)`, i*2-1, i, (i-1)%4+1, 1, i*2, i, i%4+1, 2)
 		require.NoError(t, err)
 	}
-	db, err := rasql.New(database, dialect.SQLite())
-	require.NoError(t, err)
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(db, profile)
+	executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 	require.NoError(t, err)
 	parentTable := rasql.MustReadTableOf[pageParentRow](schema.TableDef{Name: "page_parents", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}})
 	taskTable := rasql.MustReadTableOf[pageTaskRow](schema.TableDef{Name: "page_tasks", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "parent", Type: schema.IntegerType{}}, {Name: "assignee", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}})
@@ -481,8 +477,7 @@ func pageJunctionOrder(source rasql.Source) []rasql.OrderTerm {
 // how a counting wrapper sits in the chain from outside the package.
 func pageProfiled(t *testing.T, executor rasql.Executor) rasql.Executor {
 	t.Helper()
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
+	profile := rasql.SQLite335()
 	profiled, err := rasql.WithEngineProfile(executor, profile)
 	require.NoError(t, err)
 	return profiled

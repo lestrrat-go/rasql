@@ -75,8 +75,7 @@ func TestNativeQuery(t *testing.T) {
 
 	t.Run("an engine mismatch makes no query call", func(t *testing.T) {
 		raw := &runtimeFakeExecutor{dialect: dialect.PostgreSQL()}
-		profile, err := rasql.EngineProfileFromVersion("postgresql-17", 17, 6, 0)
-		require.NoError(t, err)
+		profile := rasql.PostgreSQL17()
 		executor, err := rasql.WithEngineProfile(raw, profile)
 		require.NoError(t, err)
 		_, err = rasql.All(t.Context(), executor, nativeRuntimeQuery(t, rasql.Many))
@@ -98,8 +97,7 @@ func TestNativeQuery(t *testing.T) {
 		require.NoError(t, err)
 		query := rasql.Select(source.Source(), outer)
 		raw := &runtimeFakeExecutor{dialect: dialect.PostgreSQL()}
-		profile, err := rasql.EngineProfileFromVersion("postgresql-17", 17, 6, 0)
-		require.NoError(t, err)
+		profile := rasql.PostgreSQL17()
 		executor, err := rasql.WithEngineProfile(raw, profile)
 		require.NoError(t, err)
 		_, err = rasql.All(t.Context(), executor, query)
@@ -202,8 +200,7 @@ func TestNativeQuery(t *testing.T) {
 	})
 
 	t.Run("declared and consumer cardinality share one lifecycle", func(t *testing.T) {
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
+		profile := rasql.SQLite335()
 		for _, tc := range []struct {
 			name     string
 			declared rasql.Cardinality
@@ -251,8 +248,7 @@ func TestNativeQuery(t *testing.T) {
 	})
 
 	t.Run("an early break checks the declared cardinality", func(t *testing.T) {
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
+		profile := rasql.SQLite335()
 		for _, tc := range []struct {
 			name     string
 			card     rasql.Cardinality
@@ -298,8 +294,7 @@ func TestNativeQuery(t *testing.T) {
 	})
 
 	t.Run("a break closes without a cardinality error", func(t *testing.T) {
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
+		profile := rasql.SQLite335()
 		raw := &runtimeFakeExecutor{rows: [][]any{{int64(1)}, {int64(2)}}, dialect: dialect.SQLite()}
 		executor, err := rasql.WithEngineProfile(raw, profile)
 		require.NoError(t, err)
@@ -375,8 +370,7 @@ func TestNativeProjection(t *testing.T) {
 		query, err := rasql.Native(rasql.NativeStatement{Engine: "sqlite", SQL: "SELECT 7 AS id, 'x' AS value"}, projection, rasql.Many)
 		require.NoError(t, err)
 		raw := &nativeMultiExecutor{dialect: dialect.SQLite(), rows: &runtimeFakeRows{values: [][]any{{int64(7), "x"}}, columns: []string{"id", "value"}}}
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
+		profile := rasql.SQLite335()
 		executor, err := rasql.WithEngineProfile(raw, profile)
 		require.NoError(t, err)
 		executor, err = rasql.WithCodecs(executor, registry)
@@ -473,8 +467,7 @@ func TestNativeArgument(t *testing.T) {
 
 	t.Run("a missing selected codec fails before the executor", func(t *testing.T) {
 		raw := &runtimeFakeExecutor{dialect: dialect.SQLite()}
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
+		profile := rasql.SQLite335()
 		executor, err := rasql.WithEngineProfile(raw, profile)
 		require.NoError(t, err)
 		sch, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "value", Type: schema.IntegerType{}, Codec: "missing"})
@@ -607,8 +600,7 @@ func TestNativeMutation(t *testing.T) {
 		require.NoError(t, err)
 		args[0].Value.([]byte)[0] = 'x'
 
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
+		profile := rasql.SQLite335()
 		raw := &nativeMutationExecutor{dialect: dialect.SQLite()}
 		executor, err := rasql.WithEngineProfile(raw, profile)
 		require.NoError(t, err)
@@ -642,8 +634,7 @@ func TestNativeMutation(t *testing.T) {
 	t.Run("an engine mismatch precedes the compiler and executor", func(t *testing.T) {
 		plan, err := rasql.NativeMutation(rasql.NativeStatement{Engine: "sqlite", SQL: "UPDATE users SET name = ?", Args: []rasql.NativeArgument{{Value: "x"}}})
 		require.NoError(t, err)
-		profile, err := rasql.EngineProfileFromVersion("postgresql-17", 17, 6, 0)
-		require.NoError(t, err)
+		profile := rasql.PostgreSQL17()
 		raw := &nativeMutationExecutor{dialect: dialect.PostgreSQL()}
 		executor, err := rasql.WithEngineProfile(raw, profile)
 		require.NoError(t, err)
@@ -665,8 +656,7 @@ func TestNativeMutation(t *testing.T) {
 	})
 
 	t.Run("a batch rejects every native position before execution", func(t *testing.T) {
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
+		profile := rasql.SQLite335()
 		for _, tc := range []struct {
 			name  string
 			plans func(t *testing.T) []rasql.MutationPlan
@@ -858,8 +848,7 @@ func (r nativeMutationRowsResult) RowsAffected() (int64, error) { return r.rows,
 
 func nativeMutationExecutorForTest(t *testing.T) (rasql.Executor, *nativeMutationExecutor) {
 	t.Helper()
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
+	profile := rasql.SQLite335()
 	raw := &nativeMutationExecutor{dialect: dialect.SQLite()}
 	executor, err := rasql.WithEngineProfile(raw, profile)
 	require.NoError(t, err)

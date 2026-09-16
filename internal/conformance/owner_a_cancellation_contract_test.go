@@ -20,7 +20,7 @@ func TestOwnerACancellationStages(t *testing.T) {
 	require.NoError(t, SeedDatabaseForEngine(t.Context(), database, "sqlite"))
 	engine, ok := EngineByName("sqlite")
 	require.True(t, ok)
-	raw, err := rasql.New(database, engine.Dialect)
+	raw, err := rasql.Open(t.Context(), database, engine.Dialect)
 	require.NoError(t, err)
 	invocations, events := &InvocationRecorder{}, &EventRecorder{}
 	raw, err = raw.WithInvocationObservers(
@@ -28,10 +28,7 @@ func TestOwnerACancellationStages(t *testing.T) {
 		invocations.Observer(),
 	)
 	require.NoError(t, err)
-	profile, err := rasql.DiscoverEngineProfile(t.Context(), raw, engine.ProfileID)
-	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(raw, profile)
-	require.NoError(t, err)
+	var executor rasql.Executor = raw
 	executor, err = rasql.WithEventObservers(
 		executor,
 		rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}),
@@ -58,6 +55,8 @@ func TestOwnerACancellationStages(t *testing.T) {
 	setObservationCounters(&rasqlEvidence)
 
 	require.NoError(t, resetConformanceDatabase(t.Context(), database, "sqlite"))
+	profile, err := engine.Profile()
+	require.NoError(t, err)
 	sqlObserver := newHandwrittenObserver()
 	sqlContext := context.WithValue(t.Context(), profileLimitContextKey{}, profile.Limits().MaxBindParameters)
 	sqlEvidence, err := sqlCancellation(sqlContext, database, "sqlite", sqlObserver)

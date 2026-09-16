@@ -23,11 +23,11 @@ type codecExecutor struct{ executor }
 func (codecExecutor) Codecs() rasql.CodecRegistry { return nil }
 
 func use(rasql.DB, rasql.EngineProfile, rasql.Executor, rasql.CodecRegistry) {
-	var _ = rasql.AsExecutor
+	var _ = rasql.Open
+	var _ = rasql.WithProfile
 	var _ = rasql.WithEngineProfile
 	var _ = rasql.WithCodecs
 	var _ = rasql.Rows[int]
 	var tx *sql.Tx
-	db, _ := rasql.New(tx, dialect.SQLite())
-	_, _ = rasql.AsExecutor(db, rasql.EngineProfile{})
+	_, _ = rasql.Open(context.Background(), tx, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 }

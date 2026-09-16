@@ -75,8 +75,7 @@ func codecScanQuery[R any](t *testing.T, values [][]any, codec rasql.ValueCodec,
 
 	registry, err := rasql.NewCodecRegistry(map[rasql.CodecID]rasql.ValueCodec{"text": codec})
 	require.NoError(t, err)
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
+	profile := rasql.SQLite335()
 	executor, err := rasql.WithEngineProfile(&codecScanExecutor{rows: values}, profile)
 	require.NoError(t, err)
 	executor, err = rasql.WithCodecs(executor, registry)

@@ -38,17 +38,13 @@ func cursorFixtureFor(t *testing.T) cursorFixture {
 		`CREATE TABLE cursor_rows (value REAL NOT NULL); INSERT INTO cursor_rows VALUES (1.0), (2.0)`)
 	require.NoError(t, err)
 
-	db, err := rasql.New(database, dialect.SQLite())
-	require.NoError(t, err)
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
-	base, err := rasql.AsExecutor(db, profile)
+	base, err := rasql.Open(t.Context(), database, dialect.SQLite())
 	require.NoError(t, err)
 	counter := &cursorCountingExecutor{Executor: base}
 	// WithEngineProfile re-attaches the compiler the decorator does not carry,
 	// which is what lets a counting wrapper sit in the chain from outside the
 	// package.
-	executor, err := rasql.WithEngineProfile(counter, profile)
+	executor, err := rasql.WithEngineProfile(counter, rasql.SQLite335())
 	require.NoError(t, err)
 
 	table, err := rasql.ReadTableOf[cursorRow](schema.TableDef{

@@ -42,18 +42,12 @@ func run() error {
 	database := stdlib.OpenDB(*config)
 	defer func() { _ = database.Close() }()
 
-	// A rasql.DB pairs the handle with the dialect used to render SQL.
-	db, err := rasql.New(database, dialect.PostgreSQL())
+	// Open pairs the handle with the dialect used to render SQL and asks the
+	// server its own version, so it works against whatever supported
+	// PostgreSQL release TASKBOARD_DSN actually points at.
+	executor, err := rasql.Open(context.Background(), database, dialect.PostgreSQL())
 	if err != nil {
-		return fmt.Errorf("create the rasql db: %w", err)
-	}
-	profile, err := rasql.DiscoverEngineProfile(context.Background(), db, "postgresql-17")
-	if err != nil {
-		return fmt.Errorf("discover PostgreSQL engine profile: %w", err)
-	}
-	executor, err := rasql.AsExecutor(db, profile)
-	if err != nil {
-		return fmt.Errorf("create the rasql executor: %w", err)
+		return fmt.Errorf("open the rasql database: %w", err)
 	}
 	// END(open_database)
 

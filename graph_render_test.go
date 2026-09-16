@@ -9,7 +9,6 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/internal/dbtest"
 	"github.com/lestrrat-go/rasql/stmt"
 	"github.com/stretchr/testify/require"
 )
@@ -82,17 +81,14 @@ func TestGraphPartitionRendering(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		dialect dialect.Dialect
-		profile string
-		major   int
-		minor   int
+		profile rasql.EngineProfile
 	}{
-		{name: "sqlite", dialect: dialect.SQLite(), profile: "sqlite-3.35", major: 3, minor: 35},
-		{name: "postgresql", dialect: dialect.PostgreSQL(), profile: "postgresql-17", major: 17},
-		{name: "mysql", dialect: dialect.MySQL(), profile: "mysql-8.4", major: 8, minor: 4},
+		{name: "sqlite", dialect: dialect.SQLite(), profile: rasql.SQLite335()},
+		{name: "postgresql", dialect: dialect.PostgreSQL(), profile: rasql.PostgreSQL17()},
+		{name: "mysql", dialect: dialect.MySQL(), profile: rasql.MySQL84()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			profile, err := rasql.EngineProfileFromVersion(tc.profile, tc.major, tc.minor, 0)
-			require.NoError(t, err)
+			profile := tc.profile
 			raw := &graphRenderExecutor{dialect: tc.dialect}
 			executor, err := rasql.WithEngineProfile(raw, profile)
 			require.NoError(t, err)
@@ -108,26 +104,4 @@ func TestGraphPartitionRendering(t *testing.T) {
 			require.GreaterOrEqual(t, len(statement.Args()), 2)
 		})
 	}
-}
-
-func TestGraphLiveProfile(t *testing.T) {
-	t.Run("PostgreSQL", func(t *testing.T) {
-		database := dbtest.PostgreSQLDB(t)
-		db, err := rasql.New(database, dialect.PostgreSQL())
-		require.NoError(t, err)
-		profile, err := rasql.DiscoverEngineProfile(t.Context(), db, "postgresql-17")
-		require.NoError(t, err)
-		require.Equal(t, rasql.PostgreSQLEngine, profile.Engine())
-		require.NotEqual(t, rasql.EnginePerParentLimitUnsupported, profile.Capabilities().PerParentLimit)
-	})
-
-	t.Run("MySQL", func(t *testing.T) {
-		database := dbtest.MySQLDB(t)
-		db, err := rasql.New(database, dialect.MySQL())
-		require.NoError(t, err)
-		profile, err := rasql.DiscoverEngineProfile(t.Context(), db, "mysql-8.4")
-		require.NoError(t, err)
-		require.Equal(t, rasql.MySQLEngine, profile.Engine())
-		require.NotEqual(t, rasql.EnginePerParentLimitUnsupported, profile.Capabilities().PerParentLimit)
-	})
 }

@@ -180,8 +180,7 @@ func runtimeBytesQuery(t *testing.T) rasql.Query[[]byte] {
 // carrying the engine profile the row pipeline needs.
 func runtimeRowsProfiled(t *testing.T, rows *runtimeFakeRows) rasql.Executor {
 	t.Helper()
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
+	profile := rasql.SQLite335()
 	executor, err := rasql.WithEngineProfile(runtimeRowsExecutor{rows: rows}, profile)
 	require.NoError(t, err)
 	return executor
@@ -226,8 +225,7 @@ func runtimePairQuery(t *testing.T, firstCodec, secondCodec string) rasql.Query[
 func runtimeExecutor(t *testing.T, rows [][]any) (rasql.Executor, *runtimeFakeExecutor) {
 	t.Helper()
 	raw := &runtimeFakeExecutor{rows: rows, dialect: dialect.SQLite()}
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
+	profile := rasql.SQLite335()
 	executor, err := rasql.WithEngineProfile(raw, profile)
 	require.NoError(t, err)
 	return executor, raw
@@ -404,8 +402,7 @@ func TestResultRows(t *testing.T) {
 	t.Run("a query is reusable concurrently", func(t *testing.T) {
 		q := runtimeQuery(t)
 		raw := &runtimeFakeExecutor{rows: [][]any{{int64(1)}}, dialect: dialect.SQLite()}
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
+		profile := rasql.SQLite335()
 		executor, err := rasql.WithEngineProfile(raw, profile)
 		require.NoError(t, err)
 		var wg sync.WaitGroup
@@ -543,11 +540,7 @@ func TestExecutor(t *testing.T) {
 			_, err = database.Exec(`INSERT INTO items VALUES (?,?,?)`, i, name, payload)
 			require.NoError(t, err)
 		}
-		db, err := rasql.New(database, dialect.SQLite())
-		require.NoError(t, err)
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
-		executor, err := rasql.AsExecutor(db, profile)
+		executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 		require.NoError(t, err)
 		table, err := rasql.ReadTableOf[sqliteRuntimeRow](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "name", Type: schema.TextType{}, Nullable: true}, {Name: "payload", Type: schema.BytesType{}, Nullable: true}}})
 		require.NoError(t, err)

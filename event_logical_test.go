@@ -30,11 +30,7 @@ func logicalExecutor(t *testing.T, observers ...rasql.EventObserver) rasql.Execu
 	_, err = database.ExecContext(t.Context(),
 		`CREATE TABLE logical_items (id INTEGER PRIMARY KEY, name INTEGER NOT NULL)`)
 	require.NoError(t, err)
-	db, err := rasql.New(database, dialect.SQLite())
-	require.NoError(t, err)
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
-	base, err := rasql.AsExecutor(db, profile)
+	base, err := rasql.Open(t.Context(), database, dialect.SQLite())
 	require.NoError(t, err)
 	if len(observers) == 0 {
 		return base
@@ -262,11 +258,7 @@ func TestLogicalInvocation(t *testing.T) {
 		require.NoError(t, err)
 		database.SetMaxOpenConns(1)
 		t.Cleanup(func() { require.NoError(t, database.Close()) })
-		db, err := rasql.New(database, dialect.SQLite())
-		require.NoError(t, err)
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
-		base, err := rasql.AsExecutor(db, profile)
+		base, err := rasql.Open(t.Context(), database, dialect.SQLite())
 		require.NoError(t, err)
 
 		var handled int

@@ -95,7 +95,7 @@ func TestAggregateOrderingAgainstLiveDatabases(t *testing.T) {
 }
 
 func testAggregateOrdering(t *testing.T, database *sql.DB, test aggregateOrderingCase) {
-	db, err := rasql.New(database, test.dialect)
+	db, err := rasql.Open(t.Context(), database, test.dialect)
 	require.NoError(t, err)
 	type record struct {
 		ID    int64  `rasql:"id"`
@@ -123,14 +123,7 @@ func testAggregateOrdering(t *testing.T, database *sql.DB, test aggregateOrderin
 	}()
 	require.NoError(t, rasql.CreateTable(t.Context(), db, records))
 
-	profileID := "postgresql-17"
-	if test.dialect.Name() == "mysql" {
-		profileID = "mysql-8.4"
-	}
-	profile, err := rasql.DiscoverEngineProfile(t.Context(), db, profileID)
-	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(db, profile)
-	require.NoError(t, err)
+	executor := db
 	recordID := query.TypedColumnOf[record, int64](records.Column("id"))
 	recordEmail := query.TypedColumnOf[record, string](records.Column("email"))
 	for _, fixture := range []record{
@@ -281,7 +274,7 @@ func TestDistinctOrderAgainstLiveDatabases(t *testing.T) {
 }
 
 func testDistinctOrder(t *testing.T, database *sql.DB, test distinctOrderCase) {
-	db, err := rasql.New(database, test.dialect)
+	db, err := rasql.Open(t.Context(), database, test.dialect)
 	require.NoError(t, err)
 	type record struct {
 		ID   int64  `rasql:"id"`
@@ -311,14 +304,7 @@ func testDistinctOrder(t *testing.T, database *sql.DB, test distinctOrderCase) {
 	}()
 	require.NoError(t, rasql.CreateTable(t.Context(), db, records))
 
-	profileID := "postgresql-17"
-	if test.dialect.Name() == "mysql" {
-		profileID = "mysql-8.4"
-	}
-	profile, err := rasql.DiscoverEngineProfile(t.Context(), db, profileID)
-	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(db, profile)
-	require.NoError(t, err)
+	executor := db
 	recordID := query.TypedColumnOf[record, int64](records.Column("id"))
 	recordCity := query.TypedColumnOf[record, string](records.Column("city"))
 	recordAge := query.TypedColumnOf[record, int64](records.Column("age"))
@@ -430,7 +416,7 @@ func TestOrderResultAliasAgainstLiveDatabases(t *testing.T) {
 }
 
 func testOrderResultAlias(t *testing.T, database *sql.DB, test orderResultAliasCase) {
-	db, err := rasql.New(database, test.dialect)
+	db, err := rasql.Open(t.Context(), database, test.dialect)
 	require.NoError(t, err)
 	type record struct {
 		ID   int64  `rasql:"id"`
@@ -458,14 +444,7 @@ func testOrderResultAlias(t *testing.T, database *sql.DB, test orderResultAliasC
 	}()
 	require.NoError(t, rasql.CreateTable(t.Context(), db, records))
 
-	profileID := "postgresql-17"
-	if test.dialect.Name() == "mysql" {
-		profileID = "mysql-8.4"
-	}
-	profile, err := rasql.DiscoverEngineProfile(t.Context(), db, profileID)
-	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(db, profile)
-	require.NoError(t, err)
+	executor := db
 	recordID := query.TypedColumnOf[record, int64](records.Column("id"))
 	recordCity := query.TypedColumnOf[record, string](records.Column("city"))
 	for _, fixture := range []record{

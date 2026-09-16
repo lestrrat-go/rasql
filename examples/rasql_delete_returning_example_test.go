@@ -27,7 +27,7 @@ func Example_rasql_delete_returning() {
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(ctx, database, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return

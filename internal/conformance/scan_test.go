@@ -81,11 +81,7 @@ func TestScanRowsLane(t *testing.T) {
 	rasqlState := &recordingDriverState{cols: scanColumns(), rows: values}
 	rasqlDB := openRecordingDB(rasqlState)
 	t.Cleanup(func() { require.NoError(t, rasqlDB.Close()) })
-	raw, err := rasql.New(rasqlDB, dialect.SQLite())
-	require.NoError(t, err)
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(raw, profile)
+	executor, err := rasql.Open(t.Context(), rasqlDB, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	sequence, err := rasql.Rows(t.Context(), executor, query)
 	require.NoError(t, err)
@@ -194,15 +190,7 @@ func BenchmarkConformanceScanRowsRasql(b *testing.B) {
 			b.Error(err)
 		}
 	})
-	raw, err := rasql.New(database, dialect.SQLite())
-	if err != nil {
-		b.Fatal(err)
-	}
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	if err != nil {
-		b.Fatal(err)
-	}
-	executor, err := rasql.AsExecutor(raw, profile)
+	executor, err := rasql.Open(b.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -274,15 +262,7 @@ func BenchmarkConformanceScanRowsRasqlPrepared(b *testing.B) {
 			b.Error(err)
 		}
 	})
-	raw, err := rasql.New(database, dialect.SQLite())
-	if err != nil {
-		b.Fatal(err)
-	}
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	if err != nil {
-		b.Fatal(err)
-	}
-	executor, err := rasql.AsExecutor(raw, profile)
+	executor, err := rasql.Open(b.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -358,15 +338,7 @@ func BenchmarkConformanceScanRowsRasqlAll(b *testing.B) {
 			b.Error(err)
 		}
 	})
-	raw, err := rasql.New(database, dialect.SQLite())
-	if err != nil {
-		b.Fatal(err)
-	}
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	if err != nil {
-		b.Fatal(err)
-	}
-	executor, err := rasql.AsExecutor(raw, profile)
+	executor, err := rasql.Open(b.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -428,15 +400,7 @@ func BenchmarkConformanceScanRowsRasqlAppendAll(b *testing.B) {
 			b.Error(err)
 		}
 	})
-	raw, err := rasql.New(database, dialect.SQLite())
-	if err != nil {
-		b.Fatal(err)
-	}
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	if err != nil {
-		b.Fatal(err)
-	}
-	executor, err := rasql.AsExecutor(raw, profile)
+	executor, err := rasql.Open(b.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -533,11 +497,7 @@ func TestScanRowsLanePropagatesNextErrors(t *testing.T) {
 				_, err := scanSQL(t.Context(), database, "SELECT tasks")
 				require.ErrorIs(t, err, nextErr)
 			} else {
-				raw, err := rasql.New(database, dialect.SQLite())
-				require.NoError(t, err)
-				profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-				require.NoError(t, err)
-				executor, err := rasql.AsExecutor(raw, profile)
+				executor, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 				require.NoError(t, err)
 				fixture, err := newTypedFixture()
 				require.NoError(t, err)

@@ -362,8 +362,7 @@ func bindQueryRelation(t *testing.T) (rasql.Query[bindFixtureRow], rasql.TypedRe
 
 func bindCompiler(t *testing.T) rasql.Compiler {
 	t.Helper()
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
+	profile := rasql.SQLite335()
 	compiler, err := profile.Compiler(dialect.SQLite())
 	require.NoError(t, err)
 	return compiler

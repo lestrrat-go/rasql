@@ -25,12 +25,12 @@ func Example_rasql_observer() {
 	database.SetMaxOpenConns(1)
 
 	var reported error
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(ctx, database, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
-	db, err = db.WithObservers(rasql.ExtensionErrorHandlerFunc(func(_ context.Context, extensionErr rasql.ExtensionError) {
+	executor, err := db.WithObservers(rasql.ExtensionErrorHandlerFunc(func(_ context.Context, extensionErr rasql.ExtensionError) {
 		reported = extensionErr.Errors[0]
 	}), rasql.ObserverFunc(func(context.Context, rasql.Operation, error) error {
 		return errors.New("telemetry unavailable")
@@ -42,16 +42,6 @@ func Example_rasql_observer() {
 	users := store.Users()
 	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
-		return
-	}
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 40, 0)
-	if err != nil {
-		fmt.Printf("failed to describe engine profile: %s\n", err)
-		return
-	}
-	executor, err := rasql.AsExecutor(db, profile)
-	if err != nil {
-		fmt.Printf("failed to create executor: %s\n", err)
 		return
 	}
 	plan := store.NewUsersCreate().ID(1).Email("ada@example.com").Status("active").FirstName("First").LastName("Last").Plan()

@@ -22,12 +22,12 @@ func TestNewRejectsNilDependencies(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	_, err = rasql.New(nil, dialect.PostgreSQL())
+	_, err = rasql.Open(t.Context(), nil, dialect.PostgreSQL())
 	require.ErrorContains(t, err, "rasql: handle must not be nil")
 
 	// No ExpectBegin(): a call to BeginTx would fail ExpectationsWereMet, so
 	// this also proves New validates before it touches the handle.
-	_, err = rasql.New(database, nil)
+	_, err = rasql.Open(t.Context(), database, nil)
 	require.ErrorContains(t, err, "rasql: dialect must not be nil")
 }
 
@@ -70,7 +70,7 @@ func TestDialectReturnsConfiguredDialect(t *testing.T) {
 	// the dialect passed to New by its observable behavior instead of a full
 	// value comparison.
 	postgres := dialect.PostgreSQL()
-	db, err := rasql.New(database, postgres)
+	db, err := rasql.Open(t.Context(), database, postgres, rasql.WithProfile(rasql.PostgreSQL17()))
 	require.NoError(t, err)
 	require.Equal(t, "postgresql", db.Dialect().Name())
 	require.Equal(t, postgres.Name(), db.Dialect().Name())
@@ -92,7 +92,7 @@ func TestHandleReturnsTheHandleItRunsOn(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectRollback()
 
-	db, err := rasql.New(database, dialect.PostgreSQL())
+	db, err := rasql.Open(t.Context(), database, dialect.PostgreSQL(), rasql.WithProfile(rasql.PostgreSQL17()))
 	require.NoError(t, err)
 	require.Same(t, database, db.Handle())
 
@@ -113,7 +113,7 @@ func TestBeginReturnsDBBoundToDialect(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectRollback()
 
-	db, err := rasql.New(database, dialect.PostgreSQL())
+	db, err := rasql.Open(t.Context(), database, dialect.PostgreSQL(), rasql.WithProfile(rasql.PostgreSQL17()))
 	require.NoError(t, err)
 	tx, err := db.Begin(t.Context(), nil)
 	require.NoError(t, err)
@@ -135,7 +135,7 @@ func TestTransactionWriteReachesTransactionAndCommits(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(42, 1))
 	mock.ExpectCommit()
 
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	tx, err := db.Begin(t.Context(), nil)
 	require.NoError(t, err)
@@ -162,7 +162,7 @@ func TestRollbackAfterCommitReportsNoError(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectCommit()
 
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	tx, err := db.Begin(t.Context(), nil)
 	require.NoError(t, err)
@@ -184,7 +184,7 @@ func TestRollbackTwiceReportsNoErrorEitherTime(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectRollback()
 
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	tx, err := db.Begin(t.Context(), nil)
 	require.NoError(t, err)
@@ -204,7 +204,7 @@ func TestCommitAndRollbackRejectADBThatIsNotATransaction(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	require.ErrorContains(t, db.Commit(), "rasql: this DB is not a transaction")
 	require.ErrorContains(t, db.Rollback(), "rasql: this DB is not a transaction")
@@ -218,7 +218,7 @@ func TestWithObserversValidatesHandlerAndObserver(t *testing.T) {
 		require.NoError(t, database.Close())
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	_, err = db.WithObservers(nil, rasql.ObserverFunc(func(context.Context, rasql.Operation, error) error { return nil }))
 	require.ErrorContains(t, err, "extension error handler must not be nil")
@@ -244,7 +244,7 @@ func TestNewFromTransactionAdoptsIt(t *testing.T) {
 	transaction, err := database.BeginTx(t.Context(), nil)
 	require.NoError(t, err)
 
-	tx, err := rasql.New(transaction, dialect.SQLite())
+	tx, err := rasql.Open(t.Context(), transaction, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	_, err = tx.Exec(t.Context(), renderedDeleteStatement(t))
 	require.NoError(t, err)
@@ -264,7 +264,7 @@ func TestBeginRejectsADBThatIsAlreadyATransaction(t *testing.T) {
 	// reaches the driver.
 	mock.ExpectRollback()
 
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	tx, err := db.Begin(t.Context(), nil)
 	require.NoError(t, err)
@@ -290,7 +290,7 @@ func (noBeginHandle) ExecContext(context.Context, string, ...any) (sql.Result, e
 // TestBeginRejectsAHandleThatCannotStartOne covers the handle that reads and
 // writes but cannot begin: New accepts it, and only Begin reports the limit.
 func TestBeginRejectsAHandleThatCannotStartOne(t *testing.T) {
-	db, err := rasql.New(&noBeginHandle{}, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), &noBeginHandle{}, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	_, err = db.Begin(t.Context(), nil)
 	require.ErrorContains(t, err, "cannot start a transaction")
@@ -307,7 +307,7 @@ func TestBeginPropagatesBeginTxError(t *testing.T) {
 	expected := errors.New("connection refused")
 	mock.ExpectBegin().WillReturnError(expected)
 
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	_, err = db.Begin(t.Context(), nil)
 	require.ErrorContains(t, err, "rasql: begin transaction")
@@ -334,7 +334,7 @@ func (nilTransactionHandle) BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, e
 func TestBeginRejectsNilTransactionFromHandle(t *testing.T) {
 	// Begin used to hand the nil transaction to New, which rejected it, and
 	// then call Rollback on it while cleaning up, which panicked.
-	db, err := rasql.New(nilTransactionHandle{}, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), nilTransactionHandle{}, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	tx, err := db.Begin(t.Context(), nil)
 	require.ErrorContains(t, err, "rasql: handle returned a nil transaction")
@@ -379,7 +379,9 @@ func TestBeginInheritsAndAppendsHooks(t *testing.T) {
 	mock.ExpectExec("DELETE FROM users").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectRollback()
 
-	db, err := rasql.New(database, dialect.SQLite(), dbHook)
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
+	require.NoError(t, err)
+	db, err = db.WithHooks(dbHook)
 	require.NoError(t, err)
 	tx, err := db.Begin(t.Context(), nil, callHook)
 	require.NoError(t, err)

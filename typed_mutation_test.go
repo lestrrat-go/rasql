@@ -84,11 +84,7 @@ func TestTypedMutationPlans(t *testing.T) {
 		last_name TEXT NOT NULL
 	)`)
 		require.NoError(t, err)
-		db, err := rasql.New(database, dialect.SQLite())
-		require.NoError(t, err)
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
-		executor, err := rasql.AsExecutor(db, profile)
+		executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 		require.NoError(t, err)
 		projection := usersRowProjection(t)
 
@@ -255,11 +251,9 @@ func TestTypedMutationPlanValidation(t *testing.T) {
 		patchQuery, terminalErr := rasql.Returning(patchPlan, projection)
 		require.NoError(t, terminalErr, "a valid plan builds a valid RETURNING query")
 		// The plan is valid; what must still fail gracefully, rather than panic,
-		// is handing that valid query an invalid database -- rasql.DB{} in place
-		// of the old zero rasql.DB.
-		invalidProfile, err := rasql.EngineProfileFromVersion("mysql-8.4", 8, 4, 0)
-		require.NoError(t, err)
-		_, terminalErr = rasql.AsExecutor(rasql.DB{}, invalidProfile)
+		// is handing Open an invalid handle -- nil in place of the old zero
+		// rasql.DB.
+		_, terminalErr = rasql.Open(context.Background(), nil, dialect.MySQL(), rasql.WithProfile(rasql.MySQL84()))
 		require.Error(t, terminalErr)
 		_ = patchQuery
 
@@ -362,11 +356,7 @@ func TestTypedMutationPlanValidation(t *testing.T) {
 		id := query.TypedColumnOf[mutationValidationRow, int64](first.Column("id"))
 		plan, err := rasql.NewCreatePlan(first, rasql.SetField(name, "x"))
 		require.NoError(t, err)
-		db, err := rasql.New(noCallHandle{}, dialect.MySQL())
-		require.NoError(t, err)
-		profile, err := rasql.EngineProfileFromVersion("mysql-8.4", 8, 4, 0)
-		require.NoError(t, err)
-		executor, err := rasql.AsExecutor(db, profile)
+		executor, err := rasql.Open(t.Context(), noCallHandle{}, dialect.MySQL(), rasql.WithProfile(rasql.MySQL84()))
 		require.NoError(t, err)
 		projection := mutationValidationProjection(t, first)
 
@@ -428,11 +418,7 @@ func newWriteFixture(t *testing.T) writeFixture {
 		require.NoError(t, database.Close())
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
-	db, err := rasql.New(database, dialect.PostgreSQL())
-	require.NoError(t, err)
-	profile, err := rasql.EngineProfileFromVersion("postgresql-17", 17, 0, 0)
-	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(db, profile)
+	executor, err := rasql.Open(t.Context(), database, dialect.PostgreSQL(), rasql.WithProfile(rasql.PostgreSQL17()))
 	require.NoError(t, err)
 	table, err := rasql.TableOf[writeUser](schema.TableDef{Name: "users", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}}, {Name: "email", Type: schema.TextType{}},
@@ -509,11 +495,7 @@ func generatedMeasurementTable(t *testing.T) (rasql.Table[generatedMeasurement],
 	t.Helper()
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
-	db, err := rasql.New(database, dialect.PostgreSQL())
-	require.NoError(t, err)
-	profile, err := rasql.EngineProfileFromVersion("postgresql-17", 17, 0, 0)
-	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(db, profile)
+	executor, err := rasql.Open(t.Context(), database, dialect.PostgreSQL(), rasql.WithProfile(rasql.PostgreSQL17()))
 	require.NoError(t, err)
 	table, err := rasql.TableOf[generatedMeasurement](schema.TableDef{Name: "measurements", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
@@ -547,11 +529,7 @@ func TestExecPointerWrite(t *testing.T) {
 				t.Cleanup(func() { require.NoError(t, database.Close()) })
 				_, err = database.ExecContext(t.Context(), `CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL)`)
 				require.NoError(t, err)
-				db, err := rasql.New(database, dialect.SQLite())
-				require.NoError(t, err)
-				profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-				require.NoError(t, err)
-				executor, err := rasql.AsExecutor(db, profile)
+				executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 				require.NoError(t, err)
 				testCase.run(t, executor, database, pointerWriteTable(t))
 			})

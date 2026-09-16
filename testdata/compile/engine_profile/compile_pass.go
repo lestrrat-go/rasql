@@ -18,13 +18,16 @@ func CompilePass() {
 	_ = rasql.EnginePerParentLimitWindow
 	_ = rasql.EnginePerParentLimitLateral
 
-	p, _ := rasql.EngineProfileFromVersion("postgresql-17", 17, 6, 0)
+	p := rasql.PostgreSQL17()
 	_ = p.ID()
 	_ = p.Engine()
 	_ = p.Version()
 	_ = p.Capabilities()
 	_ = p.Limits()
-	var discover = rasql.DiscoverEngineProfile
-	_ = discover
+	_ = rasql.PostgreSQL16
+	_ = rasql.MySQL84
+	_ = rasql.SQLite335
+	var open = rasql.Open
+	_ = open
 	_, _ = rasql.NewCustomEngineProfile("example", rasql.EngineVersion{Known: true, Major: 1}, rasql.EngineCapabilities{}, rasql.EngineLimits{MaxBindParameters: 1})
 }

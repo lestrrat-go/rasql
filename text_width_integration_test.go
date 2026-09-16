@@ -54,7 +54,7 @@ func TestTextWidthAgainstLiveDatabases(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := context.Background()
 			database := test.open(t)
-			db, err := rasql.New(database, test.dialect)
+			db, err := rasql.Open(ctx, database, test.dialect)
 			require.NoError(t, err, "create rasql db")
 
 			inspector, err := inspect.New(database, test.dialect)
@@ -125,7 +125,7 @@ func TestTextWidthAgainstLiveDatabases(t *testing.T) {
 func TestIndexedTextRequiresWidthOnMySQL(t *testing.T) {
 	ctx := context.Background()
 	database := dbtest.MySQLDB(t)
-	db, err := rasql.New(database, dialect.MySQL())
+	db, err := rasql.Open(ctx, database, dialect.MySQL())
 	require.NoError(t, err, "create rasql db")
 
 	definition := schema.MustTableDef("indexed_text_width",

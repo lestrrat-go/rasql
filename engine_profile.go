@@ -1,7 +1,6 @@
 package rasql
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
@@ -49,29 +48,46 @@ var (
 	ErrEngineBindLimit          = engineprofile.ErrBindLimit
 )
 
-func DiscoverEngineProfile(ctx context.Context, db DB, id string) (EngineProfile, error) {
-	if profileEngine(id) == 0 {
-		return EngineProfile{}, fmt.Errorf("%w: unknown profile %q", ErrUnknownEngineProfile, id)
-	}
-	if db.Dialect() == nil || db.Handle() == nil {
-		return EngineProfile{}, fmt.Errorf("%w: database is empty", ErrInvalidEngineProfile)
-	}
-	engine := map[string]EngineID{"postgresql": PostgreSQLEngine, "mysql": MySQLEngine, "sqlite": SQLiteEngine}[db.Dialect().Name()]
-	if engine == 0 {
-		return EngineProfile{}, fmt.Errorf("%w: unknown dialect", ErrInvalidEngineProfile)
-	}
-	if want := profileEngine(id); want == 0 || want != engine {
-		return EngineProfile{}, fmt.Errorf("%w: dialect and profile disagree", ErrEngineProfileMismatch)
-	}
-	p, err := engineprofile.Discover(ctx, db.Handle(), engine, id)
-	return EngineProfile{profile: p}, err
+// PostgreSQL16 returns the built-in engine profile for PostgreSQL 16, at that
+// spec's floor version, 16.0. Nothing in this package branches on the exact
+// version a profile carries; it is read only to fill in error messages and to
+// range-check a server Open discovered, so the floor version is a safe stand-in
+// for "PostgreSQL 16, whatever the minor release."
+func PostgreSQL16() EngineProfile {
+	return builtinProfile("postgresql-16", 16, 0, 0)
 }
-func EngineProfileFromVersion(id string, major, minor, patch int) (EngineProfile, error) {
-	if major < 0 || minor < 0 || patch < 0 || major > 65535 || minor > 65535 || patch > 65535 {
-		return EngineProfile{}, fmt.Errorf("%w: version out of range", ErrInvalidEngineProfile)
+
+// PostgreSQL17 returns the built-in engine profile for PostgreSQL 17, at that
+// spec's floor version, 17.0. See PostgreSQL16 for why the floor version is a
+// safe stand-in for the whole spec.
+func PostgreSQL17() EngineProfile {
+	return builtinProfile("postgresql-17", 17, 0, 0)
+}
+
+// MySQL84 returns the built-in engine profile for MySQL 8.4, at that spec's
+// floor version, 8.4.0. See PostgreSQL16 for why the floor version is a safe
+// stand-in for the whole spec.
+func MySQL84() EngineProfile {
+	return builtinProfile("mysql-8.4", 8, 4, 0)
+}
+
+// SQLite335 returns the built-in engine profile for SQLite 3.35, at that
+// spec's floor version, 3.35.0. See PostgreSQL16 for why the floor version is
+// a safe stand-in for the whole spec.
+func SQLite335() EngineProfile {
+	return builtinProfile("sqlite-3.35", 3, 35, 0)
+}
+
+// builtinProfile builds the built-in profile named id at major.minor.patch.
+// Every call site passes one of the four built-in spec IDs at that spec's own
+// floor version, which engineprofile.Builtin always accepts, so a failure
+// here is a bug in this package rather than something a caller can act on.
+func builtinProfile(id string, major, minor, patch uint16) EngineProfile {
+	p, err := engineprofile.Builtin(id, engineprofile.Version{Known: true, Major: major, Minor: minor, Patch: patch})
+	if err != nil {
+		panic(fmt.Sprintf("rasql: built-in engine profile %q: %s", id, err))
 	}
-	p, err := engineprofile.Builtin(id, engineprofile.Version{Known: true, Major: uint16(major), Minor: uint16(minor), Patch: uint16(patch)})
-	return EngineProfile{profile: p}, err
+	return EngineProfile{profile: p}
 }
 func NewCustomEngineProfile(name string, v EngineVersion, c EngineCapabilities, l EngineLimits) (EngineProfile, error) {
 	name = strings.TrimSpace(name)
@@ -95,20 +111,6 @@ func (p EngineProfile) queryCompiler(d dialect.Dialect) (*querycompile.Compiler,
 		return nil, err
 	}
 	return &c, nil
-}
-func profileEngine(id string) EngineID {
-	for _, x := range []string{"postgresql-16", "postgresql-17"} {
-		if id == x {
-			return PostgreSQLEngine
-		}
-	}
-	if id == "mysql-8.4" {
-		return MySQLEngine
-	}
-	if id == "sqlite-3.35" {
-		return SQLiteEngine
-	}
-	return 0
 }
 func engineForDialect(d dialect.Dialect) EngineID {
 	if d == nil {

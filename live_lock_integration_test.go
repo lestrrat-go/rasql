@@ -129,11 +129,7 @@ func TestLiveConditionalUpsert(t *testing.T) {
 	t.Cleanup(func() { _, _ = database.ExecContext(t.Context(), "DROP TABLE "+tableName) })
 	table := query.MustTableRef(schema.MustTableDef(tableName, schema.Integer("id"), schema.Integer("version"), schema.Text("payload")))
 	id, version, payload := table.Column("id"), table.Column("version"), table.Column("payload")
-	db, err := rasql.New(database, dialect.PostgreSQL())
-	require.NoError(t, err)
-	profile, err := rasql.DiscoverEngineProfile(t.Context(), db, "postgresql-17")
-	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(db, profile)
+	executor, err := rasql.Open(t.Context(), database, dialect.PostgreSQL())
 	require.NoError(t, err)
 	seed, err := query.NewInsert(table, query.Set(id, 1), query.Set(version, 2), query.Set(payload, "v2"))
 	require.NoError(t, err)
@@ -179,7 +175,7 @@ func TestLiveAtomicScope(t *testing.T) {
 	for _, engine := range engines {
 		t.Run(engine.name, func(t *testing.T) {
 			database := engine.open(t)
-			db, err := rasql.New(database, engine.dialect)
+			db, err := rasql.Open(t.Context(), database, engine.dialect)
 			require.NoError(t, err)
 			table := dbtest.UniqueName(t, "rasql_atomic_scope_records")
 			quoted, err := engine.dialect.QuoteIdentifier(table)
@@ -219,11 +215,10 @@ func TestLiveUpdateDefault(t *testing.T) {
 		name    string
 		open    func(*testing.T) *sql.DB
 		dialect dialect.Dialect
-		profile string
 		create  string
 	}{
-		{"postgresql", dbtest.PostgreSQLDB, dialect.PostgreSQL(), "postgresql-17", "CREATE TABLE %s (id BIGINT PRIMARY KEY, value BIGINT NOT NULL DEFAULT 41, count BIGINT NOT NULL)"},
-		{"mysql", dbtest.MySQLDB, dialect.MySQL(), "mysql-8.4", "CREATE TABLE %s (id BIGINT PRIMARY KEY, value BIGINT NOT NULL DEFAULT 41, count BIGINT NOT NULL)"},
+		{"postgresql", dbtest.PostgreSQLDB, dialect.PostgreSQL(), "CREATE TABLE %s (id BIGINT PRIMARY KEY, value BIGINT NOT NULL DEFAULT 41, count BIGINT NOT NULL)"},
+		{"mysql", dbtest.MySQLDB, dialect.MySQL(), "CREATE TABLE %s (id BIGINT PRIMARY KEY, value BIGINT NOT NULL DEFAULT 41, count BIGINT NOT NULL)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			database := tc.open(t)
@@ -235,11 +230,7 @@ func TestLiveUpdateDefault(t *testing.T) {
 			t.Cleanup(func() { _, _ = database.ExecContext(context.Background(), "DROP TABLE "+quoted) })
 			_, err = database.ExecContext(t.Context(), "INSERT INTO "+quoted+" (id, value, count) VALUES (1, 9, 3)")
 			require.NoError(t, err)
-			db, err := rasql.New(database, tc.dialect)
-			require.NoError(t, err)
-			profile, err := rasql.DiscoverEngineProfile(t.Context(), db, tc.profile)
-			require.NoError(t, err)
-			executor, err := rasql.AsExecutor(db, profile)
+			executor, err := rasql.Open(t.Context(), database, tc.dialect)
 			require.NoError(t, err)
 			table := rasql.MustTableOf[g5LiveRow](schema.TableDef{Name: name, PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{
 				{Name: "id", Type: schema.IntegerType{}}, {Name: "value", Type: schema.IntegerType{}, Default: "41"}, {Name: "count", Type: schema.IntegerType{}},

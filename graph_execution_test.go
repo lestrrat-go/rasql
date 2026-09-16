@@ -84,11 +84,7 @@ func graphAcceptanceFixture(t *testing.T, childRows int) (rasql.Executor, rasql.
 		_, err = database.Exec(`INSERT INTO graph_children(id, parent, tenant, rank) VALUES (?, ?, 1, ?)`, i, parent, (i-1)%10)
 		require.NoError(t, err)
 	}
-	db, err := rasql.New(database, dialect.SQLite())
-	require.NoError(t, err)
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(db, profile)
+	executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 	require.NoError(t, err)
 	parentTable, err := rasql.ReadTableOf[graphParentRow](schema.TableDef{Name: "graph_parents", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}, Nullable: true},
@@ -674,8 +670,7 @@ func (e *graphRuntimeCountingExecutor) Query(ctx context.Context, statement stmt
 // graph calls need, which a bare decorator does not carry on its own.
 func graphProfiled(t *testing.T, executor rasql.Executor) rasql.Executor {
 	t.Helper()
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
+	profile := rasql.SQLite335()
 	profiled, err := rasql.WithEngineProfile(executor, profile)
 	require.NoError(t, err)
 	return profiled

@@ -121,13 +121,9 @@ func openFixture(t *testing.T, cancelStatement int) (Repository, rasql.Executor,
 	}
 	seedFixture(t, tx)
 
-	db, err := rasql.New(tx, dialect.PostgreSQL())
+	db, err := rasql.Open(t.Context(), tx, dialect.PostgreSQL())
 	if err != nil {
-		t.Fatalf("create the rasql db: %s", err)
-	}
-	profile, err := rasql.DiscoverEngineProfile(t.Context(), db, "postgresql-17")
-	if err != nil {
-		t.Fatalf("discover PostgreSQL engine profile: %s", err)
+		t.Fatalf("open the rasql database: %s", err)
 	}
 	var observer statementObserver
 	db, err = db.WithInvocationObservers(
@@ -147,10 +143,7 @@ func openFixture(t *testing.T, cancelStatement int) (Repository, rasql.Executor,
 	if err != nil {
 		t.Fatalf("observe fixture database: %s", err)
 	}
-	executor, err := rasql.AsExecutor(db, profile)
-	if err != nil {
-		t.Fatalf("create the rasql executor: %s", err)
-	}
+	executor := db
 	didCancel := false
 	observed, err := rasql.WithEventObservers(executor,
 		rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}),

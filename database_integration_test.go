@@ -76,9 +76,9 @@ func TestDatabaseIntegration(t *testing.T) {
 }
 
 func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, coalesced coalescedAmounts) {
-	db, err := rasql.New(database, d)
+	db, err := rasql.Open(t.Context(), database, d)
 	require.NoError(t, err)
-	executor := integrationExecutor(t, db, d)
+	executor := db
 	// A fixed table name here would be inherited into every fresh PostgreSQL
 	// database this test runs against: CREATE DATABASE copies template1 by
 	// default, and an object added to template1 is copied into every
@@ -303,24 +303,6 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	require.Equal(t, integrationTable(tableName), inspected)
 }
 
-func integrationExecutor(t *testing.T, db rasql.DB, d dialect.Dialect) rasql.Executor {
-	t.Helper()
-	profileID := ""
-	switch d.Name() {
-	case "postgresql":
-		profileID = "postgresql-17"
-	case "mysql":
-		profileID = "mysql-8.4"
-	default:
-		t.Fatalf("unsupported integration dialect %q", d.Name())
-	}
-	profile, err := rasql.DiscoverEngineProfile(t.Context(), db, profileID)
-	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(db, profile)
-	require.NoError(t, err)
-	return executor
-}
-
 func integrationRecordRows(t *testing.T, db rasql.DB, d dialect.Dialect, statement query.Select) []integrationRecord {
 	t.Helper()
 	rendered, err := render.Select(d, statement)
@@ -405,9 +387,9 @@ func TestQualifiedDDLIntegration(t *testing.T) {
 // REFERENCES "public"."..." itself renders and executes.
 func testQualifiedDDLPostgreSQL(t *testing.T) {
 	database := dbtest.PostgreSQLDB(t)
-	db, err := rasql.New(database, dialect.PostgreSQL())
+	db, err := rasql.Open(t.Context(), database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	executor := integrationExecutor(t, db, dialect.PostgreSQL())
+	executor := db
 
 	type customerRow struct {
 		ID   int64  `rasql:"id"`
@@ -519,9 +501,9 @@ func testQualifiedDDLPostgreSQL(t *testing.T) {
 // test only touches objects it created.
 func testQualifiedDDLMySQL(t *testing.T) {
 	database := dbtest.MySQLDB(t)
-	db, err := rasql.New(database, dialect.MySQL())
+	db, err := rasql.Open(t.Context(), database, dialect.MySQL())
 	require.NoError(t, err)
-	executor := integrationExecutor(t, db, dialect.MySQL())
+	executor := db
 
 	schemaName := dbtest.UniqueName(t, "rasql_qualified_schema")
 	_, err = database.ExecContext(t.Context(), "CREATE DATABASE "+schemaName)

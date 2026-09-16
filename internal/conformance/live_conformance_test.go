@@ -37,7 +37,7 @@ func runLiveConformance(t *testing.T, engine Engine, database *sql.DB, driverVer
 	if err := SeedDatabaseForEngine(t.Context(), database, engine.Name); err != nil {
 		t.Fatal(err)
 	}
-	rootDB, err := rasql.New(database, engine.Dialect)
+	rootDB, err := rasql.Open(t.Context(), database, engine.Dialect)
 	if err != nil {
 		t.Fatal(err)
 	}

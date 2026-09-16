@@ -414,7 +414,7 @@ func TestOwnerAActualObserversCorrelateIdentityAndOrdinals(t *testing.T) {
 	directPayload := []byte("direct-original")
 	rawPayload := sql.RawBytes("raw-original")
 	namedPayload := []byte("original")
-	raw, err := rasql.New(database, dialect.SQLite())
+	raw, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	invocations, events := &InvocationRecorder{}, &EventRecorder{}
 	capturedContexts := make([]context.Context, 0, 2)
@@ -427,10 +427,7 @@ func TestOwnerAActualObserversCorrelateIdentityAndOrdinals(t *testing.T) {
 	})
 	raw, err = raw.WithInvocationObservers(rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), invocationObserver)
 	require.NoError(t, err)
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(raw, profile)
-	require.NoError(t, err)
+	var executor rasql.Executor = raw
 	markerSeen := false
 	markerObserver := rasql.EventObserverFunc(func(ctx context.Context, event rasql.Event) (context.Context, rasql.EventCompletion) {
 		require.Equal(t, "caller", ctx.Value(ownerAObserverMarkerKey{}))
@@ -528,7 +525,7 @@ func TestOwnerAActualObserversCorrelateIdentityAndOrdinals(t *testing.T) {
 	// Operation.Args normalizes zero-argument starts to a nonnil empty slice.
 	// The separate snapshot test covers the true nil and empty boundary shapes.
 	shapeRecorder := &InvocationRecorder{}
-	shapeRaw, err := rasql.New(database, dialect.SQLite())
+	shapeRaw, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	shapeRaw, err = shapeRaw.WithInvocationObservers(
 		rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), shapeRecorder.Observer(),

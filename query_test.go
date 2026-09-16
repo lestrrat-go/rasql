@@ -1,6 +1,7 @@
 package rasql_test
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"testing"
@@ -244,21 +245,17 @@ func renderedRankQuery(s stmt.Statement, engine string, cardinality rasql.Cardin
 	return rasql.Native(rasql.NativeStatement{Engine: engine, SQL: s.SQL(), Args: nativeArgs}, projection, cardinality)
 }
 
-func renderedRankExecutor(database rasql.DB, engine string) (rasql.Executor, error) {
+func renderedRankExecutor(ctx context.Context, handle rasql.Handle, d dialect.Dialect, engine string) (rasql.Executor, error) {
 	var profile rasql.EngineProfile
-	var err error
 	switch engine {
 	case "postgresql":
-		profile, err = rasql.EngineProfileFromVersion("postgresql-17", 17, 0, 0)
+		profile = rasql.PostgreSQL17()
 	case "sqlite":
-		profile, err = rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+		profile = rasql.SQLite335()
 	default:
 		return nil, fmt.Errorf("unsupported test engine %q", engine)
 	}
-	if err != nil {
-		return nil, err
-	}
-	return rasql.AsExecutor(database, profile)
+	return rasql.Open(ctx, handle, d, rasql.WithProfile(profile))
 }
 
 func TestQueryRendered(t *testing.T) {
@@ -277,9 +274,7 @@ func testQueryRenderedDecodesCTEAndWindowResult(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	db, err := rasql.New(database, dialect.PostgreSQL())
-	require.NoError(t, err)
-	executor, err := renderedRankExecutor(db, "postgresql")
+	executor, err := renderedRankExecutor(t.Context(), database, dialect.PostgreSQL(), "postgresql")
 	require.NoError(t, err)
 	s := stmt.New(`WITH ranked_users AS (
 	SELECT id, email, ROW_NUMBER() OVER (ORDER BY id) AS rank
@@ -306,9 +301,7 @@ func testQueryRenderedAllAndOneUseTypedDecoding(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	db, err := rasql.New(database, dialect.SQLite())
-	require.NoError(t, err)
-	executor, err := renderedRankExecutor(db, "sqlite")
+	executor, err := renderedRankExecutor(t.Context(), database, dialect.SQLite(), "sqlite")
 	require.NoError(t, err)
 	allStatement := stmt.New("SELECT id, email, rank FROM ranked_users ORDER BY rank")
 	mock.ExpectQuery(allStatement.SQL()).

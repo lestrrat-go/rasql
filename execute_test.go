@@ -40,11 +40,7 @@ func TestExecution(t *testing.T) {
 		require.NoError(t, database.Close())
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
-	db, err := rasql.New(database, dialect.PostgreSQL())
-	require.NoError(t, err)
-	profile, err := rasql.EngineProfileFromVersion("postgresql-17", 17, 0, 0)
-	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(db, profile)
+	executor, err := rasql.Open(t.Context(), database, dialect.PostgreSQL(), rasql.WithProfile(rasql.PostgreSQL17()))
 	require.NoError(t, err)
 
 	query, err := rasql.Native(rasql.NativeStatement{Engine: "postgresql", SQL: "SELECT id FROM users WHERE id = $1", Args: []rasql.NativeArgument{{Value: int64(42)}}}, executionProjection(t), rasql.Many)
@@ -93,11 +89,9 @@ func TestExecPreservesResultAfterHookError(t *testing.T) {
 	hook := rasql.HookFunc{AfterFunc: func(context.Context, rasql.Operation, error) error {
 		return errors.New("export failed")
 	}}
-	db, err := rasql.New(database, dialect.SQLite(), hook)
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(db, profile)
+	executor, err := db.WithHooks(hook)
 	require.NoError(t, err)
 
 	table, err := query.NewTableRef(schema.TableDef{
@@ -176,9 +170,7 @@ func TestOneAndWriteOneOwnTheirCardinality(t *testing.T) {
 		require.NoError(t, database.Close())
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
-	db, err := rasql.New(database, dialect.SQLite())
-	require.NoError(t, err)
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	var completions []rasql.Completion
 	db, err = db.WithInvocationObservers(rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), rasql.InvocationObserverFunc(func(ctx context.Context, _ rasql.Operation) (context.Context, rasql.CompletionObserver) {
@@ -190,8 +182,7 @@ func TestOneAndWriteOneOwnTheirCardinality(t *testing.T) {
 		})
 	}))
 	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(db, profile)
-	require.NoError(t, err)
+	executor := db
 
 	userProjection := terminalProjection(t, terminalUserDecoder{schema: mustTerminalSchema(t, rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}})})
 	query, err := rasql.Native(rasql.NativeStatement{Engine: "sqlite", SQL: "SELECT id FROM users WHERE id = ?", Args: []rasql.NativeArgument{{Value: int64(1)}}}, userProjection, rasql.ExactlyOne)

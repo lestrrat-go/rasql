@@ -369,14 +369,10 @@ INSERT INTO graph_shared_parents VALUES (1), (2);
 INSERT INTO graph_shared_children VALUES (11, 1, 0, X'61'), (12, 1, 1, X'62'), (21, 2, 0, X'63'), (22, 2, 1, X'64');
 INSERT INTO graph_shared_junction VALUES (1, 11), (2, 11)`)
 	require.NoError(t, err)
-	db, err := rasql.New(database, dialect.SQLite())
-	require.NoError(t, err)
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
-	base, err := rasql.AsExecutor(db, profile)
+	base, err := rasql.Open(t.Context(), database, dialect.SQLite())
 	require.NoError(t, err)
 	counter := &graphSharedExecutor{Executor: base}
-	executor, err := rasql.WithEngineProfile(counter, profile)
+	executor, err := rasql.WithEngineProfile(counter, rasql.SQLite335())
 	require.NoError(t, err)
 	parents, err := rasql.SourceOf(rasql.MustReadTableOf[graphSharedParentRow](schema.TableDef{
 		Name: "graph_shared_parents", PrimaryKey: []string{"id"},
@@ -498,8 +494,7 @@ func graphSharedExecutorWithCodec(t *testing.T, fixture graphSharedFixture, code
 // graphSharedCompiler renders for the engine the fixture runs against.
 func graphSharedCompiler(t *testing.T) rasql.Compiler {
 	t.Helper()
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
+	profile := rasql.SQLite335()
 	compiler, err := profile.Compiler(dialect.SQLite())
 	require.NoError(t, err)
 	return compiler
@@ -553,8 +548,7 @@ func graphSharedCodecKey[R any](base rasql.GraphKey[R], codec string) rasql.Grap
 // that graph calls need, which is what a bare decorator does not carry.
 func graphSharedProfiled(t *testing.T, executor rasql.Executor) rasql.Executor {
 	t.Helper()
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
+	profile := rasql.SQLite335()
 	profiled, err := rasql.WithEngineProfile(executor, profile)
 	require.NoError(t, err)
 	return profiled

@@ -42,10 +42,10 @@ func runGeneratedLiveFixture(t *testing.T, engine, dsn string) {
 }
 
 func generatedLiveCardinalityTest(engine, modulePath string) string {
-	driverName, dialectName, profile, openImport := "mysql", "MySQL", "mysql-8.4", `_ "github.com/go-sql-driver/mysql"`
+	driverName, dialectName, openImport := "mysql", "MySQL", `_ "github.com/go-sql-driver/mysql"`
 	insertSQL := "INSERT INTO tasks(id,project_id,assignee_id,title,is_open,due_on,created_at) VALUES (?,?,?,?,?,?,?)"
 	if engine == "postgresql" {
-		driverName, dialectName, profile, openImport = "pgx", "PostgreSQL", "postgresql-17", `_ "github.com/jackc/pgx/v5/stdlib"`
+		driverName, dialectName, openImport = "pgx", "PostgreSQL", `_ "github.com/jackc/pgx/v5/stdlib"`
 		insertSQL = "INSERT INTO tasks(id,project_id,assignee_id,title,is_open,due_on,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)"
 	}
 	return fmt.Sprintf(`package live
@@ -73,9 +73,7 @@ func TestGeneratedLiveCardinalityRuntime(t *testing.T) {
 	for _, row := range []struct{id int64; due time.Time; assignee any}{{1,time.Date(2024,1,1,0,0,0,0,time.UTC),int64(1)},{3,time.Date(2024,1,3,0,0,0,0,time.UTC),int64(3)}} {
 	_, err = db.Exec("%s", row.id,1,row.assignee,fmt.Sprintf("task-%%04d",row.id),true,row.due,time.Date(2024,1,1,0,0,0,0,time.UTC)); if err != nil { t.Fatal(err) }
 	}
-	raw, err := rasql.New(db, dialect.%s()); if err != nil { t.Fatal(err) }
-	p, err := rasql.DiscoverEngineProfile(t.Context(), raw, "%s"); if err != nil { t.Fatal(err) }
-	executor, err := rasql.AsExecutor(raw, p); if err != nil { t.Fatal(err) }
+	executor, err := rasql.Open(t.Context(), db, dialect.%s()); if err != nil { t.Fatal(err) }
 	for name, cutoff := range map[string]time.Time{"zero":time.Date(2024,1,1,0,0,0,0,time.UTC),"one":time.Date(2024,1,2,0,0,0,0,time.UTC),"two":time.Date(2024,1,4,0,0,0,0,time.UTC)} {
 		one, err := store.OverdueTask(1,true,cutoff); if err != nil { t.Fatal(err) }; row, err := rasql.One(t.Context(),executor,one)
 		if name=="zero" && !errors.Is(err,rasql.ErrNoRows) { t.Fatalf("one zero: %%v",err) }; if name=="one" && err!=nil { t.Fatal(err) }; if name=="one" { assertRow(t,row,1) }; if name=="two" && !errors.Is(err,rasql.ErrMultipleRows) { t.Fatalf("one two: %%v",err) }
@@ -96,5 +94,5 @@ func assertRow(t *testing.T, row any, id int64) {
 	if !reflect.DeepEqual(value.FieldByName("DueOn").Interface(),rasql.Nullable[time.Time]{Value:time.Date(2024,1,int(id),0,0,0,0,time.UTC),Valid:true}) { t.Fatalf("unexpected due: %%#v",row) }
 	if value.FieldByName("CreatedAt").Interface()!=time.Date(2024,1,1,0,0,0,0,time.UTC) { t.Fatalf("unexpected created: %%#v",row) }
 }
-`, modulePath, openImport, driverName, insertSQL, dialectName, profile)
+`, modulePath, openImport, driverName, insertSQL, dialectName)
 }

@@ -35,10 +35,8 @@ func compilerTable(t *testing.T) (rasql.Table[compilerRow], rasql.Column[compile
 	return table, id, name
 }
 
-func compilerFor(t *testing.T, id string, major, minor int, d dialect.Dialect) rasql.Compiler {
+func compilerFor(t *testing.T, profile rasql.EngineProfile, d dialect.Dialect) rasql.Compiler {
 	t.Helper()
-	profile, err := rasql.EngineProfileFromVersion(id, major, minor, 0)
-	require.NoError(t, err)
 	compiler, err := profile.Compiler(d)
 	require.NoError(t, err)
 	return compiler
@@ -50,7 +48,7 @@ func TestCompilerMutation(t *testing.T) {
 		plan, err := rasql.NewPatchPlan(table, rasql.EqualValue(id.Expr(), int64(1)), rasql.SetField(name, int64(3)))
 		require.NoError(t, err)
 
-		compiler := compilerFor(t, "postgresql-17", 17, 0, dialect.PostgreSQL())
+		compiler := compilerFor(t, rasql.PostgreSQL17(), dialect.PostgreSQL())
 		statement, err := compiler.Mutation(plan)
 		require.NoError(t, err)
 		require.Contains(t, statement.SQL(), "UPDATE")
@@ -65,14 +63,12 @@ func TestCompilerMutation(t *testing.T) {
 		for _, tc := range []struct {
 			name    string
 			dialect dialect.Dialect
-			profile string
-			major   int
-			minor   int
+			profile rasql.EngineProfile
 			fails   bool
 		}{
-			{name: "postgresql", dialect: dialect.PostgreSQL(), profile: "postgresql-17", major: 17},
-			{name: "mysql", dialect: dialect.MySQL(), profile: "mysql-8.4", major: 8, minor: 4},
-			{name: "sqlite", dialect: dialect.SQLite(), profile: "sqlite-3.35", major: 3, minor: 35, fails: true},
+			{name: "postgresql", dialect: dialect.PostgreSQL(), profile: rasql.PostgreSQL17()},
+			{name: "mysql", dialect: dialect.MySQL(), profile: rasql.MySQL84()},
+			{name: "sqlite", dialect: dialect.SQLite(), profile: rasql.SQLite335(), fails: true},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				table, id, name := compilerTable(t)
@@ -80,7 +76,7 @@ func TestCompilerMutation(t *testing.T) {
 					rasql.DefaultField(name), rasql.SetField(id, int64(2)))
 				require.NoError(t, err)
 
-				compiler := compilerFor(t, tc.profile, tc.major, tc.minor, tc.dialect)
+				compiler := compilerFor(t, tc.profile, tc.dialect)
 				statement, err := compiler.Mutation(plan)
 				if tc.fails {
 					require.ErrorIs(t, err, rasql.ErrUnsupportedEngineFeature)
@@ -109,18 +105,15 @@ func TestCompilerMutation(t *testing.T) {
 
 		var sentSQL string
 		var sentArgs []any
-		db, err := rasql.New(database, dialect.SQLite())
+		profile := rasql.SQLite335()
+		executor, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(profile))
 		require.NoError(t, err)
-		db, err = db.WithHooks(rasql.HookFunc{
+		executor, err = executor.WithHooks(rasql.HookFunc{
 			BeforeFunc: func(_ context.Context, operation rasql.Operation) error {
 				sentSQL, sentArgs = operation.SQL(), operation.Args()
 				return nil
 			},
 		})
-		require.NoError(t, err)
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
-		executor, err := rasql.AsExecutor(db, profile)
 		require.NoError(t, err)
 
 		table, id, name := compilerTable(t)
@@ -142,7 +135,7 @@ func TestCompilerMutation(t *testing.T) {
 
 	t.Run("renders every plan family", func(t *testing.T) {
 		table, id, name := compilerTable(t)
-		compiler := compilerFor(t, "postgresql-17", 17, 0, dialect.PostgreSQL())
+		compiler := compilerFor(t, rasql.PostgreSQL17(), dialect.PostgreSQL())
 
 		create, err := rasql.NewCreatePlan(table, rasql.SetField(id, int64(1)), rasql.SetField(name, int64(2)))
 		require.NoError(t, err)
@@ -170,7 +163,7 @@ func TestCompilerMutation(t *testing.T) {
 			rasql.SetField(payload, []byte("original")))
 		require.NoError(t, err)
 
-		compiler := compilerFor(t, "postgresql-17", 17, 0, dialect.PostgreSQL())
+		compiler := compilerFor(t, rasql.PostgreSQL17(), dialect.PostgreSQL())
 		first, err := compiler.Mutation(plan)
 		require.NoError(t, err)
 		require.Equal(t, []byte("original"), first.BoundArgs()[0])
@@ -182,9 +175,8 @@ func TestCompilerMutation(t *testing.T) {
 	})
 
 	t.Run("reports a profile that does not match the dialect", func(t *testing.T) {
-		profile, err := rasql.EngineProfileFromVersion("postgresql-17", 17, 0, 0)
-		require.NoError(t, err)
-		_, err = profile.Compiler(dialect.MySQL())
+		profile := rasql.PostgreSQL17()
+		_, err := profile.Compiler(dialect.MySQL())
 		require.ErrorIs(t, err, rasql.ErrEngineProfileMismatch)
 		_, err = profile.Compiler(nil)
 		require.ErrorIs(t, err, rasql.ErrInvalidEngineProfile)
@@ -208,7 +200,7 @@ func TestCompilerMutation(t *testing.T) {
 	// crashed, so each family is checked here rather than only the one that
 	// happened to be noticed.
 	t.Run("reports a plan that was never built", func(t *testing.T) {
-		compiler := compilerFor(t, "postgresql-17", 17, 0, dialect.PostgreSQL())
+		compiler := compilerFor(t, rasql.PostgreSQL17(), dialect.PostgreSQL())
 		_, err := compiler.Mutation(nil)
 		require.Error(t, err)
 
@@ -236,7 +228,7 @@ func TestCompilerMutation(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		compiler := compilerFor(t, "postgresql-17", 17, 0, dialect.PostgreSQL())
+		compiler := compilerFor(t, rasql.PostgreSQL17(), dialect.PostgreSQL())
 		_, err = compiler.Mutation(plan)
 		require.Error(t, err)
 		var planErr *rasql.PlanError
@@ -280,7 +272,7 @@ func (compilerCountDecoder) DecodeRow(source rasql.ScanSource, row *compilerCoun
 
 func TestCompileQuery(t *testing.T) {
 	t.Run("renders a read without a database", func(t *testing.T) {
-		compiler := compilerFor(t, "postgresql-17", 17, 0, dialect.PostgreSQL())
+		compiler := compilerFor(t, rasql.PostgreSQL17(), dialect.PostgreSQL())
 		statement, err := rasql.CompileQuery(compiler, compilerSelect(t))
 		require.NoError(t, err)
 		require.Contains(t, statement.SQL(), "SELECT")
@@ -292,7 +284,7 @@ func TestCompileQuery(t *testing.T) {
 	// a query whose SQL the profile does not change.
 	t.Run("agrees with Render where the profile does not matter", func(t *testing.T) {
 		query := compilerSelect(t)
-		compiler := compilerFor(t, "postgresql-17", 17, 0, dialect.PostgreSQL())
+		compiler := compilerFor(t, rasql.PostgreSQL17(), dialect.PostgreSQL())
 		compiled, err := rasql.CompileQuery(compiler, query)
 		require.NoError(t, err)
 		rendered, err := rasql.Render(query, dialect.PostgreSQL())
@@ -323,7 +315,7 @@ func TestCompileQuery(t *testing.T) {
 		require.NoError(t, err)
 		query := rasql.Select(relation.Source(), projection)
 
-		compiler := compilerFor(t, "postgresql-17", 17, 0, dialect.PostgreSQL())
+		compiler := compilerFor(t, rasql.PostgreSQL17(), dialect.PostgreSQL())
 		first, err := rasql.CompileQuery(compiler, query)
 		require.NoError(t, err)
 		require.Equal(t, []byte("original"), first.BoundArgs()[0])
@@ -341,13 +333,11 @@ func TestCompileQuery(t *testing.T) {
 		for _, tc := range []struct {
 			name    string
 			dialect dialect.Dialect
-			profile string
-			major   int
-			minor   int
+			profile rasql.EngineProfile
 		}{
-			{name: "postgresql", dialect: dialect.PostgreSQL(), profile: "postgresql-17", major: 17},
-			{name: "mysql", dialect: dialect.MySQL(), profile: "mysql-8.4", major: 8, minor: 4},
-			{name: "sqlite", dialect: dialect.SQLite(), profile: "sqlite-3.35", major: 3, minor: 35},
+			{name: "postgresql", dialect: dialect.PostgreSQL(), profile: rasql.PostgreSQL17()},
+			{name: "mysql", dialect: dialect.MySQL(), profile: rasql.MySQL84()},
+			{name: "sqlite", dialect: dialect.SQLite(), profile: rasql.SQLite335()},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				table, err := rasql.ReadTableOf[compilerCountRow](schema.TableDef{
@@ -371,7 +361,7 @@ func TestCompileQuery(t *testing.T) {
 				paramQuery := rasql.Select(relation.Source(), projection).Where(rasql.EqualExpr(id.Expr(), param.Expr()))
 				valueQuery := rasql.Select(relation.Source(), projection).Where(rasql.EqualValue(id.Expr(), int64(7)))
 
-				compiler := compilerFor(t, tc.profile, tc.major, tc.minor, tc.dialect)
+				compiler := compilerFor(t, tc.profile, tc.dialect)
 				paramStatement, err := rasql.CompileQuery(compiler, paramQuery)
 				require.NoError(t, err)
 				valueStatement, err := rasql.CompileQuery(compiler, valueQuery)
@@ -391,7 +381,7 @@ func TestCompileQuery(t *testing.T) {
 	})
 
 	t.Run("reports a query the profile refuses", func(t *testing.T) {
-		compiler := compilerFor(t, "postgresql-17", 17, 0, dialect.PostgreSQL())
+		compiler := compilerFor(t, rasql.PostgreSQL17(), dialect.PostgreSQL())
 		_, err := rasql.CompileQuery(compiler, rasql.Query[compilerCountRow]{})
 		require.Error(t, err)
 	})

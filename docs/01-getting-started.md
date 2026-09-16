@@ -10,8 +10,9 @@ Import a database driver in the application that opens the connection.
 
 ## Open an executor
 
-A `rasql.DB` pairs a database handle with a dialect. An `Executor` also carries the engine profile required for query
-capabilities, bind limits, codecs, scopes, and result decoding.
+`rasql.Open` pairs a database handle with a dialect, asks the connected server its version, and returns a `rasql.DB`
+already carrying the engine profile required for query capabilities, bind limits, codecs, scopes, and result
+decoding. A `DB` from `Open` is itself an `Executor`.
 
 <!-- INCLUDE(sample/taskboard/cmd/taskboard/main.go#open_database) -->
 ```go
@@ -22,25 +23,20 @@ if err != nil {
 database := stdlib.OpenDB(*config)
 defer func() { _ = database.Close() }()
 
-// A rasql.DB pairs the handle with the dialect used to render SQL.
-db, err := rasql.New(database, dialect.PostgreSQL())
+// Open pairs the handle with the dialect used to render SQL and asks the
+// server its own version, so it works against whatever supported
+// PostgreSQL release TASKBOARD_DSN actually points at.
+executor, err := rasql.Open(context.Background(), database, dialect.PostgreSQL())
 if err != nil {
-	return fmt.Errorf("create the rasql db: %w", err)
-}
-profile, err := rasql.DiscoverEngineProfile(context.Background(), db, "postgresql-17")
-if err != nil {
-	return fmt.Errorf("discover PostgreSQL engine profile: %w", err)
-}
-executor, err := rasql.AsExecutor(db, profile)
-if err != nil {
-	return fmt.Errorf("create the rasql executor: %w", err)
+	return fmt.Errorf("open the rasql database: %w", err)
 }
 ```
 source: [sample/taskboard/cmd/taskboard/main.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/cmd/taskboard/main.go)
 <!-- END INCLUDE -->
 
-Choose the profile that matches the connected engine. It makes supported syntax explicit before rasql renders or runs
-a statement.
+`Open` discovers the profile from the server by default. Pass `rasql.WithProfile` to pin one instead, which is
+required for a custom engine profile and useful when the handle cannot answer a version query, such as one built from
+a test double.
 
 ## Generate a store
 

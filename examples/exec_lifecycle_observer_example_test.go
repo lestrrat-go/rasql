@@ -35,7 +35,7 @@ func Example_rasql_lifecycle_observer() {
 	defer func() { _ = database.Close() }()
 	database.SetMaxOpenConns(1)
 
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(ctx, database, dialect.SQLite())
 	if err != nil {
 		fmt.Println("new error")
 		return
@@ -46,7 +46,7 @@ func Example_rasql_lifecycle_observer() {
 		return
 	}
 	events := make([]string, 0, 2)
-	db, err = db.WithInvocationObservers(rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), rasql.InvocationObserverFunc(func(ctx context.Context, operation rasql.Operation) (context.Context, rasql.CompletionObserver) {
+	executor, err := db.WithInvocationObservers(rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), rasql.InvocationObserverFunc(func(ctx context.Context, operation rasql.Operation) (context.Context, rasql.CompletionObserver) {
 		return ctx, rasql.CompletionObserverFunc(func(_ context.Context, completion rasql.Completion) error {
 			switch completion.Phase {
 			case rasql.ExecutionPhase:
@@ -59,16 +59,6 @@ func Example_rasql_lifecycle_observer() {
 	}))
 	if err != nil {
 		fmt.Println("observer error")
-		return
-	}
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 40, 0)
-	if err != nil {
-		fmt.Println("profile error")
-		return
-	}
-	executor, err := rasql.AsExecutor(db, profile)
-	if err != nil {
-		fmt.Println("executor error")
 		return
 	}
 

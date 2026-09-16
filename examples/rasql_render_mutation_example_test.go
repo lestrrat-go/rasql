@@ -38,11 +38,7 @@ func Example_rasql_render_mutation() {
 
 	// The profile decides which SQL an engine accepts, so it is named
 	// alongside the dialect rather than derived from it.
-	profile, err := rasql.EngineProfileFromVersion("postgresql-17", 17, 0, 0)
-	if err != nil {
-		fmt.Printf("failed to build the engine profile: %s\n", err)
-		return
-	}
+	profile := rasql.PostgreSQL17()
 	compiler, err := profile.Compiler(dialect.PostgreSQL())
 	if err != nil {
 		fmt.Printf("failed to build the compiler: %s\n", err)

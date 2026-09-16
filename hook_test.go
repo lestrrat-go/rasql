@@ -43,7 +43,9 @@ func TestHooksIsolateByteArgumentsAcrossExecution(t *testing.T) {
 			return nil
 		},
 	}
-	db, err := rasql.New(database, dialect.SQLite(), mutatingHook, observingHook)
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
+	require.NoError(t, err)
+	db, err = db.WithHooks(mutatingHook, observingHook)
 	require.NoError(t, err)
 	s := stmt.New("UPDATE blobs SET direct = ?, named = ?", []byte("abc"), sql.Named("payload", []byte("xyz")))
 	for range 2 {
@@ -99,7 +101,9 @@ func TestClientHooksRunInOrderAndPreserveStatement(t *testing.T) {
 			return nil
 		},
 	}
-	db, err := rasql.New(database, dialect.PostgreSQL(), first, second)
+	db, err := rasql.Open(t.Context(), database, dialect.PostgreSQL(), rasql.WithProfile(rasql.PostgreSQL17()))
+	require.NoError(t, err)
+	db, err = db.WithHooks(first, second)
 	require.NoError(t, err)
 	s := stmt.New("INSERT INTO users (email) VALUES ($1)", "ada@example.com")
 	mock.ExpectExec("INSERT INTO users (email) VALUES ($1)").
@@ -121,7 +125,7 @@ func TestClientHooksObserveQuery(t *testing.T) {
 	})
 
 	var observed rasql.Operation
-	db, err := rasql.New(database, dialect.PostgreSQL())
+	db, err := rasql.Open(t.Context(), database, dialect.PostgreSQL(), rasql.WithProfile(rasql.PostgreSQL17()))
 	require.NoError(t, err)
 	db, err = db.WithHooks(rasql.HookFunc{
 		BeforeFunc: func(_ context.Context, operation rasql.Operation) error {
@@ -153,7 +157,9 @@ func TestHookErrorsPreventOrRejectExecution(t *testing.T) {
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 		expected := errors.New("policy denied")
-		db, err := rasql.New(database, dialect.SQLite(), rasql.HookFunc{
+		db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
+		require.NoError(t, err)
+		db, err = db.WithHooks(rasql.HookFunc{
 			BeforeFunc: func(_ context.Context, operation rasql.Operation) error {
 				require.Equal(t, rasql.ExecOperation, operation.Kind())
 				return expected
@@ -176,7 +182,9 @@ func TestHookErrorsPreventOrRejectExecution(t *testing.T) {
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 		expected := errors.New("metrics sink unavailable")
-		db, err := rasql.New(database, dialect.SQLite(), rasql.HookFunc{
+		db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
+		require.NoError(t, err)
+		db, err = db.WithHooks(rasql.HookFunc{
 			AfterFunc: func(_ context.Context, operation rasql.Operation, err error) error {
 				require.NoError(t, err)
 				require.Equal(t, rasql.ExecOperation, operation.Kind())
@@ -212,7 +220,7 @@ func TestObserversReportFailuresWithoutChangingResult(t *testing.T) {
 	})
 	var reports []rasql.ExtensionError
 	var order []string
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	db, err = db.WithObservers(rasql.ExtensionErrorHandlerFunc(func(_ context.Context, report rasql.ExtensionError) {
 		reports = append(reports, report)
@@ -246,7 +254,7 @@ func TestWithObserversInheritsThroughBegin(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 	var observed int
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	db, err = db.WithObservers(rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {
 		observed++
@@ -292,7 +300,7 @@ func TestHooksRunInsideExplicitTransaction(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	tx, err := db.Begin(t.Context(), nil)
 	require.NoError(t, err)

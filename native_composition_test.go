@@ -79,15 +79,11 @@ func nativeCompositionSQLiteExecutor(t *testing.T, codecID string, codec rasql.V
 	require.NoError(t, err)
 	database.SetMaxOpenConns(1)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	db, err := rasql.New(database, dialect.SQLite())
-	require.NoError(t, err)
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(db, profile)
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite())
 	require.NoError(t, err)
 	registry, err := rasql.NewCodecRegistry(map[rasql.CodecID]rasql.ValueCodec{rasql.CodecID(codecID): codec})
 	require.NoError(t, err)
-	executor, err = rasql.WithCodecs(executor, registry)
+	executor, err := rasql.WithCodecs(db, registry)
 	require.NoError(t, err)
 	return executor
 }
@@ -215,8 +211,7 @@ func TestNativeComposition(t *testing.T) {
 				t.Run("success", func(t *testing.T) {
 					rows := &nativeCompositionLifecycleRows{columns: []string{"value"}, values: [][]any{{int64(1)}, {int64(2)}}}
 					executor := nativeCompositionLifecycleExecutor{dialect: dialect.SQLite(), rows: rows}
-					profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-					require.NoError(t, err)
+					profile := rasql.SQLite335()
 					profiled, err := rasql.WithEngineProfile(&executor, profile)
 					require.NoError(t, err)
 					values, err := rasql.All(t.Context(), profiled, nativeCompositionLifecycleQuery(t, cte))
@@ -234,8 +229,7 @@ func TestNativeComposition(t *testing.T) {
 						finishErr: decodeFinishErr,
 					}
 					executor := nativeCompositionLifecycleExecutor{dialect: dialect.SQLite(), rows: rows}
-					profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-					require.NoError(t, err)
+					profile := rasql.SQLite335()
 					profiled, err := rasql.WithEngineProfile(&executor, profile)
 					require.NoError(t, err)
 					_, err = rasql.All(t.Context(), profiled, nativeCompositionLifecycleQuery(t, cte))
@@ -250,8 +244,7 @@ func TestNativeComposition(t *testing.T) {
 				t.Run("executor failure", func(t *testing.T) {
 					rows := &nativeCompositionLifecycleRows{columns: []string{"value"}}
 					executor := nativeCompositionLifecycleExecutor{dialect: dialect.SQLite(), rows: rows, queryErr: queryErr}
-					profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-					require.NoError(t, err)
+					profile := rasql.SQLite335()
 					profiled, err := rasql.WithEngineProfile(&executor, profile)
 					require.NoError(t, err)
 					_, err = rasql.All(t.Context(), profiled, nativeCompositionLifecycleQuery(t, cte))
@@ -265,8 +258,7 @@ func TestNativeComposition(t *testing.T) {
 						iterationErr: iterationErr, finishErr: iterationFinishErr,
 					}
 					executor := nativeCompositionLifecycleExecutor{dialect: dialect.SQLite(), rows: rows}
-					profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-					require.NoError(t, err)
+					profile := rasql.SQLite335()
 					profiled, err := rasql.WithEngineProfile(&executor, profile)
 					require.NoError(t, err)
 					_, err = rasql.All(t.Context(), profiled, nativeCompositionLifecycleQuery(t, cte))
@@ -281,8 +273,7 @@ func TestNativeComposition(t *testing.T) {
 				t.Run("early close", func(t *testing.T) {
 					rows := &nativeCompositionLifecycleRows{columns: []string{"value"}, values: [][]any{{int64(1)}, {int64(2)}}}
 					executor := nativeCompositionLifecycleExecutor{dialect: dialect.SQLite(), rows: rows}
-					profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-					require.NoError(t, err)
+					profile := rasql.SQLite335()
 					profiled, err := rasql.WithEngineProfile(&executor, profile)
 					require.NoError(t, err)
 					sequence, err := rasql.Rows(t.Context(), profiled, nativeCompositionLifecycleQuery(t, cte))
@@ -319,8 +310,7 @@ func TestNativeComposition(t *testing.T) {
 		require.NoError(t, err)
 		query := rasql.Select(source.Source(), outerProjection)
 		spy := &nativeCompositionSpyExecutor{dialect: dialect.PostgreSQL()}
-		profile, err := rasql.EngineProfileFromVersion("postgresql-17", 17, 6, 0)
-		require.NoError(t, err)
+		profile := rasql.PostgreSQL17()
 		executor, err := rasql.WithEngineProfile(spy, profile)
 		require.NoError(t, err)
 		registry, err := rasql.NewCodecRegistry(nil)
@@ -356,8 +346,7 @@ func TestNativeComposition(t *testing.T) {
 		require.NoError(t, err)
 		query := rasql.Select(source.Source(), outerProjection)
 		spy := &nativeCompositionSpyExecutor{dialect: dialect.SQLite()}
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
+		profile := rasql.SQLite335()
 		executor, err := rasql.WithEngineProfile(spy, profile)
 		require.NoError(t, err)
 		registry, err := rasql.NewCodecRegistry(nil)
@@ -401,11 +390,7 @@ func TestNativeComposition(t *testing.T) {
 
 	t.Run("a derived table and a CTE relocate repeated placeholders on PostgreSQL", func(t *testing.T) {
 		database := dbtest.PostgreSQLDB(t)
-		db, err := rasql.New(database, dialect.PostgreSQL())
-		require.NoError(t, err)
-		profile, err := rasql.DiscoverEngineProfile(t.Context(), db, "postgresql-17")
-		require.NoError(t, err)
-		executor, err := rasql.AsExecutor(db, profile)
+		executor, err := rasql.Open(t.Context(), database, dialect.PostgreSQL())
 		require.NoError(t, err)
 		innerSchema, err := rasql.NewResultSchema(
 			rasql.ResultColumn{Name: "first", Type: schema.IntegerType{}},

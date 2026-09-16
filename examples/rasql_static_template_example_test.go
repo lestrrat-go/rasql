@@ -27,7 +27,7 @@ func Example_rasql_static_template() {
 	database.SetMaxOpenConns(1)
 
 	// A DB couples a database handle with the dialect used to render SQL.
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(ctx, database, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return

@@ -1,8 +1,8 @@
 # Database execution
 
-A `rasql.DB` pairs a `database/sql` handle with a dialect. The canonical runtime uses `rasql.Executor`, which adds an
-engine profile and carries the compiler, bind limits, codecs, scopes, and event observers that every query and
-mutation needs.
+`rasql.Open` pairs a `database/sql` handle with a dialect and resolves the engine profile a `rasql.DB` needs to run
+queries and mutations: the compiler, bind limits, codecs, scopes, and event observers every query and mutation needs.
+A `DB` from `Open` is itself a `rasql.Executor`, the canonical runtime type.
 
 ## Create an executor
 
@@ -15,25 +15,21 @@ if err != nil {
 database := stdlib.OpenDB(*config)
 defer func() { _ = database.Close() }()
 
-// A rasql.DB pairs the handle with the dialect used to render SQL.
-db, err := rasql.New(database, dialect.PostgreSQL())
+// Open pairs the handle with the dialect used to render SQL and asks the
+// server its own version, so it works against whatever supported
+// PostgreSQL release TASKBOARD_DSN actually points at.
+executor, err := rasql.Open(context.Background(), database, dialect.PostgreSQL())
 if err != nil {
-	return fmt.Errorf("create the rasql db: %w", err)
-}
-profile, err := rasql.DiscoverEngineProfile(context.Background(), db, "postgresql-17")
-if err != nil {
-	return fmt.Errorf("discover PostgreSQL engine profile: %w", err)
-}
-executor, err := rasql.AsExecutor(db, profile)
-if err != nil {
-	return fmt.Errorf("create the rasql executor: %w", err)
+	return fmt.Errorf("open the rasql database: %w", err)
 }
 ```
 source: [sample/taskboard/cmd/taskboard/main.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/cmd/taskboard/main.go)
 <!-- END INCLUDE -->
 
-The profile must describe the connected engine. Rasql uses it to reject unsupported syntax and enforce actual bind
-limits before opening rows or executing a mutation.
+`Open` asks the connected server its version and picks the built-in profile that matches, by default. Pass
+`rasql.WithProfile` to pin a profile instead, either because the dialect names a custom engine that discovery cannot
+resolve on its own, or because the handle cannot answer a version query. Rasql uses the resolved profile to reject
+unsupported syntax and enforce actual bind limits before opening rows or executing a mutation.
 
 ## Run queries and mutations
 
@@ -76,8 +72,9 @@ while a mutation outcome still reports its affected rows and the durability the 
 
 ## Low-level handles
 
-The lower-level `DB` and `exec.DB` APIs carry no engine profile. A statement run through them skips the capability
-checks and result lifecycle `Executor` applies, so application ORM code should use `Executor` instead.
+`QueryRendered` and the transaction methods (`Begin`, `Commit`, `Rollback`) run against the handle and dialect alone,
+skipping the capability checks and result lifecycle the typed `Query[R]`, `MutationPlan`, and `Native` paths apply
+through `Executor`. Application ORM code should use those typed paths instead.
 
 ## Next
 

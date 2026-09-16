@@ -44,16 +44,16 @@ func (d graphLiveChildDecoder) DecodeRow(source rasql.ScanSource, row *graphLive
 func TestGraphLiveExecution(t *testing.T) {
 	t.Run("PostgreSQL", func(t *testing.T) {
 		database := dbtest.PostgreSQLDB(t)
-		testLiveGraph(t, database, dialect.PostgreSQL(), "postgresql-17")
+		testLiveGraph(t, database, dialect.PostgreSQL())
 	})
 
 	t.Run("MySQL", func(t *testing.T) {
 		database := dbtest.MySQLDB(t)
-		testLiveGraph(t, database, dialect.MySQL(), "mysql-8.4")
+		testLiveGraph(t, database, dialect.MySQL())
 	})
 }
 
-func testLiveGraph(t *testing.T, database *sql.DB, d dialect.Dialect, profileID string) {
+func testLiveGraph(t *testing.T, database *sql.DB, d dialect.Dialect) {
 	t.Helper()
 	parentsName := dbtest.UniqueName(t, "r4_graph_parents")
 	childrenName := dbtest.UniqueName(t, "r4_graph_children")
@@ -76,14 +76,7 @@ func testLiveGraph(t *testing.T, database *sql.DB, d dialect.Dialect, profileID 
 	_, err = database.ExecContext(t.Context(), "INSERT INTO "+childrenName+" (id, parent_id, rank_value) VALUES (11,1,2), (12,1,1), (21,2,1)")
 	require.NoError(t, err)
 
-	db, err := rasql.New(database, d)
-	require.NoError(t, err)
-	profile, err := rasql.EngineProfileFromVersion(profileID, 17, 0, 0)
-	if d.Name() == "mysql" {
-		profile, err = rasql.EngineProfileFromVersion(profileID, 8, 4, 0)
-	}
-	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(db, profile)
+	executor, err := rasql.Open(t.Context(), database, d)
 	require.NoError(t, err)
 
 	parentTable, err := rasql.ReadTableOf[graphLiveParent](schema.TableDef{Name: parentsName, PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})

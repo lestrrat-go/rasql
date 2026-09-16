@@ -127,7 +127,7 @@ source: [examples/rasql_prepared_parameter_example_test.go](https://github.com/l
 | `Maybe` | Accepts zero or one row and reports whether a row was present. |
 
 The executor owns rendering, bind codecs, result codecs, row closure, event observation, and transaction durability.
-Create one with `rasql.AsExecutor` from a `DB` and an explicit engine profile.
+Create one with `rasql.Open`, which returns a `DB` that already satisfies `Executor`.
 
 ## Next
 
