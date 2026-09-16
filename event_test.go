@@ -183,10 +183,10 @@ func TestEventObserver(t *testing.T) {
 		require.NoError(t, err)
 		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
 		require.NoError(t, err)
-		executor, err := rasql.AsExecutor(db, profile)
+		profiled, err := rasql.AsExecutor(db, profile)
 		require.NoError(t, err)
 		var terminal rasql.Event
-		executor, err = rasql.WithEventObservers(executor, rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), rasql.EventObserverFunc(func(ctx context.Context, event rasql.Event) (context.Context, rasql.EventCompletion) {
+		executor, err := rasql.WithEventObservers(profiled, rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), rasql.EventObserverFunc(func(ctx context.Context, event rasql.Event) (context.Context, rasql.EventCompletion) {
 			return ctx, rasql.EventCompletionFunc(func(_ context.Context, event rasql.Event) error {
 				if event.Kind == rasql.EventScope && event.Phase == rasql.EventTerminal {
 					terminal = event

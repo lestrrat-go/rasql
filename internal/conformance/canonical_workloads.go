@@ -91,9 +91,9 @@ func runCanonicalWorkloads(t *testing.T, engine Engine, database *sql.DB, rawRoo
 			require.NoError(t, err)
 			observedRoot, err := rawRoot.WithInvocationObservers(rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), invocations.Observer())
 			require.NoError(t, err)
-			executor, err := rasql.AsExecutor(observedRoot, profile)
+			profiled, err := rasql.AsExecutor(observedRoot, profile)
 			require.NoError(t, err)
-			executor, err = rasql.WithEventObservers(executor, rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), events.Observer())
+			executor, err := rasql.WithEventObservers(profiled, rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), events.Observer())
 			require.NoError(t, err)
 			// Profile discovery uses the same observer chain. Keep setup traffic out of workload evidence.
 			resetInvocationRecorder(invocations)

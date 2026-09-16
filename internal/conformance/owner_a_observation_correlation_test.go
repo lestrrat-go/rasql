@@ -429,7 +429,7 @@ func TestOwnerAActualObserversCorrelateIdentityAndOrdinals(t *testing.T) {
 	require.NoError(t, err)
 	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
 	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(raw, profile)
+	profiled, err := rasql.AsExecutor(raw, profile)
 	require.NoError(t, err)
 	markerSeen := false
 	markerObserver := rasql.EventObserverFunc(func(ctx context.Context, event rasql.Event) (context.Context, rasql.EventCompletion) {
@@ -437,7 +437,7 @@ func TestOwnerAActualObserversCorrelateIdentityAndOrdinals(t *testing.T) {
 		markerSeen = true
 		return events.Observer().Start(ctx, event)
 	})
-	executor, err = rasql.WithEventObservers(executor, rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), markerObserver)
+	executor, err := rasql.WithEventObservers(profiled, rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), markerObserver)
 	require.NoError(t, err)
 	projection, err := rasql.NativeProjection[overdueRow](overdueDecoder{})
 	require.NoError(t, err)

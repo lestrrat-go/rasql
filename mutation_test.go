@@ -599,12 +599,12 @@ func TestMutationCodec(t *testing.T) {
 		require.NoError(t, err)
 		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 40, 0)
 		require.NoError(t, err)
-		executor, err := rasql.AsExecutor(db, profile)
+		profiled, err := rasql.AsExecutor(db, profile)
 		require.NoError(t, err)
 		count := 0
 		registry, err := rasql.NewCodecRegistry(map[rasql.CodecID]rasql.ValueCodec{"prefix": mutationCodec{enc: &count}})
 		require.NoError(t, err)
-		executor, err = rasql.WithCodecs(executor, registry)
+		executor, err := rasql.WithCodecs(profiled, registry)
 		require.NoError(t, err)
 		table := rasql.MustTableOf[mutationCodecRow](schema.TableDef{
 			Name: "codec_items", PrimaryKey: []string{"id"},

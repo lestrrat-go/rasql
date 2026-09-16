@@ -83,11 +83,11 @@ func nativeCompositionSQLiteExecutor(t *testing.T, codecID string, codec rasql.V
 	require.NoError(t, err)
 	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
 	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(db, profile)
+	profiled, err := rasql.AsExecutor(db, profile)
 	require.NoError(t, err)
 	registry, err := rasql.NewCodecRegistry(map[rasql.CodecID]rasql.ValueCodec{rasql.CodecID(codecID): codec})
 	require.NoError(t, err)
-	executor, err = rasql.WithCodecs(executor, registry)
+	executor, err := rasql.WithCodecs(profiled, registry)
 	require.NoError(t, err)
 	return executor
 }

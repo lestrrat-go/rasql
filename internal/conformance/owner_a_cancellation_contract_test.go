@@ -30,10 +30,10 @@ func TestOwnerACancellationStages(t *testing.T) {
 	require.NoError(t, err)
 	profile, err := rasql.DiscoverEngineProfile(t.Context(), raw, engine.ProfileID)
 	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(raw, profile)
+	profiled, err := rasql.AsExecutor(raw, profile)
 	require.NoError(t, err)
-	executor, err = rasql.WithEventObservers(
-		executor,
+	executor, err := rasql.WithEventObservers(
+		profiled,
 		rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}),
 		events.Observer(),
 	)

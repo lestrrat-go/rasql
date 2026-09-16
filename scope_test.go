@@ -277,7 +277,7 @@ func TestScopeCapabilities(t *testing.T) {
 		require.True(t, hasCodecs)
 		require.False(t, hasEvidence)
 
-		beginner := executor.(rasql.ScopeBeginner)
+		var beginner rasql.ScopeBeginner = executor
 		child, finalizer, err := beginner.BeginScope(t.Context(), nil)
 		require.NoError(t, err)
 		assertScopeCapabilities(t, child, true, true, rasql.Q1DurabilityPending)
@@ -564,7 +564,7 @@ func TestScopeFinalizers(t *testing.T) {
 		require.NoError(t, err)
 		executor, err := rasql.AsExecutor(db, profile)
 		require.NoError(t, err)
-		child, finalizer, err := executor.(rasql.ScopeBeginner).BeginScope(context.Background(), nil)
+		child, finalizer, err := executor.BeginScope(context.Background(), nil)
 		require.NoError(t, err)
 		rows, err := child.Query(context.Background(), stmt.New("SELECT 1"))
 		require.NoError(t, err)
@@ -586,7 +586,7 @@ func TestScopeFinalizers(t *testing.T) {
 		require.NoError(t, err)
 		executor, err := rasql.AsExecutor(db, profile)
 		require.NoError(t, err)
-		child, finalizer, err := executor.(rasql.ScopeBeginner).BeginScope(context.Background(), nil)
+		child, finalizer, err := executor.BeginScope(context.Background(), nil)
 		require.NoError(t, err)
 		rows, err := child.Query(context.Background(), stmt.New("SELECT 1"))
 		require.NoError(t, err)
