@@ -51,7 +51,7 @@ func Example_rasql_static_template() {
 		fmt.Printf("failed to render insert: %s\n", err)
 		return
 	}
-	if _, err := db.ExecRendered(ctx, renderedInsert); err != nil {
+	if _, err := db.Exec(ctx, renderedInsert); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}

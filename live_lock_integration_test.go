@@ -184,23 +184,23 @@ func TestLiveAtomicScope(t *testing.T) {
 			table := dbtest.UniqueName(t, "rasql_atomic_scope_records")
 			quoted, err := engine.dialect.QuoteIdentifier(table)
 			require.NoError(t, err)
-			_, err = db.ExecRendered(t.Context(), stmt.New(sqltext.Text("CREATE TABLE "+quoted+" (value BIGINT)")))
+			_, err = db.Exec(t.Context(), stmt.New(sqltext.Text("CREATE TABLE "+quoted+" (value BIGINT)")))
 			require.NoError(t, err)
 			t.Cleanup(func() {
-				_, _ = db.ExecRendered(context.Background(), stmt.New(sqltext.Text("DROP TABLE "+quoted)))
+				_, _ = db.Exec(context.Background(), stmt.New(sqltext.Text("DROP TABLE "+quoted)))
 			})
 
 			callbackErr := errors.New("nested live failure")
 			err = db.Atomic(t.Context(), nil, func(ctx context.Context, outer rasql.DB) error {
-				_, err := outer.ExecRendered(ctx, stmt.New(sqltext.Text("INSERT INTO "+quoted+" VALUES (1)")))
+				_, err := outer.Exec(ctx, stmt.New(sqltext.Text("INSERT INTO "+quoted+" VALUES (1)")))
 				require.NoError(t, err)
 				err = outer.Atomic(ctx, nil, func(ctx context.Context, nested rasql.DB) error {
-					_, err := nested.ExecRendered(ctx, stmt.New(sqltext.Text("INSERT INTO "+quoted+" VALUES (2)")))
+					_, err := nested.Exec(ctx, stmt.New(sqltext.Text("INSERT INTO "+quoted+" VALUES (2)")))
 					require.NoError(t, err)
 					return callbackErr
 				})
 				require.ErrorIs(t, err, callbackErr)
-				_, err = outer.ExecRendered(ctx, stmt.New(sqltext.Text("INSERT INTO "+quoted+" VALUES (3)")))
+				_, err = outer.Exec(ctx, stmt.New(sqltext.Text("INSERT INTO "+quoted+" VALUES (3)")))
 				return err
 			})
 			require.NoError(t, err)

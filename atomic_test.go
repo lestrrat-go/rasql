@@ -22,19 +22,19 @@ func TestAtomicOwnsTransactionAndNestedSavepoint(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	db, err := rasql.New(database, dialect.SQLite())
 	require.NoError(t, err)
-	_, err = db.ExecRendered(t.Context(), stmt.New("CREATE TABLE values_table (value INTEGER)"))
+	_, err = db.Exec(t.Context(), stmt.New("CREATE TABLE values_table (value INTEGER)"))
 	require.NoError(t, err)
 	callbackErr := errors.New("nested failure")
 	err = db.Atomic(t.Context(), nil, func(ctx context.Context, outer rasql.DB) error {
-		_, err := outer.ExecRendered(ctx, stmt.New("INSERT INTO values_table VALUES (1)"))
+		_, err := outer.Exec(ctx, stmt.New("INSERT INTO values_table VALUES (1)"))
 		require.NoError(t, err)
 		err = outer.Atomic(ctx, nil, func(ctx context.Context, nested rasql.DB) error {
-			_, err := nested.ExecRendered(ctx, stmt.New("INSERT INTO values_table VALUES (2)"))
+			_, err := nested.Exec(ctx, stmt.New("INSERT INTO values_table VALUES (2)"))
 			require.NoError(t, err)
 			return callbackErr
 		})
 		require.ErrorIs(t, err, callbackErr)
-		_, err = outer.ExecRendered(ctx, stmt.New("INSERT INTO values_table VALUES (3)"))
+		_, err = outer.Exec(ctx, stmt.New("INSERT INTO values_table VALUES (3)"))
 		return err
 	})
 	require.NoError(t, err)

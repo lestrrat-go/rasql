@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestQueryOwnedCompletesExecutionAndConsumption(t *testing.T) {
+func TestQueryCompletesExecutionAndConsumption(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -39,7 +39,7 @@ func TestQueryOwnedCompletesExecutionAndConsumption(t *testing.T) {
 	}))
 	require.NoError(t, err)
 	mock.ExpectQuery("SELECT id FROM users").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1).AddRow(2))
-	rows, err := db.QueryOwned(t.Context(), stmt.New("SELECT id FROM users"))
+	rows, err := db.Query(t.Context(), stmt.New("SELECT id FROM users"))
 	require.NoError(t, err)
 	defer func() { _ = rows.Finish(nil, true) }()
 	var id int
@@ -83,7 +83,7 @@ func TestRowsFinishReportsConversionAndCardinalityErrors(t *testing.T) {
 	}))
 	require.NoError(t, err)
 	mock.ExpectQuery("SELECT value FROM values").WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow("bad"))
-	rows, err := db.QueryOwned(t.Context(), stmt.New("SELECT value FROM values"))
+	rows, err := db.Query(t.Context(), stmt.New("SELECT value FROM values"))
 	require.NoError(t, err)
 	var value int
 	require.True(t, rows.Next())
@@ -117,7 +117,7 @@ func TestTransactionLifecycleReportsCommitFailure(t *testing.T) {
 	mock.ExpectCommit().WillReturnError(errors.New("commit failed"))
 	tx, err := db.Begin(t.Context(), nil)
 	require.NoError(t, err)
-	_, err = tx.ExecRendered(t.Context(), stmt.New("UPDATE users SET name = ?", "ada"))
+	_, err = tx.Exec(t.Context(), stmt.New("UPDATE users SET name = ?", "ada"))
 	require.NoError(t, err)
 	require.Len(t, phases, 2)
 	require.Equal(t, rasql.ExecutionPhase, phases[1].Phase)
@@ -166,7 +166,7 @@ func TestInvocationObserversPropagateContextAndReverseCompletion(t *testing.T) {
 		}))
 	require.NoError(t, err)
 	mock.ExpectExec("UPDATE users SET name = ?").WithArgs("ada").WillReturnResult(sqlmock.NewResult(0, 1))
-	_, err = db.ExecRendered(t.Context(), stmt.New("UPDATE users SET name = ?", "ada"))
+	_, err = db.Exec(t.Context(), stmt.New("UPDATE users SET name = ?", "ada"))
 	require.NoError(t, err)
 	require.Equal(t, []string{"first", "second"}, starts)
 	require.Equal(t, []string{"second", "first"}, completions)
@@ -204,7 +204,7 @@ func TestRawQueryRenderedReportsExecutionOnlyAndOwnedPreservesHooks(t *testing.T
 	require.Equal(t, []rasql.Phase{rasql.ExecutionPhase}, phases)
 
 	mock.ExpectQuery("SELECT id").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
-	owned, err := db.QueryOwned(t.Context(), stmt.New("SELECT id"))
+	owned, err := db.Query(t.Context(), stmt.New("SELECT id"))
 	require.NoError(t, err)
 	require.NoError(t, owned.Close())
 	require.Equal(t, 2, hooks)
@@ -232,7 +232,7 @@ func TestConsumptionDurationIncludesPostExecutionWork(t *testing.T) {
 	}))
 	require.NoError(t, err)
 	mock.ExpectQuery("SELECT id").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
-	rows, err := db.QueryOwned(t.Context(), stmt.New("SELECT id"))
+	rows, err := db.Query(t.Context(), stmt.New("SELECT id"))
 	require.NoError(t, err)
 	time.Sleep(2 * time.Millisecond)
 	require.NoError(t, rows.Close())
@@ -300,7 +300,7 @@ func TestRowsEarlyCloseAndIterationError(t *testing.T) {
 	}))
 	require.NoError(t, err)
 	mock.ExpectQuery("SELECT id").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1).AddRow(2))
-	rows, err := db.QueryOwned(t.Context(), stmt.New("SELECT id"))
+	rows, err := db.Query(t.Context(), stmt.New("SELECT id"))
 	require.NoError(t, err)
 	require.True(t, rows.Next())
 	require.NoError(t, rows.Close())
@@ -309,7 +309,7 @@ func TestRowsEarlyCloseAndIterationError(t *testing.T) {
 
 	iterationErr := errors.New("delayed iteration failure")
 	mock.ExpectQuery("SELECT id").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1).AddRow(2).RowError(1, iterationErr))
-	rows, err = db.QueryOwned(t.Context(), stmt.New("SELECT id"))
+	rows, err = db.Query(t.Context(), stmt.New("SELECT id"))
 	require.NoError(t, err)
 	require.True(t, rows.Next())
 	require.False(t, rows.Next())
@@ -339,7 +339,7 @@ func TestCompletionErrorsGoOnlyToHandler(t *testing.T) {
 	}))
 	require.NoError(t, err)
 	mock.ExpectExec("DELETE FROM users").WillReturnResult(sqlmock.NewResult(0, 1))
-	_, err = db.ExecRendered(t.Context(), stmt.New("DELETE FROM users"))
+	_, err = db.Exec(t.Context(), stmt.New("DELETE FROM users"))
 	require.NoError(t, err)
 	require.Len(t, reported, 1)
 	require.ErrorContains(t, reported[0], "completion reporter failed")
@@ -366,12 +366,12 @@ func TestDelayedDriverSeparatesExecutionAndConsumptionDuration(t *testing.T) {
 	}))
 	require.NoError(t, err)
 	type queryResult struct {
-		rows *rasql.OwnedRows
+		rows rasql.ResultRows
 		err  error
 	}
 	result := make(chan queryResult, 1)
 	go func() {
-		rows, queryErr := db.QueryOwned(t.Context(), stmt.New("SELECT value"))
+		rows, queryErr := db.Query(t.Context(), stmt.New("SELECT value"))
 		result <- queryResult{rows: rows, err: queryErr}
 	}()
 	<-queryStarted
@@ -431,7 +431,7 @@ func TestConcurrentInvocationsKeepDerivedMarkersPaired(t *testing.T) {
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			rows, queryErr := db.QueryOwned(t.Context(), stmt.New("SELECT value"))
+			rows, queryErr := db.Query(t.Context(), stmt.New("SELECT value"))
 			if queryErr != nil {
 				return
 			}

@@ -46,7 +46,7 @@ func TestZeroDBRejectsEveryMethodWithoutPanicking(t *testing.T) {
 	_, err = db.QueryRendered(t.Context(), renderedSelectStatement(t))
 	require.ErrorContains(t, err, "rasql: invalid DB")
 
-	_, err = db.ExecRendered(t.Context(), renderedDeleteStatement(t))
+	_, err = db.Exec(t.Context(), renderedDeleteStatement(t))
 	require.ErrorContains(t, err, "rasql: invalid DB")
 
 	require.Nil(t, db.Dialect())
@@ -142,7 +142,7 @@ func TestTransactionWriteReachesTransactionAndCommits(t *testing.T) {
 	defer func() { _ = tx.Rollback() }()
 
 	s := stmt.New("INSERT INTO users (id) VALUES (?)", 42)
-	result, err := tx.ExecRendered(t.Context(), s)
+	result, err := tx.Exec(t.Context(), s)
 	require.NoError(t, err)
 	rows, err := result.RowsAffected()
 	require.NoError(t, err)
@@ -246,7 +246,7 @@ func TestNewFromTransactionAdoptsIt(t *testing.T) {
 
 	tx, err := rasql.New(transaction, dialect.SQLite())
 	require.NoError(t, err)
-	_, err = tx.ExecRendered(t.Context(), renderedDeleteStatement(t))
+	_, err = tx.Exec(t.Context(), renderedDeleteStatement(t))
 	require.NoError(t, err)
 	require.NoError(t, tx.Commit())
 }
@@ -385,7 +385,7 @@ func TestBeginInheritsAndAppendsHooks(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback() }()
 
-	_, err = tx.ExecRendered(t.Context(), renderedDeleteStatement(t))
+	_, err = tx.Exec(t.Context(), renderedDeleteStatement(t))
 	require.NoError(t, err)
 	require.Equal(t, []string{"db before", "call before", "call after", "db after"}, events)
 }

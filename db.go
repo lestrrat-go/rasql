@@ -70,7 +70,7 @@ func (db DB) beginSavepoint(ctx context.Context) (DB, ScopeFinalizer, error) {
 	if err != nil {
 		return DB{}, nil, err
 	}
-	if _, err := db.ExecRendered(ctx, stmt.New(sqltext.Text("SAVEPOINT "+name))); err != nil {
+	if _, err := db.execRendered(ctx, stmt.New(sqltext.Text("SAVEPOINT "+name))); err != nil {
 		return DB{}, nil, err
 	}
 	cleanupCtx, cancel := atomicCleanupContext(ctx)
@@ -411,7 +411,7 @@ func (db DB) rollbackContext(ctx context.Context) error {
 }
 
 // QueryRendered executes statement and returns its result rows. It reports the
-// driver execution lifecycle only; use QueryOwned for consumption observation.
+// driver execution lifecycle only; use Query for consumption observation.
 // The caller owns the returned rows: hand them to dynamic.Scan, which closes
 // them, or close them directly. A debug Handle that logs the statement instead
 // of running it may return nil rows, which dynamic.Scan reads as no result rows.
@@ -449,9 +449,10 @@ func (db DB) QueryRendered(ctx context.Context, s stmt.Statement) (*sql.Rows, er
 	return rows, nil
 }
 
-// QueryOwned executes a statement and returns rows whose consumption can be
-// observed through the invocation lifecycle API.
-func (db DB) QueryOwned(ctx context.Context, s stmt.Statement) (*OwnedRows, error) {
+// queryOwned executes a statement and returns rows whose consumption can be
+// observed through the invocation lifecycle API. Query wraps it to satisfy
+// Executor.Query.
+func (db DB) queryOwned(ctx context.Context, s stmt.Statement) (*ownedRows, error) {
 	if err := db.validStatement(s); err != nil {
 		return nil, err
 	}
@@ -483,11 +484,12 @@ func (db DB) QueryOwned(ctx context.Context, s stmt.Statement) (*OwnedRows, erro
 		return nil, err
 	}
 	_, consumption := db.startInvocation(callContext, operation)
-	return &OwnedRows{rows: rows, db: db, operation: operation, invocation: consumption}, nil
+	return &ownedRows{rows: rows, db: db, operation: operation, invocation: consumption}, nil
 }
 
-// ExecRendered executes a pre-rendered parameterized statement.
-func (db DB) ExecRendered(ctx context.Context, s stmt.Statement) (sql.Result, error) {
+// execRendered executes a pre-rendered parameterized statement. Exec wraps it
+// to satisfy Executor.Exec.
+func (db DB) execRendered(ctx context.Context, s stmt.Statement) (sql.Result, error) {
 	if err := db.validStatement(s); err != nil {
 		return nil, err
 	}
@@ -529,7 +531,7 @@ func Write(ctx context.Context, db DB, s query.WriteStatement) (sql.Result, erro
 	if err != nil {
 		return nil, fmt.Errorf("rasql: render write statement: %w", err)
 	}
-	return db.ExecRendered(ctx, rendered)
+	return db.execRendered(ctx, rendered)
 }
 
 // RenderWrite renders a write statement that must carry a RETURNING clause,
@@ -559,7 +561,7 @@ func (db DB) Query(ctx context.Context, statement stmt.Statement) (ResultRows, e
 	if db.busy != nil && !db.busy.acquire() {
 		return nil, planError("transaction_concurrent_use", "executor", "transaction executor is already in use")
 	}
-	rows, err := db.QueryOwned(ctx, statement)
+	rows, err := db.queryOwned(ctx, statement)
 	if err != nil {
 		if db.busy != nil {
 			db.busy.release()
@@ -587,7 +589,7 @@ func (db DB) Exec(ctx context.Context, statement stmt.Statement) (sql.Result, er
 	if db.busy != nil {
 		defer db.busy.release()
 	}
-	return db.ExecRendered(ctx, statement)
+	return db.execRendered(ctx, statement)
 }
 
 func (db DB) queryCompiler() *querycompile.Compiler { return db.compiler }

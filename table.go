@@ -316,11 +316,11 @@ func createTableDef(ctx context.Context, db DB, table schema.TableDef) error {
 	if err != nil {
 		return fmt.Errorf("rasql: render CREATE INDEX: %w", err)
 	}
-	if _, err := db.ExecRendered(ctx, statement); err != nil {
+	if _, err := db.execRendered(ctx, statement); err != nil {
 		return fmt.Errorf("rasql: execute CREATE TABLE: %w", err)
 	}
 	for _, index := range indexes {
-		if _, err := db.ExecRendered(ctx, index); err != nil {
+		if _, err := db.execRendered(ctx, index); err != nil {
 			return fmt.Errorf("rasql: execute CREATE INDEX: %w", err)
 		}
 	}

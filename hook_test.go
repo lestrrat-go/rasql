@@ -50,7 +50,7 @@ func TestHooksIsolateByteArgumentsAcrossExecution(t *testing.T) {
 		mock.ExpectExec("UPDATE blobs SET direct = ?, named = ?").
 			WithArgs([]byte("abc"), []byte("xyz")).
 			WillReturnResult(sqlmock.NewResult(0, 1))
-		_, err = db.ExecRendered(t.Context(), s)
+		_, err = db.Exec(t.Context(), s)
 		require.NoError(t, err)
 	}
 	require.Equal(t, [][]byte{
@@ -106,7 +106,7 @@ func TestClientHooksRunInOrderAndPreserveStatement(t *testing.T) {
 		WithArgs("ada@example.com").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	_, err = db.ExecRendered(t.Context(), s)
+	_, err = db.Exec(t.Context(), s)
 	require.NoError(t, err)
 	require.Equal(t, []string{"first before", "second before", "second after", "first after"}, events)
 }
@@ -162,7 +162,7 @@ func TestHookErrorsPreventOrRejectExecution(t *testing.T) {
 		require.NoError(t, err)
 		s := stmt.New("DELETE FROM users")
 
-		_, err = db.ExecRendered(t.Context(), s)
+		_, err = db.Exec(t.Context(), s)
 		require.ErrorIs(t, err, expected)
 		require.ErrorContains(t, err, "hook before exec")
 	})
@@ -189,7 +189,7 @@ func TestHookErrorsPreventOrRejectExecution(t *testing.T) {
 			WithArgs(42).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 
-		result, err := db.ExecRendered(t.Context(), s)
+		result, err := db.Exec(t.Context(), s)
 		require.NotNil(t, result)
 		require.ErrorIs(t, err, expected)
 		require.ErrorContains(t, err, "hook after exec")
@@ -228,7 +228,7 @@ func TestObserversReportFailuresWithoutChangingResult(t *testing.T) {
 	require.NoError(t, err)
 	s := stmt.New("DELETE FROM users WHERE id = ?", 42)
 	mock.ExpectExec("DELETE FROM users WHERE id = ?").WithArgs(42).WillReturnResult(sqlmock.NewResult(0, 1))
-	result, err := db.ExecRendered(t.Context(), s)
+	result, err := db.Exec(t.Context(), s)
 	require.NoError(t, err)
 	require.Equal(t, []string{"exec", "second"}, order)
 	require.Len(t, reports, 2)
@@ -259,7 +259,7 @@ func TestWithObserversInheritsThroughBegin(t *testing.T) {
 	mock.ExpectRollback()
 	tx, err := db.Begin(t.Context(), nil)
 	require.NoError(t, err)
-	_, err = tx.ExecRendered(t.Context(), stmt.New("DELETE FROM users"))
+	_, err = tx.Exec(t.Context(), stmt.New("DELETE FROM users"))
 	require.NoError(t, err)
 	require.Equal(t, 1, observed)
 	require.NoError(t, tx.Rollback())
@@ -299,7 +299,7 @@ func TestHooksRunInsideExplicitTransaction(t *testing.T) {
 	tx, err = tx.WithHooks(hook)
 	require.NoError(t, err)
 	s := stmt.New("UPDATE users SET email = ? WHERE id = ?", "grace@example.com", 42)
-	_, err = tx.ExecRendered(t.Context(), s)
+	_, err = tx.Exec(t.Context(), s)
 	require.NoError(t, err)
 	require.NoError(t, tx.Commit())
 	require.Equal(t, []string{"before exec", "after exec"}, events)

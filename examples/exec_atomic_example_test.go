@@ -26,17 +26,17 @@ func Example_execAtomic() {
 		fmt.Printf("failed to create database: %s\n", err)
 		return
 	}
-	if _, err := db.ExecRendered(ctx, stmt.New("CREATE TABLE items (value INTEGER)")); err != nil {
+	if _, err := db.Exec(ctx, stmt.New("CREATE TABLE items (value INTEGER)")); err != nil {
 		fmt.Printf("failed to create table: %s\n", err)
 		return
 	}
 	sentinel := errors.New("nested operation failed")
 	err = db.Atomic(ctx, nil, func(ctx context.Context, tx rasql.DB) error {
-		if _, err := tx.ExecRendered(ctx, stmt.New("INSERT INTO items VALUES (1)")); err != nil {
+		if _, err := tx.Exec(ctx, stmt.New("INSERT INTO items VALUES (1)")); err != nil {
 			return err
 		}
 		err := tx.Atomic(ctx, nil, func(ctx context.Context, nested rasql.DB) error {
-			if _, err := nested.ExecRendered(ctx, stmt.New("INSERT INTO items VALUES (2)")); err != nil {
+			if _, err := nested.Exec(ctx, stmt.New("INSERT INTO items VALUES (2)")); err != nil {
 				return err
 			}
 			return sentinel
@@ -44,7 +44,7 @@ func Example_execAtomic() {
 		if !errors.Is(err, sentinel) {
 			return err
 		}
-		_, err = tx.ExecRendered(ctx, stmt.New("INSERT INTO items VALUES (3)"))
+		_, err = tx.Exec(ctx, stmt.New("INSERT INTO items VALUES (3)"))
 		return err
 	})
 	if err != nil {

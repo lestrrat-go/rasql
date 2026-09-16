@@ -18,15 +18,78 @@ type Executor interface {
 	Query(context.Context, stmt.Statement) (ResultRows, error)
 	Exec(context.Context, stmt.Statement) (sql.Result, error)
 }
+
+// ResultRows is what Executor.Query hands back, and it is also the interface
+// a hand-written Executor must satisfy to run through Rows, All, One, Maybe,
+// and Prepared. It owns exactly one query result and completes consumption
+// of it exactly once, through Finish; Columns, Next, Close, Err, and
+// RecordRow exist to drive that consumption, and Finish is what ends it
+// regardless of how it ends.
 type ResultRows interface {
+	// ScanSource decodes the row Next most recently advanced to, in
+	// database/sql's own Scan convention. An implementation that wants a
+	// Scan failure folded into Finish's reported error must record it itself
+	// when Scan returns one; nothing else does that on its behalf.
 	ScanSource
+
+	// Columns returns the result column names. An implementation that
+	// reports its own errors through Finish should fold a Columns failure
+	// into that accounting too, the same way it does for Scan and iteration
+	// failures, rather than let it vanish once the caller has already moved
+	// on to reading rows.
 	Columns() ([]string, error)
+
+	// Next advances to the next row and reports whether one is available. A
+	// false result means rows are exhausted or iteration failed; either way
+	// Next itself does not end consumption or close anything the caller can
+	// rely on staying open, and Err distinguishes the two causes. Once Next
+	// reports false it must keep reporting false, never reviving on a later
+	// call.
 	Next() bool
+
+	// Close ends consumption early, before Next has reported exhaustion. It
+	// must be safe to call more than once and after Next has already
+	// exhausted the rows, and it must leave the row source in the same state
+	// a Finish(nil, true) call would: an implementation typically defines one
+	// in terms of the other so an early Close and a caller's own Finish call
+	// never race to close the same result twice or report completion twice.
 	Close() error
+
+	// Err reports the error iteration recorded, or nil when the rows read so
+	// far, and any exhaustion that ended them, produced none. It must answer
+	// the same way before and after Finish, so a caller that already
+	// finished consumption can still ask what stopped it.
 	Err() error
+
+	// RecordRow marks the row most recently read as successfully consumed,
+	// separately from Scan succeeding: a caller that scans a row and then
+	// rejects it, for a cardinality or a decoding failure only discovered
+	// after Scan returns, must not call RecordRow for that row. An
+	// implementation that reports a row count through its own completion
+	// event counts only what RecordRow marked, so a caller that never calls
+	// it reports a count of zero rather than one derived from Next or Scan.
 	RecordRow()
-	Finish(error, bool) error
+
+	// Finish ends consumption exactly once; every call after the first
+	// leaves the row source untouched and returns the same error the first
+	// call computed. Call it whether rows were drained to exhaustion, closed
+	// early, or abandoned because a decoder failed partway through: it is
+	// the one place that closes the underlying result if nothing has closed
+	// it yet, and the one place that reports this source's outcome to
+	// whatever observes its completion.
+	//
+	// err is the terminal cause a caller already knows about, typically a
+	// conversion or cardinality failure discovered after Scan already
+	// returned successfully. earlyClose reports whether the caller stopped
+	// before Next reported exhaustion; pass its true value, not always true
+	// or always false, since a completion observer reports whichever value
+	// it is given. An implementation returns err joined with whatever error
+	// it accumulated internally while iterating, scanning, or closing, not
+	// err alone, so an errors.Is or errors.As check against the err a caller
+	// passed in still succeeds after the join.
+	Finish(err error, earlyClose bool) error
 }
+
 type compilerProvider interface{ queryCompiler() *querycompile.Compiler }
 type returnedColumnBinder[R any] interface {
 	bindReturnedColumns([]string) (RowDecoder[R], ResultSchema, error)

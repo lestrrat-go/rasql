@@ -80,7 +80,7 @@ func (db DB) atomicSavepoint(ctx context.Context, opts *sql.TxOptions, fn Atomic
 	if err != nil {
 		return err
 	}
-	if _, err := db.ExecRendered(ctx, stmt.New(sqltext.Text("SAVEPOINT "+name))); err != nil {
+	if _, err := db.execRendered(ctx, stmt.New(sqltext.Text("SAVEPOINT "+name))); err != nil {
 		return err
 	}
 	scoped := db
@@ -128,11 +128,11 @@ func (db DB) atomicSavepointName() (string, error) {
 }
 
 func (db DB) atomicRollbackSavepoint(ctx context.Context, name string) error {
-	_, err := db.ExecRendered(ctx, stmt.New(sqltext.Text("ROLLBACK TO SAVEPOINT "+name)))
+	_, err := db.execRendered(ctx, stmt.New(sqltext.Text("ROLLBACK TO SAVEPOINT "+name)))
 	return err
 }
 
 func (db DB) atomicReleaseSavepoint(ctx context.Context, name string) error {
-	_, err := db.ExecRendered(ctx, stmt.New(sqltext.Text("RELEASE SAVEPOINT "+name)))
+	_, err := db.execRendered(ctx, stmt.New(sqltext.Text("RELEASE SAVEPOINT "+name)))
 	return err
 }

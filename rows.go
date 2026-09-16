@@ -7,17 +7,8 @@ import (
 	"sync"
 )
 
-// RowSource is the row-reading surface shared by database/sql and owned rows.
-type RowSource interface {
-	Columns() ([]string, error)
-	Next() bool
-	Scan(...any) error
-	Close() error
-	Err() error
-}
-
-// OwnedRows owns a query result and completes its consumption lifecycle once.
-type OwnedRows struct {
+// ownedRows owns a query result and completes its consumption lifecycle once.
+type ownedRows struct {
 	rows       *sql.Rows
 	db         DB
 	operation  Operation
@@ -34,7 +25,7 @@ type OwnedRows struct {
 }
 
 // Columns returns the result column names and records any error for Finish.
-func (r *OwnedRows) Columns() ([]string, error) {
+func (r *ownedRows) Columns() ([]string, error) {
 	if r == nil || r.rows == nil {
 		return nil, nil
 	}
@@ -49,7 +40,7 @@ func (r *OwnedRows) Columns() ([]string, error) {
 
 // Next advances to the next result row. Exhaustion records iteration errors
 // and closes the underlying rows, while Finish remains the completion owner.
-func (r *OwnedRows) Next() bool {
+func (r *ownedRows) Next() bool {
 	if r == nil || r.rows == nil {
 		if r != nil {
 			r.mu.Lock()
@@ -73,7 +64,7 @@ func (r *OwnedRows) Next() bool {
 }
 
 // Scan scans the current row and records any conversion error for Finish.
-func (r *OwnedRows) Scan(destinations ...any) error {
+func (r *ownedRows) Scan(destinations ...any) error {
 	if r == nil || r.rows == nil {
 		return nil
 	}
@@ -87,7 +78,7 @@ func (r *OwnedRows) Scan(destinations ...any) error {
 }
 
 // Close closes rows and completes consumption as an early close when needed.
-func (r *OwnedRows) Close() error {
+func (r *ownedRows) Close() error {
 	if r == nil {
 		return nil
 	}
@@ -95,7 +86,7 @@ func (r *OwnedRows) Close() error {
 }
 
 // Err returns the recorded iteration error without completing consumption.
-func (r *OwnedRows) Err() error {
+func (r *ownedRows) Err() error {
 	if r == nil {
 		return nil
 	}
@@ -106,7 +97,7 @@ func (r *OwnedRows) Err() error {
 }
 
 // RecordRow increments the count of successfully decoded rows.
-func (r *OwnedRows) RecordRow() {
+func (r *ownedRows) RecordRow() {
 	if r == nil {
 		return
 	}
@@ -119,7 +110,7 @@ func (r *OwnedRows) RecordRow() {
 
 // Finish completes consumption exactly once. Decoder integrations use err for
 // conversion or cardinality failures and earlyClose for consumer early stop.
-func (r *OwnedRows) Finish(err error, earlyClose bool) error {
+func (r *ownedRows) Finish(err error, earlyClose bool) error {
 	if r == nil {
 		return err
 	}
