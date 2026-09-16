@@ -297,7 +297,6 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/exec"
 	store "example.com/mismatch/generated"
 	_ "modernc.org/sqlite"
 )
@@ -385,7 +384,7 @@ func TestSourceMismatchMatrix(t *testing.T) {
 		if _, err = sqlDB.ExecContext(context.Background(), statement); err != nil { t.Fatal(err) }
 	}
 	var statements []string
-	db, err := rasql.New(sqlDB, dialect.SQLite(), exec.HookFunc{BeforeFunc: func(_ context.Context, operation exec.Operation) error { statements = append(statements, operation.SQL()); return nil }})
+	db, err := rasql.New(sqlDB, dialect.SQLite(), rasql.HookFunc{BeforeFunc: func(_ context.Context, operation rasql.Operation) error { statements = append(statements, operation.SQL()); return nil }})
 	if err != nil { t.Fatal(err) }
 	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 1)
 	if err != nil { t.Fatal(err) }

@@ -1,4 +1,4 @@
-package exec_test
+package rasql_test
 
 import (
 	"context"
@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/exec"
 	"github.com/lestrrat-go/rasql/stmt"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
@@ -20,21 +20,21 @@ func TestAtomicOwnsTransactionAndNestedSavepoint(t *testing.T) {
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	db, err := exec.New(database, dialect.SQLite())
+	db, err := rasql.New(database, dialect.SQLite())
 	require.NoError(t, err)
-	_, err = db.ExecRendered(t.Context(), stmt.New("CREATE TABLE values_table (value INTEGER)"))
+	_, err = db.Exec(t.Context(), stmt.New("CREATE TABLE values_table (value INTEGER)"))
 	require.NoError(t, err)
 	callbackErr := errors.New("nested failure")
-	err = db.Atomic(t.Context(), nil, func(ctx context.Context, outer exec.DB) error {
-		_, err := outer.ExecRendered(ctx, stmt.New("INSERT INTO values_table VALUES (1)"))
+	err = db.Atomic(t.Context(), nil, func(ctx context.Context, outer rasql.DB) error {
+		_, err := outer.Exec(ctx, stmt.New("INSERT INTO values_table VALUES (1)"))
 		require.NoError(t, err)
-		err = outer.Atomic(ctx, nil, func(ctx context.Context, nested exec.DB) error {
-			_, err := nested.ExecRendered(ctx, stmt.New("INSERT INTO values_table VALUES (2)"))
+		err = outer.Atomic(ctx, nil, func(ctx context.Context, nested rasql.DB) error {
+			_, err := nested.Exec(ctx, stmt.New("INSERT INTO values_table VALUES (2)"))
 			require.NoError(t, err)
 			return callbackErr
 		})
 		require.ErrorIs(t, err, callbackErr)
-		_, err = outer.ExecRendered(ctx, stmt.New("INSERT INTO values_table VALUES (3)"))
+		_, err = outer.Exec(ctx, stmt.New("INSERT INTO values_table VALUES (3)"))
 		return err
 	})
 	require.NoError(t, err)
@@ -51,12 +51,12 @@ func TestAtomicNestedNamesAreQuotedAndDistinct(t *testing.T) {
 		require.NoError(t, database.Close())
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
-	db, err := exec.New(database, dialect.SQLite())
+	db, err := rasql.New(database, dialect.SQLite())
 	require.NoError(t, err)
 	mock.ExpectBegin()
 	var statements []string
-	db, err = db.WithHooks(exec.HookFunc{BeforeFunc: func(_ context.Context, operation exec.Operation) error {
-		if operation.Kind() == exec.ExecOperation && regexp.MustCompile(`^(SAVEPOINT|RELEASE SAVEPOINT)`).MatchString(operation.SQL()) {
+	db, err = db.WithHooks(rasql.HookFunc{BeforeFunc: func(_ context.Context, operation rasql.Operation) error {
+		if operation.Kind() == rasql.ExecOperation && regexp.MustCompile(`^(SAVEPOINT|RELEASE SAVEPOINT)`).MatchString(operation.SQL()) {
 			statements = append(statements, operation.SQL())
 		}
 		return nil
@@ -69,8 +69,8 @@ func TestAtomicNestedNamesAreQuotedAndDistinct(t *testing.T) {
 	mock.ExpectCommit()
 	tx, err := db.Begin(t.Context(), nil)
 	require.NoError(t, err)
-	require.NoError(t, tx.Atomic(t.Context(), nil, func(ctx context.Context, nested exec.DB) error {
-		return nested.Atomic(ctx, nil, func(context.Context, exec.DB) error { return nil })
+	require.NoError(t, tx.Atomic(t.Context(), nil, func(ctx context.Context, nested rasql.DB) error {
+		return nested.Atomic(ctx, nil, func(context.Context, rasql.DB) error { return nil })
 	}))
 	require.NoError(t, tx.Commit())
 	require.Len(t, statements, 4)
@@ -91,10 +91,10 @@ func TestAtomicSavepointChildRejectsOuterFinalization(t *testing.T) {
 	mock.ExpectExec(`SAVEPOINT "rasql_sp_[a-z0-9]+"`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`RELEASE SAVEPOINT "rasql_sp_[a-z0-9]+"`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
-	db, err := exec.New(database, dialect.SQLite())
+	db, err := rasql.New(database, dialect.SQLite())
 	require.NoError(t, err)
-	err = db.Atomic(t.Context(), nil, func(ctx context.Context, tx exec.DB) error {
-		return tx.Atomic(ctx, nil, func(_ context.Context, scoped exec.DB) error {
+	err = db.Atomic(t.Context(), nil, func(ctx context.Context, tx rasql.DB) error {
+		return tx.Atomic(ctx, nil, func(_ context.Context, scoped rasql.DB) error {
 			require.ErrorContains(t, scoped.Commit(), "cannot commit")
 			require.ErrorContains(t, scoped.Rollback(), "cannot roll back")
 			return nil
@@ -116,13 +116,13 @@ func TestAtomicCleanupUsesDetachedContextAfterCancellation(t *testing.T) {
 	mock.ExpectExec(`ROLLBACK TO SAVEPOINT "rasql_sp_[a-z0-9]+"`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`RELEASE SAVEPOINT "rasql_sp_[a-z0-9]+"`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectRollback()
-	db, err := exec.New(database, dialect.SQLite())
+	db, err := rasql.New(database, dialect.SQLite())
 	require.NoError(t, err)
 	tx, err := db.Begin(t.Context(), nil)
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(t.Context())
 	callbackErr := errors.New("cancelled callback")
-	err = tx.Atomic(ctx, nil, func(context.Context, exec.DB) error {
+	err = tx.Atomic(ctx, nil, func(context.Context, rasql.DB) error {
 		cancel()
 		return callbackErr
 	})
@@ -139,7 +139,7 @@ func TestAtomicCleanupUsesDetachedContextAfterCancellation(t *testing.T) {
 	ctx2, cancel2 := context.WithCancel(t.Context())
 	func() {
 		defer func() { require.Equal(t, panicValue, recover()) }()
-		err = tx.Atomic(ctx2, nil, func(context.Context, exec.DB) error {
+		err = tx.Atomic(ctx2, nil, func(context.Context, rasql.DB) error {
 			cancel2()
 			panic(panicValue)
 		})
@@ -159,20 +159,20 @@ func TestAtomicSavepointLifecycleObserversAreInherited(t *testing.T) {
 	mock.ExpectExec(`SAVEPOINT "rasql_sp_[a-z0-9]+"`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`RELEASE SAVEPOINT "rasql_sp_[a-z0-9]+"`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
-	db, err := exec.New(database, dialect.SQLite())
+	db, err := rasql.New(database, dialect.SQLite())
 	require.NoError(t, err)
 	var statements []string
-	db, err = db.WithInvocationObservers(exec.ExtensionErrorHandlerFunc(func(context.Context, exec.ExtensionError) {}), exec.InvocationObserverFunc(func(ctx context.Context, _ exec.Operation) (context.Context, exec.CompletionObserver) {
-		return ctx, exec.CompletionObserverFunc(func(_ context.Context, completion exec.Completion) error {
-			if completion.Phase == exec.ExecutionPhase && completion.Operation.Kind() == exec.ExecOperation {
+	db, err = db.WithInvocationObservers(rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), rasql.InvocationObserverFunc(func(ctx context.Context, _ rasql.Operation) (context.Context, rasql.CompletionObserver) {
+		return ctx, rasql.CompletionObserverFunc(func(_ context.Context, completion rasql.Completion) error {
+			if completion.Phase == rasql.ExecutionPhase && completion.Operation.Kind() == rasql.ExecOperation {
 				statements = append(statements, completion.Operation.SQL())
 			}
 			return nil
 		})
 	}))
 	require.NoError(t, err)
-	require.NoError(t, db.Atomic(t.Context(), nil, func(ctx context.Context, tx exec.DB) error {
-		return tx.Atomic(ctx, nil, func(context.Context, exec.DB) error { return nil })
+	require.NoError(t, db.Atomic(t.Context(), nil, func(ctx context.Context, tx rasql.DB) error {
+		return tx.Atomic(ctx, nil, func(context.Context, rasql.DB) error { return nil })
 	}))
 	require.Len(t, statements, 2)
 	require.Contains(t, statements[0], "SAVEPOINT")
@@ -187,7 +187,7 @@ func TestAtomicReleaseAndOuterRollbackErrorsRemainReachable(t *testing.T) {
 		require.NoError(t, database.Close())
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
-	db, err := exec.New(database, dialect.SQLite())
+	db, err := rasql.New(database, dialect.SQLite())
 	require.NoError(t, err)
 	mock.ExpectBegin()
 	mock.ExpectExec(`SAVEPOINT "rasql_sp_[a-z0-9]+"`).WillReturnResult(sqlmock.NewResult(0, 0))
@@ -196,7 +196,7 @@ func TestAtomicReleaseAndOuterRollbackErrorsRemainReachable(t *testing.T) {
 	mock.ExpectRollback()
 	tx, err := db.Begin(t.Context(), nil)
 	require.NoError(t, err)
-	err = tx.Atomic(t.Context(), nil, func(context.Context, exec.DB) error { return nil })
+	err = tx.Atomic(t.Context(), nil, func(context.Context, rasql.DB) error { return nil })
 	require.ErrorIs(t, err, releaseErr)
 	require.NoError(t, tx.Rollback())
 
@@ -204,13 +204,13 @@ func TestAtomicReleaseAndOuterRollbackErrorsRemainReachable(t *testing.T) {
 	callbackErr := errors.New("outer callback failed")
 	rollbackErr := errors.New("outer rollback failed")
 	mock.ExpectRollback().WillReturnError(rollbackErr)
-	err = db.Atomic(t.Context(), nil, func(context.Context, exec.DB) error { return callbackErr })
+	err = db.Atomic(t.Context(), nil, func(context.Context, rasql.DB) error { return callbackErr })
 	require.ErrorIs(t, err, callbackErr)
 	require.ErrorIs(t, err, rollbackErr)
 	mock.ExpectBegin()
 	commitErr := errors.New("outer commit failed")
 	mock.ExpectCommit().WillReturnError(commitErr)
-	err = db.Atomic(t.Context(), nil, func(context.Context, exec.DB) error { return nil })
+	err = db.Atomic(t.Context(), nil, func(context.Context, rasql.DB) error { return nil })
 	require.ErrorIs(t, err, commitErr)
 }
 
@@ -222,7 +222,7 @@ func TestAtomicOuterPanicCleanupWrapsRollbackFailure(t *testing.T) {
 		require.NoError(t, database.Close())
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
-	db, err := exec.New(database, dialect.SQLite())
+	db, err := rasql.New(database, dialect.SQLite())
 	require.NoError(t, err)
 	mock.ExpectBegin()
 	rollbackErr := errors.New("outer rollback failed")
@@ -232,12 +232,12 @@ func TestAtomicOuterPanicCleanupWrapsRollbackFailure(t *testing.T) {
 		defer func() {
 			panicErr, ok := recover().(error)
 			require.True(t, ok)
-			var atomicPanic exec.AtomicPanic
+			var atomicPanic rasql.AtomicPanic
 			require.ErrorAs(t, panicErr, &atomicPanic)
 			require.Equal(t, panicValue, atomicPanic.Value)
 			require.ErrorIs(t, atomicPanic, rollbackErr)
 		}()
-		require.NoError(t, db.Atomic(t.Context(), nil, func(context.Context, exec.DB) error { panic(panicValue) }))
+		require.NoError(t, db.Atomic(t.Context(), nil, func(context.Context, rasql.DB) error { panic(panicValue) }))
 	}()
 }
 
@@ -251,22 +251,22 @@ func TestAtomicRejectsNestedOptionsAndUnsupportedDialectBeforeCallback(t *testin
 	})
 	mock.ExpectBegin()
 	mock.ExpectRollback()
-	db, err := exec.New(database, unsupportedSavepointDialect{Dialect: dialect.SQLite()})
+	db, err := rasql.New(database, unsupportedSavepointDialect{Dialect: dialect.SQLite()})
 	require.NoError(t, err)
 	db, err = db.Begin(t.Context(), nil)
 	require.NoError(t, err)
 	called := false
-	err = db.Atomic(t.Context(), nil, func(context.Context, exec.DB) error { called = true; return nil })
+	err = db.Atomic(t.Context(), nil, func(context.Context, rasql.DB) error { called = true; return nil })
 	require.ErrorContains(t, err, "does not support savepoints")
 	require.False(t, called)
 	require.NoError(t, db.Rollback())
 	mock.ExpectBegin()
 	mock.ExpectRollback()
-	tx, err := exec.New(database, dialect.SQLite())
+	tx, err := rasql.New(database, dialect.SQLite())
 	require.NoError(t, err)
 	tx, err = tx.Begin(t.Context(), nil)
 	require.NoError(t, err)
-	err = tx.Atomic(t.Context(), &sql.TxOptions{}, func(context.Context, exec.DB) error { called = true; return nil })
+	err = tx.Atomic(t.Context(), &sql.TxOptions{}, func(context.Context, rasql.DB) error { called = true; return nil })
 	require.ErrorContains(t, err, "does not accept transaction options")
 	require.False(t, called)
 	require.NoError(t, tx.Rollback())
@@ -280,7 +280,7 @@ func TestAtomicJoinsCallbackAndBothCleanupErrors(t *testing.T) {
 		require.NoError(t, database.Close())
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
-	db, err := exec.New(database, dialect.SQLite())
+	db, err := rasql.New(database, dialect.SQLite())
 	require.NoError(t, err)
 	mock.ExpectBegin()
 	mock.ExpectExec(`SAVEPOINT "rasql_sp_[a-z0-9]+"`).WillReturnResult(sqlmock.NewResult(0, 0))
@@ -292,7 +292,7 @@ func TestAtomicJoinsCallbackAndBothCleanupErrors(t *testing.T) {
 	tx, err := db.Begin(t.Context(), nil)
 	require.NoError(t, err)
 	callbackErr := errors.New("callback failed")
-	err = tx.Atomic(t.Context(), nil, func(context.Context, exec.DB) error { return callbackErr })
+	err = tx.Atomic(t.Context(), nil, func(context.Context, rasql.DB) error { return callbackErr })
 	require.ErrorIs(t, err, callbackErr)
 	require.ErrorIs(t, err, rollbackErr)
 	require.ErrorIs(t, err, releaseErr)
@@ -307,7 +307,7 @@ func TestAtomicPanicCleanupPreservesOriginalAndWrapsCleanupFailure(t *testing.T)
 		require.NoError(t, database.Close())
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
-	db, err := exec.New(database, dialect.SQLite())
+	db, err := rasql.New(database, dialect.SQLite())
 	require.NoError(t, err)
 	mock.ExpectBegin()
 	mock.ExpectExec(`SAVEPOINT "rasql_sp_[a-z0-9]+"`).WillReturnResult(sqlmock.NewResult(0, 0))
@@ -322,7 +322,7 @@ func TestAtomicPanicCleanupPreservesOriginalAndWrapsCleanupFailure(t *testing.T)
 			recovered := recover()
 			require.Equal(t, original, recovered)
 		}()
-		require.NoError(t, tx.Atomic(t.Context(), nil, func(context.Context, exec.DB) error { panic(original) }))
+		require.NoError(t, tx.Atomic(t.Context(), nil, func(context.Context, rasql.DB) error { panic(original) }))
 	}()
 	require.NoError(t, tx.Rollback())
 	mock.ExpectBegin()
@@ -339,13 +339,13 @@ func TestAtomicPanicCleanupPreservesOriginalAndWrapsCleanupFailure(t *testing.T)
 			recovered := recover()
 			panicErr, ok := recovered.(error)
 			require.True(t, ok)
-			var atomicPanic exec.AtomicPanic
+			var atomicPanic rasql.AtomicPanic
 			require.ErrorAs(t, panicErr, &atomicPanic)
 			require.Equal(t, original, atomicPanic.Value)
 			require.ErrorIs(t, atomicPanic, rollbackErr)
 			require.ErrorIs(t, atomicPanic, releaseErr)
 		}()
-		require.NoError(t, tx.Atomic(t.Context(), nil, func(context.Context, exec.DB) error { panic(original) }))
+		require.NoError(t, tx.Atomic(t.Context(), nil, func(context.Context, rasql.DB) error { panic(original) }))
 	}()
 	require.NoError(t, tx.Rollback())
 }

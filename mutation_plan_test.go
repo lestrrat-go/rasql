@@ -110,8 +110,8 @@ func TestExecMutation(t *testing.T) {
 	// returned a non-nil error at all, even though *ExtensionError reports that
 	// the driver call underneath it succeeded. A hook failing after a write that
 	// really happened should still let the caller learn how many rows it
-	// affected, the same way exec.DB.ExecRendered already hands the result back
-	// alongside a joined hook error.
+	// affected, the same way DB.Exec already hands the result back alongside a
+	// joined hook error.
 	//
 	// Confirmed by running this test against the unmodified ExecMutation: it
 	// returned MutationOutcome{Durability: DurabilityUnknown} (Affected: 0)

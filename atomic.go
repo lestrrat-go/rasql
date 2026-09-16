@@ -1,4 +1,4 @@
-package exec
+package rasql
 
 import (
 	"context"
@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strconv"
 	"sync/atomic"
-	"time"
 
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/sqltext"
@@ -81,7 +80,7 @@ func (db DB) atomicSavepoint(ctx context.Context, opts *sql.TxOptions, fn Atomic
 	if err != nil {
 		return err
 	}
-	if _, err := db.ExecRendered(ctx, stmt.New(sqltext.Text("SAVEPOINT "+name))); err != nil {
+	if _, err := db.execRendered(ctx, stmt.New(sqltext.Text("SAVEPOINT "+name))); err != nil {
 		return err
 	}
 	scoped := db
@@ -100,10 +99,6 @@ func (db DB) atomicSavepoint(ctx context.Context, opts *sql.TxOptions, fn Atomic
 		return errors.Join(result.err, cleanupErr)
 	}
 	return db.atomicReleaseSavepoint(cleanupCtx, name)
-}
-
-func atomicCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 }
 
 func runAtomicCallback(ctx context.Context, db DB, fn AtomicFunc) (result atomicCallbackResult) {
@@ -133,11 +128,11 @@ func (db DB) atomicSavepointName() (string, error) {
 }
 
 func (db DB) atomicRollbackSavepoint(ctx context.Context, name string) error {
-	_, err := db.ExecRendered(ctx, stmt.New(sqltext.Text("ROLLBACK TO SAVEPOINT "+name)))
+	_, err := db.execRendered(ctx, stmt.New(sqltext.Text("ROLLBACK TO SAVEPOINT "+name)))
 	return err
 }
 
 func (db DB) atomicReleaseSavepoint(ctx context.Context, name string) error {
-	_, err := db.ExecRendered(ctx, stmt.New(sqltext.Text("RELEASE SAVEPOINT "+name)))
+	_, err := db.execRendered(ctx, stmt.New(sqltext.Text("RELEASE SAVEPOINT "+name)))
 	return err
 }

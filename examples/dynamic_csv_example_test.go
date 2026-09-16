@@ -31,11 +31,11 @@ func Example_dynamicCSV() {
 		fmt.Printf("failed to create database: %s\n", err)
 		return
 	}
-	if _, err := db.ExecRendered(ctx, stmt.New(sqltext.Text("CREATE TABLE users (name TEXT, email TEXT)"))); err != nil {
+	if _, err := db.Exec(ctx, stmt.New(sqltext.Text("CREATE TABLE users (name TEXT, email TEXT)"))); err != nil {
 		fmt.Printf("failed to create table: %s\n", err)
 		return
 	}
-	if _, err := db.ExecRendered(ctx, stmt.New(sqltext.Text("INSERT INTO users VALUES ('Ada', 'ada@example.com')"))); err != nil {
+	if _, err := db.Exec(ctx, stmt.New(sqltext.Text("INSERT INTO users VALUES ('Ada', 'ada@example.com')"))); err != nil {
 		fmt.Printf("failed to insert row: %s\n", err)
 		return
 	}

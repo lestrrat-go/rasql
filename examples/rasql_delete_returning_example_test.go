@@ -56,7 +56,7 @@ func Example_rasql_delete_returning() {
 			fmt.Printf("failed to render insert: %s\n", err)
 			return
 		}
-		if _, err := db.ExecRendered(ctx, rendered); err != nil {
+		if _, err := db.Exec(ctx, rendered); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
