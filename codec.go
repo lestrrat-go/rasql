@@ -135,6 +135,12 @@ func WithCodecs(executor Executor, codecs CodecRegistry) (Executor, error) {
 }
 
 func wrapCodecExecutor(executor Executor, codecs CodecRegistry) Executor {
+	// A DB already carries its codec registry as a field, so setting it is
+	// enough: nothing needs a wrapper around a DB to answer Codecs.
+	if db, ok := executor.(DB); ok {
+		db.codecs = codecs
+		return db
+	}
 	base := codecExec{Executor: executor, codecs: codecs}
 	_, hasLogical := executor.(logicalInvocationProvider)
 	_, scope := executor.(ScopeBeginner)

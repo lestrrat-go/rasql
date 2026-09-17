@@ -73,6 +73,7 @@ var (
 	_ SavepointBeginner           = DB{}
 	_ ScopeFinalizer              = guardedScopeFinalizer{}
 	_ executionDurabilityProvider = DB{}
+	_ CodecProvider               = DB{}
 )
 
 // A wrapper varies over the transaction scope and the codec registry, which a
@@ -162,6 +163,16 @@ func wrapProfiledChild(child Executor, compiler *querycompile.Compiler) Executor
 }
 
 func wrapProfiledChildWithCodecs(child Executor, compiler *querycompile.Compiler, codecs CodecRegistry) Executor {
+	// A DB already carries its compiler and its codec registry as fields, so
+	// setting them is enough: nothing needs a wrapper around a DB to answer
+	// queryCompiler or Codecs.
+	if db, ok := child.(DB); ok {
+		db.compiler = compiler
+		if codecs != nil {
+			db.codecs = codecs
+		}
+		return db
+	}
 	if codecs != nil {
 		child = wrapCodecExecutor(child, codecs)
 	}

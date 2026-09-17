@@ -152,13 +152,17 @@ type DB struct {
 	// tx is the transaction this DB runs in, and is nil when it runs directly
 	// on handle. When it is set it is the same value as handle.
 	tx *sql.Tx
-	// profile and compiler are set by AsExecutor, and propagate to every child
+	// profile and compiler are set by Open, and propagate to every child
 	// Begin, BeginScope, and BeginSavepoint return by ordinary struct copy.
 	profile  EngineProfile
 	compiler *querycompile.Compiler
-	// busy guards concurrent use of this DB as an Executor. It is nil for a DB
-	// AsExecutor built from a non-transaction DB, because concurrent statements
-	// on a connection pool need no such guard.
+	// codecs is the registry WithCodecs set, and propagates the same way
+	// profile and compiler do. Codecs falls back to the builtin registry when
+	// this is nil, so a DB Open returned needs no registry of its own.
+	codecs CodecRegistry
+	// busy guards concurrent use of this DB as an Executor. It is nil for a
+	// non-transaction DB, because concurrent statements on a connection pool
+	// need no such guard.
 	busy *executorBusy
 }
 
@@ -300,6 +304,43 @@ func (db DB) WithInvocationObservers(handler ExtensionErrorHandler, observers ..
 	}
 	db.invocationObservers = configured
 	db.extensionErrorHandler = handler
+	return db, nil
+}
+
+// WithCodecs returns a copy of db that binds every argument and decodes every
+// result column through codecs instead of the builtin registry. Every
+// transaction Begin, BeginScope, and BeginSavepoint start from the copy
+// inherits it.
+//
+// `codecs` must not be nil.
+func (db DB) WithCodecs(codecs CodecRegistry) (DB, error) {
+	if err := db.valid(); err != nil {
+		return DB{}, err
+	}
+	if codecs == nil {
+		return DB{}, fmt.Errorf("rasql: codec registry must not be nil")
+	}
+	db.codecs = codecs
+	return db, nil
+}
+
+// WithEngineProfile returns a copy of db that compiles and renders every
+// statement for profile instead of the one Open resolved. Every transaction
+// Begin, BeginScope, and BeginSavepoint start from the copy inherits it.
+//
+// It reports ErrInvalidEngineProfile when profile is zero and
+// ErrEngineProfileMismatch when profile names a different engine than db's
+// dialect speaks.
+func (db DB) WithEngineProfile(profile EngineProfile) (DB, error) {
+	if err := db.valid(); err != nil {
+		return DB{}, err
+	}
+	c, err := profile.queryCompiler(db.dialect)
+	if err != nil {
+		return DB{}, err
+	}
+	db.profile = profile
+	db.compiler = c
 	return db, nil
 }
 
@@ -626,6 +667,17 @@ func (db DB) Exec(ctx context.Context, statement stmt.Statement) (sql.Result, er
 }
 
 func (db DB) queryCompiler() *querycompile.Compiler { return db.compiler }
+
+// Codecs returns the registry db binds arguments and decodes columns through,
+// which satisfies CodecProvider. A DB WithCodecs never touched returns the
+// builtin registry, the same one executorCodecs falls back to for an
+// executor that does not implement CodecProvider at all.
+func (db DB) Codecs() CodecRegistry {
+	if db.codecs == nil {
+		return builtinCodecs
+	}
+	return db.codecs
+}
 
 func (db DB) executionDurability() executionDurabilityEvidence {
 	if !db.IsTransaction() {
