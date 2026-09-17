@@ -193,7 +193,7 @@ func checkNoParameterSlots(slots []bindSlot) error {
 }
 
 func compileMutationParts(executor Executor, statement query.WriteStatement) (compiledQuery, error) {
-	provider, ok := executorCapability[compilerProvider](executor)
+	provider, ok := executor.(compilerProvider)
 	if !ok || provider.queryCompiler() == nil {
 		return compiledQuery{}, &PlanError{Code: "engine_profile_unavailable", Detail: "executor has no retained compiler"}
 	}
@@ -236,7 +236,7 @@ func compileNativeMutation(executor Executor, native nativeMutationPlanAccessor)
 	if dialect == nil || dialect.Name() != plan.engine {
 		return stmt.Statement{}, planError("engine_mismatch", "native.engine", "executor dialect does not match native SQL")
 	}
-	provider, ok := executorCapability[compilerProvider](executor)
+	provider, ok := executor.(compilerProvider)
 	if !ok || provider.queryCompiler() == nil {
 		return stmt.Statement{}, &PlanError{Code: "engine_profile_unavailable", Detail: "executor has no retained compiler"}
 	}
@@ -252,7 +252,7 @@ func compileNativeMutation(executor Executor, native nativeMutationPlanAccessor)
 }
 
 func executorDurability(executor Executor) Durability {
-	provider, ok := executorCapability[executionDurabilityProvider](executor)
+	provider, ok := executor.(executionDurabilityProvider)
 	if !ok {
 		return DurabilityUnknown
 	}
@@ -638,7 +638,7 @@ func execPreparedMutationBatches(ctx context.Context, executor Executor, prepare
 
 func mutationBindLimit(executor Executor, override int) int {
 	limit := 0
-	if provider, ok := executorCapability[compilerProvider](executor); ok && provider.queryCompiler() != nil {
+	if provider, ok := executor.(compilerProvider); ok && provider.queryCompiler() != nil {
 		limit = provider.queryCompiler().EngineProfile().Limits.MaxBindParameters
 	}
 	if override > 0 && (limit == 0 || override < limit) {

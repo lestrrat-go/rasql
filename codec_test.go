@@ -33,9 +33,9 @@ func TestCodecRegistry(t *testing.T) {
 }
 
 // nilCodecScopedExecutor is the shape testdata/compile/runtime_api/positive/main.go
-// declares legal: an executor implementing CodecProvider that returns nil from
-// it. It opens a scope so that WithEngineProfile picks the scoped wrapper,
-// which is the case that used to reach a caller with the nil intact.
+// declares legal: an executor implementing CodecProvider that returns nil
+// from it. It also opens a scope, exercising the case that used to reach a
+// caller with the nil intact.
 type nilCodecScopedExecutor struct{ rasql.Executor }
 
 func (nilCodecScopedExecutor) Codecs() rasql.CodecRegistry { return nil }
@@ -96,9 +96,9 @@ func TestNilCodecRegistryIsAnError(t *testing.T) {
 		requireRegistryUnavailable(t, err)
 	})
 
-	// WithEngineProfile picks profiledCodecExecutor for an executor that opens
-	// no scope, which used to substitute the builtin registry and let the same
-	// mistake through.
+	// The decorator WithEngineProfile builds forwards Codecs to the executor
+	// it wraps, which used to substitute the builtin registry and let the
+	// same mistake through.
 	t.Run("an executor that opens no scope reports it too", func(t *testing.T) {
 		unscoped, err := rasql.WithEngineProfile(struct {
 			rasql.Executor

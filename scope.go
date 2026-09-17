@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"time"
-
-	"github.com/lestrrat-go/rasql/internal/querycompile"
 )
 
 // Scope is one owned transaction or savepoint callback.
@@ -73,124 +71,8 @@ var (
 	_ SavepointBeginner           = DB{}
 	_ ScopeFinalizer              = guardedScopeFinalizer{}
 	_ executionDurabilityProvider = DB{}
+	_ CodecProvider               = DB{}
 )
-
-// A wrapper varies over the transaction scope and the codec registry, which a
-// caller reads off it, and over the logical invocation, which every layer has
-// to rewrap the child of. The compiler and the durability evidence need no
-// variant of their own, because executorCapability reaches both by unwrapping.
-type profiledScopedExecutor struct{ profiledExecutor }
-type profiledCodecScopedExecutor struct{ profiledScopedExecutor }
-
-type codecScopedExecutor struct{ codecExec }
-
-type logicalProfiledScopedExecutor struct{ profiledScopedExecutor }
-type logicalProfiledCodecScopedExecutor struct{ profiledCodecScopedExecutor }
-type logicalCodecScopedExecutor struct{ codecScopedExecutor }
-
-func (e logicalProfiledScopedExecutor) beginLogicalInvocation(ctx context.Context, kind EventKind) (context.Context, Executor, logicalInvocationCompletion) {
-	callCtx, child, completion := beginLogicalFrom(e.Executor, ctx, kind)
-	return callCtx, wrapProfiledChild(child, e.compiler), completion
-}
-func (e logicalProfiledCodecScopedExecutor) beginLogicalInvocation(ctx context.Context, kind EventKind) (context.Context, Executor, logicalInvocationCompletion) {
-	callCtx, child, completion := beginLogicalFrom(e.Executor, ctx, kind)
-	return callCtx, wrapProfiledChildWithCodecs(child, e.compiler, e.Codecs()), completion
-}
-func (e logicalCodecScopedExecutor) beginLogicalInvocation(ctx context.Context, kind EventKind) (context.Context, Executor, logicalInvocationCompletion) {
-	callCtx, child, completion := beginLogicalFrom(e.Executor, ctx, kind)
-	return callCtx, wrapCodecExecutor(child, e.codecs), completion
-}
-
-func (e profiledScopedExecutor) IsTransaction() bool           { return scopeStateFrom(e.Executor) }
-func (e profiledScopedExecutor) scopeContext() context.Context { return scopeContextFrom(e.Executor) }
-
-func (e profiledScopedExecutor) BeginScope(ctx context.Context, opts *sql.TxOptions) (Executor, ScopeFinalizer, error) {
-	child, finalizer, err := beginScopeFrom(e.Executor, ctx, opts)
-	if err != nil {
-		return nil, nil, err
-	}
-	return wrapProfiledChild(child, e.compiler), finalizer, nil
-}
-
-func (e profiledScopedExecutor) BeginSavepoint(ctx context.Context) (Executor, ScopeFinalizer, error) {
-	child, finalizer, err := beginSavepointFrom(e.Executor, ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	return wrapProfiledChild(child, e.compiler), finalizer, nil
-}
-
-func (e profiledCodecScopedExecutor) Codecs() CodecRegistry { return codecsFrom(e.Executor) }
-
-func (e profiledCodecScopedExecutor) BeginScope(ctx context.Context, opts *sql.TxOptions) (Executor, ScopeFinalizer, error) {
-	child, finalizer, err := beginScopeFrom(e.Executor, ctx, opts)
-	if err != nil {
-		return nil, nil, err
-	}
-	return wrapProfiledChildWithCodecs(child, e.compiler, e.Codecs()), finalizer, nil
-}
-
-func (e profiledCodecScopedExecutor) BeginSavepoint(ctx context.Context) (Executor, ScopeFinalizer, error) {
-	child, finalizer, err := beginSavepointFrom(e.Executor, ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	return wrapProfiledChildWithCodecs(child, e.compiler, e.Codecs()), finalizer, nil
-}
-
-func (e codecScopedExecutor) IsTransaction() bool           { return scopeStateFrom(e.Executor) }
-func (e codecScopedExecutor) scopeContext() context.Context { return scopeContextFrom(e.Executor) }
-
-func (e codecScopedExecutor) BeginScope(ctx context.Context, opts *sql.TxOptions) (Executor, ScopeFinalizer, error) {
-	child, finalizer, err := beginScopeFrom(e.Executor, ctx, opts)
-	if err != nil {
-		return nil, nil, err
-	}
-	return wrapCodecExecutor(child, e.codecs), finalizer, nil
-}
-
-func (e codecScopedExecutor) BeginSavepoint(ctx context.Context) (Executor, ScopeFinalizer, error) {
-	child, finalizer, err := beginSavepointFrom(e.Executor, ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	return wrapCodecExecutor(child, e.codecs), finalizer, nil
-}
-
-func wrapProfiledChild(child Executor, compiler *querycompile.Compiler) Executor {
-	return wrapProfiledChildWithCodecs(child, compiler, nil)
-}
-
-func wrapProfiledChildWithCodecs(child Executor, compiler *querycompile.Compiler, codecs CodecRegistry) Executor {
-	if codecs != nil {
-		child = wrapCodecExecutor(child, codecs)
-	}
-	base := profiledExecutor{Executor: child, compiler: compiler}
-	_, hasLogical := child.(logicalInvocationProvider)
-	_, hasCodecs := child.(CodecProvider)
-	if _, scope := child.(ScopeBeginner); scope {
-		if hasCodecs {
-			if hasLogical {
-				return logicalProfiledCodecScopedExecutor{profiledCodecScopedExecutor{profiledScopedExecutor{base}}}
-			}
-			return profiledCodecScopedExecutor{profiledScopedExecutor: profiledScopedExecutor{profiledExecutor: base}}
-		}
-		if hasLogical {
-			return logicalProfiledScopedExecutor{profiledScopedExecutor{base}}
-		}
-		return profiledScopedExecutor{profiledExecutor: base}
-	}
-	if hasCodecs {
-		if hasLogical {
-			return logicalProfiledCodecExecutor{profiledCodecExecutor{base}}
-		}
-		return profiledCodecExecutor{profiledExecutor: base}
-	}
-	if hasLogical {
-		return logicalProfiledExecutor{base}
-	}
-	return base
-}
 
 func unsupportedScopeError() error {
 	return planError("transaction_scope_unsupported", "scope", "executor does not support transaction scopes")
@@ -201,9 +83,9 @@ func unsupportedSavepointError() error {
 }
 
 // beginScopeFrom and beginSavepointFrom open the scope on the executor a
-// wrapper wraps and hand back the child untouched, the way beginLogicalFrom
-// does. Each wrapper puts its own layer back around that child itself, because
-// which layer goes back on is the only thing that differs between them.
+// decoratedExecutor wraps and hand back the child untouched, the way
+// beginLogicalFrom does. decoratedExecutor puts its own compiler, codecs, and
+// event identity back around that child itself.
 
 func beginScopeFrom(inner Executor, ctx context.Context, opts *sql.TxOptions) (Executor, ScopeFinalizer, error) {
 	beginner, ok := inner.(ScopeBeginner)

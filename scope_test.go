@@ -227,10 +227,18 @@ func TestScopeCapabilities(t *testing.T) {
 		custom := capabilityTestExecutor{}
 		customProfiled, err := rasql.WithEngineProfile(custom, profile)
 		require.NoError(t, err)
-		assertScopeCapabilities(t, customProfiled, false, false, rasql.Q1DurabilityUnknown)
+		// The decorator WithEngineProfile builds always implements
+		// ScopeBeginner and SavepointBeginner, even though capabilityTestExecutor
+		// implements neither: BeginScope reports transaction_scope_unsupported
+		// from a method that exists, rather than failing a type assertion.
+		assertScopeCapabilities(t, customProfiled, true, true, rasql.Q1DurabilityUnknown)
+		_, _, beginErr := customProfiled.(rasql.ScopeBeginner).BeginScope(t.Context(), nil)
+		var scopeErr *rasql.PlanError
+		require.ErrorAs(t, beginErr, &scopeErr)
+		require.Equal(t, "transaction_scope_unsupported", scopeErr.Code)
 		customWrapped, err := rasql.WithCodecs(customProfiled, registry)
 		require.NoError(t, err)
-		assertScopeCapabilities(t, customWrapped, false, false, rasql.Q1DurabilityUnknown)
+		assertScopeCapabilities(t, customWrapped, true, true, rasql.Q1DurabilityUnknown)
 		customScoped := capabilityScopedExecutor{}
 		scopedProfiled, err := rasql.WithEngineProfile(customScoped, profile)
 		require.NoError(t, err)
@@ -239,6 +247,9 @@ func TestScopeCapabilities(t *testing.T) {
 		require.True(t, hasCompiler)
 		scopedObserved, err := rasql.WithEventObservers(customScoped, rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}))
 		require.NoError(t, err)
+		// WithEventObservers is called with no observer here, so it hands
+		// scopedObserved back unwrapped: capabilityScopedExecutor itself
+		// implements neither compilerProvider nor CodecProvider.
 		hasCompiler = rasql.Q1QueryCompilerOf(scopedObserved) != nil
 		_, hasCodecs := scopedObserved.(rasql.CodecProvider)
 		_, hasEvidence := rasql.Q1DurabilityOf(scopedObserved)
@@ -273,16 +284,19 @@ func TestScopeCapabilities(t *testing.T) {
 
 		plain, err := rasql.WithEventObservers(capabilityTestExecutor{}, handler, observer)
 		require.NoError(t, err)
-		assertScopeCapabilities(t, plain, false, false, rasql.Q1DurabilityUnknown)
+		// Same as WithEngineProfile above: the decorator always implements
+		// ScopeBeginner and SavepointBeginner, whatever capabilityTestExecutor
+		// itself implements.
+		assertScopeCapabilities(t, plain, true, true, rasql.Q1DurabilityUnknown)
 		_, hasCodecs := plain.(rasql.CodecProvider)
-		require.False(t, hasCodecs)
+		require.True(t, hasCodecs)
 		require.Nil(t, rasql.Q1QueryCompilerOf(plain))
 
 		scoped, err := rasql.WithEventObservers(capabilityScopedExecutor{}, handler, observer)
 		require.NoError(t, err)
 		assertScopeCapabilities(t, scoped, true, true, rasql.Q1DurabilityUnknown)
 		_, hasCodecs = scoped.(rasql.CodecProvider)
-		require.False(t, hasCodecs)
+		require.True(t, hasCodecs)
 		require.Nil(t, rasql.Q1QueryCompilerOf(scoped))
 
 		profiled, err := rasql.WithEngineProfile(capabilityScopedExecutor{}, profile)
@@ -317,8 +331,17 @@ func TestScopeCapabilities(t *testing.T) {
 		require.NoError(t, err)
 		custom, err = rasql.WithCodecs(custom, mustEmptyRegistry(t))
 		require.NoError(t, err)
+		// The decorator WithEngineProfile and WithCodecs each build always
+		// implements the interface a logical invocation looks for, the same
+		// way it always implements ScopeBeginner, and behaves as a no-op
+		// when it carries no event observers of its own: the same ctx and
+		// itself, unchanged, come back.
 		hasProvider := rasql.Q1ForwardsLogicalInvocation(custom)
-		require.False(t, hasProvider)
+		require.True(t, hasProvider)
+		noopCtx, noopChild, noopInvocation := rasql.Q1BeginLogicalInvocation(t.Context(), custom, rasql.EventMutationBatch)
+		require.Equal(t, t.Context(), noopCtx)
+		require.Equal(t, custom, noopChild)
+		noopInvocation.Complete()
 
 		database, err := sql.Open("sqlite", ":memory:")
 		require.NoError(t, err)
@@ -336,8 +359,20 @@ func TestScopeCapabilities(t *testing.T) {
 
 		withoutObservers, err := rasql.WithEventObservers(base, handler)
 		require.NoError(t, err)
+		// WithEventObservers with no observers hands base back unchanged, and
+		// a DB always implements the interface a logical invocation looks
+		// for, the same way it always implements ScopeBeginner: unlike a
+		// foreign executor, whose wrapper only grows the interface once it
+		// carries observers, a DB with none still structurally forwards, and
+		// behaves as a no-op when it does, reporting back the same ctx and
+		// itself unchanged.
 		hasProvider = rasql.Q1ForwardsLogicalInvocation(withoutObservers)
-		require.False(t, hasProvider)
+		require.True(t, hasProvider)
+		noopCtx, noopChild, noopInvocation = rasql.Q1BeginLogicalInvocation(t.Context(), withoutObservers, rasql.EventMutationBatch)
+		require.Equal(t, t.Context(), noopCtx)
+		require.Equal(t, withoutObservers.(rasql.DB).Handle(), noopChild.(rasql.DB).Handle())
+		require.Same(t, rasql.Q1QueryCompilerOf(withoutObservers), rasql.Q1QueryCompilerOf(noopChild))
+		noopInvocation.Complete()
 	})
 
 	t.Run("the child a logical invocation returns retains its capabilities", func(t *testing.T) {
