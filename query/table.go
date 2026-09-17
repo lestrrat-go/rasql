@@ -188,6 +188,43 @@ func (t TableRef) As(alias string) (TableRef, error) {
 	return aliased, nil
 }
 
+// InSchema returns a copy of t whose table lives in namespace: a PostgreSQL
+// schema, a MySQL database, or a SQLite attached-database name. It changes
+// where the table is, not which table it is, so the columns, the column index
+// built over them and any alias all carry over unchanged.
+//
+// An alias still replaces the whole qualified name in a column reference, so
+// moving an aliased table changes the FROM entry and leaves every column
+// rendered under the bare alias. Read QualifierSchema to learn what qualifies
+// a rendered column.
+//
+// An empty namespace is an error rather than a way to unqualify the table. An
+// empty string arriving from configuration that failed to load would otherwise
+// retarget every statement with nothing to report, and a caller who wants the
+// unqualified table already holds it.
+//
+// It leaves every foreign key's ReferencedSchema alone. An empty
+// ReferencedSchema means the server resolves the reference by its own rule,
+// which is a different statement from "the same namespace as the referencing
+// table", so moving the table cannot decide what an unqualified reference
+// meant.
+func (t TableRef) InSchema(namespace string) (TableRef, error) {
+	if err := t.validate(); err != nil {
+		return TableRef{}, err
+	}
+	if err := schema.ValidateIdentifier(namespace); err != nil {
+		return TableRef{}, fmt.Errorf("query table schema: %w", err)
+	}
+	// The descriptor is copied by value, so the new namespace lands on a
+	// descriptor of this ref's own while the columns slice and the column-name
+	// index stay shared with the original. Both are read-only once a descriptor
+	// is built, so nothing is re-indexed and nothing the original reports can
+	// change.
+	moved := *t.descriptor
+	moved.definition.Schema = namespace
+	return TableRef{descriptor: &moved, alias: t.alias}, nil
+}
+
 // Name returns the underlying table name.
 func (t TableRef) Name() string {
 	return t.def().Name

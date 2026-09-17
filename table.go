@@ -147,6 +147,42 @@ func AsRead[T any](table ReadTable[T], alias string) (ReadTable[T], error) {
 	return readTable[T]{source: aliased}, nil
 }
 
+// InSchema returns table in namespace: a PostgreSQL schema, a MySQL database,
+// or a SQLite attached-database name. It is what a caller reaches for when the
+// namespace a store was generated against is not the one the application runs
+// against, such as a MySQL deployment giving each tenant its own database.
+//
+// It carries query.TableRef.InSchema's contract, including that an empty
+// namespace is an error and that no foreign key's ReferencedSchema moves with
+// the table.
+//
+// `table` must not be nil.
+func InSchema[T any](table Table[T], namespace string) (Table[T], error) {
+	if table == nil {
+		return nil, fmt.Errorf("rasql: table schema: table must not be nil")
+	}
+	moved, err := table.Ref().InSchema(namespace)
+	if err != nil {
+		return nil, fmt.Errorf("rasql: table schema: %w", err)
+	}
+	return typedTable[T]{source: moved}, nil
+}
+
+// ReadInSchema returns a queryable typed object in namespace. It is InSchema
+// for a table that is read but never written.
+//
+// `table` must not be nil.
+func ReadInSchema[T any](table ReadTable[T], namespace string) (ReadTable[T], error) {
+	if table == nil {
+		return nil, fmt.Errorf("rasql: table schema: table must not be nil")
+	}
+	moved, err := table.Ref().InSchema(namespace)
+	if err != nil {
+		return nil, fmt.Errorf("rasql: table schema: %w", err)
+	}
+	return readTable[T]{source: moved}, nil
+}
+
 // ColumnRef is a reference to one column of one table. It is query.ColumnRef
 // under a name generated code can reach without importing query.
 type ColumnRef = query.ColumnRef
