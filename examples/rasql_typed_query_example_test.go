@@ -103,7 +103,6 @@ func Example_rasql_typed_query() {
 
 	// A DB couples a database handle with the dialect used to render SQL.
 	db, err := rasql.Open(ctx, database, dialect.SQLite())
-	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -122,7 +121,7 @@ func Example_rasql_typed_query() {
 		{ID: 3, Email: "cyd@example.com"},
 	} {
 		plan := store.NewUsersCreate().ID(user.ID).Email(user.Email).FirstName("First").LastName("Last").Plan()
-		if _, err := rasql.ExecMutation(ctx, executor, plan); err != nil {
+		if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
@@ -148,7 +147,7 @@ func Example_rasql_typed_query() {
 	// Rows yields decoded rows directly, so the loop does not need manual
 	// scanning or conversion.
 	// SQL: SELECT users.id, users.email, users.nickname, users.status, users.first_name, users.last_name FROM users ORDER BY users.email ASC LIMIT 2 OFFSET 1
-	rows, err := rasql.Rows(ctx, executor, q)
+	rows, err := rasql.Rows(ctx, db, q)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return

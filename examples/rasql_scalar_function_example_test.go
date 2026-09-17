@@ -46,7 +46,6 @@ func Example_rasql_scalar_function() {
 
 	// A DB couples a database handle with the dialect used to render SQL.
 	db, err := rasql.Open(ctx, database, dialect.SQLite())
-	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -58,11 +57,11 @@ func Example_rasql_scalar_function() {
 	}
 
 	nick := "Ada"
-	if _, err := rasql.ExecMutation(ctx, executor, store.NewUsersCreate().ID(1).Email("Ada@Example.com").Nickname(&nick).FirstName("First").LastName("Last").Plan()); err != nil {
+	if _, err := rasql.ExecMutation(ctx, db, store.NewUsersCreate().ID(1).Email("Ada@Example.com").Nickname(&nick).FirstName("First").LastName("Last").Plan()); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
-	if _, err := rasql.ExecMutation(ctx, executor, store.NewUsersCreate().ID(2).Email("bob@example.com").FirstName("First").LastName("Last").Plan()); err != nil {
+	if _, err := rasql.ExecMutation(ctx, db, store.NewUsersCreate().ID(2).Email("bob@example.com").FirstName("First").LastName("Last").Plan()); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
@@ -125,7 +124,7 @@ func Example_rasql_scalar_function() {
 	}
 	fmt.Println(byEmailStatement.SQL())
 	fmt.Println(byEmailStatement.Args())
-	byEmail, err := rasql.All(ctx, executor, byEmailQuery)
+	byEmail, err := rasql.All(ctx, db, byEmailQuery)
 	if err != nil {
 		fmt.Printf("failed to query user by email: %s\n", err)
 		return
@@ -143,7 +142,7 @@ func Example_rasql_scalar_function() {
 		return
 	}
 	fmt.Println(namesStatement.SQL())
-	names, err := rasql.All(ctx, executor, namesQuery)
+	names, err := rasql.All(ctx, db, namesQuery)
 	if err != nil {
 		fmt.Printf("failed to query user names: %s\n", err)
 		return

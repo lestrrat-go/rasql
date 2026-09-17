@@ -282,7 +282,6 @@ func aggregatePlacementFixture(t *testing.T) (*sql.DB, schema.TableDef) {
 	users, err := rasql.TableOf[user](definition)
 	require.NoError(t, err)
 	require.NoError(t, rasql.CreateTable(t.Context(), db, users))
-	executor := db
 	userID := query.TypedColumnOf[user, int64](users.Column("id"))
 	userEmail := query.TypedColumnOf[user, string](users.Column("email"))
 	for _, fixture := range []user{
@@ -292,7 +291,7 @@ func aggregatePlacementFixture(t *testing.T) (*sql.DB, schema.TableDef) {
 	} {
 		plan, err := rasql.NewCreatePlan(users, rasql.SetField(userID, fixture.ID), rasql.SetField(userEmail, fixture.Email))
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), executor, plan)
+		_, err = rasql.ExecMutation(t.Context(), db, plan)
 		require.NoError(t, err)
 	}
 	return database, definition
@@ -413,7 +412,6 @@ func TestSQLiteDistinct(t *testing.T) {
 		visits, err := rasql.TableOf[visit](definition)
 		require.NoError(t, err)
 		require.NoError(t, rasql.CreateTable(t.Context(), db, visits))
-		executor := db
 		visitID := query.TypedColumnOf[visit, int64](visits.Column("id"))
 		visitCity := query.NullableColumnOf[visit, string](visits.Column("city"))
 		tokyo := "tokyo"
@@ -431,7 +429,7 @@ func TestSQLiteDistinct(t *testing.T) {
 			}
 			plan, err := rasql.NewCreatePlan(visits, fields...)
 			require.NoError(t, err)
-			_, err = rasql.ExecMutation(t.Context(), executor, plan)
+			_, err = rasql.ExecMutation(t.Context(), db, plan)
 			require.NoError(t, err)
 		}
 
@@ -552,7 +550,6 @@ func distinctFixture(t *testing.T) (*sql.DB, schema.TableDef) {
 	users, err := rasql.TableOf[user](definition)
 	require.NoError(t, err)
 	require.NoError(t, rasql.CreateTable(t.Context(), db, users))
-	executor := db
 	userID := query.TypedColumnOf[user, int64](users.Column("id"))
 	userCity := query.TypedColumnOf[user, string](users.Column("city"))
 	userAge := query.TypedColumnOf[user, int64](users.Column("age"))
@@ -567,7 +564,7 @@ func distinctFixture(t *testing.T) (*sql.DB, schema.TableDef) {
 			rasql.SetField(userAge, fixture.Age),
 		)
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), executor, plan)
+		_, err = rasql.ExecMutation(t.Context(), db, plan)
 		require.NoError(t, err)
 	}
 	return database, definition
@@ -682,7 +679,6 @@ func orderResultAliasFixture(t *testing.T) (*sql.DB, schema.TableDef) {
 	people, err := rasql.TableOf[person](definition)
 	require.NoError(t, err)
 	require.NoError(t, rasql.CreateTable(t.Context(), db, people))
-	executor := db
 	personID := query.TypedColumnOf[person, int64](people.Column("id"))
 	personCity := query.TypedColumnOf[person, string](people.Column("city"))
 	for _, fixture := range []person{
@@ -692,7 +688,7 @@ func orderResultAliasFixture(t *testing.T) (*sql.DB, schema.TableDef) {
 	} {
 		plan, err := rasql.NewCreatePlan(people, rasql.SetField(personID, fixture.ID), rasql.SetField(personCity, fixture.City))
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), executor, plan)
+		_, err = rasql.ExecMutation(t.Context(), db, plan)
 		require.NoError(t, err)
 	}
 	return database, definition

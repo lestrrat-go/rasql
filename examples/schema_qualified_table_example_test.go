@@ -61,7 +61,6 @@ func Example_schema_qualified_table() {
 	}
 
 	db, err := rasql.Open(ctx, database, dialect.SQLite())
-	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -106,7 +105,7 @@ func Example_schema_qualified_table() {
 		fmt.Printf("failed to build create plan: %s\n", err)
 		return
 	}
-	if _, err := rasql.ExecMutation(ctx, executor, createPlan); err != nil {
+	if _, err := rasql.ExecMutation(ctx, db, createPlan); err != nil {
 		fmt.Printf("failed to insert event: %s\n", err)
 		return
 	}
@@ -129,7 +128,7 @@ func Example_schema_qualified_table() {
 	}
 
 	// SQL: SELECT audit.events.id, audit.events.action FROM audit.events WHERE audit.events.id = ? (argument: 1)
-	event, err := rasql.One(ctx, executor,
+	event, err := rasql.One(ctx, db,
 		rasql.Select(source.Source(), projection).Where(rasql.EqualValue(id.Expr(), int64(1))))
 	if err != nil {
 		fmt.Printf("failed to query events: %s\n", err)

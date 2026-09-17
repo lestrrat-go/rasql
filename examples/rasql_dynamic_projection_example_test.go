@@ -41,7 +41,6 @@ func Example_rasql_dynamic_projection() {
 	database.SetMaxOpenConns(1)
 
 	db, err := rasql.Open(ctx, database, dialect.SQLite())
-	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -59,7 +58,7 @@ func Example_rasql_dynamic_projection() {
 	}
 
 	// Populate both tables through the generated create builders.
-	if _, err := rasql.ExecMutation(ctx, executor, store.NewUsersCreate().ID(1).Email("ada@example.com").FirstName("First").LastName("Last").Plan()); err != nil {
+	if _, err := rasql.ExecMutation(ctx, db, store.NewUsersCreate().ID(1).Email("ada@example.com").FirstName("First").LastName("Last").Plan()); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
@@ -68,7 +67,7 @@ func Example_rasql_dynamic_projection() {
 		{ID: 2, UserID: 1, Total: 10},
 	} {
 		plan := store.NewOrdersCreate().ID(order.ID).UserID(order.UserID).Total(order.Total).Plan()
-		if _, err := rasql.ExecMutation(ctx, executor, plan); err != nil {
+		if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
 			fmt.Printf("failed to insert order: %s\n", err)
 			return
 		}
@@ -127,7 +126,7 @@ func Example_rasql_dynamic_projection() {
 		Join(ordersSource.Source(), rasql.EqualExpr(usersID.Expr(), ordersUserID.Expr())).
 		Where(rasql.GreaterValue(ordersTotal.Expr(), int64(20))).
 		OrderBy(rasql.DescExpr(ordersTotal.Expr()))
-	rows, err := rasql.All(ctx, executor, q)
+	rows, err := rasql.All(ctx, db, q)
 	if err != nil {
 		fmt.Printf("failed to build order totals query: %s\n", err)
 		return

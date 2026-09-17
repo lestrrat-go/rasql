@@ -109,7 +109,6 @@ func Example_rasql_transaction() {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
 	}
-	executor := db
 	users := store.Users()
 	// Create the table before any transaction starts.
 	if err := rasql.CreateTable(ctx, db, users); err != nil {
@@ -120,7 +119,7 @@ func Example_rasql_transaction() {
 	// db.Begin starts a transaction on the same handle and returns another DB
 	// bound to it, carrying the engine profile db already resolved. There is no
 	// separate transaction type to carry around: tx is a DB, and it already
-	// takes exactly the plans and queries executor takes.
+	// takes exactly the plans and queries db takes.
 	tx, err := db.Begin(ctx, nil)
 	if err != nil {
 		fmt.Printf("failed to begin transaction: %s\n", err)
@@ -148,7 +147,7 @@ func Example_rasql_transaction() {
 		return
 	}
 
-	// The same query shape that runs against executor also runs against
+	// The same query shape that runs against db also runs against
 	// txExecutor: it reads the two rows written above, before they are committed.
 	// SQL: SELECT users.id, users.email, users.nickname, users.status, users.first_name, users.last_name FROM users ORDER BY users.id ASC
 	inTx, err := rasql.All(ctx, txExecutor, base.OrderBy(rasql.AscExpr(cols.ID.Expr())))
@@ -168,7 +167,7 @@ func Example_rasql_transaction() {
 	// connection, and the transaction holds it until Commit or Rollback
 	// releases it back to the pool.
 	// SQL: SELECT users.id, users.email, users.nickname, users.status, users.first_name, users.last_name FROM users ORDER BY users.id ASC
-	afterCommit, err := rasql.All(ctx, executor, base.OrderBy(rasql.AscExpr(cols.ID.Expr())))
+	afterCommit, err := rasql.All(ctx, db, base.OrderBy(rasql.AscExpr(cols.ID.Expr())))
 	if err != nil {
 		fmt.Printf("failed to query users after commit: %s\n", err)
 		return

@@ -44,7 +44,6 @@ func Example_rasql_group_by() {
 	database.SetMaxOpenConns(1)
 
 	db, err := rasql.Open(ctx, database, dialect.SQLite())
-	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -62,7 +61,7 @@ func Example_rasql_group_by() {
 		{ID: 5, Status: "done"},
 	} {
 		plan := store.NewTasksCreate().ID(task.ID).Status(task.Status).Plan()
-		if _, err := rasql.ExecMutation(ctx, executor, plan); err != nil {
+		if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
 			fmt.Printf("failed to insert task: %s\n", err)
 			return
 		}
@@ -103,7 +102,7 @@ func Example_rasql_group_by() {
 		GroupBy(rasql.Group(status.Expr())).
 		Having(rasql.GreaterValue(rasql.CountRows(), int64(1))).
 		OrderBy(rasql.AscExpr(status.Expr()))
-	rows, err := rasql.All(ctx, executor, q)
+	rows, err := rasql.All(ctx, db, q)
 	if err != nil {
 		fmt.Printf("failed to query status counts: %s\n", err)
 		return

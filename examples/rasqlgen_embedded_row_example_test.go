@@ -56,7 +56,6 @@ func Example_rasqlgen_embedded_row() {
 	database.SetMaxOpenConns(1)
 
 	db, err := rasql.Open(ctx, database, dialect.SQLite())
-	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -65,7 +64,7 @@ func Example_rasqlgen_embedded_row() {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	if _, err := rasql.ExecMutation(ctx, executor, store.NewUsersCreate().ID(1).Email("ada@example.com").FirstName("First").LastName("Last").Plan()); err != nil {
+	if _, err := rasql.ExecMutation(ctx, db, store.NewUsersCreate().ID(1).Email("ada@example.com").FirstName("First").LastName("Last").Plan()); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
@@ -103,7 +102,7 @@ func Example_rasqlgen_embedded_row() {
 		return
 	}
 
-	wrapped, err := rasql.One(ctx, executor, rasql.Select(source.Source(), projection))
+	wrapped, err := rasql.One(ctx, db, rasql.Select(source.Source(), projection))
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return

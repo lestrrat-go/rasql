@@ -182,20 +182,19 @@ func TestOneAndWriteOneOwnTheirCardinality(t *testing.T) {
 		})
 	}))
 	require.NoError(t, err)
-	executor := db
 
 	userProjection := terminalProjection(t, terminalUserDecoder{schema: mustTerminalSchema(t, rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}})})
 	query, err := rasql.Native(rasql.NativeStatement{Engine: "sqlite", SQL: "SELECT id FROM users WHERE id = ?", Args: []rasql.NativeArgument{{Value: int64(1)}}}, userProjection, rasql.ExactlyOne)
 	require.NoError(t, err)
 	mock.ExpectQuery("SELECT id FROM users WHERE id = ?").WithArgs(int64(1)).WillReturnRows(sqlmock.NewRows([]string{"id"}))
-	_, err = rasql.One(t.Context(), executor, query)
+	_, err = rasql.One(t.Context(), db, query)
 	require.ErrorIs(t, err, rasql.ErrNoRows)
 	require.Len(t, completions, 1)
 	require.ErrorIs(t, completions[0].Err, rasql.ErrNoRows)
 
 	completions = nil
 	mock.ExpectQuery("SELECT id FROM users WHERE id = ?").WithArgs(int64(1)).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1).AddRow(2))
-	_, err = rasql.One(t.Context(), executor, query)
+	_, err = rasql.One(t.Context(), db, query)
 	require.ErrorIs(t, err, rasql.ErrMultipleRows)
 	require.Len(t, completions, 1)
 	require.ErrorIs(t, completions[0].Err, rasql.ErrMultipleRows)
@@ -205,7 +204,7 @@ func TestOneAndWriteOneOwnTheirCardinality(t *testing.T) {
 	valueQuery, err := rasql.Native(rasql.NativeStatement{Engine: "sqlite", SQL: "SELECT value"}, valueProjection, rasql.Many)
 	require.NoError(t, err)
 	mock.ExpectQuery("SELECT value").WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow(1).AddRow("bad"))
-	_, err = rasql.All(t.Context(), executor, valueQuery)
+	_, err = rasql.All(t.Context(), db, valueQuery)
 	require.Error(t, err)
 	require.Len(t, completions, 1)
 	require.Equal(t, int64(1), completions[0].RowsRead)

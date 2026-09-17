@@ -81,7 +81,6 @@ func Example_rasql_prepared_parameter() {
 	database.SetMaxOpenConns(1)
 
 	db, err := rasql.Open(ctx, database, dialect.SQLite())
-	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -97,7 +96,7 @@ func Example_rasql_prepared_parameter() {
 		{ID: 3, UserID: 2, Total: 90},
 	} {
 		plan := store.NewOrdersCreate().ID(order.ID).UserID(order.UserID).Total(order.Total)
-		if _, err := rasql.ExecMutation(ctx, executor, plan.Plan()); err != nil {
+		if _, err := rasql.ExecMutation(ctx, db, plan.Plan()); err != nil {
 			fmt.Printf("failed to insert order: %s\n", err)
 			return
 		}
@@ -113,7 +112,7 @@ func Example_rasql_prepared_parameter() {
 	// Prepare validates, lowers, renders and resolves codecs once. minTotal
 	// still has no value, so running prepared as it stands would report
 	// parameter_unbound.
-	prepared, err := rasql.Prepare(executor, query)
+	prepared, err := rasql.Prepare(db, query)
 	if err != nil {
 		fmt.Printf("failed to prepare query: %s\n", err)
 		return
@@ -135,7 +134,7 @@ func Example_rasql_prepared_parameter() {
 
 	// END(prepared_parameter)
 
-	smallOrders, err := atLeast20.All(ctx, executor)
+	smallOrders, err := atLeast20.All(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query orders: %s\n", err)
 		return
@@ -143,7 +142,7 @@ func Example_rasql_prepared_parameter() {
 	for _, order := range smallOrders {
 		fmt.Println(order.ID, order.Total)
 	}
-	largeOrders, err := atLeast80.All(ctx, executor)
+	largeOrders, err := atLeast80.All(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to query orders: %s\n", err)
 		return

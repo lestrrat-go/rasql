@@ -28,7 +28,6 @@ func Example_rasql_delete() {
 
 	// A DB couples a database handle with the dialect used to render SQL.
 	db, err := rasql.Open(ctx, database, dialect.SQLite())
-	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -41,7 +40,7 @@ func Example_rasql_delete() {
 	}
 	for id, email := range map[int64]string{1: "ada@example.com", 2: "grace@example.com", 3: "edsger@example.com"} {
 		plan := store.NewUsersCreate().ID(id).Email(email).FirstName("First").LastName("Last").Plan()
-		if _, err := rasql.ExecMutation(ctx, executor, plan); err != nil {
+		if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
@@ -55,7 +54,7 @@ func Example_rasql_delete() {
 		fmt.Printf("failed to build delete: %s\n", err)
 		return
 	}
-	outcome, err := rasql.ExecMutation(ctx, executor, byID)
+	outcome, err := rasql.ExecMutation(ctx, db, byID)
 	if err != nil {
 		fmt.Printf("failed to delete user: %s\n", err)
 		return
@@ -69,7 +68,7 @@ func Example_rasql_delete() {
 		fmt.Printf("failed to build delete: %s\n", err)
 		return
 	}
-	outcome, err = rasql.ExecMutation(ctx, executor, byPredicate)
+	outcome, err = rasql.ExecMutation(ctx, db, byPredicate)
 	if err != nil {
 		fmt.Printf("failed to delete users: %s\n", err)
 		return

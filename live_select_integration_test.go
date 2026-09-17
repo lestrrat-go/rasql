@@ -123,7 +123,6 @@ func testAggregateOrdering(t *testing.T, database *sql.DB, test aggregateOrderin
 	}()
 	require.NoError(t, rasql.CreateTable(t.Context(), db, records))
 
-	executor := db
 	recordID := query.TypedColumnOf[record, int64](records.Column("id"))
 	recordEmail := query.TypedColumnOf[record, string](records.Column("email"))
 	for _, fixture := range []record{
@@ -132,7 +131,7 @@ func testAggregateOrdering(t *testing.T, database *sql.DB, test aggregateOrderin
 	} {
 		plan, err := rasql.NewCreatePlan(records, rasql.SetField(recordID, fixture.ID), rasql.SetField(recordEmail, fixture.Email))
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), executor, plan)
+		_, err = rasql.ExecMutation(t.Context(), db, plan)
 		require.NoError(t, err)
 	}
 
@@ -304,7 +303,6 @@ func testDistinctOrder(t *testing.T, database *sql.DB, test distinctOrderCase) {
 	}()
 	require.NoError(t, rasql.CreateTable(t.Context(), db, records))
 
-	executor := db
 	recordID := query.TypedColumnOf[record, int64](records.Column("id"))
 	recordCity := query.TypedColumnOf[record, string](records.Column("city"))
 	recordAge := query.TypedColumnOf[record, int64](records.Column("age"))
@@ -319,7 +317,7 @@ func testDistinctOrder(t *testing.T, database *sql.DB, test distinctOrderCase) {
 			rasql.SetField(recordAge, fixture.Age),
 		)
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), executor, plan)
+		_, err = rasql.ExecMutation(t.Context(), db, plan)
 		require.NoError(t, err)
 	}
 
@@ -444,7 +442,6 @@ func testOrderResultAlias(t *testing.T, database *sql.DB, test orderResultAliasC
 	}()
 	require.NoError(t, rasql.CreateTable(t.Context(), db, records))
 
-	executor := db
 	recordID := query.TypedColumnOf[record, int64](records.Column("id"))
 	recordCity := query.TypedColumnOf[record, string](records.Column("city"))
 	for _, fixture := range []record{
@@ -454,7 +451,7 @@ func testOrderResultAlias(t *testing.T, database *sql.DB, test orderResultAliasC
 	} {
 		plan, err := rasql.NewCreatePlan(records, rasql.SetField(recordID, fixture.ID), rasql.SetField(recordCity, fixture.City))
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), executor, plan)
+		_, err = rasql.ExecMutation(t.Context(), db, plan)
 		require.NoError(t, err)
 	}
 

@@ -45,7 +45,6 @@ func Example_rasql_order_by_alias() {
 	database.SetMaxOpenConns(1)
 
 	db, err := rasql.Open(ctx, database, dialect.SQLite())
-	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -57,11 +56,11 @@ func Example_rasql_order_by_alias() {
 	}
 
 	nick := "Ada"
-	if _, err := rasql.ExecMutation(ctx, executor, store.NewUsersCreate().ID(1).Email("ada@example.com").Nickname(&nick).FirstName("First").LastName("Last").Plan()); err != nil {
+	if _, err := rasql.ExecMutation(ctx, db, store.NewUsersCreate().ID(1).Email("ada@example.com").Nickname(&nick).FirstName("First").LastName("Last").Plan()); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
-	if _, err := rasql.ExecMutation(ctx, executor, store.NewUsersCreate().ID(2).Email("bob@example.com").FirstName("First").LastName("Last").Plan()); err != nil {
+	if _, err := rasql.ExecMutation(ctx, db, store.NewUsersCreate().ID(2).Email("bob@example.com").FirstName("First").LastName("Last").Plan()); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
@@ -124,7 +123,7 @@ func Example_rasql_order_by_alias() {
 	}
 	fmt.Println(statement.SQL())
 
-	rows, err := rasql.All(ctx, executor,
+	rows, err := rasql.All(ctx, db,
 		rasql.Select(source.Source(), projection).OrderBy(rasql.DescResult(displayName)))
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
