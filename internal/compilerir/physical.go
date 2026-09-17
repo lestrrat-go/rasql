@@ -41,6 +41,7 @@ type PhysicalObject struct {
 	Kind                        string                        `json:"kind"`
 	Schema                      string                        `json:"schema"`
 	Name                        string                        `json:"name"`
+	Operations                  uint16                        `json:"operations,omitempty"`
 	Columns                     []PhysicalColumn              `json:"columns"`
 	Constraints                 []PhysicalConstraint          `json:"constraints"`
 	Indexes                     []PhysicalIndex               `json:"indexes"`
@@ -192,7 +193,7 @@ func PhysicalFromTableDefs(engine EngineIdentity, tables []schema.TableDef) (Phy
 			diagnostics = append(diagnostics, Diagnostic{Level: DiagnosticError, Code: "invalid_table", Path: t.QualifiedName(), Message: err.Error()})
 			continue
 		}
-		o := PhysicalObject{Kind: string(t.EffectiveKind()), Schema: t.Schema, Name: t.Name, Strict: t.Strict, WithoutRowID: t.WithoutRowID, PrimaryKeyAutoincrement: t.PrimaryKeyAutoincrement, PrimaryKeyOnConflict: string(t.PrimaryKeyOnConflict), VirtualTableModule: t.VirtualTableModule, VirtualTableModuleArguments: slices.Clone(t.VirtualTableModuleArguments)}
+		o := PhysicalObject{Kind: string(t.EffectiveKind()), Schema: t.Schema, Name: t.Name, Operations: uint16(t.Operations), Strict: t.Strict, WithoutRowID: t.WithoutRowID, PrimaryKeyAutoincrement: t.PrimaryKeyAutoincrement, PrimaryKeyOnConflict: string(t.PrimaryKeyOnConflict), VirtualTableModule: t.VirtualTableModule, VirtualTableModuleArguments: slices.Clone(t.VirtualTableModuleArguments)}
 		for i, col := range t.Columns {
 			pc := PhysicalColumn{Name: col.Name, Ordinal: i, LogicalKind: string(col.Type.Kind()), Nullable: col.Nullable, DefaultSQL: string(col.Default), GeneratedSQL: string(col.GeneratedExpression), GeneratedStorage: string(col.GeneratedStorage), Identity: string(col.Identity), Collation: col.Collation, Hidden: col.Hidden}
 			pc.Native = nativeType(col.NativeType)
@@ -399,7 +400,7 @@ func TableDefsFromPhysical(c PhysicalCatalog) ([]schema.TableDef, []Diagnostic) 
 	var out []schema.TableDef
 	var diagnostics []Diagnostic
 	for _, object := range c.Objects {
-		t := schema.TableDef{Schema: object.Schema, Name: object.Name, Kind: schema.ObjectKind(object.Kind), Strict: object.Strict, WithoutRowID: object.WithoutRowID, PrimaryKeyAutoincrement: object.PrimaryKeyAutoincrement, PrimaryKeyOnConflict: schema.ConflictResolution(object.PrimaryKeyOnConflict), VirtualTableModule: object.VirtualTableModule, VirtualTableModuleArguments: slices.Clone(object.VirtualTableModuleArguments)}
+		t := schema.TableDef{Schema: object.Schema, Name: object.Name, Kind: schema.ObjectKind(object.Kind), Operations: schema.Operation(object.Operations), Strict: object.Strict, WithoutRowID: object.WithoutRowID, PrimaryKeyAutoincrement: object.PrimaryKeyAutoincrement, PrimaryKeyOnConflict: schema.ConflictResolution(object.PrimaryKeyOnConflict), VirtualTableModule: object.VirtualTableModule, VirtualTableModuleArguments: slices.Clone(object.VirtualTableModuleArguments)}
 		for _, col := range object.Columns {
 			typeValue := schema.ColumnType(schema.OpaqueType{})
 			switch col.LogicalKind {
