@@ -36,6 +36,17 @@ func (t staffTable) As(alias string) (staffTable, error) {
 	return staffTable{Table: aliased}, nil
 }
 
+// InSchema mirrors the method rasqlgen's compact emitter gains once the
+// generator half of this design lands: one call through rasql.InSchema, and
+// the moved table back inside the same wrapper type.
+func (t staffTable) InSchema(namespace string) (staffTable, error) {
+	moved, err := rasql.InSchema(t.Table, namespace)
+	if err != nil {
+		return staffTable{}, err
+	}
+	return staffTable{Table: moved}, nil
+}
+
 // auditedStaffTable mirrors a wrapper around a wrapper: it reaches
 // rasql.Table[staffRow] through the embedded staffTable rather than directly.
 type auditedStaffTable struct {
@@ -459,5 +470,143 @@ func TestTableCapabilities(t *testing.T) {
 		} {
 			t.Run(name, func(t *testing.T) { require.ErrorContains(t, call(), "does not support") })
 		}
+	})
+}
+
+// TestInSchema requires that a caller can point a generated table at a
+// namespace while the program runs. Where a store is generated is rarely where
+// it runs: a MySQL deployment copies one schema into tenant_0001 and
+// tenant_0002, and a store generated against a development database has to
+// reach production without being regenerated.
+func TestInSchema(t *testing.T) {
+	t.Run("moves a copy and leaves the original alone", func(t *testing.T) {
+		original := staff(t)
+		moved, err := original.InSchema("tenant_0001")
+		require.NoError(t, err)
+
+		require.Equal(t, "tenant_0001", moved.Ref().Schema())
+		require.Equal(t, "tenant_0001.staff", moved.Ref().QualifiedName())
+		require.Equal(t, "", original.Ref().Schema())
+		require.Equal(t, "staff", original.Ref().QualifiedName())
+
+		// Every accessor answers off the moved table, without the wrapper
+		// rebinding a single column.
+		require.Equal(t, "id", moved.ID().Name())
+		require.Equal(t, "staff", moved.ID().Source().Qualifier())
+		require.NoError(t, moved.Email().Validate())
+	})
+
+	t.Run("every statement kind names the new namespace", func(t *testing.T) {
+		moved, err := staff(t).InSchema("tenant_0001")
+		require.NoError(t, err)
+
+		statement, err := render.SelectFrom(dbForBuild(t).Dialect(), moved.Ref()).
+			Select("id", "email").
+			Where(query.Equal(moved.ID(), 1)).
+			Build()
+		require.NoError(t, err)
+		require.Equal(
+			t,
+			`SELECT "tenant_0001"."staff"."id", "tenant_0001"."staff"."email" `+
+				`FROM "tenant_0001"."staff" WHERE ("tenant_0001"."staff"."id" = $1)`,
+			statement.SQL(),
+		)
+
+		update, err := query.NewUpdate(moved.Ref(), query.Set(moved.Email(), query.Bind("ada@example.com")))
+		require.NoError(t, err)
+		update, err = update.WithWhere(query.Equal(moved.ID(), 1))
+		require.NoError(t, err)
+		rendered, err := render.Update(dbForBuild(t).Dialect(), update)
+		require.NoError(t, err)
+		require.Equal(
+			t,
+			`UPDATE "tenant_0001"."staff" SET "email" = $1 WHERE ("tenant_0001"."staff"."id" = $2)`,
+			rendered.SQL(),
+		)
+	})
+
+	t.Run("a relation built from a moved table carries the namespace", func(t *testing.T) {
+		// SourceOf is how a generated table becomes something a query selects
+		// from, so the namespace has to survive that step rather than only the
+		// table wrapper.
+		moved, err := staff(t).InSchema("tenant_0001")
+		require.NoError(t, err)
+		relation, err := rasql.SourceOf(moved.Table, "")
+		require.NoError(t, err)
+		id, err := rasql.BindColumn[staffRow, int64](relation, "id", "")
+		require.NoError(t, err)
+		projection, err := rasql.Scalar("id", id.Expr(), schema.IntegerType{}, "")
+		require.NoError(t, err)
+
+		statement, err := rasql.Render(rasql.Select(relation.Source(), projection), dialect.PostgreSQL())
+		require.NoError(t, err)
+		require.Equal(
+			t,
+			`SELECT "tenant_0001"."staff"."id" AS "id" FROM "tenant_0001"."staff"`,
+			statement.SQL(),
+		)
+	})
+
+	t.Run("an alias still replaces the whole qualified name", func(t *testing.T) {
+		// InSchema writes the descriptor's namespace and SourceOf writes the
+		// alias, two different fields, so the two compose in either order. What
+		// the renderer does with the pair is today's rule unchanged: only the
+		// FROM entry names the namespace, and every column renders under the
+		// bare alias.
+		moved, err := staff(t).InSchema("tenant_0001")
+		require.NoError(t, err)
+		relation, err := rasql.SourceOf(moved.Table, "s")
+		require.NoError(t, err)
+		id, err := rasql.BindColumn[staffRow, int64](relation, "id", "")
+		require.NoError(t, err)
+		projection, err := rasql.Scalar("id", id.Expr(), schema.IntegerType{}, "")
+		require.NoError(t, err)
+
+		statement, err := rasql.Render(rasql.Select(relation.Source(), projection), dialect.PostgreSQL())
+		require.NoError(t, err)
+		require.Equal(
+			t,
+			`SELECT "s"."id" AS "id" FROM "tenant_0001"."staff" AS "s"`,
+			statement.SQL(),
+		)
+
+		// The same pair written the other way round: alias first, then the
+		// move.
+		aliased, err := staff(t).As("s")
+		require.NoError(t, err)
+		aliasedThenMoved, err := aliased.InSchema("tenant_0001")
+		require.NoError(t, err)
+		require.Equal(t, "tenant_0001", aliasedThenMoved.Ref().Schema())
+		require.Equal(t, "s", aliasedThenMoved.Ref().Alias())
+		require.Equal(t, "", aliasedThenMoved.Ref().QualifierSchema())
+	})
+
+	t.Run("rejects an empty namespace", func(t *testing.T) {
+		// An empty string reaching here from configuration that failed to load
+		// would otherwise retarget every statement with nothing to report.
+		_, err := staff(t).InSchema("")
+		require.ErrorContains(t, err, "must not be empty")
+	})
+
+	t.Run("reports a nil table", func(t *testing.T) {
+		_, err := rasql.InSchema[staffRow](nil, "tenant_0001")
+		require.ErrorContains(t, err, "table must not be nil")
+
+		_, err = rasql.ReadInSchema[staffRow](nil, "tenant_0001")
+		require.ErrorContains(t, err, "table must not be nil")
+	})
+
+	t.Run("ReadInSchema moves a read-only object", func(t *testing.T) {
+		view, err := rasql.ReadTableOf[staffRow](staffDefinition())
+		require.NoError(t, err)
+
+		moved, err := rasql.ReadInSchema(view, "tenant_0001")
+		require.NoError(t, err)
+		require.Equal(t, "tenant_0001", moved.Ref().Schema())
+		require.Equal(t, "", view.Ref().Schema())
+		require.NoError(t, moved.Column("email").Validate())
+
+		_, err = rasql.ReadInSchema(view, "")
+		require.ErrorContains(t, err, "must not be empty")
 	})
 }

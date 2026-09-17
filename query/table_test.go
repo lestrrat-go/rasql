@@ -72,6 +72,14 @@ func TestZeroTableRefErrorsInsteadOfPanicking(t *testing.T) {
 		require.ErrorContains(t, err, "must not be nil")
 	})
 
+	t.Run("InSchema", func(t *testing.T) {
+		var err error
+		require.NotPanics(t, func() {
+			_, err = zero.InSchema("tenant_0001")
+		})
+		require.ErrorIs(t, err, query.ErrNilTable)
+	})
+
 	t.Run("Column", func(t *testing.T) {
 		var err error
 		require.NotPanics(t, func() {
@@ -269,4 +277,258 @@ func TestTableRefFromInvalidDescriptorStillFailsBeforeReachingAServer(t *testing
 
 	// Not caught at all: a descriptor repeating a column name renders as SQL a
 	// server accepts. TableRefFrom trades that class of mistake for speed.
+}
+
+// TestTableRefInSchemaMovesACopy requires that InSchema reports the new
+// namespace through every accessor that reads one, leaves the ref it was
+// called on where it was, and re-indexes nothing: the moved ref answers a
+// column lookup from the index the original built, and still reports a name
+// neither of them holds.
+func TestTableRefInSchemaMovesACopy(t *testing.T) {
+	users, err := query.NewTableRef(usersTable())
+	require.NoError(t, err)
+
+	moved, err := users.InSchema("tenant_0001")
+	require.NoError(t, err)
+
+	require.Equal(t, "tenant_0001", moved.Schema())
+	require.True(t, moved.Qualified())
+	require.Equal(t, "tenant_0001", moved.QualifierSchema())
+	require.Equal(t, "tenant_0001.users", moved.QualifiedName())
+	require.Equal(t, "users", moved.Name())
+	require.Equal(t, "users", moved.Qualifier())
+	require.Equal(t, "tenant_0001", moved.Definition().Schema)
+
+	require.Equal(t, "", users.Schema(), "the original stays where it was")
+	require.False(t, users.Qualified())
+	require.Equal(t, "users", users.QualifiedName())
+	require.Equal(t, "", users.Definition().Schema)
+
+	require.Equal(t, usersTable().Columns, moved.Definition().Columns)
+	require.NoError(t, moved.Column("id").Validate())
+	require.NoError(t, moved.Column("email").Validate())
+	require.ErrorContains(t, moved.Column("absent").Validate(), `has no column "absent"`)
+
+	// A second move replaces the first rather than stacking on it, and still
+	// leaves both earlier refs alone.
+	again, err := moved.InSchema("tenant_0002")
+	require.NoError(t, err)
+	require.Equal(t, "tenant_0002", again.Schema())
+	require.Equal(t, "tenant_0001", moved.Schema())
+	require.Equal(t, "", users.Schema())
+}
+
+// TestTableRefInSchemaSharesTheColumns requires that the moved ref reads the
+// same columns slice as the ref it came from rather than a copy of it. A ref
+// built by TableRefFrom is what can show that from outside the package: it
+// reads the caller's slice in place, so a rename after the move is visible
+// through the moved ref exactly as it is through the original.
+func TestTableRefInSchemaSharesTheColumns(t *testing.T) {
+	definition := usersTable()
+	trusted := query.TableRefFrom(definition)
+
+	moved, err := trusted.InSchema("tenant_0001")
+	require.NoError(t, err)
+	require.NoError(t, moved.Column("email").Validate())
+
+	definition.Columns[1].Name = "changed"
+
+	require.Error(t, moved.Column("email").Validate(), "the moved ref reads the same slice as the original")
+	require.NoError(t, moved.Column("changed").Validate())
+	require.NoError(t, trusted.Column("changed").Validate())
+}
+
+// TestTableRefInSchemaRejectsANamespaceItCannotRender requires that an empty
+// namespace is an error rather than a way to unqualify a table, and that an
+// identifier schema.ValidateIdentifier refuses never reaches a rendered
+// statement.
+func TestTableRefInSchemaRejectsANamespaceItCannotRender(t *testing.T) {
+	users, err := query.NewTableRef(usersTable())
+	require.NoError(t, err)
+
+	t.Run("empty", func(t *testing.T) {
+		_, err := users.InSchema("")
+		require.ErrorContains(t, err, "must not be empty")
+	})
+
+	t.Run("NUL", func(t *testing.T) {
+		_, err := users.InSchema("tenant\x000001")
+		require.ErrorContains(t, err, "must not contain NUL")
+	})
+
+	t.Run("invalid UTF-8", func(t *testing.T) {
+		_, err := users.InSchema("tenant\xff")
+		require.ErrorContains(t, err, "must contain valid UTF-8")
+	})
+}
+
+// TestTableRefInSchemaComposesWithAnAlias requires that a move and an alias
+// write two different fields and compose in either order, and pins what the
+// renderer then does with the pair. The rule is today's, unchanged: an alias
+// replaces a table's whole qualified name for a column reference, so only the
+// FROM entry names the namespace and every column renders under the bare
+// alias.
+func TestTableRefInSchemaComposesWithAnAlias(t *testing.T) {
+	users, err := query.NewTableRef(usersTable())
+	require.NoError(t, err)
+
+	movedFirst, err := users.InSchema("tenant_0001")
+	require.NoError(t, err)
+	movedFirst, err = movedFirst.As("u")
+	require.NoError(t, err)
+
+	aliasedFirst, err := users.As("u")
+	require.NoError(t, err)
+	aliasedFirst, err = aliasedFirst.InSchema("tenant_0001")
+	require.NoError(t, err)
+
+	for _, order := range []struct {
+		name  string
+		table query.TableRef
+	}{
+		{name: "InSchema then As", table: movedFirst},
+		{name: "As then InSchema", table: aliasedFirst},
+	} {
+		t.Run(order.name, func(t *testing.T) {
+			require.Equal(t, "tenant_0001", order.table.Schema())
+			require.Equal(t, "u", order.table.Alias())
+			require.Equal(t, "u", order.table.Qualifier())
+			require.True(t, order.table.Qualified(), "the table itself is still qualified")
+			require.Equal(t, "", order.table.QualifierSchema(), "an alias replaces the whole qualified name")
+			require.Equal(t, "u", order.table.QualifiedName())
+
+			statement, err := render.SelectFrom(dialect.PostgreSQL(), order.table).Select("id", "email").Build()
+			require.NoError(t, err)
+			require.Equal(
+				t,
+				`SELECT "u"."id", "u"."email" FROM "tenant_0001"."users" AS "u"`,
+				statement.SQL(),
+			)
+		})
+	}
+}
+
+// TestMovedTableRendersQualifiedOnEveryDialect requires that a table moved at
+// run time names its new namespace in every statement kind rasql renders, on
+// each of the three dialects. It is the whole point of the move: a store
+// generated against one namespace has to reach another one without being
+// regenerated.
+func TestMovedTableRendersQualifiedOnEveryDialect(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		dialect   dialect.Dialect
+		selectSQL string
+		insertSQL string
+		updateSQL string
+		deleteSQL string
+	}{
+		{
+			name:      "postgresql",
+			dialect:   dialect.PostgreSQL(),
+			selectSQL: `SELECT "tenant_0001"."users"."id", "tenant_0001"."users"."email" FROM "tenant_0001"."users" WHERE ("tenant_0001"."users"."id" = $1)`,
+			insertSQL: `INSERT INTO "tenant_0001"."users" ("id", "email") VALUES ($1, $2)`,
+			updateSQL: `UPDATE "tenant_0001"."users" SET "email" = $1 WHERE ("tenant_0001"."users"."id" = $2)`,
+			deleteSQL: `DELETE FROM "tenant_0001"."users" WHERE ("tenant_0001"."users"."id" = $1)`,
+		},
+		{
+			name:      "mysql",
+			dialect:   dialect.MySQL(),
+			selectSQL: "SELECT `tenant_0001`.`users`.`id`, `tenant_0001`.`users`.`email` FROM `tenant_0001`.`users` WHERE (`tenant_0001`.`users`.`id` = ?)",
+			insertSQL: "INSERT INTO `tenant_0001`.`users` (`id`, `email`) VALUES (?, ?)",
+			updateSQL: "UPDATE `tenant_0001`.`users` SET `email` = ? WHERE (`tenant_0001`.`users`.`id` = ?)",
+			deleteSQL: "DELETE FROM `tenant_0001`.`users` WHERE (`tenant_0001`.`users`.`id` = ?)",
+		},
+		{
+			name:      "sqlite",
+			dialect:   dialect.SQLite(),
+			selectSQL: `SELECT "tenant_0001"."users"."id", "tenant_0001"."users"."email" FROM "tenant_0001"."users" WHERE ("tenant_0001"."users"."id" = ?)`,
+			insertSQL: `INSERT INTO "tenant_0001"."users" ("id", "email") VALUES (?, ?)`,
+			updateSQL: `UPDATE "tenant_0001"."users" SET "email" = ? WHERE ("tenant_0001"."users"."id" = ?)`,
+			deleteSQL: `DELETE FROM "tenant_0001"."users" WHERE ("tenant_0001"."users"."id" = ?)`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			users, err := query.NewTableRef(usersTable())
+			require.NoError(t, err)
+			moved, err := users.InSchema("tenant_0001")
+			require.NoError(t, err)
+			id := moved.Column("id")
+			email := moved.Column("email")
+
+			t.Run("SELECT", func(t *testing.T) {
+				statement, err := render.SelectFrom(test.dialect, moved).
+					Select("id", "email").
+					Where(query.Equal(id, 1)).
+					Build()
+				require.NoError(t, err)
+				require.Equal(t, test.selectSQL, statement.SQL())
+			})
+
+			t.Run("INSERT", func(t *testing.T) {
+				insert, err := query.NewInsertRows(moved, []query.ColumnRef{id, email}, [][]any{{1, "ada@example.com"}})
+				require.NoError(t, err)
+				statement, err := render.Insert(test.dialect, insert)
+				require.NoError(t, err)
+				require.Equal(t, test.insertSQL, statement.SQL())
+			})
+
+			t.Run("UPDATE", func(t *testing.T) {
+				update, err := query.NewUpdate(moved, query.Set(email, query.Bind("grace@example.com")))
+				require.NoError(t, err)
+				update, err = update.WithWhere(query.Equal(id, 1))
+				require.NoError(t, err)
+				statement, err := render.Update(test.dialect, update)
+				require.NoError(t, err)
+				require.Equal(t, test.updateSQL, statement.SQL())
+			})
+
+			t.Run("DELETE", func(t *testing.T) {
+				del, err := query.NewDelete(moved)
+				require.NoError(t, err)
+				del, err = del.WithWhere(query.Equal(id, 1))
+				require.NoError(t, err)
+				statement, err := render.Delete(test.dialect, del)
+				require.NoError(t, err)
+				require.Equal(t, test.deleteSQL, statement.SQL())
+			})
+		})
+	}
+}
+
+// TestOneStatementReachesTwoNamespaces requires that two copies of one table
+// moved to two namespaces join in a single statement, each column rendering
+// under its own namespace. This is the case a per-connection namespace could
+// not express, since a connection points at one place.
+//
+// It also pins the limit the existing source rule puts on that: a moved copy
+// joined to the unqualified original is refused, because rasql renders a
+// column of an unqualified table under a bare "users" that names the qualified
+// table equally well. Aliasing either side is the way out, and it is the same
+// answer rasql already gives for a self-join.
+func TestOneStatementReachesTwoNamespaces(t *testing.T) {
+	users, err := query.NewTableRef(usersTable())
+	require.NoError(t, err)
+
+	first, err := users.InSchema("tenant_0001")
+	require.NoError(t, err)
+	second, err := users.InSchema("tenant_0002")
+	require.NoError(t, err)
+
+	statement, err := render.SelectFrom(dialect.PostgreSQL(), first).
+		Select("id").
+		Join(query.InnerJoin(query.Relation(second), query.Equal(first.Column("id"), second.Column("id")))).
+		Build()
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		`SELECT "tenant_0001"."users"."id" FROM "tenant_0001"."users" `+
+			`INNER JOIN "tenant_0002"."users" ON ("tenant_0001"."users"."id" = "tenant_0002"."users"."id")`,
+		statement.SQL(),
+	)
+
+	_, err = render.SelectFrom(dialect.PostgreSQL(), users).
+		Select("id").
+		Join(query.InnerJoin(query.Relation(first), query.Equal(users.Column("id"), first.Column("id")))).
+		Build()
+	require.ErrorContains(t, err, `is referred to as "users"`)
 }
