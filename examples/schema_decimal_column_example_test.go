@@ -30,8 +30,8 @@ type InvoicesTable struct {
 	rasql.Table[InvoiceRow]
 }
 
-func (t InvoicesTable) ID() query.ColumnRef     { return rasql.ColumnOf(t.Table, "id") }
-func (t InvoicesTable) Amount() query.ColumnRef { return rasql.ColumnOf(t.Table, "amount") }
+func (t InvoicesTable) ID() query.ColumnRef     { return t.Column("id") }
+func (t InvoicesTable) Amount() query.ColumnRef { return t.Column("amount") }
 
 // invoiceDecoder decodes an InvoiceRow from its two columns, in projection order.
 type invoiceDecoder struct{ result rasql.ResultSchema }
@@ -74,12 +74,12 @@ func Example_schema_decimal_column() {
 	// SQLite has no exact decimal storage class, so the dialect declares this
 	// column TEXT rather than NUMERIC(19,4), which would round through REAL.
 	// SQL: CREATE TABLE invoices (id INTEGER NOT NULL, amount TEXT NOT NULL, PRIMARY KEY (id))
-	if err := rasql.CreateTable(ctx, db, invoices); err != nil {
+	if err := rasql.CreateTable(ctx, db, invoices.Ref()); err != nil {
 		fmt.Printf("failed to create invoices table: %s\n", err)
 		return
 	}
 
-	source, err := rasql.SourceOf(invoices, "")
+	source, err := invoices.Source("")
 	if err != nil {
 		fmt.Printf("failed to bind invoices source: %s\n", err)
 		return
@@ -96,7 +96,7 @@ func Example_schema_decimal_column() {
 	}
 
 	// SQL: INSERT INTO invoices (id, amount) VALUES (?, ?) (arguments: 1, "19.99")
-	createPlan, err := rasql.NewCreatePlan[InvoiceRow](invoices,
+	createPlan, err := rasql.NewCreatePlan[InvoiceRow](invoices.Table,
 		rasql.SetField[InvoiceRow](id, int64(1)),
 		rasql.SetField[InvoiceRow](amount, "19.99"),
 	)

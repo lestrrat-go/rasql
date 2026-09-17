@@ -34,7 +34,7 @@ func Example_rasql_delete() {
 	}
 	users := store.Users()
 	// Create the table described by the generated users descriptor.
-	if err := rasql.CreateTable(ctx, db, users); err != nil {
+	if err := rasql.CreateTable(ctx, db, users.Ref()); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
@@ -49,7 +49,7 @@ func Example_rasql_delete() {
 	// NewDeletePlan takes a table and a typed predicate built through the
 	// query package.
 	// SQL: DELETE FROM users WHERE users.id = ? (argument: 1)
-	byID, err := rasql.NewDeletePlan(users, query.EqualValue(users.ID(), int64(1)))
+	byID, err := rasql.NewDeletePlan(users.Table, query.EqualValue(users.ID(), int64(1)))
 	if err != nil {
 		fmt.Printf("failed to build delete: %s\n", err)
 		return
@@ -63,7 +63,7 @@ func Example_rasql_delete() {
 
 	// Where takes any predicate the query package can build.
 	// SQL: DELETE FROM users WHERE users.id > ? (argument: 2)
-	byPredicate, err := rasql.NewDeletePlan(users, query.GreaterValue(users.ID(), int64(2)))
+	byPredicate, err := rasql.NewDeletePlan(users.Table, query.GreaterValue(users.ID(), int64(2)))
 	if err != nil {
 		fmt.Printf("failed to build delete: %s\n", err)
 		return
@@ -77,7 +77,7 @@ func Example_rasql_delete() {
 
 	// A zero predicate is rejected, so a dropped Where cannot become a
 	// full-table delete by accident.
-	if _, err := rasql.NewDeletePlan(users, query.Predicate{}); err != nil {
+	if _, err := rasql.NewDeletePlan(users.Table, query.Predicate{}); err != nil {
 		fmt.Println(err)
 	}
 

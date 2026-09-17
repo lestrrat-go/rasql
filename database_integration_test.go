@@ -89,7 +89,7 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	tableName := dbtest.UniqueName(t, "rasql_integration_records")
 	records, err := rasql.TableOf[integrationRecord](integrationTable(tableName))
 	require.NoError(t, err)
-	relation, err := rasql.SourceOf(records, "")
+	relation, err := records.Source("")
 	require.NoError(t, err)
 	recordID, err := rasql.BindColumn[integrationRecord, int64](relation, "id", "")
 	require.NoError(t, err)
@@ -120,7 +120,7 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 		_, err := database.ExecContext(t.Context(), "DROP TABLE IF EXISTS "+tableName)
 		require.NoError(t, err)
 	}()
-	require.NoError(t, rasql.CreateTable(t.Context(), db, records))
+	require.NoError(t, rasql.CreateTable(t.Context(), db, records.Ref()))
 
 	first := integrationRecord{ID: 1, Active: true, Email: "ada@example.com", Amount: "19.99"}
 	second := integrationRecord{ID: 2, Active: false, Email: "grace@example.com", Amount: "5.00"}
@@ -403,7 +403,7 @@ func testQualifiedDDLPostgreSQL(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	customersSource, err := rasql.SourceOf(customers, "")
+	customersSource, err := customers.Source("")
 	require.NoError(t, err)
 	customersID, err := rasql.BindColumn[customerRow, int64](customersSource, "id", "")
 	require.NoError(t, err)
@@ -413,7 +413,7 @@ func testQualifiedDDLPostgreSQL(t *testing.T) {
 	// which rasql.CreateTable never states explicitly: an unqualified Schema
 	// resolves through the connection's own default, the same as before
 	// this change.
-	require.NoError(t, rasql.CreateTable(t.Context(), db, customers))
+	require.NoError(t, rasql.CreateTable(t.Context(), db, customers.Ref()))
 	defer func() {
 		_, err := database.ExecContext(t.Context(), "DROP TABLE IF EXISTS "+customersName)
 		require.NoError(t, err)
@@ -453,13 +453,13 @@ func testQualifiedDDLPostgreSQL(t *testing.T) {
 		}},
 	})
 	require.NoError(t, err)
-	ordersSource, err := rasql.SourceOf(orders, "")
+	ordersSource, err := orders.Source("")
 	require.NoError(t, err)
 	ordersID, err := rasql.BindColumn[orderRow, int64](ordersSource, "id", "")
 	require.NoError(t, err)
 	ordersCustomerID, err := rasql.BindColumn[orderRow, int64](ordersSource, "customer_id", "")
 	require.NoError(t, err)
-	require.NoError(t, rasql.CreateTable(t.Context(), db, orders))
+	require.NoError(t, rasql.CreateTable(t.Context(), db, orders.Ref()))
 
 	customerCreate, err := rasql.NewCreatePlan(customers,
 		rasql.SetField(customersID, int64(1)), rasql.SetField(customersNameColumn, "ada"))
@@ -538,7 +538,7 @@ func testQualifiedDDLMySQL(t *testing.T) {
 		}},
 	})
 	require.NoError(t, err)
-	eventsSource, err := rasql.SourceOf(events, "")
+	eventsSource, err := events.Source("")
 	require.NoError(t, err)
 	eventID, err := rasql.BindColumn[eventRow, int64](eventsSource, "id", "")
 	require.NoError(t, err)
@@ -546,7 +546,7 @@ func testQualifiedDDLMySQL(t *testing.T) {
 	require.NoError(t, err)
 	eventAction, err := rasql.BindColumn[eventRow, string](eventsSource, "action", "")
 	require.NoError(t, err)
-	require.NoError(t, rasql.CreateTable(t.Context(), db, events))
+	require.NoError(t, rasql.CreateTable(t.Context(), db, events.Ref()))
 
 	// Both objects must live in schemaName rather than in the connection's
 	// own default database, which is what the qualified DDL is for. The

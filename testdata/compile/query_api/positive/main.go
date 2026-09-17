@@ -23,11 +23,11 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	table, err := rasql.ReadTableOf[user](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
+	table, err := rasql.TableOf[user](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
 	if err != nil {
 		panic(err)
 	}
-	relation, err := rasql.SourceOf(table, "u")
+	relation, err := table.Source("u")
 	if err != nil {
 		panic(err)
 	}

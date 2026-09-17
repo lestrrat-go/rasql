@@ -132,9 +132,9 @@ type validationDecoder struct {
 func (d *validationDecoder) ResultSchema() rasql.ResultSchema       { return d.schema }
 func (d *validationDecoder) Presence() []rasql.Presence             { return d.presence }
 func (*validationDecoder) DecodeRow(rasql.ScanSource, *int64) error { return nil }
-func validationTable(t *testing.T, name string) rasql.ReadTable[int64] {
+func validationTable(t *testing.T, name string) rasql.Table[int64] {
 	t.Helper()
-	table, err := rasql.ReadTableOf[int64](schema.TableDef{Name: name, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
+	table, err := rasql.TableOf[int64](schema.TableDef{Name: name, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
 	require.NoError(t, err)
 	return table
 }
@@ -149,8 +149,8 @@ func validationProjection(t *testing.T) rasql.Projection[int64] {
 func TestSourceIdentityAndDecoderValidation(t *testing.T) {
 	a := validationTable(t, "a")
 	b := validationTable(t, "b")
-	ar, _ := rasql.SourceOf(a, "same")
-	br, _ := rasql.SourceOf(b, "other")
+	ar, _ := a.Source("same")
+	br, _ := b.Source("other")
 	p := validationProjection(t)
 	q := rasql.Select(ar.Source(), p).Where(rasql.EqualValue(rasql.Value(int64(1)), int64(1)))
 	require.NoError(t, q.Validate())
@@ -168,7 +168,7 @@ func TestSourceIdentityAndDecoderValidation(t *testing.T) {
 	require.Equal(t, "invalid_source", pe.Code)
 	joined := rasql.Select(ar.Source(), p).Join(br.Source(), rasql.EqualExpr(ac.Expr(), bc.Expr()))
 	require.NoError(t, joined.Validate())
-	duplicateSource, _ := rasql.SourceOf(b, "same")
+	duplicateSource, _ := b.Source("same")
 	duplicate := rasql.Select(ar.Source(), p).Join(duplicateSource.Source(), rasql.EqualValue(rasql.Value(int64(1)), int64(1)))
 	var duplicateError *rasql.PlanError
 	require.ErrorAs(t, duplicate.Validate(), &duplicateError)

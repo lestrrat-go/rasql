@@ -49,7 +49,7 @@ func Example_rasql_group_by() {
 		return
 	}
 	tasks := store.Tasks()
-	if err := rasql.CreateTable(ctx, db, tasks); err != nil {
+	if err := rasql.CreateTable(ctx, db, tasks.Ref()); err != nil {
 		fmt.Printf("failed to create tasks table: %s\n", err)
 		return
 	}
@@ -67,7 +67,7 @@ func Example_rasql_group_by() {
 		}
 	}
 
-	source, err := rasql.SourceOf(tasks, "")
+	source, err := tasks.Source("")
 	if err != nil {
 		fmt.Printf("failed to bind tasks source: %s\n", err)
 		return

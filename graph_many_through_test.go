@@ -313,14 +313,14 @@ func mtFixture(t *testing.T) (rasql.Executor, *mtCountingExecutor, rasql.Query[m
 	// WithEngineProfile re-attaches the compiler the decorator does not carry.
 	executor, err := rasql.WithEngineProfile(counter, rasql.SQLite335())
 	require.NoError(t, err)
-	parents := rasql.MustReadTableOf[mtParentRow](schema.TableDef{Name: "mt_parents", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}})
-	children := rasql.MustReadTableOf[mtChildRow](schema.TableDef{Name: "mt_children", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "active", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}})
-	junctions := rasql.MustReadTableOf[mtJunctionRow](schema.TableDef{Name: "mt_junctions", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "parent", Type: schema.IntegerType{}}, {Name: "target", Type: schema.IntegerType{}}, {Name: "rank", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}})
-	parentSource, err := rasql.SourceOf(parents, "p")
+	parents := rasql.MustTableOf[mtParentRow](schema.TableDef{Name: "mt_parents", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}})
+	children := rasql.MustTableOf[mtChildRow](schema.TableDef{Name: "mt_children", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "active", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}})
+	junctions := rasql.MustTableOf[mtJunctionRow](schema.TableDef{Name: "mt_junctions", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "parent", Type: schema.IntegerType{}}, {Name: "target", Type: schema.IntegerType{}}, {Name: "rank", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}})
+	parentSource, err := parents.Source("p")
 	require.NoError(t, err)
-	childSource, err := rasql.SourceOf(children, "c")
+	childSource, err := children.Source("c")
 	require.NoError(t, err)
-	junctionSource, err := rasql.SourceOf(junctions, "j")
+	junctionSource, err := junctions.Source("j")
 	require.NoError(t, err)
 	pid, err := rasql.BindColumn[mtParentRow, int64](parentSource, "id", "")
 	require.NoError(t, err)
@@ -470,23 +470,32 @@ CREATE TABLE r4_width_junctions (parent_id INTEGER NOT NULL, parent_tenant INTEG
 	counter := &graphWidthExecutor{Executor: base}
 	executor, err := rasql.WithEngineProfile(counter, rasql.SQLite335())
 	require.NoError(t, err)
-	parents, err := rasql.SourceOf(rasql.MustReadTableOf[graphWidthParentRow](schema.TableDef{
+	parents, err := rasql.MustTableOf[graphWidthParentRow](schema.TableDef{
 		Name: "r4_width_parents", PrimaryKey: []string{"id"},
 		Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}}},
-	}), "wp")
+	}).Source(
+
+		"wp")
+
 	require.NoError(t, err)
-	children, err := rasql.SourceOf(rasql.MustReadTableOf[graphWidthChildRow](schema.TableDef{
+	children, err := rasql.MustTableOf[graphWidthChildRow](schema.TableDef{
 		Name: "r4_width_children", PrimaryKey: []string{"id"},
 		Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}}},
-	}), "wc")
+	}).Source(
+
+		"wc")
+
 	require.NoError(t, err)
-	junction, err := rasql.SourceOf(rasql.MustReadTableOf[graphWidthJunctionRow](schema.TableDef{
+	junction, err := rasql.MustTableOf[graphWidthJunctionRow](schema.TableDef{
 		Name: "r4_width_junctions", Columns: []schema.ColumnDef{
 			{Name: "parent_id", Type: schema.IntegerType{}}, {Name: "parent_tenant", Type: schema.IntegerType{}},
 			{Name: "child_id", Type: schema.IntegerType{}}, {Name: "child_tenant", Type: schema.IntegerType{}},
 			{Name: "kind", Type: schema.IntegerType{}},
 		},
-	}), "wj")
+	}).Source(
+
+		"wj")
+
 	require.NoError(t, err)
 	parentRelation := rasql.Q1TypedRelation[graphWidthParentRow](parents.Source())
 	childRelation := rasql.Q1TypedRelation[graphWidthChildRow](children.Source())

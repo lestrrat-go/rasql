@@ -167,7 +167,7 @@ func BenchmarkTypedRowScan(b *testing.B) {
 
 func benchmarkCollectionQuery(b *testing.B, limit *int) rasql.Query[benchmarkMemberRow] {
 	b.Helper()
-	table, err := rasql.ReadTableOf[benchmarkMemberRow](schema.TableDef{Name: "members", Columns: []schema.ColumnDef{
+	table, err := rasql.TableOf[benchmarkMemberRow](schema.TableDef{Name: "members", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "name", Type: schema.TextType{}},
 		{Name: "email", Type: schema.TextType{}},
@@ -175,7 +175,7 @@ func benchmarkCollectionQuery(b *testing.B, limit *int) rasql.Query[benchmarkMem
 	if err != nil {
 		b.Fatal(err)
 	}
-	relation, err := rasql.SourceOf(table, "")
+	relation, err := table.Source("")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -262,14 +262,14 @@ func (benchmarkCountRowDecoder) DecodeRow(source rasql.ScanSource, result *bench
 
 func benchmarkCountBaseQuery(b *testing.B) rasql.Query[benchmarkCountRow] {
 	b.Helper()
-	table, err := rasql.ReadTableOf[benchmarkCountRow](schema.TableDef{
+	table, err := rasql.TableOf[benchmarkCountRow](schema.TableDef{
 		Name:    "members",
 		Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 	})
 	if err != nil {
 		b.Fatal(err)
 	}
-	relation, err := rasql.SourceOf(table, "")
+	relation, err := table.Source("")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -453,14 +453,14 @@ func benchmarkTasksDefinition() schema.TableDef {
 // SourceOf itself, once per table per query build, separate from the
 // end-to-end query benchmarks above.
 func BenchmarkSourceOf(b *testing.B) {
-	table, err := rasql.ReadTableOf[benchmarkTaskRow](benchmarkTasksDefinition())
+	table, err := rasql.TableOf[benchmarkTaskRow](benchmarkTasksDefinition())
 	if err != nil {
 		b.Fatal(err)
 	}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		if _, err := rasql.SourceOf(table, ""); err != nil {
+		if _, err := table.Source(""); err != nil {
 			b.Fatal(err)
 		}
 	}

@@ -60,12 +60,12 @@ func partitionQuery(t *testing.T) rasql.Query[partitionRow] {
 	t.Helper()
 	result, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}})
 	require.NoError(t, err)
-	table, err := rasql.ReadTableOf[partitionRow](schema.TableDef{
+	table, err := rasql.TableOf[partitionRow](schema.TableDef{
 		Name:    "items",
 		Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 	})
 	require.NoError(t, err)
-	relation, err := rasql.SourceOf(table, "i")
+	relation, err := table.Source("i")
 	require.NoError(t, err)
 	column, err := rasql.BindColumn[partitionRow, int64](relation, "id", "")
 	require.NoError(t, err)

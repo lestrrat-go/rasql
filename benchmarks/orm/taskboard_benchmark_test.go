@@ -125,15 +125,15 @@ type taskboardTasksTable struct{ rasql.Table[taskboardTask] }
 type taskboardMembersTable struct{ rasql.Table[taskboardMember] }
 
 func (t taskboardProjectsTable) Source(alias string) (rasql.TypedRelation[taskboardProject], error) {
-	return rasql.SourceOf(t.Table, alias)
+	return t.Table.Source(alias)
 }
 func (t taskboardProjectsTable) Column(name string) query.ColumnRef { return t.Table.Column(name) }
 func (t taskboardTasksTable) Source(alias string) (rasql.TypedRelation[taskboardTask], error) {
-	return rasql.SourceOf(t.Table, alias)
+	return t.Table.Source(alias)
 }
 func (t taskboardTasksTable) Column(name string) query.ColumnRef { return t.Table.Column(name) }
 func (t taskboardMembersTable) Source(alias string) (rasql.TypedRelation[taskboardMember], error) {
-	return rasql.SourceOf(t.Table, alias)
+	return t.Table.Source(alias)
 }
 func (t taskboardMembersTable) Column(name string) query.ColumnRef { return t.Table.Column(name) }
 

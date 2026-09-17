@@ -333,7 +333,7 @@ func (bindFixtureDecoder) DecodeRow(source rasql.ScanSource, row *bindFixtureRow
 // caller can bind another column of the same source.
 func bindQueryRelation(t *testing.T) (rasql.Query[bindFixtureRow], rasql.TypedRelation[bindFixtureRow]) {
 	t.Helper()
-	table, err := rasql.ReadTableOf[bindFixtureRow](schema.TableDef{
+	table, err := rasql.TableOf[bindFixtureRow](schema.TableDef{
 		Name: "bind_items",
 		Columns: []schema.ColumnDef{
 			{Name: "category", Type: schema.TextType{}, Nullable: true},
@@ -341,7 +341,7 @@ func bindQueryRelation(t *testing.T) (rasql.Query[bindFixtureRow], rasql.TypedRe
 		},
 	})
 	require.NoError(t, err)
-	relation, err := rasql.SourceOf(table, "i")
+	relation, err := table.Source("i")
 	require.NoError(t, err)
 	category, err := rasql.BindNullColumn[bindFixtureRow, string](relation, "category", "category.codec")
 	require.NoError(t, err)

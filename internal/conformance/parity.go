@@ -598,7 +598,7 @@ func newTypedFixture() (typedFixture, error) {
 }
 
 func mustSource[T any](table rasql.Table[T], alias string) rasql.TypedRelation[T] {
-	relation, err := rasql.SourceOf(table, alias)
+	relation, err := table.Source(alias)
 	if err != nil {
 		panic(err)
 	}

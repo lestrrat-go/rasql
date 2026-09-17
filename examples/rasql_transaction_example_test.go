@@ -40,7 +40,7 @@ type txnUsersColumns struct {
 func txnUsersQuery() (rasql.Query[store.UsersRow], txnUsersColumns, error) {
 	users := store.Users()
 	def := store.UsersDef()
-	source, err := rasql.SourceOf(users, "")
+	source, err := users.Source("")
 	if err != nil {
 		return rasql.Query[store.UsersRow]{}, txnUsersColumns{}, err
 	}
@@ -111,7 +111,7 @@ func Example_rasql_transaction() {
 	}
 	users := store.Users()
 	// Create the table before any transaction starts.
-	if err := rasql.CreateTable(ctx, db, users); err != nil {
+	if err := rasql.CreateTable(ctx, db, users.Ref()); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}

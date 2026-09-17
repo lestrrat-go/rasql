@@ -58,7 +58,7 @@ func TestExecution(t *testing.T) {
 		{Name: "id", Type: schema.IntegerType{}}, {Name: "email", Type: schema.TextType{}},
 	}})
 	require.NoError(t, err)
-	relation, err := rasql.SourceOf(table, "")
+	relation, err := table.Source("")
 	require.NoError(t, err)
 	email, err := rasql.BindColumn[user, string](relation, "email", "")
 	require.NoError(t, err)
@@ -120,7 +120,7 @@ func TestExecPreservesResultAfterHookError(t *testing.T) {
 		Columns: []schema.ColumnDef{{Name: "email", Type: schema.TextType{}}},
 	})
 	require.NoError(t, err)
-	usersSource, err := rasql.SourceOf(users, "")
+	usersSource, err := users.Source("")
 	require.NoError(t, err)
 	email, err := rasql.BindColumn[user, string](usersSource, "email", "")
 	require.NoError(t, err)

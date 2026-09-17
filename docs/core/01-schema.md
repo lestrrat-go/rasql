@@ -260,8 +260,8 @@ type EventsTable struct {
 	rasql.Table[EventRow]
 }
 
-func (t EventsTable) ID() query.ColumnRef     { return rasql.ColumnOf(t.Table, "id") }
-func (t EventsTable) Action() query.ColumnRef { return rasql.ColumnOf(t.Table, "action") }
+func (t EventsTable) ID() query.ColumnRef     { return t.Column("id") }
+func (t EventsTable) Action() query.ColumnRef { return t.Column("action") }
 
 // eventDecoder decodes an EventRow from its two columns, in projection order.
 type eventDecoder struct{ result rasql.ResultSchema }
@@ -310,12 +310,12 @@ func Example_schema_qualified_table() {
 	))}
 
 	// SQL: CREATE TABLE audit.events (id INTEGER NOT NULL, action TEXT NOT NULL, PRIMARY KEY (id))
-	if err := rasql.CreateTable(ctx, db, events); err != nil {
+	if err := rasql.CreateTable(ctx, db, events.Ref()); err != nil {
 		fmt.Printf("failed to create events table: %s\n", err)
 		return
 	}
 
-	source, err := rasql.SourceOf(events, "")
+	source, err := events.Source("")
 	if err != nil {
 		fmt.Printf("failed to bind events source: %s\n", err)
 		return
@@ -332,7 +332,7 @@ func Example_schema_qualified_table() {
 	}
 
 	// SQL: INSERT INTO audit.events (id, action) VALUES (?, ?) (arguments: 1, "created")
-	createPlan, err := rasql.NewCreatePlan[EventRow](events,
+	createPlan, err := rasql.NewCreatePlan[EventRow](events.Table,
 		rasql.SetField[EventRow](id, int64(1)),
 		rasql.SetField[EventRow](action, "created"),
 	)
@@ -477,8 +477,8 @@ type InvoicesTable struct {
 	rasql.Table[InvoiceRow]
 }
 
-func (t InvoicesTable) ID() query.ColumnRef     { return rasql.ColumnOf(t.Table, "id") }
-func (t InvoicesTable) Amount() query.ColumnRef { return rasql.ColumnOf(t.Table, "amount") }
+func (t InvoicesTable) ID() query.ColumnRef     { return t.Column("id") }
+func (t InvoicesTable) Amount() query.ColumnRef { return t.Column("amount") }
 
 // invoiceDecoder decodes an InvoiceRow from its two columns, in projection order.
 type invoiceDecoder struct{ result rasql.ResultSchema }
@@ -521,12 +521,12 @@ func Example_schema_decimal_column() {
 	// SQLite has no exact decimal storage class, so the dialect declares this
 	// column TEXT rather than NUMERIC(19,4), which would round through REAL.
 	// SQL: CREATE TABLE invoices (id INTEGER NOT NULL, amount TEXT NOT NULL, PRIMARY KEY (id))
-	if err := rasql.CreateTable(ctx, db, invoices); err != nil {
+	if err := rasql.CreateTable(ctx, db, invoices.Ref()); err != nil {
 		fmt.Printf("failed to create invoices table: %s\n", err)
 		return
 	}
 
-	source, err := rasql.SourceOf(invoices, "")
+	source, err := invoices.Source("")
 	if err != nil {
 		fmt.Printf("failed to bind invoices source: %s\n", err)
 		return
@@ -543,7 +543,7 @@ func Example_schema_decimal_column() {
 	}
 
 	// SQL: INSERT INTO invoices (id, amount) VALUES (?, ?) (arguments: 1, "19.99")
-	createPlan, err := rasql.NewCreatePlan[InvoiceRow](invoices,
+	createPlan, err := rasql.NewCreatePlan[InvoiceRow](invoices.Table,
 		rasql.SetField[InvoiceRow](id, int64(1)),
 		rasql.SetField[InvoiceRow](amount, "19.99"),
 	)
@@ -1023,9 +1023,10 @@ Native identities render only on a matching dialect, and cross-dialect DDL retur
 ## Typed read surfaces for views
 
 Inspected views expose `schema.ObjectView` and read-only operations.
-Generated view wrappers embed `rasql.ReadTable[T]`, so typed selects compile, while insert, update, delete, and table DDL require `rasql.Table[T]` and fail at compile time.
+A generated view wrapper gets a `Source` method and no mutation builder, because the generator emits a create builder only for a descriptor permitting `schema.OperationInsert` and a patch builder only for one permitting `schema.OperationUpdate`.
+Writing to a view through a handle the wrapper still exposes reports `object "active_users" does not support operation 2` when the plan is built, before anything is rendered or sent to a server.
 
-Use `rasql.ReadTableOf[T]` for a hand-built queryable descriptor.
+Use `rasql.TableOf[T]` for a hand-built descriptor, whatever it permits.
 Use `catalog.Options{IncludeViews: true}` when generating a store that includes inspected views.
 
 ## Next

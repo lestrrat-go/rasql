@@ -468,11 +468,11 @@ func rasqlNullableReport(ctx context.Context, executor rasql.Executor, _ rasql.D
 	}
 	p := mustSource(f.projects, "p")
 	tSource := mustSource(f.tasks, "t")
-	optionalMembers, err := rasql.ReadTableOf[optionalMemberRow](schema.TableDef{Name: "members", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "name", Type: schema.TextType{}, Nullable: true}}})
+	optionalMembers, err := rasql.TableOf[optionalMemberRow](schema.TableDef{Name: "members", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "name", Type: schema.TextType{}, Nullable: true}}})
 	if err != nil {
 		return parityEvidence{}, err
 	}
-	m, err := rasql.SourceOf(optionalMembers, "m")
+	m, err := optionalMembers.Source("m")
 	if err != nil {
 		return parityEvidence{}, err
 	}

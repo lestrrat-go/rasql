@@ -181,7 +181,7 @@ func g5MutationTableWithFlag(t *testing.T) (rasql.Table[g5MutationRow], rasql.Co
 		{Name: "count", Type: schema.IntegerType{}, Default: "2"}, {Name: "flag", Type: schema.IntegerType{}, Default: "0"},
 	}})
 	require.NoError(t, err)
-	relation, err := rasql.SourceOf(table, "")
+	relation, err := table.Source("")
 	require.NoError(t, err)
 	id, err := rasql.BindColumn[g5MutationRow, int64](relation, "id", "")
 	require.NoError(t, err)

@@ -46,11 +46,11 @@ func Example_rasql_exists() {
 	}
 	users := store.Users()
 	orders := store.Orders()
-	if err := rasql.CreateTable(ctx, db, users); err != nil {
+	if err := rasql.CreateTable(ctx, db, users.Ref()); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	if err := rasql.CreateTable(ctx, db, orders); err != nil {
+	if err := rasql.CreateTable(ctx, db, orders.Ref()); err != nil {
 		fmt.Printf("failed to create orders table: %s\n", err)
 		return
 	}
@@ -77,7 +77,7 @@ func Example_rasql_exists() {
 		}
 	}
 
-	usersSource, err := rasql.SourceOf(users, "")
+	usersSource, err := users.Source("")
 	if err != nil {
 		fmt.Printf("failed to bind users source: %s\n", err)
 		return
@@ -92,7 +92,7 @@ func Example_rasql_exists() {
 		fmt.Printf("failed to bind users email column: %s\n", err)
 		return
 	}
-	ordersSource, err := rasql.SourceOf(orders, "")
+	ordersSource, err := orders.Source("")
 	if err != nil {
 		fmt.Printf("failed to bind orders source: %s\n", err)
 		return

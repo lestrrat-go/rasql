@@ -50,7 +50,7 @@ func correlatedUserColumns(t *testing.T, users rasql.Table[correlatedUser]) (
 ) {
 	t.Helper()
 
-	relation, err := rasql.SourceOf(users, "")
+	relation, err := users.Source("")
 	require.NoError(t, err)
 	id, err := rasql.BindColumn[correlatedUser, int64](relation, "id", "")
 	require.NoError(t, err)
@@ -66,7 +66,7 @@ func correlatedOrderColumns(t *testing.T, orders rasql.Table[correlatedOrder]) (
 ) {
 	t.Helper()
 
-	relation, err := rasql.SourceOf(orders, "")
+	relation, err := orders.Source("")
 	require.NoError(t, err)
 	id, err := rasql.BindColumn[correlatedOrder, int64](relation, "id", "")
 	require.NoError(t, err)
@@ -356,8 +356,8 @@ func createCorrelatedFixture(t *testing.T, db rasql.DB) (rasql.Table[correlatedU
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, rasql.CreateTable(t.Context(), db, users))
-	require.NoError(t, rasql.CreateTable(t.Context(), db, orders))
+	require.NoError(t, rasql.CreateTable(t.Context(), db, users.Ref()))
+	require.NoError(t, rasql.CreateTable(t.Context(), db, orders.Ref()))
 
 	_, usersID, usersEmail, usersOrderCount := correlatedUserColumns(t, users)
 	for _, user := range []correlatedUser{

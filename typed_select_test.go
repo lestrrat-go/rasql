@@ -6,6 +6,7 @@ import (
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
@@ -43,11 +44,11 @@ func newSelectFixture(t *testing.T) selectFixture {
 	require.NoError(t, err)
 	executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 	require.NoError(t, err)
-	table, err := rasql.ReadTableOf[selectUser](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{
+	table, err := rasql.TableOf[selectUser](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}}, {Name: "email", Type: schema.TextType{}},
 	}})
 	require.NoError(t, err)
-	source, err := rasql.SourceOf(table, "users")
+	source, err := table.Source("users")
 	require.NoError(t, err)
 	id, err := rasql.BindColumn[selectUser, int64](source, "id", "")
 	require.NoError(t, err)
@@ -141,12 +142,12 @@ func (reusableEmailDecoder) DecodeRow(source rasql.ScanSource, result *reusableE
 
 func reusableUsers(t *testing.T) (rasql.TypedRelation[reusableUser], rasql.Column[reusableUser, int64], rasql.Column[reusableUser, string]) {
 	t.Helper()
-	table, err := rasql.ReadTableOf[reusableUser](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{
+	table, err := rasql.TableOf[reusableUser](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "email", Type: schema.TextType{}},
 	}})
 	require.NoError(t, err)
-	relation, err := rasql.SourceOf(table, "users")
+	relation, err := table.Source("users")
 	require.NoError(t, err)
 	id, err := rasql.BindColumn[reusableUser, int64](relation, "id", "")
 	require.NoError(t, err)
@@ -205,8 +206,9 @@ func TestTypedReusableQuery(t *testing.T) {
 
 		_, err = rasql.BindResultColumn[reusableUser, string](derived, "missing")
 		require.ErrorContains(t, err, "not a member")
-		_, err = rasql.SourceOf[reusableUser](nil, "users")
-		require.Error(t, err)
+		var zero rasql.Table[reusableUser]
+		_, err = zero.Source("users")
+		require.ErrorIs(t, err, query.ErrNilTable)
 	})
 
 	t.Run("rendering a select builder query and replacing the projection", func(t *testing.T) {

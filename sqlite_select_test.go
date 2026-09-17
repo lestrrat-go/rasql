@@ -281,7 +281,7 @@ func aggregatePlacementFixture(t *testing.T) (*sql.DB, schema.TableDef) {
 	}
 	users, err := rasql.TableOf[user](definition)
 	require.NoError(t, err)
-	require.NoError(t, rasql.CreateTable(t.Context(), db, users))
+	require.NoError(t, rasql.CreateTable(t.Context(), db, users.Ref()))
 	userID := query.TypedColumnOf[user, int64](users.Column("id"))
 	userEmail := query.TypedColumnOf[user, string](users.Column("email"))
 	for _, fixture := range []user{
@@ -411,7 +411,7 @@ func TestSQLiteDistinct(t *testing.T) {
 		}
 		visits, err := rasql.TableOf[visit](definition)
 		require.NoError(t, err)
-		require.NoError(t, rasql.CreateTable(t.Context(), db, visits))
+		require.NoError(t, rasql.CreateTable(t.Context(), db, visits.Ref()))
 		visitID := query.TypedColumnOf[visit, int64](visits.Column("id"))
 		visitCity := query.NullableColumnOf[visit, string](visits.Column("city"))
 		tokyo := "tokyo"
@@ -549,7 +549,7 @@ func distinctFixture(t *testing.T) (*sql.DB, schema.TableDef) {
 	}
 	users, err := rasql.TableOf[user](definition)
 	require.NoError(t, err)
-	require.NoError(t, rasql.CreateTable(t.Context(), db, users))
+	require.NoError(t, rasql.CreateTable(t.Context(), db, users.Ref()))
 	userID := query.TypedColumnOf[user, int64](users.Column("id"))
 	userCity := query.TypedColumnOf[user, string](users.Column("city"))
 	userAge := query.TypedColumnOf[user, int64](users.Column("age"))
@@ -678,7 +678,7 @@ func orderResultAliasFixture(t *testing.T) (*sql.DB, schema.TableDef) {
 	}
 	people, err := rasql.TableOf[person](definition)
 	require.NoError(t, err)
-	require.NoError(t, rasql.CreateTable(t.Context(), db, people))
+	require.NoError(t, rasql.CreateTable(t.Context(), db, people.Ref()))
 	personID := query.TypedColumnOf[person, int64](people.Column("id"))
 	personCity := query.TypedColumnOf[person, string](people.Column("city"))
 	for _, fixture := range []person{

@@ -20,9 +20,9 @@ import (
 // and Bind a different value per run.
 func runtimeParamQuery(t *testing.T) (rasql.Query[int64], rasql.Parameter[int64]) {
 	t.Helper()
-	table, err := rasql.ReadTableOf[struct{}](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "value", Type: schema.IntegerType{}}}})
+	table, err := rasql.TableOf[struct{}](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "value", Type: schema.IntegerType{}}}})
 	require.NoError(t, err)
-	relation, err := rasql.SourceOf(table, "i")
+	relation, err := table.Source("i")
 	require.NoError(t, err)
 	column, err := rasql.BindColumn[struct{}, int64](relation, "value", "")
 	require.NoError(t, err)
@@ -40,9 +40,9 @@ func runtimeParamQuery(t *testing.T) (rasql.Query[int64], rasql.Parameter[int64]
 // given.
 func runtimeParamTwiceQuery(t *testing.T) (rasql.Query[int64], rasql.Parameter[int64]) {
 	t.Helper()
-	table, err := rasql.ReadTableOf[struct{}](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "value", Type: schema.IntegerType{}}}})
+	table, err := rasql.TableOf[struct{}](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "value", Type: schema.IntegerType{}}}})
 	require.NoError(t, err)
-	relation, err := rasql.SourceOf(table, "i")
+	relation, err := table.Source("i")
 	require.NoError(t, err)
 	column, err := rasql.BindColumn[struct{}, int64](relation, "value", "")
 	require.NoError(t, err)
@@ -63,9 +63,9 @@ func runtimeParamTwiceQuery(t *testing.T) (rasql.Query[int64], rasql.Parameter[i
 // names.
 func runtimeParamCodecQuery(t *testing.T) (rasql.Query[int64], rasql.Parameter[int64]) {
 	t.Helper()
-	table, err := rasql.ReadTableOf[struct{}](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "value", Type: schema.IntegerType{}}}})
+	table, err := rasql.TableOf[struct{}](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "value", Type: schema.IntegerType{}}}})
 	require.NoError(t, err)
-	relation, err := rasql.SourceOf(table, "i")
+	relation, err := table.Source("i")
 	require.NoError(t, err)
 	column, err := rasql.BindColumn[struct{}, int64](relation, "value", "")
 	require.NoError(t, err)

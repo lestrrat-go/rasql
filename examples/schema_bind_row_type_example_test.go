@@ -58,12 +58,12 @@ func Example_schema_bind_row_type() {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
 	}
-	if err := rasql.CreateTable(ctx, db, users); err != nil {
+	if err := rasql.CreateTable(ctx, db, users.Ref()); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
 
-	source, err := rasql.SourceOf(users, "")
+	source, err := users.Source("")
 	if err != nil {
 		fmt.Printf("failed to bind users source: %s\n", err)
 		return

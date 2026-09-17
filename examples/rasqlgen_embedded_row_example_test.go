@@ -60,7 +60,7 @@ func Example_rasqlgen_embedded_row() {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
 	}
-	if err := rasql.CreateTable(ctx, db, store.Users()); err != nil {
+	if err := rasql.CreateTable(ctx, db, store.Users().Ref()); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
@@ -70,7 +70,7 @@ func Example_rasqlgen_embedded_row() {
 	}
 
 	users := store.Users()
-	source, err := rasql.SourceOf(users, "")
+	source, err := users.Source("")
 	if err != nil {
 		fmt.Printf("failed to bind users source: %s\n", err)
 		return

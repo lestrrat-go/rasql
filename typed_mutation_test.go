@@ -34,7 +34,7 @@ func (d usersRowDecoder) DecodeRow(source rasql.ScanSource, row *store.UsersRow)
 func usersRowProjection(t *testing.T) rasql.Projection[store.UsersRow] {
 	t.Helper()
 
-	relation, err := rasql.SourceOf[store.UsersRow](store.Users(), "")
+	relation, err := store.Users().Source("")
 	require.NoError(t, err)
 	id, err := rasql.BindColumn[store.UsersRow, int64](relation, "id", "")
 	require.NoError(t, err)
@@ -111,7 +111,7 @@ func TestTypedMutationPlans(t *testing.T) {
 	t.Run("generated-column plans", func(t *testing.T) {
 		table, executor, mock, cleanup := generatedMeasurementTable(t)
 		t.Cleanup(cleanup)
-		relation, err := rasql.SourceOf(table, "")
+		relation, err := table.Source("")
 		require.NoError(t, err)
 		id, err := rasql.BindColumn[generatedMeasurement, int64](relation, "id", "")
 		require.NoError(t, err)
@@ -173,7 +173,7 @@ func (d mutationValidationDecoder) DecodeRow(source rasql.ScanSource, _ *mutatio
 func mutationValidationProjection(t *testing.T, first rasql.Table[mutationValidationRow]) rasql.Projection[mutationValidationRow] {
 	t.Helper()
 
-	relation, err := rasql.SourceOf(first, "")
+	relation, err := first.Source("")
 	require.NoError(t, err)
 	id, err := rasql.BindColumn[mutationValidationRow, int64](relation, "id", "")
 	require.NoError(t, err)
@@ -424,7 +424,7 @@ func newWriteFixture(t *testing.T) writeFixture {
 		{Name: "id", Type: schema.IntegerType{}}, {Name: "email", Type: schema.TextType{}},
 	}})
 	require.NoError(t, err)
-	relation, err := rasql.SourceOf(table, "")
+	relation, err := table.Source("")
 	require.NoError(t, err)
 	id, err := rasql.BindColumn[writeUser, int64](relation, "id", "")
 	require.NoError(t, err)

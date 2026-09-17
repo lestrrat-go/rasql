@@ -281,12 +281,12 @@ func TestSQLiteCorrelatedProjectionConstructorsDecode(t *testing.T) {
 		}, PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	require.NoError(t, rasql.CreateTable(t.Context(), executor, users))
-	require.NoError(t, rasql.CreateTable(t.Context(), executor, orders))
+	require.NoError(t, rasql.CreateTable(t.Context(), executor, users.Ref()))
+	require.NoError(t, rasql.CreateTable(t.Context(), executor, orders.Ref()))
 
-	usersSource, err := rasql.SourceOf(users, "")
+	usersSource, err := users.Source("")
 	require.NoError(t, err)
-	ordersSource, err := rasql.SourceOf(orders, "")
+	ordersSource, err := orders.Source("")
 	require.NoError(t, err)
 	usersID, err := rasql.BindColumn[apiQ7User, int64](usersSource, "id", "")
 	require.NoError(t, err)
@@ -399,13 +399,13 @@ func countUsersQuery(t *testing.T) (rasql.Query[countUser], rasql.Executor) {
 	require.NoError(t, err)
 	executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 	require.NoError(t, err)
-	table, err := rasql.ReadTableOf[countUser](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{
+	table, err := rasql.TableOf[countUser](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "tenant", Type: schema.IntegerType{}},
 		{Name: "category", Type: schema.TextType{}, Nullable: true},
 	}})
 	require.NoError(t, err)
-	relation, err := rasql.SourceOf(table, "users")
+	relation, err := table.Source("users")
 	require.NoError(t, err)
 	id, err := rasql.BindColumn[countUser, int64](relation, "id", "")
 	require.NoError(t, err)

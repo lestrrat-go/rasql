@@ -62,21 +62,21 @@ type OrdersTable struct {
 
 // ID returns a reference to the "id" column.
 func (t OrdersTable) ID() query.TypedColumn[OrdersRow, int64] {
-	return query.TypedColumnOf[OrdersRow, int64](rasql.ColumnOf(t.Table, "id"))
+	return query.TypedColumnOf[OrdersRow, int64](t.Column("id"))
 }
-func (t OrdersTable) IDRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
+func (t OrdersTable) IDRef() rasql.ColumnRef { return t.Column("id") }
 
 // UserID returns a reference to the "user_id" column.
 func (t OrdersTable) UserID() query.TypedColumn[OrdersRow, int64] {
-	return query.TypedColumnOf[OrdersRow, int64](rasql.ColumnOf(t.Table, "user_id"))
+	return query.TypedColumnOf[OrdersRow, int64](t.Column("user_id"))
 }
-func (t OrdersTable) UserIDRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "user_id") }
+func (t OrdersTable) UserIDRef() rasql.ColumnRef { return t.Column("user_id") }
 
 // Total returns a reference to the "total" column.
 func (t OrdersTable) Total() query.TypedColumn[OrdersRow, int64] {
-	return query.TypedColumnOf[OrdersRow, int64](rasql.ColumnOf(t.Table, "total"))
+	return query.TypedColumnOf[OrdersRow, int64](t.Column("total"))
 }
-func (t OrdersTable) TotalRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "total") }
+func (t OrdersTable) TotalRef() rasql.ColumnRef { return t.Column("total") }
 
 // Orders returns the descriptor for the "orders" table.
 func Orders() OrdersTable {
@@ -85,7 +85,7 @@ func Orders() OrdersTable {
 
 // As returns the table under alias.
 func (t OrdersTable) As(alias string) (OrdersTable, error) {
-	aliased, err := rasql.As(t.Table, alias)
+	aliased, err := t.Table.As(alias)
 	if err != nil {
 		return OrdersTable{}, err
 	}
@@ -114,7 +114,7 @@ func (p OrdersCreate) Total(value int64) OrdersCreate {
 	return OrdersCreate{fields: fields}
 }
 func (p OrdersCreate) Plan() rasql.CreatePlan[OrdersRow] {
-	plan, _ := rasql.NewCreatePlan[OrdersRow](Orders(), p.fields...)
+	plan, _ := rasql.NewCreatePlan[OrdersRow](Orders().Table, p.fields...)
 	return plan
 }
 
@@ -135,5 +135,5 @@ func (p OrdersPatch) Total(value int64) OrdersPatch {
 	return OrdersPatch{fields: fields}
 }
 func (p OrdersPatch) Where(predicate query.Predicate) (rasql.PatchPlan[OrdersRow], error) {
-	return rasql.NewPatchPlan[OrdersRow](Orders(), predicate, p.fields...)
+	return rasql.NewPatchPlan[OrdersRow](Orders().Table, predicate, p.fields...)
 }

@@ -44,7 +44,7 @@ func benchmarkConformanceDatabase(b *testing.B) (*sql.DB, rasql.Executor, rasql.
 	if err != nil {
 		b.Fatal(err)
 	}
-	source, err := rasql.SourceOf(table, "m")
+	source, err := table.Source("m")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func benchmarkProjectQuery() rasql.Query[benchmarkProject] {
 	if err != nil {
 		panic(err)
 	}
-	source, err := rasql.SourceOf(table, "p")
+	source, err := table.Source("p")
 	if err != nil {
 		panic(err)
 	}

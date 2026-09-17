@@ -83,39 +83,39 @@ type UsersTable struct {
 
 // ID returns a reference to the "id" column.
 func (t UsersTable) ID() query.TypedColumn[UsersRow, int64] {
-	return query.TypedColumnOf[UsersRow, int64](rasql.ColumnOf(t.Table, "id"))
+	return query.TypedColumnOf[UsersRow, int64](t.Column("id"))
 }
-func (t UsersTable) IDRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
+func (t UsersTable) IDRef() rasql.ColumnRef { return t.Column("id") }
 
 // Email returns a reference to the "email" column.
 func (t UsersTable) Email() query.TypedColumn[UsersRow, string] {
-	return query.TypedColumnOf[UsersRow, string](rasql.ColumnOf(t.Table, "email"))
+	return query.TypedColumnOf[UsersRow, string](t.Column("email"))
 }
-func (t UsersTable) EmailRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "email") }
+func (t UsersTable) EmailRef() rasql.ColumnRef { return t.Column("email") }
 
 // Nickname returns a reference to the "nickname" column.
 func (t UsersTable) Nickname() query.NullableColumn[UsersRow, *string] {
-	return query.NullableColumnOf[UsersRow, *string](rasql.ColumnOf(t.Table, "nickname"))
+	return query.NullableColumnOf[UsersRow, *string](t.Column("nickname"))
 }
-func (t UsersTable) NicknameRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "nickname") }
+func (t UsersTable) NicknameRef() rasql.ColumnRef { return t.Column("nickname") }
 
 // Status returns a reference to the "status" column.
 func (t UsersTable) Status() query.TypedColumn[UsersRow, string] {
-	return query.TypedColumnOf[UsersRow, string](rasql.ColumnOf(t.Table, "status"))
+	return query.TypedColumnOf[UsersRow, string](t.Column("status"))
 }
-func (t UsersTable) StatusRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "status") }
+func (t UsersTable) StatusRef() rasql.ColumnRef { return t.Column("status") }
 
 // FirstName returns a reference to the "first_name" column.
 func (t UsersTable) FirstName() query.TypedColumn[UsersRow, string] {
-	return query.TypedColumnOf[UsersRow, string](rasql.ColumnOf(t.Table, "first_name"))
+	return query.TypedColumnOf[UsersRow, string](t.Column("first_name"))
 }
-func (t UsersTable) FirstNameRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "first_name") }
+func (t UsersTable) FirstNameRef() rasql.ColumnRef { return t.Column("first_name") }
 
 // LastName returns a reference to the "last_name" column.
 func (t UsersTable) LastName() query.TypedColumn[UsersRow, string] {
-	return query.TypedColumnOf[UsersRow, string](rasql.ColumnOf(t.Table, "last_name"))
+	return query.TypedColumnOf[UsersRow, string](t.Column("last_name"))
 }
-func (t UsersTable) LastNameRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "last_name") }
+func (t UsersTable) LastNameRef() rasql.ColumnRef { return t.Column("last_name") }
 
 // Users returns the descriptor for the "users" table.
 func Users() UsersTable {
@@ -124,7 +124,7 @@ func Users() UsersTable {
 
 // As returns the table under alias.
 func (t UsersTable) As(alias string) (UsersTable, error) {
-	aliased, err := rasql.As(t.Table, alias)
+	aliased, err := t.Table.As(alias)
 	if err != nil {
 		return UsersTable{}, err
 	}
@@ -178,7 +178,7 @@ func (p UsersCreate) LastName(value string) UsersCreate {
 	return UsersCreate{fields: fields}
 }
 func (p UsersCreate) Plan() rasql.CreatePlan[UsersRow] {
-	plan, _ := rasql.NewCreatePlan[UsersRow](Users(), p.fields...)
+	plan, _ := rasql.NewCreatePlan[UsersRow](Users().Table, p.fields...)
 	return plan
 }
 
@@ -224,5 +224,5 @@ func (p UsersPatch) LastName(value string) UsersPatch {
 	return UsersPatch{fields: fields}
 }
 func (p UsersPatch) Where(predicate query.Predicate) (rasql.PatchPlan[UsersRow], error) {
-	return rasql.NewPatchPlan[UsersRow](Users(), predicate, p.fields...)
+	return rasql.NewPatchPlan[UsersRow](Users().Table, predicate, p.fields...)
 }

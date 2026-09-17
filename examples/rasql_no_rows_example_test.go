@@ -41,7 +41,7 @@ type noRowsUsersColumns struct {
 func noRowsUsersQuery() (rasql.Query[store.UsersRow], noRowsUsersColumns, error) {
 	users := store.Users()
 	def := store.UsersDef()
-	source, err := rasql.SourceOf(users, "")
+	source, err := users.Source("")
 	if err != nil {
 		return rasql.Query[store.UsersRow]{}, noRowsUsersColumns{}, err
 	}
@@ -110,7 +110,7 @@ func Example_rasql_no_rows() {
 	}
 	users := store.Users()
 	// Create the users table, but never insert into it, so One matches no row.
-	if err := rasql.CreateTable(ctx, db, users); err != nil {
+	if err := rasql.CreateTable(ctx, db, users.Ref()); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}

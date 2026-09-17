@@ -40,7 +40,7 @@ type whereExprUsersColumns struct {
 func whereExprUsersQuery() (rasql.Query[store.UsersRow], whereExprUsersColumns, error) {
 	users := store.Users()
 	def := store.UsersDef()
-	source, err := rasql.SourceOf(users, "")
+	source, err := users.Source("")
 	if err != nil {
 		return rasql.Query[store.UsersRow]{}, whereExprUsersColumns{}, err
 	}
@@ -109,7 +109,7 @@ func Example_rasql_where_expressions() {
 		return
 	}
 	users := store.Users()
-	if err := rasql.CreateTable(ctx, db, users); err != nil {
+	if err := rasql.CreateTable(ctx, db, users.Ref()); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}

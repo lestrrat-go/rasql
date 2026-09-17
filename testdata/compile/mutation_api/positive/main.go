@@ -18,7 +18,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	relation, err := rasql.SourceOf[row](table, "")
+	relation, err := table.Source("")
 	if err != nil {
 		panic(err)
 	}

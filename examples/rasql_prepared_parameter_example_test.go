@@ -28,7 +28,7 @@ func (d preparedParamOrdersDecoder) DecodeRow(src rasql.ScanSource, row *store.O
 func preparedParamOrdersQuery() (rasql.Query[store.OrdersRow], rasql.Parameter[int64], error) {
 	orders := store.Orders()
 	def := store.OrdersDef()
-	source, err := rasql.SourceOf(orders, "")
+	source, err := orders.Source("")
 	if err != nil {
 		return rasql.Query[store.OrdersRow]{}, rasql.Parameter[int64]{}, err
 	}
@@ -86,7 +86,7 @@ func Example_rasql_prepared_parameter() {
 		return
 	}
 	orders := store.Orders()
-	if err := rasql.CreateTable(ctx, db, orders); err != nil {
+	if err := rasql.CreateTable(ctx, db, orders.Ref()); err != nil {
 		fmt.Printf("failed to create orders table: %s\n", err)
 		return
 	}

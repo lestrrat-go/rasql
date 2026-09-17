@@ -25,7 +25,7 @@ func (usersIDDecoder) DecodeRow(source rasql.ScanSource, result *store.UsersRow)
 }
 
 func usersQuery() rasql.Query[store.UsersRow] {
-	relation, err := rasql.SourceOf[store.UsersRow](store.Users(), "")
+	relation, err := store.Users().Source("")
 	if err != nil {
 		panic(err)
 	}
@@ -115,7 +115,7 @@ func compile() {
     _ = query.TypedInnerJoin(other.Ref(), query.EqualColumns(id, other.ID()))
     _ = query.TypedLeftJoin(other.Ref(), query.EqualColumns(id, other.ID()))
 
-    relation, err := rasql.SourceOf[store.UsersRow](store.Users(), "")
+    relation, err := store.Users().Source("")
     if err != nil {
         panic(err)
     }
@@ -133,7 +133,7 @@ func compile() {
     if err != nil {
         panic(err)
     }
-    otherRelation, err := rasql.SourceOf[store.UsersRow](store.Users(), "other2")
+    otherRelation, err := store.Users().Source("other2")
     if err != nil {
         panic(err)
     }

@@ -55,15 +55,15 @@ type TasksTable struct {
 
 // ID returns a reference to the "id" column.
 func (t TasksTable) ID() query.TypedColumn[TasksRow, int64] {
-	return query.TypedColumnOf[TasksRow, int64](rasql.ColumnOf(t.Table, "id"))
+	return query.TypedColumnOf[TasksRow, int64](t.Column("id"))
 }
-func (t TasksTable) IDRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
+func (t TasksTable) IDRef() rasql.ColumnRef { return t.Column("id") }
 
 // Status returns a reference to the "status" column.
 func (t TasksTable) Status() query.TypedColumn[TasksRow, string] {
-	return query.TypedColumnOf[TasksRow, string](rasql.ColumnOf(t.Table, "status"))
+	return query.TypedColumnOf[TasksRow, string](t.Column("status"))
 }
-func (t TasksTable) StatusRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "status") }
+func (t TasksTable) StatusRef() rasql.ColumnRef { return t.Column("status") }
 
 // Tasks returns the descriptor for the "tasks" table.
 func Tasks() TasksTable {
@@ -72,7 +72,7 @@ func Tasks() TasksTable {
 
 // As returns the table under alias.
 func (t TasksTable) As(alias string) (TasksTable, error) {
-	aliased, err := rasql.As(t.Table, alias)
+	aliased, err := t.Table.As(alias)
 	if err != nil {
 		return TasksTable{}, err
 	}
@@ -96,7 +96,7 @@ func (p TasksCreate) Status(value string) TasksCreate {
 	return TasksCreate{fields: fields}
 }
 func (p TasksCreate) Plan() rasql.CreatePlan[TasksRow] {
-	plan, _ := rasql.NewCreatePlan[TasksRow](Tasks(), p.fields...)
+	plan, _ := rasql.NewCreatePlan[TasksRow](Tasks().Table, p.fields...)
 	return plan
 }
 
@@ -112,5 +112,5 @@ func (p TasksPatch) Status(value string) TasksPatch {
 	return TasksPatch{fields: fields}
 }
 func (p TasksPatch) Where(predicate query.Predicate) (rasql.PatchPlan[TasksRow], error) {
-	return rasql.NewPatchPlan[TasksRow](Tasks(), predicate, p.fields...)
+	return rasql.NewPatchPlan[TasksRow](Tasks().Table, predicate, p.fields...)
 }

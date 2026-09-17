@@ -199,15 +199,26 @@ func cloneItems(items []ProjectionItem) []ProjectionItem {
 
 type Source struct{ ref query.RelationRef }
 
-// SourceOf returns table as a relation a query selects from, under alias. An
-// empty alias keeps the alias table already carries.
+// Source returns t as a relation a query selects from, under alias. An empty
+// alias keeps the alias t already carries.
 //
-// `table` must not be nil.
-func SourceOf[R any](table ReadTable[R], alias string) (TypedRelation[R], error) {
-	if table == nil {
-		return TypedRelation[R]{}, planError("invalid_source", "table", "must not be nil")
+// It reports an error for a descriptor that does not permit
+// schema.OperationRead, which is how a view-kinded descriptor written for
+// something other than reading is refused before a statement is assembled, and
+// it reports one wrapping query.ErrNilTable for the zero Table.
+//
+// It keeps the ref it holds rather than rebuilding one, so a relation reads the
+// descriptor a TableFrom handle was given in place, the way TableFrom's own doc
+// describes.
+func (t Table[T]) Source(alias string) (TypedRelation[T], error) {
+	if err := t.ref.Validate(); err != nil {
+		return TypedRelation[T]{}, fmt.Errorf("rasql: table source: %w", err)
 	}
-	ref := table.Ref()
+	if !t.ref.Supports(schema.OperationRead) {
+		return TypedRelation[T]{}, fmt.Errorf("rasql: object %q does not support operation %d",
+			t.ref.Definition().QualifiedName(), schema.OperationRead)
+	}
+	ref := t.ref
 	var err error
 	if alias == "" {
 		alias = ref.Alias()
@@ -215,10 +226,19 @@ func SourceOf[R any](table ReadTable[R], alias string) (TypedRelation[R], error)
 	if alias != "" {
 		ref, err = ref.As(alias)
 		if err != nil {
-			return TypedRelation[R]{}, planError("invalid_source", "alias", err.Error())
+			return TypedRelation[T]{}, planError("invalid_source", "alias", err.Error())
 		}
 	}
-	return TypedRelation[R]{source: Source{ref: query.Relation(ref)}}, nil
+	return TypedRelation[T]{source: Source{ref: query.Relation(ref)}}, nil
+}
+
+// SourceOf returns table as a relation a query selects from, under alias.
+//
+// Deprecated: it is Table.Source under the free-function spelling the compact
+// emitter still writes. It is deleted together with that emitted call, in the
+// PR that regenerates every checked-in store.
+func SourceOf[R any](table Table[R], alias string) (TypedRelation[R], error) {
+	return table.Source(alias)
 }
 
 type TypedRelation[R any] struct{ source Source }

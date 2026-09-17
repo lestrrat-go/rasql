@@ -298,7 +298,7 @@ func logicalMutationPlan(t *testing.T) (rasql.Table[logicalRow], func(int64) ras
 		},
 	})
 	require.NoError(t, err)
-	relation, err := rasql.SourceOf(table, "")
+	relation, err := table.Source("")
 	require.NoError(t, err)
 	id, err := rasql.BindColumn[logicalRow, int64](relation, "id", "")
 	require.NoError(t, err)
@@ -315,7 +315,7 @@ func logicalMutationPlan(t *testing.T) (rasql.Table[logicalRow], func(int64) ras
 // observers can still show its work reached the database.
 func logicalCountQuery(t *testing.T) rasql.Query[int64] {
 	t.Helper()
-	table, err := rasql.ReadTableOf[logicalRow](schema.TableDef{
+	table, err := rasql.TableOf[logicalRow](schema.TableDef{
 		Name: "logical_items",
 		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
@@ -323,7 +323,7 @@ func logicalCountQuery(t *testing.T) rasql.Query[int64] {
 		},
 	})
 	require.NoError(t, err)
-	relation, err := rasql.SourceOf(table, "")
+	relation, err := table.Source("")
 	require.NoError(t, err)
 	projection, err := rasql.Scalar("total", rasql.CountRows(), schema.IntegerType{}, "")
 	require.NoError(t, err)

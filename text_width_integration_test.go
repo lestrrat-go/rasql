@@ -93,7 +93,7 @@ func TestTextWidthAgainstLiveDatabases(t *testing.T) {
 						schema.PrimaryKey("id"),
 					)
 					table := rasql.MustTableOf[struct{}](definition)
-					require.NoError(t, rasql.CreateTable(ctx, db, table), "create table")
+					require.NoError(t, rasql.CreateTable(ctx, db, table.Ref()), "create table")
 
 					inspected, err := inspector.Table(ctx, column.table)
 					require.NoError(t, err, "inspect table")
@@ -135,7 +135,7 @@ func TestIndexedTextRequiresWidthOnMySQL(t *testing.T) {
 		schema.Index("indexed_text_width_label", "label"),
 	)
 	table := rasql.MustTableOf[struct{}](definition)
-	require.NoError(t, rasql.CreateTable(ctx, db, table),
+	require.NoError(t, rasql.CreateTable(ctx, db, table.Ref()),
 		"a bounded text column is indexable on MySQL")
 
 	// CreateTable returning nil only means MySQL accepted the statements it

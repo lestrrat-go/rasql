@@ -144,7 +144,7 @@ func TestQueryComposition(t *testing.T) {
 	t.Run("reuses a grouped DTO through a derived table and a CTE", func(t *testing.T) {
 		db := q2AcceptanceSQLite(t)
 		compiler := q2AcceptanceCompiler(t)
-		table, err := rasql.ReadTableOf[q2AcceptanceRow](schema.TableDef{
+		table, err := rasql.TableOf[q2AcceptanceRow](schema.TableDef{
 			Name: "q2_items",
 			Columns: []schema.ColumnDef{
 				{Name: "category", Type: schema.TextType{}, Nullable: true},
@@ -152,7 +152,7 @@ func TestQueryComposition(t *testing.T) {
 			},
 		})
 		require.NoError(t, err)
-		relation, err := rasql.SourceOf(table, "i")
+		relation, err := table.Source("i")
 		require.NoError(t, err)
 		category, err := rasql.BindNullColumn[q2AcceptanceRow, string](relation, "category", "category.codec")
 		require.NoError(t, err)
@@ -263,7 +263,7 @@ func q2AcceptanceQuery(t *testing.T) rasql.Query[q2AcceptanceRow] {
 // source does not have to dig one back out of the built query.
 func q2AcceptanceQueryRelation(t *testing.T) (rasql.Query[q2AcceptanceRow], rasql.TypedRelation[q2AcceptanceRow]) {
 	t.Helper()
-	table, err := rasql.ReadTableOf[q2AcceptanceRow](schema.TableDef{
+	table, err := rasql.TableOf[q2AcceptanceRow](schema.TableDef{
 		Name: "q2_items",
 		Columns: []schema.ColumnDef{
 			{Name: "category", Type: schema.TextType{}, Nullable: true},
@@ -271,7 +271,7 @@ func q2AcceptanceQueryRelation(t *testing.T) (rasql.Query[q2AcceptanceRow], rasq
 		},
 	})
 	require.NoError(t, err)
-	relation, err := rasql.SourceOf(table, "i")
+	relation, err := table.Source("i")
 	require.NoError(t, err)
 	category, err := rasql.BindNullColumn[q2AcceptanceRow, string](relation, "category", "category.codec")
 	require.NoError(t, err)
@@ -381,9 +381,9 @@ func TestCompositionCompiler(t *testing.T) {
 	t.Run("a partition limit lowers to ROW_NUMBER", func(t *testing.T) {
 		schemaValue, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}})
 		require.NoError(t, err)
-		table, err := rasql.ReadTableOf[partitionRow](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
+		table, err := rasql.TableOf[partitionRow](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
 		require.NoError(t, err)
-		relation, err := rasql.SourceOf(table, "i")
+		relation, err := table.Source("i")
 		require.NoError(t, err)
 		column, err := rasql.BindColumn[partitionRow, int64](relation, "id", "")
 		require.NoError(t, err)
@@ -523,24 +523,24 @@ func TestCompositionCompiler(t *testing.T) {
 	})
 }
 
-func nullableColumn(t *testing.T) (rasql.NullColumn[nullOrderRow, int64], rasql.ReadTable[nullOrderRow]) {
+func nullableColumn(t *testing.T) (rasql.NullColumn[nullOrderRow, int64], rasql.Table[nullOrderRow]) {
 	t.Helper()
-	table, err := rasql.ReadTableOf[nullOrderRow](schema.TableDef{Name: "nullable_items", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}, Nullable: true}}})
+	table, err := rasql.TableOf[nullOrderRow](schema.TableDef{Name: "nullable_items", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}, Nullable: true}}})
 	require.NoError(t, err)
-	relation, err := rasql.SourceOf(table, "n")
+	relation, err := table.Source("n")
 	require.NoError(t, err)
 	column, err := rasql.BindNullColumn[nullOrderRow, int64](relation, "id", "")
 	require.NoError(t, err)
 	return column, table
 }
 
-func nullableOrderQuery(t *testing.T, table rasql.ReadTable[nullOrderRow], column rasql.NullColumn[nullOrderRow, int64], term rasql.OrderTerm) rasql.Query[rasql.Nullable[int64]] {
+func nullableOrderQuery(t *testing.T, table rasql.Table[nullOrderRow], column rasql.NullColumn[nullOrderRow, int64], term rasql.OrderTerm) rasql.Query[rasql.Nullable[int64]] {
 	t.Helper()
 	schemaValue, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}, Nullable: true})
 	require.NoError(t, err)
 	projection, err := rasql.NullableScalar("id", column.NullExpr(), schema.IntegerType{}, "")
 	require.NoError(t, err)
-	relation, err := rasql.SourceOf(table, "n")
+	relation, err := table.Source("n")
 	require.NoError(t, err)
 	_ = schemaValue
 	return rasql.Select(relation.Source(), projection).OrderBy(term)

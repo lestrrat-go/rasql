@@ -27,7 +27,7 @@ func liveMutationProjection(t *testing.T, table rasql.Table[liveMutationRow]) ra
 	t.Helper()
 	schemaValue, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}})
 	require.NoError(t, err)
-	relation, err := rasql.SourceOf[liveMutationRow](table, "")
+	relation, err := table.Source("")
 	require.NoError(t, err)
 	id, err := rasql.BindColumn[liveMutationRow, int64](relation, "id", "")
 	require.NoError(t, err)

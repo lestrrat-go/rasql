@@ -18,18 +18,18 @@ type staffRow struct {
 	Email     string `rasql:"email"`
 }
 
-// staffTable mirrors the wrapper type rasqlgen emits: the typed table is
-// embedded and every column is reachable through an accessor method.
+// staffTable mirrors the wrapper type rasqlgen emits: the typed table is held
+// as a field and every column is reachable through an accessor method.
 type staffTable struct {
 	rasql.Table[staffRow]
 }
 
-func (t staffTable) ID() query.ColumnRef        { return rasql.ColumnOf(t.Table, "id") }
-func (t staffTable) ManagerID() query.ColumnRef { return rasql.ColumnOf(t.Table, "manager_id") }
-func (t staffTable) Email() query.ColumnRef     { return rasql.ColumnOf(t.Table, "email") }
+func (t staffTable) ID() query.ColumnRef        { return t.Column("id") }
+func (t staffTable) ManagerID() query.ColumnRef { return t.Column("manager_id") }
+func (t staffTable) Email() query.ColumnRef     { return t.Column("email") }
 
 func (t staffTable) As(alias string) (staffTable, error) {
-	aliased, err := rasql.As(t.Table, alias)
+	aliased, err := t.Table.As(alias)
 	if err != nil {
 		return staffTable{}, err
 	}
@@ -37,10 +37,10 @@ func (t staffTable) As(alias string) (staffTable, error) {
 }
 
 // InSchema mirrors the method rasqlgen's compact emitter gains once the
-// generator half of this design lands: one call through rasql.InSchema, and
+// generator half of this design lands: one call through Table.InSchema, and
 // the moved table back inside the same wrapper type.
 func (t staffTable) InSchema(namespace string) (staffTable, error) {
-	moved, err := rasql.InSchema(t.Table, namespace)
+	moved, err := t.Table.InSchema(namespace)
 	if err != nil {
 		return staffTable{}, err
 	}
@@ -51,23 +51,6 @@ func (t staffTable) InSchema(namespace string) (staffTable, error) {
 // rasql.Table[staffRow] through the embedded staffTable rather than directly.
 type auditedStaffTable struct {
 	staffTable
-}
-
-// selfMethodStaffTable mirrors a table that supplies its own Ref and
-// Column and keeps the embedded rasql.Table[staffRow] nil, using it only for the
-// unexported method that satisfies the interface. It is usable even though that
-// embedded field is nil.
-type selfMethodStaffTable struct {
-	rasql.Table[staffRow]
-	source query.TableRef
-}
-
-func (t selfMethodStaffTable) Ref() query.TableRef {
-	return t.source
-}
-
-func (t selfMethodStaffTable) Column(name string) query.ColumnRef {
-	return t.source.Column(name)
 }
 
 func staffDefinition() schema.TableDef {
@@ -125,25 +108,34 @@ func TestTable(t *testing.T) {
 			require.Equal(t, []string{"id"}, table.Ref().Definition().PrimaryKey)
 		})
 
-		t.Run("NewTable rejects an invalid definition", func(t *testing.T) {
+		t.Run("TableOf rejects an invalid definition", func(t *testing.T) {
 			_, err := rasql.TableOf[staffRow](schema.TableDef{})
 			require.Error(t, err)
 			require.Panics(t, func() {
 				rasql.MustTableOf[staffRow](schema.TableDef{})
 			})
 		})
+
+		t.Run("TableOf accepts a descriptor no write reaches", func(t *testing.T) {
+			// requireWritableDefinition used to demand insert, update and
+			// delete together here, so a descriptor permitting only some of
+			// the three had to be built through a second constructor that
+			// permitted none of them. Every operation is checked where it is
+			// performed instead; see TestTableOperations.
+			definition := staffDefinition()
+			definition.Operations = schema.OperationRead
+			table, err := rasql.TableOf[staffRow](definition)
+			require.NoError(t, err)
+			require.Equal(t, "staff", table.Ref().Name())
+		})
 	})
 
 	t.Run("binds a column", func(t *testing.T) {
-		t.Run("zero ColumnRef for a nil table", func(t *testing.T) {
-			require.Equal(t, query.ColumnRef{}, rasql.ColumnOf[staffRow](nil, "id"))
-		})
-
 		t.Run("keeps name and source for a column the table does not have", func(t *testing.T) {
 			table, err := rasql.TableOf[staffRow](staffDefinition())
 			require.NoError(t, err)
 
-			column := rasql.ColumnOf(table, "missing")
+			column := table.Column("missing")
 			require.Equal(t, "missing", column.Name())
 			require.Equal(t, query.Relation(table.Ref()), column.Source())
 
@@ -224,156 +216,99 @@ func TestTable(t *testing.T) {
 		require.ErrorContains(t, err, "contractors")
 	})
 
-	t.Run("a nil table reports errors", func(t *testing.T) {
-		requireNilTableRejected[rasql.Table[staffRow]](t, "nil interface", nil)
-
-		failed, err := rasql.TableOf[staffRow](schema.TableDef{})
-		require.Error(t, err)
-		require.Nil(t, failed)
-		requireNilTableRejected(t, "nil table from a failed NewTable", failed)
-
-		t.Run("a generated As reports the error behind the zero wrapper it returns", func(t *testing.T) {
-			var wrapper staffTable
-			aliased, err := wrapper.As("alias")
-			require.ErrorContains(t, err, "must not be nil")
-			require.Equal(t, staffTable{}, aliased)
-		})
-
-		// A wrapper value is not the nil interface, so the contract check in As
-		// cannot see it: Ref promotes through the wrapper's nil embedded
-		// Table[staffRow] and the runtime panics, naming the caller that built
-		// the value. Only the panic is asserted; the runtime's wording for a nil
-		// dereference is not a contract.
-		t.Run("a zero generated wrapper panics", func(t *testing.T) {
-			require.Panics(t, func() {
-				_, _ = rasql.As[staffRow](staffTable{}, "alias")
-			})
-		})
-	})
-
-	t.Run("a usable table is accepted", func(t *testing.T) {
+	t.Run("a table that carries a descriptor is usable", func(t *testing.T) {
 		table, err := rasql.TableOf[staffRow](staffDefinition())
 		require.NoError(t, err)
 
-		requireTableUsable(t, "typed table", table)
-		requireTableUsable(t, "wrapper around a typed table", staff(t))
-		requireTableUsable(t, "wrapper around a usable wrapper", auditedStaffTable{staffTable: staff(t)})
-		requireTableUsable(t, "pointer to a usable wrapper", &staffTable{Table: table})
-		requireTableUsable(t, "table with its own Ref and a nil embedded table", selfMethodStaffTable{source: table.Ref()})
+		requireTableUsable(t, "the handle itself", table)
+		requireTableUsable(t, "a wrapper holding it", staff(t).Table)
+		requireTableUsable(t, "a wrapper around a wrapper", auditedStaffTable{staffTable: staff(t)}.Table)
 	})
 }
 
-// nilTableEntryPoint is one exported entry point that takes a
-// rasql.Table[staffRow]. Wrapper is the type of the value the call receives, so
-// each case hands the entry point the table value a caller holds instead of one
-// the test converted to rasql.Table[staffRow] first.
-type nilTableEntryPoint[Wrapper rasql.Table[staffRow]] struct {
-	name          string
-	errorContains string
-	run           func(t *testing.T, table Wrapper) error
-}
-
-// nilTableEntryPoints returns every entry point that reaches a table through
-// rasql.Table[staffRow] in the canonical API. The old builder surface had a
-// separate entry point for a read (SelectFrom), a partial read (DecodeFrom),
-// and a join source (InnerJoin, LeftJoin), each deferring its own table check
-// to Build; the canonical API routes every one of those through a single
-// gate, SourceOf, which reports the nil table immediately instead of waiting
-// for a later Build, so the four old cases collapse into the one "SourceOf"
-// case below. Insert and InsertWithOptions collapse the same way into
-// NewCreatePlan, which a DefaultField turns into what InsertWithOptions was
-// for. ColumnOf is missing because it returns the zero ColumnRef rather than
-// reporting an error; requireNilTableRejected covers it separately. Every entry
-// point here reports the nil interface only.
-func nilTableEntryPoints[Wrapper rasql.Table[staffRow]]() []nilTableEntryPoint[Wrapper] {
-	return []nilTableEntryPoint[Wrapper]{
-		{
-			name:          "SourceOf",
-			errorContains: "must not be nil",
-			run: func(t *testing.T, table Wrapper) error {
-				_, err := rasql.SourceOf[staffRow](table, "")
-				return err
-			},
+// zeroTableEntryPoints returns every exported entry point that reads a table
+// through rasql.Table[staffRow]. Each one takes the zero handle, which carries
+// no descriptor, and each is required to report query.ErrNilTable rather than
+// panic.
+//
+// The zero handle is the value a generated wrapper holds after its As fails,
+// and the value a caller gets from a var declaration. Before Table[T] was a
+// struct it was a nil interface at one of those and a non-nil interface over a
+// nil pointer at the other, and only the first was caught.
+func zeroTableEntryPoints() map[string]func(t *testing.T, table rasql.Table[staffRow]) error {
+	return map[string]func(t *testing.T, table rasql.Table[staffRow]) error{
+		"Source": func(_ *testing.T, table rasql.Table[staffRow]) error {
+			_, err := table.Source("")
+			return err
 		},
-		{
-			name:          "NewCreatePlan",
-			errorContains: "must not be nil",
-			run: func(t *testing.T, table Wrapper) error {
-				_, err := rasql.NewCreatePlan[staffRow](table)
-				return err
-			},
+		"As": func(_ *testing.T, table rasql.Table[staffRow]) error {
+			_, err := table.As("alias")
+			return err
 		},
-		{
-			name:          "NewPatchPlan",
-			errorContains: "must not be nil",
-			run: func(t *testing.T, table Wrapper) error {
-				_, err := rasql.NewPatchPlan[staffRow, rasql.Predicate](table, rasql.Predicate{})
-				return err
-			},
+		"InSchema": func(_ *testing.T, table rasql.Table[staffRow]) error {
+			_, err := table.InSchema("tenant_0001")
+			return err
 		},
-		{
-			name:          "NewDeletePlan",
-			errorContains: "must not be nil",
-			run: func(t *testing.T, table Wrapper) error {
-				_, err := rasql.NewDeletePlan[staffRow](table, query.Predicate{})
-				return err
-			},
+		"NewCreatePlan": func(_ *testing.T, table rasql.Table[staffRow]) error {
+			_, err := rasql.NewCreatePlan(table)
+			return err
 		},
-		{
-			name:          "Create",
-			errorContains: "must not be nil",
-			run: func(t *testing.T, table Wrapper) error {
-				return rasql.CreateTable[staffRow](t.Context(), dbForBuild(t), table)
-			},
+		"NewPatchPlan": func(_ *testing.T, table rasql.Table[staffRow]) error {
+			_, err := rasql.NewPatchPlan[staffRow, rasql.Predicate](table, rasql.Predicate{})
+			return err
 		},
-		{
-			name:          "As",
-			errorContains: "must not be nil",
-			run: func(t *testing.T, table Wrapper) error {
-				_, err := rasql.As[staffRow](table, "alias")
-				return err
-			},
+		"NewDeletePlan": func(_ *testing.T, table rasql.Table[staffRow]) error {
+			_, err := rasql.NewDeletePlan(table, query.Predicate{})
+			return err
+		},
+		"CreateTable": func(t *testing.T, table rasql.Table[staffRow]) error {
+			return rasql.CreateTable(t.Context(), dbForBuild(t), table.Ref())
 		},
 	}
 }
 
-// requireNilTableRejected drives table through every typed entry point and
-// requires each one to report the nil table instead of panicking. Only the nil
-// interface reaches it. A wrapper whose embedded Table[staffRow] is nil is not
-// the nil interface and panics at these entry points instead, which TestTable's
-// "a zero generated wrapper panics" subtest pins.
-func requireNilTableRejected[Wrapper rasql.Table[staffRow]](t *testing.T, name string, table Wrapper) {
-	t.Helper()
-
-	t.Run(name, func(t *testing.T) {
-		for _, entryPoint := range nilTableEntryPoints[Wrapper]() {
-			t.Run(entryPoint.name, func(t *testing.T) {
+func TestZeroTable(t *testing.T) {
+	t.Run("every entry point reports query.ErrNilTable", func(t *testing.T) {
+		for name, call := range zeroTableEntryPoints() {
+			t.Run(name, func(t *testing.T) {
+				var zero rasql.Table[staffRow]
 				var err error
-				require.NotPanics(t, func() {
-					err = entryPoint.run(t, table)
-				})
-				require.ErrorContains(t, err, entryPoint.errorContains)
+				require.NotPanics(t, func() { err = call(t, zero) })
+				require.ErrorIs(t, err, query.ErrNilTable)
 			})
 		}
+	})
 
-		t.Run("ColumnOf", func(t *testing.T) {
-			require.Equal(t, query.ColumnRef{}, rasql.ColumnOf[staffRow](table, "id"))
-		})
+	t.Run("a generated wrapper holding one reports the same error", func(t *testing.T) {
+		var wrapper staffTable
+		aliased, err := wrapper.As("alias")
+		require.ErrorIs(t, err, query.ErrNilTable)
+		require.Equal(t, staffTable{}, aliased)
+
+		_, err = wrapper.Source("")
+		require.ErrorIs(t, err, query.ErrNilTable)
+	})
+
+	t.Run("Column answers with a ColumnRef that reports it", func(t *testing.T) {
+		// A generated accessor returns a ColumnRef alone, so Column reports
+		// the zero table through the value it hands back rather than through
+		// an error its signature cannot carry.
+		var zero rasql.Table[staffRow]
+		require.ErrorIs(t, zero.Column("id").Validate(), query.ErrNilTable)
 	})
 }
 
 // requireTableUsable drives table through the entry points that build a
-// statement without executing it and requires each one to reach the table behind
-// it, so a value the guard must accept is proven usable rather than merely not
-// rejected.
-func requireTableUsable[Wrapper rasql.Table[staffRow]](t *testing.T, name string, table Wrapper) {
+// statement without executing it and requires each one to reach the table
+// behind it, so a value the guard must accept is proven usable rather than
+// merely not rejected.
+func requireTableUsable(t *testing.T, name string, table rasql.Table[staffRow]) {
 	t.Helper()
 
 	t.Run(name, func(t *testing.T) {
-		// SourceOf's own guard is exercised by requireNilTableRejected; here
-		// the table is valid, so a plain render through its real Ref proves
-		// the same reachability SelectFrom and DecodeFrom used to prove,
-		// which the canonical API folds into the one SourceOf gate.
+		_, err := table.Source("")
+		require.NoError(t, err)
+
 		selected, err := render.SelectFrom(dbForBuild(t).Dialect(), table.Ref()).Select("id").Build()
 		require.NoError(t, err)
 		require.Contains(t, selected.SQL(), `FROM "staff"`)
@@ -386,11 +321,11 @@ func requireTableUsable[Wrapper rasql.Table[staffRow]](t *testing.T, name string
 		require.NoError(t, err)
 		require.Contains(t, deleted.SQL(), `DELETE FROM "staff"`)
 
-		aliased, err := rasql.As[staffRow](table, "alias")
+		aliased, err := table.As("alias")
 		require.NoError(t, err)
 		require.Equal(t, "alias", aliased.Ref().Qualifier())
 
-		require.Equal(t, "email", rasql.ColumnOf[staffRow](table, "email").Name())
+		require.Equal(t, "email", table.Column("email").Name())
 
 		others := contractors(t)
 		othersID := others.Column("id")
@@ -415,61 +350,133 @@ type viewCapabilityRow struct {
 	ID int64 `rasql:"id"`
 }
 
-func TestTableCapabilities(t *testing.T) {
-	t.Run("constructors require write capabilities", func(t *testing.T) {
-		view := schema.TableDef{
-			Name:       "active_users",
-			Kind:       schema.ObjectView,
-			Operations: schema.OperationRead,
-			Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
-		}
-		read, err := rasql.ReadTableOf[viewCapabilityRow](view)
-		require.NoError(t, err)
-		require.NotNil(t, read)
-		_, err = rasql.TableOf[viewCapabilityRow](view)
-		require.ErrorContains(t, err, "does not support operation")
-		require.Panics(t, func() { rasql.MustTableOf[viewCapabilityRow](view) })
+func viewCapabilityDB(t *testing.T) rasql.DB {
+	t.Helper()
 
-		writableView := view
-		writableView.Operations = schema.OperationRead | schema.OperationInsert | schema.OperationUpdate | schema.OperationDelete
-		table, err := rasql.TableOf[viewCapabilityRow](writableView)
+	database, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { mock.ExpectClose(); require.NoError(t, database.Close()) })
+	// A descriptor that does permit DDL reaches the server, so the mock
+	// answers the one CREATE TABLE the ddl case below sends. A descriptor
+	// that does not never sends it, and the expectation goes unused, so the
+	// mock is told not to require the order it was registered in.
+	mock.MatchExpectationsInOrder(false)
+	mock.ExpectExec("CREATE TABLE").WillReturnResult(sqlmock.NewResult(0, 0))
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
+	require.NoError(t, err)
+	return db
+}
+
+// capabilityCalls returns the five operations a descriptor can permit, each
+// spelled the way a caller performs it. The name is the operation, so a
+// subtest that fails names the bit that decided the outcome.
+func capabilityCalls(t *testing.T, table rasql.Table[viewCapabilityRow]) map[string]func() error {
+	t.Helper()
+
+	id := query.TypedColumnOf[viewCapabilityRow, int64](table.Column("id"))
+	db := viewCapabilityDB(t)
+	return map[string]func() error{
+		"read": func() error {
+			_, err := table.Source("")
+			return err
+		},
+		"insert": func() error {
+			_, err := rasql.NewCreatePlan(table, rasql.SetField[viewCapabilityRow, int64](id, 1))
+			return err
+		},
+		"update": func() error {
+			_, err := rasql.NewPatchPlan(table, query.EqualValue(id, int64(1)), rasql.SetField[viewCapabilityRow, int64](id, 1))
+			return err
+		},
+		"delete": func() error {
+			_, err := rasql.NewDeletePlan(table, query.EqualValue(id, int64(1)))
+			return err
+		},
+		"ddl": func() error { return rasql.CreateTable(t.Context(), db, table.Ref()) },
+	}
+}
+
+// requireCapabilities runs every operation against table and requires each one
+// to be accepted exactly when permitted names it.
+func requireCapabilities(t *testing.T, table rasql.Table[viewCapabilityRow], permitted ...string) {
+	t.Helper()
+
+	allowed := make(map[string]struct{}, len(permitted))
+	for _, name := range permitted {
+		allowed[name] = struct{}{}
+	}
+	for name, call := range capabilityCalls(t, table) {
+		t.Run(name, func(t *testing.T) {
+			err := call()
+			if _, ok := allowed[name]; ok {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, "does not support")
+		})
+	}
+}
+
+// TestTableOperations pins the per-operation refusals that replaced
+// requireWritableDefinition. A handle is built for a descriptor whatever it
+// permits, and each of the five operations checks its own bit where the
+// statement is assembled: insert in NewCreatePlan, update in NewPatchPlan,
+// delete in NewDeletePlan, DDL in CreateTable, and read in Table.Source.
+func TestTableOperations(t *testing.T) {
+	viewDefinition := schema.TableDef{
+		Name:    "active_users",
+		Kind:    schema.ObjectView,
+		Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+	}
+
+	t.Run("a view states no operations and is read-only through its Kind", func(t *testing.T) {
+		table, err := rasql.TableOf[viewCapabilityRow](viewDefinition)
 		require.NoError(t, err)
-		require.NotNil(t, table)
+		requireCapabilities(t, table, "read")
 	})
 
-	// TestTableCapabilities/"a forged writable handle rejects every mutation" proves that a Table[T] handle
-	// which bypassed TableOf, and whose schema does not support a given
-	// mutation, is refused for every mutation kind: insert, update, delete and
-	// DDL alike. TableFrom is the entry point that skips TableOf's own check,
-	// which is exactly how a forged handle reaches NewCreatePlan, NewPatchPlan,
-	// NewDeletePlan or CreateTable without ever passing through TableOf, so each
-	// constructor is required to check the capability again itself.
-	t.Run("a forged writable handle rejects every mutation", func(t *testing.T) {
-		database, mock, err := sqlmock.New()
+	t.Run("a view naming the writes permits them", func(t *testing.T) {
+		writable := viewDefinition
+		writable.Operations = schema.OperationRead | schema.OperationInsert | schema.OperationUpdate |
+			schema.OperationDelete | schema.OperationDDL
+		table, err := rasql.TableOf[viewCapabilityRow](writable)
 		require.NoError(t, err)
-		t.Cleanup(func() { mock.ExpectClose(); require.NoError(t, database.Close()) })
-		db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
-		require.NoError(t, err)
-		view := schema.TableDef{Name: "active_users", Kind: schema.ObjectView, Operations: schema.OperationRead, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}}
-		table := rasql.TableFrom[viewCapabilityRow](view)
-		id := query.TypedColumnOf[viewCapabilityRow, int64](table.Column("id"))
-		for name, call := range map[string]func() error{
-			"insert": func() error {
-				_, err := rasql.NewCreatePlan(table, rasql.SetField[viewCapabilityRow, int64](id, 1))
-				return err
-			},
-			"update": func() error {
-				_, err := rasql.NewPatchPlan(table, query.EqualValue(id, int64(1)), rasql.SetField[viewCapabilityRow, int64](id, 1))
-				return err
-			},
-			"delete": func() error {
-				_, err := rasql.NewDeletePlan(table, query.EqualValue(id, int64(1)))
-				return err
-			},
-			"ddl": func() error { return rasql.CreateTable(t.Context(), db, table) },
-		} {
-			t.Run(name, func(t *testing.T) { require.ErrorContains(t, call(), "does not support") })
+		requireCapabilities(t, table, "read", "insert", "update", "delete", "ddl")
+	})
+
+	t.Run("a descriptor stating Read and Insert refuses the other three", func(t *testing.T) {
+		// This is the shape requireWritableDefinition refused outright: an
+		// append-only table a caller inserts into and never updates or
+		// deletes from.
+		appendOnly := schema.TableDef{
+			Name:       "audit_log",
+			Operations: schema.OperationRead | schema.OperationInsert,
+			Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 		}
+		table, err := rasql.TableOf[viewCapabilityRow](appendOnly)
+		require.NoError(t, err)
+		requireCapabilities(t, table, "read", "insert")
+	})
+
+	t.Run("a descriptor withholding read refuses Source", func(t *testing.T) {
+		// Nothing in this repository read OperationRead before Source did.
+		writeOnly := schema.TableDef{
+			Name:       "outbox",
+			Operations: schema.OperationInsert,
+			Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		}
+		table, err := rasql.TableOf[viewCapabilityRow](writeOnly)
+		require.NoError(t, err)
+		_, err = table.Source("")
+		require.ErrorContains(t, err, `object "outbox" does not support operation 1`)
+	})
+
+	// TableFrom validates nothing, so it is how a handle reaches a mutation
+	// constructor without TableOf ever having seen the descriptor. Each
+	// constructor is required to check the capability again itself.
+	t.Run("a handle built through TableFrom is refused the same way", func(t *testing.T) {
+		table := rasql.TableFrom[viewCapabilityRow](viewDefinition)
+		requireCapabilities(t, table, "read")
 	})
 }
 
@@ -526,12 +533,12 @@ func TestInSchema(t *testing.T) {
 	})
 
 	t.Run("a relation built from a moved table carries the namespace", func(t *testing.T) {
-		// SourceOf is how a generated table becomes something a query selects
+		// Source is how a generated table becomes something a query selects
 		// from, so the namespace has to survive that step rather than only the
 		// table wrapper.
 		moved, err := staff(t).InSchema("tenant_0001")
 		require.NoError(t, err)
-		relation, err := rasql.SourceOf(moved.Table, "")
+		relation, err := moved.Source("")
 		require.NoError(t, err)
 		id, err := rasql.BindColumn[staffRow, int64](relation, "id", "")
 		require.NoError(t, err)
@@ -548,14 +555,14 @@ func TestInSchema(t *testing.T) {
 	})
 
 	t.Run("an alias still replaces the whole qualified name", func(t *testing.T) {
-		// InSchema writes the descriptor's namespace and SourceOf writes the
+		// InSchema writes the descriptor's namespace and Source writes the
 		// alias, two different fields, so the two compose in either order. What
 		// the renderer does with the pair is today's rule unchanged: only the
 		// FROM entry names the namespace, and every column renders under the
 		// bare alias.
 		moved, err := staff(t).InSchema("tenant_0001")
 		require.NoError(t, err)
-		relation, err := rasql.SourceOf(moved.Table, "s")
+		relation, err := moved.Source("s")
 		require.NoError(t, err)
 		id, err := rasql.BindColumn[staffRow, int64](relation, "id", "")
 		require.NoError(t, err)
@@ -588,25 +595,17 @@ func TestInSchema(t *testing.T) {
 		require.ErrorContains(t, err, "must not be empty")
 	})
 
-	t.Run("reports a nil table", func(t *testing.T) {
-		_, err := rasql.InSchema[staffRow](nil, "tenant_0001")
-		require.ErrorContains(t, err, "table must not be nil")
-
-		_, err = rasql.ReadInSchema[staffRow](nil, "tenant_0001")
-		require.ErrorContains(t, err, "table must not be nil")
-	})
-
-	t.Run("ReadInSchema moves a read-only object", func(t *testing.T) {
-		view, err := rasql.ReadTableOf[staffRow](staffDefinition())
+	t.Run("moves a read-only object", func(t *testing.T) {
+		view, err := rasql.TableOf[staffRow](staffDefinition())
 		require.NoError(t, err)
 
-		moved, err := rasql.ReadInSchema(view, "tenant_0001")
+		moved, err := view.InSchema("tenant_0001")
 		require.NoError(t, err)
 		require.Equal(t, "tenant_0001", moved.Ref().Schema())
 		require.Equal(t, "", view.Ref().Schema())
 		require.NoError(t, moved.Column("email").Validate())
 
-		_, err = rasql.ReadInSchema(view, "")
+		_, err = view.InSchema("")
 		require.ErrorContains(t, err, "must not be empty")
 	})
 }

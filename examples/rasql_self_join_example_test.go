@@ -48,7 +48,7 @@ func Example_rasql_self_join() {
 		return
 	}
 	employees := store.Employees()
-	if err := rasql.CreateTable(ctx, db, employees); err != nil {
+	if err := rasql.CreateTable(ctx, db, employees.Ref()); err != nil {
 		fmt.Printf("failed to create employees table: %s\n", err)
 		return
 	}
@@ -70,7 +70,7 @@ func Example_rasql_self_join() {
 		}
 	}
 
-	employeesSource, err := rasql.SourceOf(employees, "")
+	employeesSource, err := employees.Source("")
 	if err != nil {
 		fmt.Printf("failed to bind employees source: %s\n", err)
 		return
@@ -96,7 +96,7 @@ func Example_rasql_self_join() {
 		fmt.Printf("failed to alias employees: %s\n", err)
 		return
 	}
-	managerSource, err := rasql.SourceOf(manager, "manager")
+	managerSource, err := manager.Source("manager")
 	if err != nil {
 		fmt.Printf("failed to bind manager source: %s\n", err)
 		return

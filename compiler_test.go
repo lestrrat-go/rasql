@@ -26,7 +26,7 @@ func compilerTable(t *testing.T) (rasql.Table[compilerRow], rasql.Column[compile
 		},
 	})
 	require.NoError(t, err)
-	relation, err := rasql.SourceOf(table, "")
+	relation, err := table.Source("")
 	require.NoError(t, err)
 	id, err := rasql.BindColumn[compilerRow, int64](relation, "id", "")
 	require.NoError(t, err)
@@ -241,12 +241,12 @@ func TestCompilerMutation(t *testing.T) {
 // a predicate so the statement carries a bound argument.
 func compilerSelect(t *testing.T) rasql.Query[compilerCountRow] {
 	t.Helper()
-	table, err := rasql.ReadTableOf[compilerCountRow](schema.TableDef{
+	table, err := rasql.TableOf[compilerCountRow](schema.TableDef{
 		Name:    "compiler_items",
 		Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 	})
 	require.NoError(t, err)
-	relation, err := rasql.SourceOf(table, "")
+	relation, err := table.Source("")
 	require.NoError(t, err)
 	id, err := rasql.BindColumn[compilerCountRow, int64](relation, "id", "")
 	require.NoError(t, err)
@@ -306,12 +306,12 @@ func TestCompileQuery(t *testing.T) {
 			compilerBytesDecoder{result: result},
 		)
 		require.NoError(t, err)
-		table, err := rasql.ReadTableOf[compilerBytesRow](schema.TableDef{
+		table, err := rasql.TableOf[compilerBytesRow](schema.TableDef{
 			Name:    "compiler_items",
 			Columns: []schema.ColumnDef{{Name: "payload", Type: schema.BytesType{}}},
 		})
 		require.NoError(t, err)
-		relation, err := rasql.SourceOf(table, "")
+		relation, err := table.Source("")
 		require.NoError(t, err)
 		query := rasql.Select(relation.Source(), projection)
 
@@ -340,12 +340,12 @@ func TestCompileQuery(t *testing.T) {
 			{name: "sqlite", dialect: dialect.SQLite(), profile: rasql.SQLite335()},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
-				table, err := rasql.ReadTableOf[compilerCountRow](schema.TableDef{
+				table, err := rasql.TableOf[compilerCountRow](schema.TableDef{
 					Name:    "compiler_items",
 					Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 				})
 				require.NoError(t, err)
-				relation, err := rasql.SourceOf(table, "")
+				relation, err := table.Source("")
 				require.NoError(t, err)
 				id, err := rasql.BindColumn[compilerCountRow, int64](relation, "id", "")
 				require.NoError(t, err)
@@ -399,7 +399,7 @@ func (compilerBytesDecoder) DecodeRow(source rasql.ScanSource, row *compilerByte
 
 func mustRelation(t *testing.T, table rasql.Table[compilerRow]) rasql.TypedRelation[compilerRow] {
 	t.Helper()
-	relation, err := rasql.SourceOf(table, "")
+	relation, err := table.Source("")
 	require.NoError(t, err)
 	return relation
 }

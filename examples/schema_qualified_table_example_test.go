@@ -25,8 +25,8 @@ type EventsTable struct {
 	rasql.Table[EventRow]
 }
 
-func (t EventsTable) ID() query.ColumnRef     { return rasql.ColumnOf(t.Table, "id") }
-func (t EventsTable) Action() query.ColumnRef { return rasql.ColumnOf(t.Table, "action") }
+func (t EventsTable) ID() query.ColumnRef     { return t.Column("id") }
+func (t EventsTable) Action() query.ColumnRef { return t.Column("action") }
 
 // eventDecoder decodes an EventRow from its two columns, in projection order.
 type eventDecoder struct{ result rasql.ResultSchema }
@@ -75,12 +75,12 @@ func Example_schema_qualified_table() {
 	))}
 
 	// SQL: CREATE TABLE audit.events (id INTEGER NOT NULL, action TEXT NOT NULL, PRIMARY KEY (id))
-	if err := rasql.CreateTable(ctx, db, events); err != nil {
+	if err := rasql.CreateTable(ctx, db, events.Ref()); err != nil {
 		fmt.Printf("failed to create events table: %s\n", err)
 		return
 	}
 
-	source, err := rasql.SourceOf(events, "")
+	source, err := events.Source("")
 	if err != nil {
 		fmt.Printf("failed to bind events source: %s\n", err)
 		return
@@ -97,7 +97,7 @@ func Example_schema_qualified_table() {
 	}
 
 	// SQL: INSERT INTO audit.events (id, action) VALUES (?, ?) (arguments: 1, "created")
-	createPlan, err := rasql.NewCreatePlan[EventRow](events,
+	createPlan, err := rasql.NewCreatePlan[EventRow](events.Table,
 		rasql.SetField[EventRow](id, int64(1)),
 		rasql.SetField[EventRow](action, "created"),
 	)

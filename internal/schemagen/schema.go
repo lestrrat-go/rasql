@@ -28,7 +28,7 @@ func variableName(name string) string {
 }
 
 // DescriptorVarName returns the unexported package-level variable a
-// generated table's rasql.Table (or rasql.ReadTable) wrapper is built from:
+// generated table's rasql.Table wrapper is built from:
 // descriptorName's exported form, kept for a caller outside this package
 // that needs to name that variable, such as an error message pointing at a
 // specific generated declaration.

@@ -39,7 +39,7 @@ type sqliteQueryUsersColumns struct {
 func sqliteQueryUsersQuery() (rasql.Query[store.UsersRow], sqliteQueryUsersColumns, error) {
 	users := store.Users()
 	def := store.UsersDef()
-	source, err := rasql.SourceOf(users, "")
+	source, err := users.Source("")
 	if err != nil {
 		return rasql.Query[store.UsersRow]{}, sqliteQueryUsersColumns{}, err
 	}
@@ -111,7 +111,7 @@ func Example_rasql_sqlite_query() {
 	users := store.Users()
 
 	// Create the schema described by the generated table descriptor.
-	if err := rasql.CreateTable(ctx, db, users); err != nil {
+	if err := rasql.CreateTable(ctx, db, users.Ref()); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}

@@ -72,21 +72,21 @@ func (d acceptanceTotalDecoder) DecodeRow(src rasql.ScanSource, row *acceptanceT
 func acceptanceQuery(t *testing.T) rasql.Query[acceptanceTotalRow] {
 	t.Helper()
 
-	orders, err := rasql.ReadTableOf[acceptanceOrderRow](schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{
+	orders, err := rasql.TableOf[acceptanceOrderRow](schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "customer", Type: schema.TextType{}},
 		{Name: "amount", Type: schema.IntegerType{}},
 	}})
 	require.NoError(t, err)
-	refunds, err := rasql.ReadTableOf[acceptanceRefundRow](schema.TableDef{Name: "refunds", Columns: []schema.ColumnDef{
+	refunds, err := rasql.TableOf[acceptanceRefundRow](schema.TableDef{Name: "refunds", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "order_id", Type: schema.IntegerType{}},
 	}})
 	require.NoError(t, err)
 
-	o, err := rasql.SourceOf(orders, "o")
+	o, err := orders.Source("o")
 	require.NoError(t, err)
-	r, err := rasql.SourceOf(refunds, "r")
+	r, err := refunds.Source("r")
 	require.NoError(t, err)
 
 	orderID, err := rasql.BindColumn[acceptanceOrderRow, int64](o, "id", "")
@@ -210,21 +210,21 @@ func runAcceptance(t *testing.T, database *sql.DB, executor rasql.Executor, text
 func correlationQuery(t *testing.T) rasql.Query[acceptanceTotalRow] {
 	t.Helper()
 
-	orders, err := rasql.ReadTableOf[acceptanceOrderRow](schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{
+	orders, err := rasql.TableOf[acceptanceOrderRow](schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "customer", Type: schema.TextType{}},
 		{Name: "amount", Type: schema.IntegerType{}},
 	}})
 	require.NoError(t, err)
-	refunds, err := rasql.ReadTableOf[acceptanceRefundRow](schema.TableDef{Name: "refunds", Columns: []schema.ColumnDef{
+	refunds, err := rasql.TableOf[acceptanceRefundRow](schema.TableDef{Name: "refunds", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "order_id", Type: schema.IntegerType{}},
 	}})
 	require.NoError(t, err)
 
-	o, err := rasql.SourceOf(orders, "o")
+	o, err := orders.Source("o")
 	require.NoError(t, err)
-	r, err := rasql.SourceOf(refunds, "r")
+	r, err := refunds.Source("r")
 	require.NoError(t, err)
 
 	orderID, err := rasql.BindColumn[acceptanceOrderRow, int64](o, "id", "")
@@ -420,13 +420,13 @@ func (d coalesceGapDecoder) DecodeRow(src rasql.ScanSource, row *coalesceGapAcco
 func coalesceGapQuery(t *testing.T) rasql.Query[coalesceGapAccountRow] {
 	t.Helper()
 
-	accounts, err := rasql.ReadTableOf[coalesceGapAccountRow](schema.TableDef{Name: "accounts", Columns: []schema.ColumnDef{
+	accounts, err := rasql.TableOf[coalesceGapAccountRow](schema.TableDef{Name: "accounts", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "name", Type: schema.TextType{}},
 		{Name: "credit_limit", Type: schema.IntegerType{}, Nullable: true},
 	}})
 	require.NoError(t, err)
-	a, err := rasql.SourceOf(accounts, "")
+	a, err := accounts.Source("")
 	require.NoError(t, err)
 
 	name, err := rasql.BindColumn[coalesceGapAccountRow, string](a, "name", "")
@@ -528,23 +528,23 @@ func (d subqueryGapDecoder) DecodeRow(src rasql.ScanSource, row *subqueryGapRow)
 func subqueryGapQuery(t *testing.T) rasql.Query[subqueryGapRow] {
 	t.Helper()
 
-	customers, err := rasql.ReadTableOf[subqueryGapCustomerRow](schema.TableDef{Name: "customers", Columns: []schema.ColumnDef{
+	customers, err := rasql.TableOf[subqueryGapCustomerRow](schema.TableDef{Name: "customers", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "name", Type: schema.TextType{}},
 	}})
 	require.NoError(t, err)
-	orders, err := rasql.ReadTableOf[subqueryGapOrderRow](schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{
+	orders, err := rasql.TableOf[subqueryGapOrderRow](schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "customer_id", Type: schema.IntegerType{}},
 		{Name: "amount", Type: schema.IntegerType{}},
 	}})
 	require.NoError(t, err)
 
-	c, err := rasql.SourceOf(customers, "c")
+	c, err := customers.Source("c")
 	require.NoError(t, err)
-	o, err := rasql.SourceOf(orders, "o")
+	o, err := orders.Source("o")
 	require.NoError(t, err)
-	baseline, err := rasql.SourceOf(orders, "baseline")
+	baseline, err := orders.Source("baseline")
 	require.NoError(t, err)
 
 	customerID, err := rasql.BindColumn[subqueryGapCustomerRow, int64](c, "id", "")
@@ -690,20 +690,20 @@ func (d subqueryNullDecoder) DecodeRow(src rasql.ScanSource, row *subqueryNullRe
 func subqueryNullQuery(t *testing.T) rasql.Query[subqueryNullResultRow] {
 	t.Helper()
 
-	customers, err := rasql.ReadTableOf[subqueryNullCustomerRow](schema.TableDef{Name: "customers", Columns: []schema.ColumnDef{
+	customers, err := rasql.TableOf[subqueryNullCustomerRow](schema.TableDef{Name: "customers", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 	}})
 	require.NoError(t, err)
-	orders, err := rasql.ReadTableOf[subqueryNullOrderRow](schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{
+	orders, err := rasql.TableOf[subqueryNullOrderRow](schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "customer_id", Type: schema.IntegerType{}},
 		{Name: "amount", Type: schema.IntegerType{}},
 	}})
 	require.NoError(t, err)
 
-	c, err := rasql.SourceOf(customers, "c")
+	c, err := customers.Source("c")
 	require.NoError(t, err)
-	o, err := rasql.SourceOf(orders, "o")
+	o, err := orders.Source("o")
 	require.NoError(t, err)
 
 	customerID, err := rasql.BindColumn[subqueryNullCustomerRow, int64](c, "id", "")
@@ -779,13 +779,13 @@ type bindTypedColumnGapTable struct {
 }
 
 func (t bindTypedColumnGapTable) ID() query.TypedColumn[bindTypedColumnGapRow, int64] {
-	return query.TypedColumnOf[bindTypedColumnGapRow, int64](rasql.ColumnOf(t.Table, "id"))
+	return query.TypedColumnOf[bindTypedColumnGapRow, int64](t.Column("id"))
 }
 func (t bindTypedColumnGapTable) Name() query.TypedColumn[bindTypedColumnGapRow, string] {
-	return query.TypedColumnOf[bindTypedColumnGapRow, string](rasql.ColumnOf(t.Table, "name"))
+	return query.TypedColumnOf[bindTypedColumnGapRow, string](t.Column("name"))
 }
 func (t bindTypedColumnGapTable) Nickname() query.NullableColumn[bindTypedColumnGapRow, string] {
-	return query.NullableColumnOf[bindTypedColumnGapRow, string](rasql.ColumnOf(t.Table, "nickname"))
+	return query.NullableColumnOf[bindTypedColumnGapRow, string](t.Column("nickname"))
 }
 
 func bindTypedColumnGapUsers(t *testing.T) bindTypedColumnGapTable {
@@ -824,7 +824,7 @@ func bindTypedColumnGapQuery(t *testing.T) rasql.Query[bindTypedColumnGapResultR
 	t.Helper()
 
 	users := bindTypedColumnGapUsers(t)
-	u, err := rasql.SourceOf(users, "")
+	u, err := users.Source("")
 	require.NoError(t, err)
 
 	id, err := rasql.BindTypedColumn(users.ID())
@@ -925,12 +925,12 @@ func (d renderGapDecoder) DecodeRow(src rasql.ScanSource, row *renderGapRow) err
 func renderGapQuery(t *testing.T) rasql.Query[renderGapRow] {
 	t.Helper()
 
-	widgets, err := rasql.ReadTableOf[renderGapRow](schema.TableDef{Name: "widgets", Columns: []schema.ColumnDef{
+	widgets, err := rasql.TableOf[renderGapRow](schema.TableDef{Name: "widgets", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "name", Type: schema.TextType{}},
 	}})
 	require.NoError(t, err)
-	w, err := rasql.SourceOf(widgets, "")
+	w, err := widgets.Source("")
 	require.NoError(t, err)
 
 	id, err := rasql.BindColumn[renderGapRow, int64](w, "id", "")
