@@ -374,12 +374,12 @@ INSERT INTO graph_shared_junction VALUES (1, 11), (2, 11)`)
 	counter := &graphSharedExecutor{Executor: base}
 	executor, err := rasql.WithEngineProfile(counter, rasql.SQLite335())
 	require.NoError(t, err)
-	parents, err := rasql.SourceOf(rasql.MustReadTableOf[graphSharedParentRow](schema.TableDef{
+	parents, err := rasql.SourceOf(rasql.MustViewOf[graphSharedParentRow](schema.TableDef{
 		Name: "graph_shared_parents", PrimaryKey: []string{"id"},
 		Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 	}), "p")
 	require.NoError(t, err)
-	children, err := rasql.SourceOf(rasql.MustReadTableOf[graphSharedChildRow](schema.TableDef{
+	children, err := rasql.SourceOf(rasql.MustViewOf[graphSharedChildRow](schema.TableDef{
 		Name: "graph_shared_children", PrimaryKey: []string{"id"},
 		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}}, {Name: "parent", Type: schema.IntegerType{}},
@@ -387,7 +387,7 @@ INSERT INTO graph_shared_junction VALUES (1, 11), (2, 11)`)
 		},
 	}), "c")
 	require.NoError(t, err)
-	junction, err := rasql.SourceOf(rasql.MustReadTableOf[graphSharedJunctionRow](schema.TableDef{
+	junction, err := rasql.SourceOf(rasql.MustViewOf[graphSharedJunctionRow](schema.TableDef{
 		Name:    "graph_shared_junction",
 		Columns: []schema.ColumnDef{{Name: "parent", Type: schema.IntegerType{}}, {Name: "child", Type: schema.IntegerType{}}},
 	}), "j")

@@ -412,7 +412,7 @@ func TestTableCapabilities(t *testing.T) {
 			Operations: schema.OperationRead,
 			Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 		}
-		read, err := rasql.ReadTableOf[viewCapabilityRow](view)
+		read, err := rasql.ViewOf[viewCapabilityRow](view)
 		require.NoError(t, err)
 		require.NotNil(t, read)
 		_, err = rasql.TableOf[viewCapabilityRow](view)

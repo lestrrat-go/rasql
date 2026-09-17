@@ -241,7 +241,7 @@ func TestCompilerMutation(t *testing.T) {
 // a predicate so the statement carries a bound argument.
 func compilerSelect(t *testing.T) rasql.Query[compilerCountRow] {
 	t.Helper()
-	table, err := rasql.ReadTableOf[compilerCountRow](schema.TableDef{
+	table, err := rasql.ViewOf[compilerCountRow](schema.TableDef{
 		Name:    "compiler_items",
 		Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 	})
@@ -306,7 +306,7 @@ func TestCompileQuery(t *testing.T) {
 			compilerBytesDecoder{result: result},
 		)
 		require.NoError(t, err)
-		table, err := rasql.ReadTableOf[compilerBytesRow](schema.TableDef{
+		table, err := rasql.ViewOf[compilerBytesRow](schema.TableDef{
 			Name:    "compiler_items",
 			Columns: []schema.ColumnDef{{Name: "payload", Type: schema.BytesType{}}},
 		})
@@ -340,7 +340,7 @@ func TestCompileQuery(t *testing.T) {
 			{name: "sqlite", dialect: dialect.SQLite(), profile: rasql.SQLite335()},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
-				table, err := rasql.ReadTableOf[compilerCountRow](schema.TableDef{
+				table, err := rasql.ViewOf[compilerCountRow](schema.TableDef{
 					Name:    "compiler_items",
 					Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 				})

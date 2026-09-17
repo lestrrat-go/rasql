@@ -166,7 +166,7 @@ func BenchmarkTypedRowScan(b *testing.B) {
 
 func benchmarkCollectionQuery(b *testing.B, limit *int) rasql.Query[benchmarkMemberRow] {
 	b.Helper()
-	table, err := rasql.ReadTableOf[benchmarkMemberRow](schema.TableDef{Name: "members", Columns: []schema.ColumnDef{
+	table, err := rasql.ViewOf[benchmarkMemberRow](schema.TableDef{Name: "members", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "name", Type: schema.TextType{}},
 		{Name: "email", Type: schema.TextType{}},
@@ -261,7 +261,7 @@ func (benchmarkCountRowDecoder) DecodeRow(source rasql.ScanSource, result *bench
 
 func benchmarkCountBaseQuery(b *testing.B) rasql.Query[benchmarkCountRow] {
 	b.Helper()
-	table, err := rasql.ReadTableOf[benchmarkCountRow](schema.TableDef{
+	table, err := rasql.ViewOf[benchmarkCountRow](schema.TableDef{
 		Name:    "members",
 		Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 	})

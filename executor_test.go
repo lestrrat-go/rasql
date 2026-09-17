@@ -146,7 +146,7 @@ func (runtimePairDecoder) DecodeRow(source rasql.ScanSource, result *runtimePair
 
 func runtimeQuery(t *testing.T) rasql.Query[int64] {
 	t.Helper()
-	table, err := rasql.ReadTableOf[struct{}](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "value", Type: schema.IntegerType{}}}})
+	table, err := rasql.ViewOf[struct{}](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "value", Type: schema.IntegerType{}}}})
 	require.NoError(t, err)
 	relation, err := rasql.SourceOf(table, "i")
 	require.NoError(t, err)
@@ -163,7 +163,7 @@ func runtimeQuery(t *testing.T) rasql.Query[int64] {
 // rows never share a buffer.
 func runtimeBytesQuery(t *testing.T) rasql.Query[[]byte] {
 	t.Helper()
-	table, err := rasql.ReadTableOf[struct{}](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "value", Type: schema.BytesType{}}}})
+	table, err := rasql.ViewOf[struct{}](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "value", Type: schema.BytesType{}}}})
 	require.NoError(t, err)
 	relation, err := rasql.SourceOf(table, "i")
 	require.NoError(t, err)
@@ -190,7 +190,7 @@ func runtimeRowsProfiled(t *testing.T, rows *runtimeFakeRows) rasql.Executor {
 // caller can watch what the codec is asked to decode.
 func runtimeCodecQuery(t *testing.T, codec string) rasql.Query[int64] {
 	t.Helper()
-	table, err := rasql.ReadTableOf[struct{}](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "value", Type: schema.IntegerType{}, Nullable: true}}})
+	table, err := rasql.ViewOf[struct{}](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "value", Type: schema.IntegerType{}, Nullable: true}}})
 	require.NoError(t, err)
 	relation, err := rasql.SourceOf(table, "i")
 	require.NoError(t, err)
@@ -205,7 +205,7 @@ func runtimeCodecQuery(t *testing.T, codec string) rasql.Query[int64] {
 
 func runtimePairQuery(t *testing.T, firstCodec, secondCodec string) rasql.Query[runtimePair] {
 	t.Helper()
-	table, err := rasql.ReadTableOf[runtimePair](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "first", Type: schema.IntegerType{}}, {Name: "second", Type: schema.IntegerType{}}}})
+	table, err := rasql.ViewOf[runtimePair](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "first", Type: schema.IntegerType{}}, {Name: "second", Type: schema.IntegerType{}}}})
 	require.NoError(t, err)
 	relation, err := rasql.SourceOf(table, "i")
 	require.NoError(t, err)
@@ -542,7 +542,7 @@ func TestExecutor(t *testing.T) {
 		}
 		executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 		require.NoError(t, err)
-		table, err := rasql.ReadTableOf[sqliteRuntimeRow](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "name", Type: schema.TextType{}, Nullable: true}, {Name: "payload", Type: schema.BytesType{}, Nullable: true}}})
+		table, err := rasql.ViewOf[sqliteRuntimeRow](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "name", Type: schema.TextType{}, Nullable: true}, {Name: "payload", Type: schema.BytesType{}, Nullable: true}}})
 		require.NoError(t, err)
 		relation, err := rasql.SourceOf(table, "i")
 		require.NoError(t, err)

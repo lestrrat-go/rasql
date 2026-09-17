@@ -13,7 +13,7 @@ import (
 )
 
 // TestGeneratedViewRejectsEachMutationIndependently proves that a
-// generated view's table type, which embeds rasql.ReadTable rather than
+// generated view's table type, which embeds rasql.View rather than
 // rasql.Table, cannot satisfy rasql.Table[T] and so is rejected at compile
 // time by every entry point that requires a writable table: the mutation
 // plan constructors and CreateTable. A generated ordinary table's type,

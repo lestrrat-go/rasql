@@ -56,7 +56,7 @@ func (nilCodecFinalizer) Rollback(context.Context) error { return nil }
 // the nil instead, and whether it did depended on whether the executor opened
 // a scope, because only the scoped wrapper passed the nil along.
 func TestNilCodecRegistryIsAnError(t *testing.T) {
-	table, err := rasql.ReadTableOf[int64](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
+	table, err := rasql.ViewOf[int64](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
 	require.NoError(t, err)
 	relation, err := rasql.SourceOf(table, "i")
 	require.NoError(t, err)

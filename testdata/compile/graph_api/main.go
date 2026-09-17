@@ -76,11 +76,11 @@ func intSchema(names ...string) rasql.ResultSchema {
 }
 
 func main() {
-	users := rasql.MustReadTableOf[userRow](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
-	tasks := rasql.MustReadTableOf[taskRow](schema.TableDef{Name: "tasks", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "user_id", Type: schema.IntegerType{}}}})
-	labels := rasql.MustReadTableOf[labelRow](schema.TableDef{Name: "labels", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
-	links := rasql.MustReadTableOf[linkRow](schema.TableDef{Name: "user_labels", Columns: []schema.ColumnDef{{Name: "user_id", Type: schema.IntegerType{}}, {Name: "label_id", Type: schema.IntegerType{}}}})
-	employees := rasql.MustReadTableOf[employeeRow](schema.TableDef{Name: "employees", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "manager_id", Type: schema.IntegerType{}}}})
+	users := rasql.MustViewOf[userRow](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
+	tasks := rasql.MustViewOf[taskRow](schema.TableDef{Name: "tasks", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "user_id", Type: schema.IntegerType{}}}})
+	labels := rasql.MustViewOf[labelRow](schema.TableDef{Name: "labels", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
+	links := rasql.MustViewOf[linkRow](schema.TableDef{Name: "user_labels", Columns: []schema.ColumnDef{{Name: "user_id", Type: schema.IntegerType{}}, {Name: "label_id", Type: schema.IntegerType{}}}})
+	employees := rasql.MustViewOf[employeeRow](schema.TableDef{Name: "employees", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "manager_id", Type: schema.IntegerType{}}}})
 	ur, _ := rasql.SourceOf(users, "u")
 	tr, _ := rasql.SourceOf(tasks, "t")
 	lr, _ := rasql.SourceOf(labels, "l")

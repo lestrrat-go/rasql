@@ -542,7 +542,7 @@ func TestCompilerExtensionExecutesCanonicalSelect(t *testing.T) {
 	type user struct {
 		Email string `rasql:"email"`
 	}
-	table, err := rasql.ReadTableOf[user](schema.TableDef{
+	table, err := rasql.ViewOf[user](schema.TableDef{
 		Name: "users", Columns: []schema.ColumnDef{{Name: "email", Type: schema.TextType{}}},
 	})
 	require.NoError(t, err)

@@ -86,11 +86,11 @@ func graphAcceptanceFixture(t *testing.T, childRows int) (rasql.Executor, rasql.
 	}
 	executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 	require.NoError(t, err)
-	parentTable, err := rasql.ReadTableOf[graphParentRow](schema.TableDef{Name: "graph_parents", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{
+	parentTable, err := rasql.ViewOf[graphParentRow](schema.TableDef{Name: "graph_parents", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}, Nullable: true},
 	}})
 	require.NoError(t, err)
-	childTable, err := rasql.ReadTableOf[graphChildRow](schema.TableDef{Name: "graph_children", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{
+	childTable, err := rasql.ViewOf[graphChildRow](schema.TableDef{Name: "graph_children", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}}, {Name: "parent", Type: schema.IntegerType{}},
 		{Name: "tenant", Type: schema.IntegerType{}}, {Name: "rank", Type: schema.IntegerType{}},
 	}})
@@ -127,8 +127,8 @@ func graphAcceptanceFixture(t *testing.T, childRows int) (rasql.Executor, rasql.
 func TestGraphExecution(t *testing.T) {
 	t.Run("a per-parent limit and absent composite keys", func(t *testing.T) {
 		executor, _, _, _, parentQuery, childQuery := graphAcceptanceFixture(t, 4_750)
-		parentTable := rasql.MustReadTableOf[graphParentRow](schema.TableDef{Name: "graph_parents", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}, Nullable: true}}})
-		childTable := rasql.MustReadTableOf[graphChildRow](schema.TableDef{Name: "graph_children", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "parent", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}}, {Name: "rank", Type: schema.IntegerType{}}}})
+		parentTable := rasql.MustViewOf[graphParentRow](schema.TableDef{Name: "graph_parents", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}, Nullable: true}}})
+		childTable := rasql.MustViewOf[graphChildRow](schema.TableDef{Name: "graph_children", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "parent", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}}, {Name: "rank", Type: schema.IntegerType{}}}})
 		parentRelation, err := rasql.SourceOf(parentTable, "p")
 		require.NoError(t, err)
 		childRelation, err := rasql.SourceOf(childTable, "c")
@@ -167,8 +167,8 @@ func TestGraphExecution(t *testing.T) {
 
 	t.Run("a plan is reusable concurrently", func(t *testing.T) {
 		executor, _, _, _, parentQuery, childQuery := graphAcceptanceFixture(t, 100)
-		parentTable := rasql.MustReadTableOf[graphParentRow](schema.TableDef{Name: "graph_parents", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}, Nullable: true}}})
-		childTable := rasql.MustReadTableOf[graphChildRow](schema.TableDef{Name: "graph_children", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "parent", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}}, {Name: "rank", Type: schema.IntegerType{}}}})
+		parentTable := rasql.MustViewOf[graphParentRow](schema.TableDef{Name: "graph_parents", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}, Nullable: true}}})
+		childTable := rasql.MustViewOf[graphChildRow](schema.TableDef{Name: "graph_children", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "parent", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}}, {Name: "rank", Type: schema.IntegerType{}}}})
 		parents, err := rasql.SourceOf(parentTable, "p")
 		require.NoError(t, err)
 		children, err := rasql.SourceOf(childTable, "c")
@@ -206,8 +206,8 @@ func TestGraphExecution(t *testing.T) {
 
 	t.Run("has-one requires a duplicate-detection limit", func(t *testing.T) {
 		_, _, _, _, parentQuery, childQuery := graphAcceptanceFixture(t, 0)
-		parentTable := rasql.MustReadTableOf[graphParentRow](schema.TableDef{Name: "graph_parents", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}, Nullable: true}}})
-		childTable := rasql.MustReadTableOf[graphChildRow](schema.TableDef{Name: "graph_children", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "parent", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}}, {Name: "rank", Type: schema.IntegerType{}}}})
+		parentTable := rasql.MustViewOf[graphParentRow](schema.TableDef{Name: "graph_parents", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}, Nullable: true}}})
+		childTable := rasql.MustViewOf[graphChildRow](schema.TableDef{Name: "graph_children", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "parent", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}}, {Name: "rank", Type: schema.IntegerType{}}}})
 		parents, err := rasql.SourceOf(parentTable, "p")
 		require.NoError(t, err)
 		children, err := rasql.SourceOf(childTable, "c")

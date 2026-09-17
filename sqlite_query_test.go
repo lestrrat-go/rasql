@@ -399,7 +399,7 @@ func countUsersQuery(t *testing.T) (rasql.Query[countUser], rasql.Executor) {
 	require.NoError(t, err)
 	executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 	require.NoError(t, err)
-	table, err := rasql.ReadTableOf[countUser](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{
+	table, err := rasql.ViewOf[countUser](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "tenant", Type: schema.IntegerType{}},
 		{Name: "category", Type: schema.TextType{}, Nullable: true},

@@ -43,7 +43,7 @@ func TestPageAfter(t *testing.T) {
 		}
 		executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 		require.NoError(t, err)
-		table, err := rasql.ReadTableOf[pageAcceptanceRow](schema.TableDef{Name: "page_rows", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
+		table, err := rasql.ViewOf[pageAcceptanceRow](schema.TableDef{Name: "page_rows", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
 		require.NoError(t, err)
 		relation, err := rasql.SourceOf(table, "p")
 		require.NoError(t, err)
@@ -225,7 +225,7 @@ func TestPageAfter(t *testing.T) {
 		executor, err := db.Begin(t.Context(), nil)
 		require.NoError(t, err)
 		defer func() { _ = executor.Rollback() }()
-		table, err := rasql.ReadTableOf[pageAcceptanceRow](schema.TableDef{Name: "transaction_page_rows", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
+		table, err := rasql.ViewOf[pageAcceptanceRow](schema.TableDef{Name: "transaction_page_rows", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
 		require.NoError(t, err)
 		relation, err := rasql.SourceOf(table, "p")
 		require.NoError(t, err)
@@ -292,7 +292,7 @@ func r5PageQuery(t *testing.T, values string) (rasql.Executor, rasql.Query[r5Pag
 	require.NoError(t, err)
 	executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 	require.NoError(t, err)
-	table, err := rasql.ReadTableOf[r5PageRow](schema.TableDef{Name: "page_rows", Columns: []schema.ColumnDef{
+	table, err := rasql.ViewOf[r5PageRow](schema.TableDef{Name: "page_rows", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}}, {Name: "rank", Type: schema.IntegerType{}, Nullable: true},
 	}})
 	require.NoError(t, err)
@@ -356,7 +356,7 @@ func (d r5LifecycleDecoder) DecodeRow(source rasql.ScanSource, row *r5LifecycleR
 
 func r5LifecycleQuery(t *testing.T, decoder r5LifecycleDecoder) (rasql.Query[r5LifecycleRow], rasql.PageSpec[r5LifecycleRow]) {
 	t.Helper()
-	table, err := rasql.ReadTableOf[r5LifecycleRow](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
+	table, err := rasql.ViewOf[r5LifecycleRow](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
 	require.NoError(t, err)
 	relation, err := rasql.SourceOf(table, "i")
 	require.NoError(t, err)
@@ -389,7 +389,7 @@ func (*r5CountingCursorCodec) DecodeCursor(value []byte) (any, error) {
 
 func TestPageBinds(t *testing.T) {
 	t.Run("named codec occurrences are counted without re-encoding the fingerprint or rows", func(t *testing.T) {
-		table, err := rasql.ReadTableOf[int64](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
+		table, err := rasql.ViewOf[int64](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
 		require.NoError(t, err)
 		relation, err := rasql.SourceOf(table, "i")
 		require.NoError(t, err)

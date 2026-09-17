@@ -333,7 +333,7 @@ func (bindFixtureDecoder) DecodeRow(source rasql.ScanSource, row *bindFixtureRow
 // caller can bind another column of the same source.
 func bindQueryRelation(t *testing.T) (rasql.Query[bindFixtureRow], rasql.TypedRelation[bindFixtureRow]) {
 	t.Helper()
-	table, err := rasql.ReadTableOf[bindFixtureRow](schema.TableDef{
+	table, err := rasql.ViewOf[bindFixtureRow](schema.TableDef{
 		Name: "bind_items",
 		Columns: []schema.ColumnDef{
 			{Name: "category", Type: schema.TextType{}, Nullable: true},

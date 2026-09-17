@@ -9,8 +9,11 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 )
 
-// ReadTable associates a queryable SQL object with the Go type of one of its rows.
-type ReadTable[T any] interface {
+// View associates a SQL object with the Go type of one of its rows, and names
+// nothing a caller can write to. NewCreatePlan, NewPatchPlan, NewDeletePlan and
+// CreateTable each take a Table[T], so handing one of them a View[T] fails to
+// compile. Table[T] embeds View[T], so a table reaches everything a view does.
+type View[T any] interface {
 	Ref() query.TableRef
 	Column(name string) ColumnRef
 	tableRow() T
@@ -25,7 +28,7 @@ type ReadTable[T any] interface {
 // passing that wrapper to one of those functions dereferences the nil embedded
 // field and panics, and the panic names the caller that built it.
 type Table[T any] interface {
-	ReadTable[T]
+	View[T]
 	writableTable()
 }
 
@@ -34,27 +37,29 @@ type typedTable[T any] struct {
 	source query.TableRef
 }
 
-type readTable[T any] struct {
+type view[T any] struct {
 	source query.TableRef
 }
 
-func (readTable[T]) tableRow() T                    { var zero T; return zero }
-func (t readTable[T]) Ref() query.TableRef          { return t.source }
-func (t readTable[T]) Column(name string) ColumnRef { return t.source.Column(name) }
-func (typedTable[T]) writableTable()                {}
+func (view[T]) tableRow() T                    { var zero T; return zero }
+func (t view[T]) Ref() query.TableRef          { return t.source }
+func (t view[T]) Column(name string) ColumnRef { return t.source.Column(name) }
+func (typedTable[T]) writableTable()           {}
 
-// ReadTableOf creates a queryable typed object from a validated schema definition.
-func ReadTableOf[T any](definition schema.TableDef) (ReadTable[T], error) {
+// ViewOf validates definition and returns a View[T] naming it. TableOf is the
+// constructor that returns the Table[T] the write entry points take.
+func ViewOf[T any](definition schema.TableDef) (View[T], error) {
 	source, err := query.NewTableRef(definition)
 	if err != nil {
 		return nil, fmt.Errorf("rasql: table definition: %w", err)
 	}
-	return readTable[T]{source: source}, nil
+	return view[T]{source: source}, nil
 }
 
-// MustReadTableOf creates a queryable typed object or panics when definition is invalid.
-func MustReadTableOf[T any](definition schema.TableDef) ReadTable[T] {
-	table, err := ReadTableOf[T](definition)
+// MustViewOf returns what ViewOf returns, and panics with ViewOf's error when
+// definition is invalid.
+func MustViewOf[T any](definition schema.TableDef) View[T] {
+	table, err := ViewOf[T](definition)
 	if err != nil {
 		panic(err)
 	}
@@ -112,9 +117,13 @@ func TableFrom[T any](definition schema.TableDef) Table[T] {
 	return typedTable[T]{source: query.TableRefFrom(definition)}
 }
 
-// ReadTableFrom creates a queryable typed object from a descriptor known to be valid.
-func ReadTableFrom[T any](definition schema.TableDef) ReadTable[T] {
-	return readTable[T]{source: query.TableRefFrom(definition)}
+// ViewFrom returns a View[T] over a descriptor already known to be valid,
+// skipping the validation and copying ViewOf performs. It stands to ViewOf as
+// TableFrom stands to TableOf, and carries the same contract, including that
+// the returned view reads the descriptor's slices in place. Read TableFrom's
+// doc before using it with a descriptor assembled at runtime.
+func ViewFrom[T any](definition schema.TableDef) View[T] {
+	return view[T]{source: query.TableRefFrom(definition)}
 }
 
 // As returns table under alias. Generated table types have their own As with
@@ -133,10 +142,12 @@ func As[T any](table Table[T], alias string) (Table[T], error) {
 	return typedTable[T]{source: aliased}, nil
 }
 
-// AsRead returns a queryable typed object under alias.
+// AsView returns table under alias. As performs the same aliasing on a
+// Table[T] and returns a Table[T], so a caller holding a writable table keeps
+// its write entry points by calling As instead.
 //
 // `table` must not be nil.
-func AsRead[T any](table ReadTable[T], alias string) (ReadTable[T], error) {
+func AsView[T any](table View[T], alias string) (View[T], error) {
 	if table == nil {
 		return nil, fmt.Errorf("rasql: table alias: table must not be nil")
 	}
@@ -144,7 +155,7 @@ func AsRead[T any](table ReadTable[T], alias string) (ReadTable[T], error) {
 	if err != nil {
 		return nil, fmt.Errorf("rasql: table alias: %w", err)
 	}
-	return readTable[T]{source: aliased}, nil
+	return view[T]{source: aliased}, nil
 }
 
 // ColumnRef is a reference to one column of one table. It is query.ColumnRef
@@ -326,4 +337,3 @@ func createTableDef(ctx context.Context, db DB, table schema.TableDef) error {
 	}
 	return nil
 }
-

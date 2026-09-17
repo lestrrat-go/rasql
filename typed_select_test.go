@@ -43,7 +43,7 @@ func newSelectFixture(t *testing.T) selectFixture {
 	require.NoError(t, err)
 	executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 	require.NoError(t, err)
-	table, err := rasql.ReadTableOf[selectUser](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{
+	table, err := rasql.ViewOf[selectUser](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}}, {Name: "email", Type: schema.TextType{}},
 	}})
 	require.NoError(t, err)
@@ -141,7 +141,7 @@ func (reusableEmailDecoder) DecodeRow(source rasql.ScanSource, result *reusableE
 
 func reusableUsers(t *testing.T) (rasql.TypedRelation[reusableUser], rasql.Column[reusableUser, int64], rasql.Column[reusableUser, string]) {
 	t.Helper()
-	table, err := rasql.ReadTableOf[reusableUser](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{
+	table, err := rasql.ViewOf[reusableUser](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "email", Type: schema.TextType{}},
 	}})

@@ -16,8 +16,8 @@ func TestPackageSourceGeneratesReadOnlyViewSurface(t *testing.T) {
 			{Name: "id", Type: schema.IntegerType{}},
 		},
 	})
-	require.Contains(t, text, "rasql.ReadTable[ActiveUsersRow]")
-	require.Contains(t, text, "rasql.MustReadTableOf[ActiveUsersRow]")
+	require.Contains(t, text, "rasql.View[ActiveUsersRow]")
+	require.Contains(t, text, "rasql.MustViewOf[ActiveUsersRow]")
 	require.NotContains(t, text, "rasql.Table[ActiveUsersRow]")
 	require.NotContains(t, text, "rasql.MustTableOf[ActiveUsersRow]")
 	require.Contains(t, text, "ID rasql.Column[ActiveUsersRow, int64]")

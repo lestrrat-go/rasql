@@ -104,7 +104,7 @@ func TestQueryAPI(t *testing.T) {
 	})
 
 	t.Run("query operations are immutable", func(t *testing.T) {
-		table, err := rasql.ReadTableOf[int64](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
+		table, err := rasql.ViewOf[int64](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
 		require.NoError(t, err)
 		relation, err := rasql.SourceOf(table, "u")
 		require.NoError(t, err)
@@ -121,7 +121,7 @@ func TestQueryAPI(t *testing.T) {
 	})
 
 	t.Run("source-bound columns validate nullability and membership", func(t *testing.T) {
-		table, err := rasql.ReadTableOf[int64](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{
+		table, err := rasql.ViewOf[int64](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "nickname", Type: schema.TextType{}, Nullable: true},
 		}})
@@ -158,7 +158,7 @@ func compositionQuery(t *testing.T) rasql.Query[compositionRow] {
 		rasql.Item("id", rasql.Value(int64(1)), schema.IntegerType{}, ""),
 	}, compositionDecoder{schema: s})
 	require.NoError(t, err)
-	table, err := rasql.ReadTableOf[compositionRow](schema.TableDef{
+	table, err := rasql.ViewOf[compositionRow](schema.TableDef{
 		Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 	})
 	require.NoError(t, err)

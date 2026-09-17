@@ -132,9 +132,9 @@ type validationDecoder struct {
 func (d *validationDecoder) ResultSchema() rasql.ResultSchema       { return d.schema }
 func (d *validationDecoder) Presence() []rasql.Presence             { return d.presence }
 func (*validationDecoder) DecodeRow(rasql.ScanSource, *int64) error { return nil }
-func validationTable(t *testing.T, name string) rasql.ReadTable[int64] {
+func validationTable(t *testing.T, name string) rasql.View[int64] {
 	t.Helper()
-	table, err := rasql.ReadTableOf[int64](schema.TableDef{Name: name, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
+	table, err := rasql.ViewOf[int64](schema.TableDef{Name: name, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
 	require.NoError(t, err)
 	return table
 }

@@ -48,7 +48,7 @@ func (*codecScanRejectingNull) Scan(any) error { return errCodecScannerNull }
 func codecScanQuery[R any](t *testing.T, values [][]any, codec rasql.ValueCodec, nullable bool,
 	decode func(rasql.ScanSource, *R) error) ([]R, error) {
 	t.Helper()
-	table, err := rasql.ReadTableOf[R](schema.TableDef{
+	table, err := rasql.ViewOf[R](schema.TableDef{
 		Name:    "codec_rows",
 		Columns: []schema.ColumnDef{{Name: "value", Type: schema.TextType{}, Nullable: nullable}},
 	})

@@ -315,7 +315,7 @@ func logicalMutationPlan(t *testing.T) (rasql.Table[logicalRow], func(int64) ras
 // observers can still show its work reached the database.
 func logicalCountQuery(t *testing.T) rasql.Query[int64] {
 	t.Helper()
-	table, err := rasql.ReadTableOf[logicalRow](schema.TableDef{
+	table, err := rasql.ViewOf[logicalRow](schema.TableDef{
 		Name: "logical_items",
 		Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},

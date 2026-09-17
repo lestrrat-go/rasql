@@ -34,7 +34,7 @@ func TestPlanErrorUnwrapsItsCause(t *testing.T) {
 		planErrorDecoder{result: result},
 	)
 	require.NoError(t, err)
-	table, err := rasql.ReadTableOf[planErrorRow](schema.TableDef{
+	table, err := rasql.ViewOf[planErrorRow](schema.TableDef{
 		Name:    "plan_error_items",
 		Columns: []schema.ColumnDef{{Name: "flag", Type: schema.IntegerType{}}},
 	})

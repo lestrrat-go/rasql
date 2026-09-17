@@ -47,7 +47,7 @@ func cursorFixtureFor(t *testing.T) cursorFixture {
 	executor, err := rasql.WithEngineProfile(counter, rasql.SQLite335())
 	require.NoError(t, err)
 
-	table, err := rasql.ReadTableOf[cursorRow](schema.TableDef{
+	table, err := rasql.ViewOf[cursorRow](schema.TableDef{
 		Name:    "cursor_rows",
 		Columns: []schema.ColumnDef{{Name: "value", Type: schema.FloatType{}}},
 	})

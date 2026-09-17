@@ -99,7 +99,7 @@ func CompactObjectSource(packageName string, object CompactObject) ([]byte, erro
 	if object.Catalog.Kind == "view" {
 		b.WriteString("var ")
 		b.WriteString(tableName)
-		b.WriteString(" = rasql.MustReadTableOf[")
+		b.WriteString(" = rasql.MustViewOf[")
 		b.WriteString(row)
 		b.WriteString("](")
 		b.WriteString(definitionName)
@@ -117,7 +117,7 @@ func CompactObjectSource(packageName string, object CompactObject) ([]byte, erro
 	b.WriteString(accessor)
 	b.WriteString("Table struct { rasql.")
 	if object.Catalog.Kind == "view" {
-		b.WriteString("ReadTable[")
+		b.WriteString("View[")
 	} else {
 		b.WriteString("Table[")
 	}
@@ -129,7 +129,7 @@ func CompactObjectSource(packageName string, object CompactObject) ([]byte, erro
 	b.WriteString("Table { return ")
 	b.WriteString(accessor)
 	if object.Catalog.Kind == "view" {
-		b.WriteString("Table{ReadTable: ")
+		b.WriteString("Table{View: ")
 	} else {
 		b.WriteString("Table{Table: ")
 	}
@@ -142,7 +142,7 @@ func CompactObjectSource(packageName string, object CompactObject) ([]byte, erro
 	b.WriteString("], error) { return rasql.SourceOf[")
 	b.WriteString(row)
 	if object.Catalog.Kind == "view" {
-		b.WriteString("](t.ReadTable, alias) }\n\n")
+		b.WriteString("](t.View, alias) }\n\n")
 	} else {
 		b.WriteString("](t.Table, alias) }\n\n")
 	}

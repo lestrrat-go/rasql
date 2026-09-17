@@ -203,13 +203,13 @@ type Source struct{ ref query.RelationRef }
 // empty alias keeps the alias table already carries.
 //
 // `table` must not be nil.
-func SourceOf[R any](table ReadTable[R], alias string) (TypedRelation[R], error) {
+func SourceOf[R any](table View[R], alias string) (TypedRelation[R], error) {
 	if table == nil {
 		return TypedRelation[R]{}, planError("invalid_source", "table", "must not be nil")
 	}
 	originalRef := table.Ref()
 	definition := originalRef.Definition()
-	detached, detachErr := ReadTableOf[R](definition)
+	detached, detachErr := ViewOf[R](definition)
 	if detachErr != nil {
 		return TypedRelation[R]{}, planError("invalid_source", "table", detachErr.Error())
 	}
