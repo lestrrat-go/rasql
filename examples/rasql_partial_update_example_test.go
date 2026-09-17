@@ -39,20 +39,26 @@ func Example_rasql_partial_update() {
 		return
 	}
 	for id, email := range map[int64]string{42: "old@example.com", 512: "keep@example.com"} {
-		plan := store.NewUsersCreate().ID(id).Email(email).FirstName("First").LastName("Last").Plan()
+		plan, err := store.NewUsersCreate().ID(id).Email(email).FirstName("First").LastName("Last").Plan()
+		if err != nil {
+			fmt.Printf("failed to build insert: %s\n", err)
+			return
+		}
 		if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
 	}
 
+	// The query package takes a query.ColumnRef, and Column is the generated
+	// table's only way to produce one.
 	// SQL: UPDATE users SET email = ? WHERE users.id < ? (arguments: "ada@example.com", 100)
-	statement, err := query.NewUpdate(users.Ref(), query.Set(users.Email().Ref(), "ada@example.com"))
+	statement, err := query.NewUpdate(users.Ref(), query.Set(users.Column("email"), "ada@example.com"))
 	if err != nil {
 		fmt.Printf("failed to build update: %s\n", err)
 		return
 	}
-	statement, err = statement.WithWhere(query.LessThan(users.ID().Ref(), 100))
+	statement, err = statement.WithWhere(query.LessThan(users.Column("id"), 100))
 	if err != nil {
 		fmt.Printf("failed to filter update: %s\n", err)
 		return
@@ -72,12 +78,12 @@ func Example_rasql_partial_update() {
 	// The row outside the predicate keeps the email it was inserted with. A
 	// dynamic SELECT reads it back through the query and render packages.
 	// SQL: SELECT users.id, users.email FROM users WHERE users.id = ? (argument: 512)
-	kept, err := query.NewSelect(users.Ref(), users.ID().Ref(), users.Email().Ref())
+	kept, err := query.NewSelect(users.Ref(), users.Column("id"), users.Column("email"))
 	if err != nil {
 		fmt.Printf("failed to build select: %s\n", err)
 		return
 	}
-	kept, err = kept.WithWhere(query.Equal(users.ID().Ref(), 512))
+	kept, err = kept.WithWhere(query.Equal(users.Column("id"), 512))
 	if err != nil {
 		fmt.Printf("failed to filter select: %s\n", err)
 		return

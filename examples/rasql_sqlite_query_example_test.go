@@ -11,79 +11,6 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
-// sqliteQueryUsersDecoder decodes every column of the users table into a
-// store.UsersRow, reusing the generated ScanRow method rather than restating
-// the column order.
-type sqliteQueryUsersDecoder struct{ result rasql.ResultSchema }
-
-func (d sqliteQueryUsersDecoder) ResultSchema() rasql.ResultSchema { return d.result }
-func (d sqliteQueryUsersDecoder) Presence() []rasql.Presence       { return nil }
-func (d sqliteQueryUsersDecoder) DecodeRow(src rasql.ScanSource, row *store.UsersRow) error {
-	return row.ScanRow(src)
-}
-
-// sqliteQueryUsersColumns is every users column bound to one rasql.Source, so a caller
-// can add a Where or OrderBy against the same columns sqliteQueryUsersQuery projects.
-type sqliteQueryUsersColumns struct {
-	ID        rasql.Column[store.UsersRow, int64]
-	Email     rasql.Column[store.UsersRow, string]
-	Nickname  rasql.NullColumn[store.UsersRow, string]
-	Status    rasql.Column[store.UsersRow, string]
-	FirstName rasql.Column[store.UsersRow, string]
-	LastName  rasql.Column[store.UsersRow, string]
-}
-
-// sqliteQueryUsersQuery builds the canonical Query[store.UsersRow] that projects
-// every users column, in the order the generated row type scans them, and
-// returns the bound columns so a caller can filter or order by them.
-func sqliteQueryUsersQuery() (rasql.Query[store.UsersRow], sqliteQueryUsersColumns, error) {
-	users := store.Users()
-	def := store.UsersDef()
-	var cols sqliteQueryUsersColumns
-	var err error
-	if cols.ID, err = rasql.BindColumn[store.UsersRow, int64](users, users.IDRef().Name(), ""); err != nil {
-		return rasql.Query[store.UsersRow]{}, sqliteQueryUsersColumns{}, err
-	}
-	if cols.Email, err = rasql.BindColumn[store.UsersRow, string](users, users.EmailRef().Name(), ""); err != nil {
-		return rasql.Query[store.UsersRow]{}, sqliteQueryUsersColumns{}, err
-	}
-	if cols.Nickname, err = rasql.BindNullColumn[store.UsersRow, string](users, users.NicknameRef().Name(), ""); err != nil {
-		return rasql.Query[store.UsersRow]{}, sqliteQueryUsersColumns{}, err
-	}
-	if cols.Status, err = rasql.BindColumn[store.UsersRow, string](users, users.StatusRef().Name(), ""); err != nil {
-		return rasql.Query[store.UsersRow]{}, sqliteQueryUsersColumns{}, err
-	}
-	if cols.FirstName, err = rasql.BindColumn[store.UsersRow, string](users, users.FirstNameRef().Name(), ""); err != nil {
-		return rasql.Query[store.UsersRow]{}, sqliteQueryUsersColumns{}, err
-	}
-	if cols.LastName, err = rasql.BindColumn[store.UsersRow, string](users, users.LastNameRef().Name(), ""); err != nil {
-		return rasql.Query[store.UsersRow]{}, sqliteQueryUsersColumns{}, err
-	}
-	result, err := rasql.NewResultSchema(
-		rasql.ResultColumn{Name: users.IDRef().Name(), Type: def.Columns[0].Type},
-		rasql.ResultColumn{Name: users.EmailRef().Name(), Type: def.Columns[1].Type},
-		rasql.ResultColumn{Name: users.NicknameRef().Name(), Type: def.Columns[2].Type, Nullable: true},
-		rasql.ResultColumn{Name: users.StatusRef().Name(), Type: def.Columns[3].Type},
-		rasql.ResultColumn{Name: users.FirstNameRef().Name(), Type: def.Columns[4].Type},
-		rasql.ResultColumn{Name: users.LastNameRef().Name(), Type: def.Columns[5].Type},
-	)
-	if err != nil {
-		return rasql.Query[store.UsersRow]{}, sqliteQueryUsersColumns{}, err
-	}
-	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
-		rasql.Item(users.IDRef().Name(), cols.ID.Expr(), def.Columns[0].Type, ""),
-		rasql.Item(users.EmailRef().Name(), cols.Email.Expr(), def.Columns[1].Type, ""),
-		rasql.NullItem(users.NicknameRef().Name(), cols.Nickname.NullExpr(), def.Columns[2].Type, ""),
-		rasql.Item(users.StatusRef().Name(), cols.Status.Expr(), def.Columns[3].Type, ""),
-		rasql.Item(users.FirstNameRef().Name(), cols.FirstName.Expr(), def.Columns[4].Type, ""),
-		rasql.Item(users.LastNameRef().Name(), cols.LastName.Expr(), def.Columns[5].Type, ""),
-	}, sqliteQueryUsersDecoder{result: result})
-	if err != nil {
-		return rasql.Query[store.UsersRow]{}, sqliteQueryUsersColumns{}, err
-	}
-	return rasql.Select(users, projection), cols, nil
-}
-
 func Example_rasql_sqlite_query() {
 	// This example creates, inserts, and reads one generated row with SQLite.
 	ctx := context.Background()
@@ -103,8 +30,8 @@ func Example_rasql_sqlite_query() {
 		return
 	}
 
-	// store.Users() returns the generated table value, which carries the row
-	// type and one accessor method per column.
+	// store.Users() returns the generated table value, which carries the
+	// descriptor and the row type.
 	users := store.Users()
 
 	// Create the schema described by the generated table descriptor.
@@ -113,22 +40,32 @@ func Example_rasql_sqlite_query() {
 		return
 	}
 	// The generated create builder binds the row's fields as values, through
-	// the column accessors the generator wrote.
-	plan := store.NewUsersCreate().ID(42).Email("ada@example.com").FirstName("First").LastName("Last").Plan()
+	// the columns the generator bound for it.
+	plan, err := store.NewUsersCreate().ID(42).Email("ada@example.com").FirstName("First").LastName("Last").Plan()
+	if err != nil {
+		fmt.Printf("failed to build insert: %s\n", err)
+		return
+	}
 	if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
 
-	// The query binds one column per users field, so One returns a decoded
-	// store.UsersRow.
+	// The generated projection names one column per users field, so One
+	// returns a decoded store.UsersRow.
 	// SQL: SELECT users.id, users.email, users.nickname, users.status, users.first_name, users.last_name FROM users WHERE users.id = ? (argument: 42)
-	base, cols, err := sqliteQueryUsersQuery()
+	columns, err := (store.UsersColumns{}).Bind(users.Table)
 	if err != nil {
-		fmt.Printf("failed to build users query: %s\n", err)
+		fmt.Printf("failed to bind users columns: %s\n", err)
 		return
 	}
-	user, err := rasql.One(ctx, db, base.Where(rasql.EqualValue(cols.ID.Expr(), int64(42))))
+	projection, err := store.UsersProjection(columns)
+	if err != nil {
+		fmt.Printf("failed to build users projection: %s\n", err)
+		return
+	}
+	base := rasql.Select(users, projection)
+	user, err := rasql.One(ctx, db, base.Where(rasql.EqualValue(columns.ID.Expr(), int64(42))))
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return

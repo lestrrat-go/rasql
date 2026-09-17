@@ -38,10 +38,12 @@ func Example_rasql_static_template() {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	// Insert a row that the bound template will find.
+	// Insert a row that the bound template will find. query.Set takes a
+	// query.ColumnRef, and Column is the generated table's only way to
+	// produce one.
 	insert, err := query.NewInsert(users.Ref(),
-		query.Set(users.ID().Ref(), int64(42)), query.Set(users.Email().Ref(), "ada@example.com"),
-		query.Set(users.FirstName().Ref(), "Ada"), query.Set(users.LastName().Ref(), "Lovelace"))
+		query.Set(users.Column("id"), int64(42)), query.Set(users.Column("email"), "ada@example.com"),
+		query.Set(users.Column("first_name"), "Ada"), query.Set(users.Column("last_name"), "Lovelace"))
 	if err != nil {
 		fmt.Printf("failed to build insert: %s\n", err)
 		return

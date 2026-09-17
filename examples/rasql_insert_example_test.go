@@ -37,9 +37,13 @@ func Example_rasql_insert() {
 	}
 
 	// The generated create builder binds the row's fields as values, through
-	// the column accessors the generator wrote.
+	// the columns the generator bound for it.
 	// SQL: INSERT INTO users (id, email) VALUES (?, ?) (arguments: 42, "ada@example.com")
-	plan := store.NewUsersCreate().ID(42).Email("ada@example.com").FirstName("First").LastName("Last").Plan()
+	plan, err := store.NewUsersCreate().ID(42).Email("ada@example.com").FirstName("First").LastName("Last").Plan()
+	if err != nil {
+		fmt.Printf("failed to build insert: %s\n", err)
+		return
+	}
 	outcome, err := rasql.ExecMutation(ctx, db, plan)
 	if err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)

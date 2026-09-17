@@ -11,55 +11,23 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
-// preparedParamOrdersDecoder decodes every column of the orders table into a
-// store.OrdersRow, reusing the generated ScanRow method rather than restating
-// the column order.
-type preparedParamOrdersDecoder struct{ result rasql.ResultSchema }
-
-func (d preparedParamOrdersDecoder) ResultSchema() rasql.ResultSchema { return d.result }
-func (d preparedParamOrdersDecoder) Presence() []rasql.Presence       { return nil }
-func (d preparedParamOrdersDecoder) DecodeRow(src rasql.ScanSource, row *store.OrdersRow) error {
-	return row.ScanRow(src)
-}
-
 // preparedParamOrdersQuery builds a Query[store.OrdersRow] whose WHERE clause
 // carries a Parameter instead of a bound value, so one Prepare serves every
 // minimum total a caller asks for.
 func preparedParamOrdersQuery() (rasql.Query[store.OrdersRow], rasql.Parameter[int64], error) {
 	orders := store.Orders()
-	def := store.OrdersDef()
-	id, err := rasql.BindColumn[store.OrdersRow, int64](orders, orders.IDRef().Name(), "")
+	columns, err := (store.OrdersColumns{}).Bind(orders.Table)
 	if err != nil {
 		return rasql.Query[store.OrdersRow]{}, rasql.Parameter[int64]{}, err
 	}
-	userID, err := rasql.BindColumn[store.OrdersRow, int64](orders, orders.UserIDRef().Name(), "")
-	if err != nil {
-		return rasql.Query[store.OrdersRow]{}, rasql.Parameter[int64]{}, err
-	}
-	total, err := rasql.BindColumn[store.OrdersRow, int64](orders, orders.TotalRef().Name(), "")
-	if err != nil {
-		return rasql.Query[store.OrdersRow]{}, rasql.Parameter[int64]{}, err
-	}
-	result, err := rasql.NewResultSchema(
-		rasql.ResultColumn{Name: orders.IDRef().Name(), Type: def.Columns[0].Type},
-		rasql.ResultColumn{Name: orders.UserIDRef().Name(), Type: def.Columns[1].Type},
-		rasql.ResultColumn{Name: orders.TotalRef().Name(), Type: def.Columns[2].Type},
-	)
-	if err != nil {
-		return rasql.Query[store.OrdersRow]{}, rasql.Parameter[int64]{}, err
-	}
-	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
-		rasql.Item(orders.IDRef().Name(), id.Expr(), def.Columns[0].Type, ""),
-		rasql.Item(orders.UserIDRef().Name(), userID.Expr(), def.Columns[1].Type, ""),
-		rasql.Item(orders.TotalRef().Name(), total.Expr(), def.Columns[2].Type, ""),
-	}, preparedParamOrdersDecoder{result: result})
+	projection, err := store.OrdersProjection(columns)
 	if err != nil {
 		return rasql.Query[store.OrdersRow]{}, rasql.Parameter[int64]{}, err
 	}
 	minTotal := rasql.NewParameter[int64]()
 	query := rasql.Select(orders, projection).
-		Where(rasql.GreaterOrEqualExpr(total.Expr(), minTotal.Expr())).
-		OrderBy(rasql.AscExpr(id.Expr()))
+		Where(rasql.GreaterOrEqualExpr(columns.Total.Expr(), minTotal.Expr())).
+		OrderBy(rasql.AscExpr(columns.ID.Expr()))
 	return query, minTotal, nil
 }
 
@@ -91,8 +59,12 @@ func Example_rasql_prepared_parameter() {
 		{ID: 2, UserID: 1, Total: 50},
 		{ID: 3, UserID: 2, Total: 90},
 	} {
-		plan := store.NewOrdersCreate().ID(order.ID).UserID(order.UserID).Total(order.Total)
-		if _, err := rasql.ExecMutation(ctx, db, plan.Plan()); err != nil {
+		plan, err := store.NewOrdersCreate().ID(order.ID).UserID(order.UserID).Total(order.Total).Plan()
+		if err != nil {
+			fmt.Printf("failed to build insert: %s\n", err)
+			return
+		}
+		if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
 			fmt.Printf("failed to insert order: %s\n", err)
 			return
 		}

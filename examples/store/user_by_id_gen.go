@@ -2,8 +2,57 @@
 
 package store
 
-import "github.com/lestrrat-go/rasql/stmt"
+import (
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/schema"
+)
 
-func UserByID(id int64) stmt.Statement {
-	return stmt.New("SELECT id, email FROM users WHERE id = $1\n", id)
+type user_by_idResult struct {
+	ID    int64
+	Email string
+}
+
+type UserByIDBindings struct{}
+type UserByIDExpressions struct {
+	ID    rasql.Column[user_by_idResult, int64]
+	Email rasql.Column[user_by_idResult, string]
+}
+
+func (UserByIDBindings) Bind(source rasql.TypedSource[user_by_idResult]) (UserByIDExpressions, error) {
+	valueID, err := rasql.BindResultColumn[user_by_idResult, int64](source, "id")
+	if err != nil {
+		return UserByIDExpressions{}, err
+	}
+	valueEmail, err := rasql.BindResultColumn[user_by_idResult, string](source, "email")
+	if err != nil {
+		return UserByIDExpressions{}, err
+	}
+	return UserByIDExpressions{ID: valueID, Email: valueEmail}, nil
+}
+
+type user_by_idDecoder struct{}
+
+func (user_by_idDecoder) ResultSchema() rasql.ResultSchema { return user_by_idDecoderSchema() }
+func (user_by_idDecoder) Presence() []rasql.Presence       { return nil }
+func (user_by_idDecoder) DecodeRow(s rasql.ScanSource, r *user_by_idResult) error {
+	if err := s.Scan(&r.ID, &r.Email); err != nil {
+		return err
+	}
+	return nil
+}
+
+func user_by_idDecoderSchema() rasql.ResultSchema {
+	s, _ := rasql.NewResultSchema(
+		rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}, Nullable: false, Codec: ""},
+		rasql.ResultColumn{Name: "email", Type: schema.TextType{}, Nullable: false, Codec: ""},
+	)
+	return s
+}
+
+func UserByID(id int64) (rasql.Query[user_by_idResult], error) {
+	projection, err := rasql.NativeProjection[user_by_idResult](user_by_idDecoder{})
+	if err != nil {
+		return rasql.Query[user_by_idResult]{}, err
+	}
+	return rasql.Native[user_by_idResult](rasql.NativeStatement{Engine: "sqlite", SQL: "SELECT id, email FROM users WHERE id = ?\n", Args: []rasql.NativeArgument{{Value: id, Codec: ""}}}, projection, rasql.ExactlyOne)
 }

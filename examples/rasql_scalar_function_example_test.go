@@ -56,35 +56,28 @@ func Example_rasql_scalar_function() {
 		return
 	}
 
-	nick := "Ada"
-	if _, err := rasql.ExecMutation(ctx, db, store.NewUsersCreate().ID(1).Email("Ada@Example.com").Nickname(&nick).FirstName("First").LastName("Last").Plan()); err != nil {
+	withNickname, err := store.NewUsersCreate().ID(1).Email("Ada@Example.com").Nickname("Ada").FirstName("First").LastName("Last").Plan()
+	if err != nil {
+		fmt.Printf("failed to build insert: %s\n", err)
+		return
+	}
+	if _, err := rasql.ExecMutation(ctx, db, withNickname); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
-	if _, err := rasql.ExecMutation(ctx, db, store.NewUsersCreate().ID(2).Email("bob@example.com").FirstName("First").LastName("Last").Plan()); err != nil {
+	withoutNickname, err := store.NewUsersCreate().ID(2).Email("bob@example.com").FirstName("First").LastName("Last").Plan()
+	if err != nil {
+		fmt.Printf("failed to build insert: %s\n", err)
+		return
+	}
+	if _, err := rasql.ExecMutation(ctx, db, withoutNickname); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
 
-	id, err := rasql.BindTypedColumn(users.ID())
+	columns, err := (store.UsersColumns{}).Bind(users.Table)
 	if err != nil {
-		fmt.Printf("failed to bind id column: %s\n", err)
-		return
-	}
-	// email and nickname are both bound by column name rather than through
-	// users.Email() and users.Nickname(): CoalesceExpr requires the same Go
-	// type on its nullable value and its fallback, but a generated accessor
-	// always mirrors the row's own field type, string for email and *string
-	// for the nullable nickname. Binding both explicitly as string is what
-	// gives CoalesceExpr a matching pair; no accessor bridges that gap.
-	email, err := rasql.BindColumn[store.UsersRow, string](users, "email", "")
-	if err != nil {
-		fmt.Printf("failed to bind email column: %s\n", err)
-		return
-	}
-	nickname, err := rasql.BindNullColumn[store.UsersRow, string](users, "nickname", "")
-	if err != nil {
-		fmt.Printf("failed to bind nickname column: %s\n", err)
+		fmt.Printf("failed to bind users columns: %s\n", err)
 		return
 	}
 
@@ -98,9 +91,9 @@ func Example_rasql_scalar_function() {
 	}
 	// name falls back from nickname to email with CoalesceExpr, so it is
 	// never NULL even though nickname, the column it is drawn from, is.
-	name := rasql.CoalesceExpr(nickname.NullExpr(), email.Expr())
+	name := rasql.CoalesceExpr(columns.Nickname.NullExpr(), columns.Email.Expr())
 	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
-		rasql.Item("id", id.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("id", columns.ID.Expr(), schema.IntegerType{}, ""),
 		rasql.Item("name", name, schema.TextType{}, ""),
 	}, userNameDecoder{result: result})
 	if err != nil {
@@ -111,7 +104,7 @@ func Example_rasql_scalar_function() {
 
 	// LowerExpr matches "Ada@Example.com" against the lower-case literal a
 	// caller would type, regardless of how the stored value was cased.
-	byEmailQuery := base.Where(rasql.EqualValue(rasql.LowerExpr(email.Expr()), "ada@example.com"))
+	byEmailQuery := base.Where(rasql.EqualValue(rasql.LowerExpr(columns.Email.Expr()), "ada@example.com"))
 	byEmailStatement, err := rasql.Render(byEmailQuery, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to render statement: %s\n", err)
@@ -130,7 +123,7 @@ func Example_rasql_scalar_function() {
 
 	// COALESCE(nickname, email) reads every user's display name, falling
 	// back to the email once nickname is NULL.
-	namesQuery := base.OrderBy(rasql.AscExpr(id.Expr()))
+	namesQuery := base.OrderBy(rasql.AscExpr(columns.ID.Expr()))
 	namesStatement, err := rasql.Render(namesQuery, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to render statement: %s\n", err)

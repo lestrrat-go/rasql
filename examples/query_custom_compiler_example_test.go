@@ -62,7 +62,10 @@ func (compilerExample) CompilePagination(emitter dialect.Emitter, pagination dia
 // so it is projected the same way the query package projects any expression.
 func Example_customCompiler() {
 	users := store.Users()
-	statement, err := query.NewSelect(users.Ref(), query.Project(containsExample{column: users.EmailRef(), value: "@example.com"}))
+	// containsExample holds a query.Expression, and Column is the generated
+	// table's only way to produce a query.ColumnRef: the generated columns
+	// struct binds a rasql.Column, which the query package does not take.
+	statement, err := query.NewSelect(users.Ref(), query.Project(containsExample{column: users.Column("email"), value: "@example.com"}))
 	if err != nil {
 		fmt.Println(err)
 		return

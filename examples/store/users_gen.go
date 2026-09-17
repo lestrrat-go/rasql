@@ -3,183 +3,261 @@
 package store
 
 import (
-	"fmt"
-
 	"github.com/lestrrat-go/rasql"
-	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/schema"
 )
 
-// UsersRow is one row of the "users" table.
 type UsersRow struct {
-	ID        int64
-	Email     string
-	Nickname  *string
-	Status    string
-	FirstName string
-	LastName  string
+	ID                          int64
+	Email                       string
+	Nickname                    rasql.Nullable[string]
+	Status, FirstName, LastName string
 }
 
-// ScanRow scans each result column directly into its field.
-func (r *UsersRow) ScanRow(src rasql.ScanSource) error {
-	return src.Scan(&r.ID, &r.Email, &r.Nickname, &r.Status, &r.FirstName, &r.LastName)
+var usersDefinition = schema.TableDef{
+	Kind: schema.ObjectKind("table"),
+	Name: "users",
+	Columns: []schema.ColumnDef{
+		{Name: "id", Type: schema.IntegerType{}},
+		{Name: "email", Type: schema.TextType{}},
+		{Name: "nickname", Type: schema.TextType{}, Nullable: true},
+		{Name: "status", Type: schema.TextType{}, Default: "'pending'"},
+		{Name: "first_name", Type: schema.TextType{}},
+		{Name: "last_name", Type: schema.TextType{}},
+	},
+	PrimaryKey:              []string{"id"},
+	PrimaryKeyAutoincrement: true,
 }
 
-// ScanDestinations maps result-column names to fields on r.
-func (r *UsersRow) ScanDestinations(columns []string) ([]any, error) {
-	const (
-		scanIndexID = iota
-		scanIndexEmail
-		scanIndexNickname
-		scanIndexStatus
-		scanIndexFirstName
-		scanIndexLastName
-	)
-	destinations := make([]any, len(columns))
-	scanned := rasql.NewScanMask(6)
-	var discard any
-	for index, column := range columns {
-		switch column {
-		case "id":
-			if !scanned.Mark(scanIndexID) {
-				return nil, fmt.Errorf("duplicate result column %q", column)
-			}
-			destinations[index] = &r.ID
-		case "email":
-			if !scanned.Mark(scanIndexEmail) {
-				return nil, fmt.Errorf("duplicate result column %q", column)
-			}
-			destinations[index] = &r.Email
-		case "nickname":
-			if !scanned.Mark(scanIndexNickname) {
-				return nil, fmt.Errorf("duplicate result column %q", column)
-			}
-			destinations[index] = &r.Nickname
-		case "status":
-			if !scanned.Mark(scanIndexStatus) {
-				return nil, fmt.Errorf("duplicate result column %q", column)
-			}
-			destinations[index] = &r.Status
-		case "first_name":
-			if !scanned.Mark(scanIndexFirstName) {
-				return nil, fmt.Errorf("duplicate result column %q", column)
-			}
-			destinations[index] = &r.FirstName
-		case "last_name":
-			if !scanned.Mark(scanIndexLastName) {
-				return nil, fmt.Errorf("duplicate result column %q", column)
-			}
-			destinations[index] = &r.LastName
-		default:
-			destinations[index] = &discard
-		}
+var usersTable = rasql.MustTableOf[UsersRow](usersDefinition)
+
+type UsersTable struct{ rasql.Table[UsersRow] }
+
+func Users() UsersTable { return UsersTable{Table: usersTable} }
+
+func (t UsersTable) Source(alias string) (rasql.TypedRelation[UsersRow], error) {
+	return rasql.SourceOf[UsersRow](t.Table, alias)
+}
+
+type UsersColumns struct{}
+
+type UsersExpressions struct {
+	ID                          rasql.Column[UsersRow, int64]
+	Email                       rasql.Column[UsersRow, string]
+	Nickname                    rasql.NullColumn[UsersRow, string]
+	Status, FirstName, LastName rasql.Column[UsersRow, string]
+}
+
+type OptionalUsersExpressions struct {
+	ID                                           rasql.NullColumn[UsersRow, int64]
+	Email, Nickname, Status, FirstName, LastName rasql.NullColumn[UsersRow, string]
+}
+
+func (UsersColumns) Bind(source rasql.TypedRelation[UsersRow]) (UsersExpressions, error) {
+	var err error
+	result := UsersExpressions{
+		ID:        rasqlgenBind(&err, source, "id", "", rasql.BindColumn[UsersRow, int64]),
+		Email:     rasqlgenBind(&err, source, "email", "", rasql.BindColumn[UsersRow, string]),
+		Nickname:  rasqlgenBind(&err, source, "nickname", "", rasql.BindNullColumn[UsersRow, string]),
+		Status:    rasqlgenBind(&err, source, "status", "", rasql.BindColumn[UsersRow, string]),
+		FirstName: rasqlgenBind(&err, source, "first_name", "", rasql.BindColumn[UsersRow, string]),
+		LastName:  rasqlgenBind(&err, source, "last_name", "", rasql.BindColumn[UsersRow, string]),
 	}
-	return destinations, nil
+	return result, err
 }
 
-// UsersTable is the generated table type for the "users" table.
-type UsersTable struct {
-	rasql.Table[UsersRow]
+func (UsersColumns) BindOptional(source rasql.OptionalRelation[UsersRow]) (OptionalUsersExpressions, error) {
+	var err error
+	result := OptionalUsersExpressions{
+		ID:        rasqlgenBind(&err, source, "id", "", rasql.BindOptionalColumn[UsersRow, int64]),
+		Email:     rasqlgenBind(&err, source, "email", "", rasql.BindOptionalColumn[UsersRow, string]),
+		Nickname:  rasqlgenBind(&err, source, "nickname", "", rasql.BindOptionalColumn[UsersRow, string]),
+		Status:    rasqlgenBind(&err, source, "status", "", rasql.BindOptionalColumn[UsersRow, string]),
+		FirstName: rasqlgenBind(&err, source, "first_name", "", rasql.BindOptionalColumn[UsersRow, string]),
+		LastName:  rasqlgenBind(&err, source, "last_name", "", rasql.BindOptionalColumn[UsersRow, string]),
+	}
+	return result, err
 }
 
-// ID returns a reference to the "id" column.
-func (t UsersTable) ID() query.TypedColumn[UsersRow, int64] {
-	return query.TypedColumnOf[UsersRow, int64](t.Column("id"))
+var usersResultColumns = []rasql.ResultColumn{
+	{Name: "id", Type: schema.IntegerType{}, Codec: ""},
+	{Name: "email", Type: schema.TextType{}, Codec: ""},
+	{Name: "nickname", Type: schema.TextType{}, Nullable: true, Codec: ""},
+	{Name: "status", Type: schema.TextType{}, Codec: ""},
+	{Name: "first_name", Type: schema.TextType{}, Codec: ""},
+	{Name: "last_name", Type: schema.TextType{}, Codec: ""},
 }
-func (t UsersTable) IDRef() rasql.ColumnRef { return t.Column("id") }
+var usersResultSchema = rasqlgenResultSchema(usersResultColumns)
 
-// Email returns a reference to the "email" column.
-func (t UsersTable) Email() query.TypedColumn[UsersRow, string] {
-	return query.TypedColumnOf[UsersRow, string](t.Column("email"))
-}
-func (t UsersTable) EmailRef() rasql.ColumnRef { return t.Column("email") }
+type usersDecoder struct{}
 
-// Nickname returns a reference to the "nickname" column.
-func (t UsersTable) Nickname() query.NullableColumn[UsersRow, *string] {
-	return query.NullableColumnOf[UsersRow, *string](t.Column("nickname"))
-}
-func (t UsersTable) NicknameRef() rasql.ColumnRef { return t.Column("nickname") }
-
-// Status returns a reference to the "status" column.
-func (t UsersTable) Status() query.TypedColumn[UsersRow, string] {
-	return query.TypedColumnOf[UsersRow, string](t.Column("status"))
-}
-func (t UsersTable) StatusRef() rasql.ColumnRef { return t.Column("status") }
-
-// FirstName returns a reference to the "first_name" column.
-func (t UsersTable) FirstName() query.TypedColumn[UsersRow, string] {
-	return query.TypedColumnOf[UsersRow, string](t.Column("first_name"))
-}
-func (t UsersTable) FirstNameRef() rasql.ColumnRef { return t.Column("first_name") }
-
-// LastName returns a reference to the "last_name" column.
-func (t UsersTable) LastName() query.TypedColumn[UsersRow, string] {
-	return query.TypedColumnOf[UsersRow, string](t.Column("last_name"))
-}
-func (t UsersTable) LastNameRef() rasql.ColumnRef { return t.Column("last_name") }
-
-// Users returns the descriptor for the "users" table.
-func Users() UsersTable {
-	return usersTable
+func (usersDecoder) ResultSchema() rasql.ResultSchema { return usersResultSchema }
+func (usersDecoder) Presence() []rasql.Presence       { return nil }
+func (usersDecoder) DecodeRow(source rasql.ScanSource, row *UsersRow) error {
+	return source.Scan(&row.ID, &row.Email, &row.Nickname, &row.Status, &row.FirstName, &row.LastName)
 }
 
-// As returns the table under alias.
-func (t UsersTable) As(alias string) (UsersTable, error) {
-	aliased, err := t.Table.As(alias)
+func (row *UsersRow) ScanRow(source rasql.ScanSource) error {
+	return usersDecoder{}.DecodeRow(source, row)
+}
+
+var usersOptionalResultSchema = rasqlgenOptionalResultSchema(usersResultColumns)
+
+type usersOptionalDecoder struct{}
+
+func (usersOptionalDecoder) ResultSchema() rasql.ResultSchema { return usersOptionalResultSchema }
+func (usersOptionalDecoder) Presence() []rasql.Presence {
+	p, err := rasql.NewPresence("Users", "id")
 	if err != nil {
-		return UsersTable{}, err
+		panic(err)
 	}
-	return UsersTable{Table: aliased}, nil
+	return []rasql.Presence{p}
 }
+func (usersOptionalDecoder) DecodeRow(source rasql.ScanSource, row *UsersRow) error {
+	var IDValue rasql.Nullable[int64]
+	var EmailValue, StatusValue, FirstNameValue, LastNameValue rasql.Nullable[string]
+	if err := source.Scan(&IDValue, &EmailValue, &row.Nickname, &StatusValue, &FirstNameValue, &LastNameValue); err != nil {
+		return err
+	}
+	rasqlgenAssignNullable(IDValue, &row.ID)
+	rasqlgenAssignNullable(EmailValue, &row.Email)
+	rasqlgenAssignNullable(StatusValue, &row.Status)
+	rasqlgenAssignNullable(FirstNameValue, &row.FirstName)
+	rasqlgenAssignNullable(LastNameValue, &row.LastName)
+	return nil
+}
+
+func UsersProjection(expressions UsersExpressions) (rasql.Projection[UsersRow], error) {
+	items := []rasql.ProjectionItem{
+		rasql.Item("id", expressions.ID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("email", expressions.Email.Expr(), schema.TextType{}, ""),
+		rasql.NullItem("nickname", expressions.Nickname.NullExpr(), schema.TextType{}, ""),
+		rasql.Item("status", expressions.Status.Expr(), schema.TextType{}, ""),
+		rasql.Item("first_name", expressions.FirstName.Expr(), schema.TextType{}, ""),
+		rasql.Item("last_name", expressions.LastName.Expr(), schema.TextType{}, ""),
+	}
+	return rasql.NewProjection(items, usersDecoder{})
+}
+
+func OptionalUsersProjection(expressions OptionalUsersExpressions) (rasql.Projection[UsersRow], error) {
+	items := []rasql.ProjectionItem{
+		rasql.NullItem("id", expressions.ID.NullExpr(), schema.IntegerType{}, ""),
+		rasql.NullItem("email", expressions.Email.NullExpr(), schema.TextType{}, ""),
+		rasql.NullItem("nickname", expressions.Nickname.NullExpr(), schema.TextType{}, ""),
+		rasql.NullItem("status", expressions.Status.NullExpr(), schema.TextType{}, ""),
+		rasql.NullItem("first_name", expressions.FirstName.NullExpr(), schema.TextType{}, ""),
+		rasql.NullItem("last_name", expressions.LastName.NullExpr(), schema.TextType{}, ""),
+	}
+	return rasql.NewProjection(items, usersOptionalDecoder{})
+}
+
+func UsersGraphKey(source rasql.TypedRelation[UsersRow]) (rasql.GraphKey[UsersRow], error) {
+	expressions, err := (UsersColumns{}).Bind(source)
+	if err != nil {
+		return rasql.GraphKey[UsersRow]{}, err
+	}
+	return rasql.NewGraphKey[UsersRow](rasql.KeyPart[UsersRow, int64](expressions.ID, func(row UsersRow) int64 { return row.ID }))
+}
+
+func UsersIDPageKey(source rasql.TypedRelation[UsersRow], direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
+	expressions, err := (UsersColumns{}).Bind(source)
+	if err != nil {
+		return nil, err
+	}
+	return rasqlgenPageKey(direction, expressions.ID.Expr(), func(row UsersRow) int64 { return row.ID })
+}
+
+func UsersEmailPageKey(source rasql.TypedRelation[UsersRow], direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
+	expressions, err := (UsersColumns{}).Bind(source)
+	if err != nil {
+		return nil, err
+	}
+	return rasqlgenPageKey(direction, expressions.Email.Expr(), func(row UsersRow) string { return row.Email })
+}
+
+func UsersNicknamePageKey(source rasql.TypedRelation[UsersRow], direction rasql.PageDirection, nulls rasql.NullOrder) (rasql.PageKey[UsersRow], error) {
+	expressions, err := (UsersColumns{}).Bind(source)
+	if err != nil {
+		return nil, err
+	}
+	return rasqlgenNullablePageKey(direction, expressions.Nickname.NullExpr(), func(row UsersRow) rasql.Nullable[string] { return row.Nickname }, nulls)
+}
+
+func UsersStatusPageKey(source rasql.TypedRelation[UsersRow], direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
+	expressions, err := (UsersColumns{}).Bind(source)
+	if err != nil {
+		return nil, err
+	}
+	return rasqlgenPageKey(direction, expressions.Status.Expr(), func(row UsersRow) string { return row.Status })
+}
+
+func UsersFirstNamePageKey(source rasql.TypedRelation[UsersRow], direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
+	expressions, err := (UsersColumns{}).Bind(source)
+	if err != nil {
+		return nil, err
+	}
+	return rasqlgenPageKey(direction, expressions.FirstName.Expr(), func(row UsersRow) string { return row.FirstName })
+}
+
+func UsersLastNamePageKey(source rasql.TypedRelation[UsersRow], direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
+	expressions, err := (UsersColumns{}).Bind(source)
+	if err != nil {
+		return nil, err
+	}
+	return rasqlgenPageKey(direction, expressions.LastName.Expr(), func(row UsersRow) string { return row.LastName })
+}
+
+var usersMutationColumns = func() UsersExpressions {
+	source, err := Users().Source("")
+	if err != nil {
+		panic(err)
+	}
+	value, err := (UsersColumns{}).Bind(source)
+	if err != nil {
+		panic(err)
+	}
+	return value
+}()
 
 type UsersCreate struct {
 	fields []rasql.MutationField[UsersRow]
 }
 
 func NewUsersCreate() UsersCreate { return UsersCreate{} }
-
-func (p UsersCreate) ID(value int64) UsersCreate {
-	fields := append([]rasql.MutationField[UsersRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[UsersRow](Users().ID(), value))
-	return UsersCreate{fields: fields}
+func (v UsersCreate) ID(value int64) UsersCreate {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(usersMutationColumns.ID, value))
+	return v
 }
-func (p UsersCreate) Email(value string) UsersCreate {
-	fields := append([]rasql.MutationField[UsersRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[UsersRow](Users().Email(), value))
-	return UsersCreate{fields: fields}
+func (v UsersCreate) Email(value string) UsersCreate {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(usersMutationColumns.Email, value))
+	return v
 }
-func (p UsersCreate) Nickname(value *string) UsersCreate {
-	fields := append([]rasql.MutationField[UsersRow](nil), p.fields...)
-	fields = append(fields, rasql.SetNullableField[UsersRow](Users().Nickname(), value))
-	return UsersCreate{fields: fields}
+func (v UsersCreate) Nickname(value string) UsersCreate {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetNullableField(usersMutationColumns.Nickname, value))
+	return v
 }
-func (p UsersCreate) ClearNickname() UsersCreate {
-	fields := append([]rasql.MutationField[UsersRow](nil), p.fields...)
-	fields = append(fields, rasql.ClearField[UsersRow](Users().Nickname()))
-	return UsersCreate{fields: fields}
+func (v UsersCreate) ClearNickname() UsersCreate {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.ClearField(usersMutationColumns.Nickname))
+	return v
 }
-func (p UsersCreate) Status(value string) UsersCreate {
-	fields := append([]rasql.MutationField[UsersRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[UsersRow](Users().Status(), value))
-	return UsersCreate{fields: fields}
+func (v UsersCreate) Status(value string) UsersCreate {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(usersMutationColumns.Status, value))
+	return v
 }
-func (p UsersCreate) DefaultStatus() UsersCreate {
-	fields := append([]rasql.MutationField[UsersRow](nil), p.fields...)
-	fields = append(fields, rasql.DefaultField[UsersRow](Users().Status()))
-	return UsersCreate{fields: fields}
+func (v UsersCreate) DefaultStatus() UsersCreate {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.DefaultField(usersMutationColumns.Status))
+	return v
 }
-func (p UsersCreate) FirstName(value string) UsersCreate {
-	fields := append([]rasql.MutationField[UsersRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[UsersRow](Users().FirstName(), value))
-	return UsersCreate{fields: fields}
+func (v UsersCreate) FirstName(value string) UsersCreate {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(usersMutationColumns.FirstName, value))
+	return v
 }
-func (p UsersCreate) LastName(value string) UsersCreate {
-	fields := append([]rasql.MutationField[UsersRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[UsersRow](Users().LastName(), value))
-	return UsersCreate{fields: fields}
+func (v UsersCreate) LastName(value string) UsersCreate {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(usersMutationColumns.LastName, value))
+	return v
 }
-func (p UsersCreate) Plan() rasql.CreatePlan[UsersRow] {
-	plan, _ := rasql.NewCreatePlan[UsersRow](Users().Table, p.fields...)
-	return plan
+func (v UsersCreate) Plan() (rasql.CreatePlan[UsersRow], error) {
+	return rasql.NewCreatePlan(Users().Table, v.fields...)
 }
 
 type UsersPatch struct {
@@ -187,42 +265,38 @@ type UsersPatch struct {
 }
 
 func NewUsersPatch() UsersPatch { return UsersPatch{} }
-
-func (p UsersPatch) Email(value string) UsersPatch {
-	fields := append([]rasql.MutationField[UsersRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[UsersRow](Users().Email(), value))
-	return UsersPatch{fields: fields}
+func (v UsersPatch) ID(value int64) UsersPatch {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(usersMutationColumns.ID, value))
+	return v
 }
-func (p UsersPatch) Nickname(value *string) UsersPatch {
-	fields := append([]rasql.MutationField[UsersRow](nil), p.fields...)
-	fields = append(fields, rasql.SetNullableField[UsersRow](Users().Nickname(), value))
-	return UsersPatch{fields: fields}
+func (v UsersPatch) Email(value string) UsersPatch {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(usersMutationColumns.Email, value))
+	return v
 }
-func (p UsersPatch) ClearNickname() UsersPatch {
-	fields := append([]rasql.MutationField[UsersRow](nil), p.fields...)
-	fields = append(fields, rasql.ClearField[UsersRow](Users().Nickname()))
-	return UsersPatch{fields: fields}
+func (v UsersPatch) Nickname(value string) UsersPatch {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetNullableField(usersMutationColumns.Nickname, value))
+	return v
 }
-func (p UsersPatch) Status(value string) UsersPatch {
-	fields := append([]rasql.MutationField[UsersRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[UsersRow](Users().Status(), value))
-	return UsersPatch{fields: fields}
+func (v UsersPatch) ClearNickname() UsersPatch {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.ClearField(usersMutationColumns.Nickname))
+	return v
 }
-func (p UsersPatch) DefaultStatus() UsersPatch {
-	fields := append([]rasql.MutationField[UsersRow](nil), p.fields...)
-	fields = append(fields, rasql.DefaultField[UsersRow](Users().Status()))
-	return UsersPatch{fields: fields}
+func (v UsersPatch) Status(value string) UsersPatch {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(usersMutationColumns.Status, value))
+	return v
 }
-func (p UsersPatch) FirstName(value string) UsersPatch {
-	fields := append([]rasql.MutationField[UsersRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[UsersRow](Users().FirstName(), value))
-	return UsersPatch{fields: fields}
+func (v UsersPatch) DefaultStatus() UsersPatch {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.DefaultField(usersMutationColumns.Status))
+	return v
 }
-func (p UsersPatch) LastName(value string) UsersPatch {
-	fields := append([]rasql.MutationField[UsersRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[UsersRow](Users().LastName(), value))
-	return UsersPatch{fields: fields}
+func (v UsersPatch) FirstName(value string) UsersPatch {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(usersMutationColumns.FirstName, value))
+	return v
 }
-func (p UsersPatch) Where(predicate query.Predicate) (rasql.PatchPlan[UsersRow], error) {
-	return rasql.NewPatchPlan[UsersRow](Users().Table, predicate, p.fields...)
+func (v UsersPatch) LastName(value string) UsersPatch {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(usersMutationColumns.LastName, value))
+	return v
+}
+func (v UsersPatch) Where(value rasql.Predicate) (rasql.PatchPlan[UsersRow], error) {
+	return rasql.NewPatchPlan(Users().Table, value, v.fields...)
 }

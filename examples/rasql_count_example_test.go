@@ -43,16 +43,20 @@ func Example_rasql_count() {
 		{ID: 2, Email: "bob@example.com"},
 		{ID: 3, Email: "cyd@example.com"},
 	} {
-		plan := store.NewUsersCreate().ID(user.ID).Email(user.Email).FirstName("First").LastName("Last").Plan()
+		plan, err := store.NewUsersCreate().ID(user.ID).Email(user.Email).FirstName("First").LastName("Last").Plan()
+		if err != nil {
+			fmt.Printf("failed to build insert: %s\n", err)
+			return
+		}
 		if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
 	}
 
-	id, err := rasql.BindColumn[store.UsersRow, int64](users, users.IDRef().Name(), "")
+	columns, err := (store.UsersColumns{}).Bind(users.Table)
 	if err != nil {
-		fmt.Printf("failed to bind id column: %s\n", err)
+		fmt.Printf("failed to bind users columns: %s\n", err)
 		return
 	}
 	countProjection, err := rasql.Scalar("count", rasql.CountRows(), schema.IntegerType{}, "")
@@ -72,7 +76,7 @@ func Example_rasql_count() {
 	fmt.Println("total:", total)
 
 	// SQL: SELECT COUNT(*) AS count FROM users WHERE users.id = ? (argument: 2)
-	filtered, err := rasql.One(ctx, db, base.Where(rasql.EqualValue(id.Expr(), int64(2))))
+	filtered, err := rasql.One(ctx, db, base.Where(rasql.EqualValue(columns.ID.Expr(), int64(2))))
 	if err != nil {
 		fmt.Printf("failed to count filtered users: %s\n", err)
 		return

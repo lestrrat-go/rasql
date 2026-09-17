@@ -67,7 +67,11 @@ func Example_rasql_subquery() {
 		{ID: 2, Email: "bob@example.com"},
 		{ID: 3, Email: "cyd@other.example"},
 	} {
-		plan := store.NewUsersCreate().ID(user.ID).Email(user.Email).FirstName("First").LastName("Last").Plan()
+		plan, err := store.NewUsersCreate().ID(user.ID).Email(user.Email).FirstName("First").LastName("Last").Plan()
+		if err != nil {
+			fmt.Printf("failed to build insert: %s\n", err)
+			return
+		}
 		if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
@@ -78,43 +82,35 @@ func Example_rasql_subquery() {
 		{ID: 2, UserID: 2, Total: 20},
 		{ID: 3, UserID: 3, Total: 100},
 	} {
-		plan := store.NewOrdersCreate().ID(order.ID).UserID(order.UserID).Total(order.Total).Plan()
+		plan, err := store.NewOrdersCreate().ID(order.ID).UserID(order.UserID).Total(order.Total).Plan()
+		if err != nil {
+			fmt.Printf("failed to build insert: %s\n", err)
+			return
+		}
 		if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
 			fmt.Printf("failed to insert order: %s\n", err)
 			return
 		}
 	}
 
-	usersSource := users
-	usersID, err := rasql.BindTypedColumn(users.ID())
+	usersColumns, err := (store.UsersColumns{}).Bind(users.Table)
 	if err != nil {
-		fmt.Printf("failed to bind users id column: %s\n", err)
+		fmt.Printf("failed to bind users columns: %s\n", err)
 		return
 	}
-	usersEmail, err := rasql.BindTypedColumn(users.Email())
+	ordersColumns, err := (store.OrdersColumns{}).Bind(orders.Table)
 	if err != nil {
-		fmt.Printf("failed to bind users email column: %s\n", err)
-		return
-	}
-	ordersSource := orders
-	ordersUserID, err := rasql.BindTypedColumn(orders.UserID())
-	if err != nil {
-		fmt.Printf("failed to bind orders user_id column: %s\n", err)
-		return
-	}
-	ordersTotal, err := rasql.BindTypedColumn(orders.Total())
-	if err != nil {
-		fmt.Printf("failed to bind orders total column: %s\n", err)
+		fmt.Printf("failed to bind orders columns: %s\n", err)
 		return
 	}
 	// The average subquery below compares against orders.total as a float64,
 	// since AvgExpr always returns NullExpr[float64] regardless of its input
 	// column's type and GreaterOrEqualExpr requires both sides to share the
-	// same Go type. orders.Total's generated accessor mirrors the row's
-	// stored int64 instead, so this second, string-named bind of the same
-	// "total" column is what gives the comparison a matching float64 view;
-	// no accessor bridges an int64 column into a float64 Expr.
-	ordersTotalAsFloat, err := rasql.BindColumn[store.OrdersRow, float64](ordersSource, "total", "")
+	// same Go type. The generated ordersColumns.Total mirrors the row's stored
+	// int64 instead, so this second, string-named bind of the same "total"
+	// column is what gives the comparison a matching float64 view; the
+	// generated columns struct carries one Go type per column and no more.
+	ordersTotalAsFloat, err := rasql.BindColumn[store.OrdersRow, float64](orders, "total", "")
 	if err != nil {
 		fmt.Printf("failed to bind orders total column as float64: %s\n", err)
 		return
@@ -129,22 +125,21 @@ func Example_rasql_subquery() {
 		fmt.Printf("failed to alias orders: %s\n", err)
 		return
 	}
-	allOrdersSource := allOrders
-	allOrdersTotal, err := rasql.BindTypedColumn(allOrders.Total())
+	allOrdersColumns, err := (store.OrdersColumns{}).Bind(allOrders)
 	if err != nil {
-		fmt.Printf("failed to bind all_orders total column: %s\n", err)
+		fmt.Printf("failed to bind all_orders columns: %s\n", err)
 		return
 	}
 	// AVG is NULL over an empty group; COALESCE turns it into a plain,
 	// never-NULL Expr, which is what averageProjection needs. The orders
 	// table is never empty here, so this fallback is never actually read.
-	averageValue := rasql.CoalesceExpr(rasql.AvgExpr(allOrdersTotal.Expr()), rasql.Value(0.0))
+	averageValue := rasql.CoalesceExpr(rasql.AvgExpr(allOrdersColumns.Total.Expr()), rasql.Value(0.0))
 	averageProjection, err := rasql.Scalar("average", averageValue, schema.FloatType{}, "")
 	if err != nil {
 		fmt.Printf("failed to build average projection: %s\n", err)
 		return
 	}
-	averageQuery := rasql.Select(allOrdersSource, averageProjection)
+	averageQuery := rasql.Select(allOrders, averageProjection)
 	averageSubquery, err := rasql.SubqueryExpr(averageQuery)
 	if err != nil {
 		fmt.Printf("failed to build the average subquery expression: %s\n", err)
@@ -160,14 +155,14 @@ func Example_rasql_subquery() {
 	// domainUsers selects the id of every user whose email ends in the chosen
 	// domain. It reads no table of the enclosing statement, so it validates and
 	// runs as its own SELECT.
-	domainUsersProjection, err := rasql.Scalar("id", usersID.Expr(), schema.IntegerType{}, "")
+	domainUsersProjection, err := rasql.Scalar("id", usersColumns.ID.Expr(), schema.IntegerType{}, "")
 	if err != nil {
 		fmt.Printf("failed to build domain-users projection: %s\n", err)
 		return
 	}
-	domainUsers := rasql.Select(usersSource, domainUsersProjection).
-		Where(rasql.LikeValue(usersEmail.Expr(), "%@example.com"))
-	inDomain, err := rasql.InQuery(ordersUserID.Expr(), domainUsers)
+	domainUsers := rasql.Select(users, domainUsersProjection).
+		Where(rasql.LikeValue(usersColumns.Email.Expr(), "%@example.com"))
+	inDomain, err := rasql.InQuery(ordersColumns.UserID.Expr(), domainUsers)
 	if err != nil {
 		fmt.Printf("failed to build the in-domain predicate: %s\n", err)
 		return
@@ -182,8 +177,8 @@ func Example_rasql_subquery() {
 		return
 	}
 	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
-		rasql.Item("user_id", ordersUserID.Expr(), schema.IntegerType{}, ""),
-		rasql.Item("total", ordersTotal.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("user_id", ordersColumns.UserID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("total", ordersColumns.Total.Expr(), schema.IntegerType{}, ""),
 	}, subqueryOrderSummaryDecoder{result: result})
 	if err != nil {
 		fmt.Printf("failed to build projection: %s\n", err)
@@ -194,9 +189,9 @@ func Example_rasql_subquery() {
 	// argument per candidate id, and SubqueryExpr compares the total against
 	// the average of every order, both nested inside the one statement that
 	// runs below.
-	selected := rasql.Select(ordersSource, projection).
+	selected := rasql.Select(orders, projection).
 		Where(rasql.And(inDomain, rasql.GreaterOrEqualExpr(ordersTotalAsFloat.Expr(), averageExpr))).
-		OrderBy(rasql.AscExpr(ordersTotal.Expr()))
+		OrderBy(rasql.AscExpr(ordersColumns.Total.Expr()))
 
 	statement, err := rasql.Render(selected, dialect.SQLite())
 	if err != nil {

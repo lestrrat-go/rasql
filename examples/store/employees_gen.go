@@ -3,124 +3,200 @@
 package store
 
 import (
-	"fmt"
-
 	"github.com/lestrrat-go/rasql"
-	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/schema"
 )
 
-// EmployeesRow is one row of the "employees" table.
 type EmployeesRow struct {
 	ID        int64
 	Name      string
-	ManagerID *int64
+	ManagerID rasql.Nullable[int64]
 }
 
-// ScanRow scans each result column directly into its field.
-func (r *EmployeesRow) ScanRow(src rasql.ScanSource) error {
-	return src.Scan(&r.ID, &r.Name, &r.ManagerID)
+var employeesDefinition = schema.TableDef{
+	Kind: schema.ObjectKind("table"),
+	Name: "employees",
+	Columns: []schema.ColumnDef{
+		{Name: "id", Type: schema.IntegerType{}},
+		{Name: "name", Type: schema.TextType{}},
+		{Name: "manager_id", Type: schema.IntegerType{}, Nullable: true},
+	},
+	PrimaryKey: []string{"id"},
 }
 
-// ScanDestinations maps result-column names to fields on r.
-func (r *EmployeesRow) ScanDestinations(columns []string) ([]any, error) {
-	const (
-		scanIndexID = iota
-		scanIndexName
-		scanIndexManagerID
-	)
-	destinations := make([]any, len(columns))
-	scanned := rasql.NewScanMask(3)
-	var discard any
-	for index, column := range columns {
-		switch column {
-		case "id":
-			if !scanned.Mark(scanIndexID) {
-				return nil, fmt.Errorf("duplicate result column %q", column)
-			}
-			destinations[index] = &r.ID
-		case "name":
-			if !scanned.Mark(scanIndexName) {
-				return nil, fmt.Errorf("duplicate result column %q", column)
-			}
-			destinations[index] = &r.Name
-		case "manager_id":
-			if !scanned.Mark(scanIndexManagerID) {
-				return nil, fmt.Errorf("duplicate result column %q", column)
-			}
-			destinations[index] = &r.ManagerID
-		default:
-			destinations[index] = &discard
-		}
+var employeesTable = rasql.MustTableOf[EmployeesRow](employeesDefinition)
+
+type EmployeesTable struct{ rasql.Table[EmployeesRow] }
+
+func Employees() EmployeesTable { return EmployeesTable{Table: employeesTable} }
+
+func (t EmployeesTable) Source(alias string) (rasql.TypedRelation[EmployeesRow], error) {
+	return rasql.SourceOf[EmployeesRow](t.Table, alias)
+}
+
+type EmployeesColumns struct{}
+
+type EmployeesExpressions struct {
+	ID        rasql.Column[EmployeesRow, int64]
+	Name      rasql.Column[EmployeesRow, string]
+	ManagerID rasql.NullColumn[EmployeesRow, int64]
+}
+
+type OptionalEmployeesExpressions struct {
+	ID        rasql.NullColumn[EmployeesRow, int64]
+	Name      rasql.NullColumn[EmployeesRow, string]
+	ManagerID rasql.NullColumn[EmployeesRow, int64]
+}
+
+func (EmployeesColumns) Bind(source rasql.TypedRelation[EmployeesRow]) (EmployeesExpressions, error) {
+	var err error
+	result := EmployeesExpressions{
+		ID:        rasqlgenBind(&err, source, "id", "", rasql.BindColumn[EmployeesRow, int64]),
+		Name:      rasqlgenBind(&err, source, "name", "", rasql.BindColumn[EmployeesRow, string]),
+		ManagerID: rasqlgenBind(&err, source, "manager_id", "", rasql.BindNullColumn[EmployeesRow, int64]),
 	}
-	return destinations, nil
+	return result, err
 }
 
-// EmployeesTable is the generated table type for the "employees" table.
-type EmployeesTable struct {
-	rasql.Table[EmployeesRow]
+func (EmployeesColumns) BindOptional(source rasql.OptionalRelation[EmployeesRow]) (OptionalEmployeesExpressions, error) {
+	var err error
+	result := OptionalEmployeesExpressions{
+		ID:        rasqlgenBind(&err, source, "id", "", rasql.BindOptionalColumn[EmployeesRow, int64]),
+		Name:      rasqlgenBind(&err, source, "name", "", rasql.BindOptionalColumn[EmployeesRow, string]),
+		ManagerID: rasqlgenBind(&err, source, "manager_id", "", rasql.BindOptionalColumn[EmployeesRow, int64]),
+	}
+	return result, err
 }
 
-// ID returns a reference to the "id" column.
-func (t EmployeesTable) ID() query.TypedColumn[EmployeesRow, int64] {
-	return query.TypedColumnOf[EmployeesRow, int64](t.Column("id"))
+var employeesResultColumns = []rasql.ResultColumn{
+	{Name: "id", Type: schema.IntegerType{}, Codec: ""},
+	{Name: "name", Type: schema.TextType{}, Codec: ""},
+	{Name: "manager_id", Type: schema.IntegerType{}, Nullable: true, Codec: ""},
 }
-func (t EmployeesTable) IDRef() rasql.ColumnRef { return t.Column("id") }
+var employeesResultSchema = rasqlgenResultSchema(employeesResultColumns)
 
-// Name returns a reference to the "name" column.
-func (t EmployeesTable) Name() query.TypedColumn[EmployeesRow, string] {
-	return query.TypedColumnOf[EmployeesRow, string](t.Column("name"))
-}
-func (t EmployeesTable) NameRef() rasql.ColumnRef { return t.Column("name") }
+type employeesDecoder struct{}
 
-// ManagerID returns a reference to the "manager_id" column.
-func (t EmployeesTable) ManagerID() query.NullableColumn[EmployeesRow, *int64] {
-	return query.NullableColumnOf[EmployeesRow, *int64](t.Column("manager_id"))
-}
-func (t EmployeesTable) ManagerIDRef() rasql.ColumnRef { return t.Column("manager_id") }
-
-// Employees returns the descriptor for the "employees" table.
-func Employees() EmployeesTable {
-	return employeesTable
+func (employeesDecoder) ResultSchema() rasql.ResultSchema { return employeesResultSchema }
+func (employeesDecoder) Presence() []rasql.Presence       { return nil }
+func (employeesDecoder) DecodeRow(source rasql.ScanSource, row *EmployeesRow) error {
+	return source.Scan(&row.ID, &row.Name, &row.ManagerID)
 }
 
-// As returns the table under alias.
-func (t EmployeesTable) As(alias string) (EmployeesTable, error) {
-	aliased, err := t.Table.As(alias)
+func (row *EmployeesRow) ScanRow(source rasql.ScanSource) error {
+	return employeesDecoder{}.DecodeRow(source, row)
+}
+
+var employeesOptionalResultSchema = rasqlgenOptionalResultSchema(employeesResultColumns)
+
+type employeesOptionalDecoder struct{}
+
+func (employeesOptionalDecoder) ResultSchema() rasql.ResultSchema {
+	return employeesOptionalResultSchema
+}
+func (employeesOptionalDecoder) Presence() []rasql.Presence {
+	p, err := rasql.NewPresence("Employees", "id")
 	if err != nil {
-		return EmployeesTable{}, err
+		panic(err)
 	}
-	return EmployeesTable{Table: aliased}, nil
+	return []rasql.Presence{p}
 }
+func (employeesOptionalDecoder) DecodeRow(source rasql.ScanSource, row *EmployeesRow) error {
+	var IDValue rasql.Nullable[int64]
+	var NameValue rasql.Nullable[string]
+	if err := source.Scan(&IDValue, &NameValue, &row.ManagerID); err != nil {
+		return err
+	}
+	rasqlgenAssignNullable(IDValue, &row.ID)
+	rasqlgenAssignNullable(NameValue, &row.Name)
+	return nil
+}
+
+func EmployeesProjection(expressions EmployeesExpressions) (rasql.Projection[EmployeesRow], error) {
+	items := []rasql.ProjectionItem{
+		rasql.Item("id", expressions.ID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("name", expressions.Name.Expr(), schema.TextType{}, ""),
+		rasql.NullItem("manager_id", expressions.ManagerID.NullExpr(), schema.IntegerType{}, ""),
+	}
+	return rasql.NewProjection(items, employeesDecoder{})
+}
+
+func OptionalEmployeesProjection(expressions OptionalEmployeesExpressions) (rasql.Projection[EmployeesRow], error) {
+	items := []rasql.ProjectionItem{
+		rasql.NullItem("id", expressions.ID.NullExpr(), schema.IntegerType{}, ""),
+		rasql.NullItem("name", expressions.Name.NullExpr(), schema.TextType{}, ""),
+		rasql.NullItem("manager_id", expressions.ManagerID.NullExpr(), schema.IntegerType{}, ""),
+	}
+	return rasql.NewProjection(items, employeesOptionalDecoder{})
+}
+
+func EmployeesGraphKey(source rasql.TypedRelation[EmployeesRow]) (rasql.GraphKey[EmployeesRow], error) {
+	expressions, err := (EmployeesColumns{}).Bind(source)
+	if err != nil {
+		return rasql.GraphKey[EmployeesRow]{}, err
+	}
+	return rasql.NewGraphKey[EmployeesRow](rasql.KeyPart[EmployeesRow, int64](expressions.ID, func(row EmployeesRow) int64 { return row.ID }))
+}
+
+func EmployeesIDPageKey(source rasql.TypedRelation[EmployeesRow], direction rasql.PageDirection) (rasql.PageKey[EmployeesRow], error) {
+	expressions, err := (EmployeesColumns{}).Bind(source)
+	if err != nil {
+		return nil, err
+	}
+	return rasqlgenPageKey(direction, expressions.ID.Expr(), func(row EmployeesRow) int64 { return row.ID })
+}
+
+func EmployeesNamePageKey(source rasql.TypedRelation[EmployeesRow], direction rasql.PageDirection) (rasql.PageKey[EmployeesRow], error) {
+	expressions, err := (EmployeesColumns{}).Bind(source)
+	if err != nil {
+		return nil, err
+	}
+	return rasqlgenPageKey(direction, expressions.Name.Expr(), func(row EmployeesRow) string { return row.Name })
+}
+
+func EmployeesManagerIDPageKey(source rasql.TypedRelation[EmployeesRow], direction rasql.PageDirection, nulls rasql.NullOrder) (rasql.PageKey[EmployeesRow], error) {
+	expressions, err := (EmployeesColumns{}).Bind(source)
+	if err != nil {
+		return nil, err
+	}
+	return rasqlgenNullablePageKey(direction, expressions.ManagerID.NullExpr(), func(row EmployeesRow) rasql.Nullable[int64] { return row.ManagerID }, nulls)
+}
+
+var employeesMutationColumns = func() EmployeesExpressions {
+	source, err := Employees().Source("")
+	if err != nil {
+		panic(err)
+	}
+	value, err := (EmployeesColumns{}).Bind(source)
+	if err != nil {
+		panic(err)
+	}
+	return value
+}()
 
 type EmployeesCreate struct {
 	fields []rasql.MutationField[EmployeesRow]
 }
 
 func NewEmployeesCreate() EmployeesCreate { return EmployeesCreate{} }
-
-func (p EmployeesCreate) ID(value int64) EmployeesCreate {
-	fields := append([]rasql.MutationField[EmployeesRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[EmployeesRow](Employees().ID(), value))
-	return EmployeesCreate{fields: fields}
+func (v EmployeesCreate) ID(value int64) EmployeesCreate {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(employeesMutationColumns.ID, value))
+	return v
 }
-func (p EmployeesCreate) Name(value string) EmployeesCreate {
-	fields := append([]rasql.MutationField[EmployeesRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[EmployeesRow](Employees().Name(), value))
-	return EmployeesCreate{fields: fields}
+func (v EmployeesCreate) Name(value string) EmployeesCreate {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(employeesMutationColumns.Name, value))
+	return v
 }
-func (p EmployeesCreate) ManagerID(value *int64) EmployeesCreate {
-	fields := append([]rasql.MutationField[EmployeesRow](nil), p.fields...)
-	fields = append(fields, rasql.SetNullableField[EmployeesRow](Employees().ManagerID(), value))
-	return EmployeesCreate{fields: fields}
+func (v EmployeesCreate) ManagerID(value int64) EmployeesCreate {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetNullableField(employeesMutationColumns.ManagerID, value))
+	return v
 }
-func (p EmployeesCreate) ClearManagerID() EmployeesCreate {
-	fields := append([]rasql.MutationField[EmployeesRow](nil), p.fields...)
-	fields = append(fields, rasql.ClearField[EmployeesRow](Employees().ManagerID()))
-	return EmployeesCreate{fields: fields}
+func (v EmployeesCreate) ClearManagerID() EmployeesCreate {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.ClearField(employeesMutationColumns.ManagerID))
+	return v
 }
-func (p EmployeesCreate) Plan() rasql.CreatePlan[EmployeesRow] {
-	plan, _ := rasql.NewCreatePlan[EmployeesRow](Employees().Table, p.fields...)
-	return plan
+func (v EmployeesCreate) Plan() (rasql.CreatePlan[EmployeesRow], error) {
+	return rasql.NewCreatePlan(Employees().Table, v.fields...)
 }
 
 type EmployeesPatch struct {
@@ -128,22 +204,22 @@ type EmployeesPatch struct {
 }
 
 func NewEmployeesPatch() EmployeesPatch { return EmployeesPatch{} }
-
-func (p EmployeesPatch) Name(value string) EmployeesPatch {
-	fields := append([]rasql.MutationField[EmployeesRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[EmployeesRow](Employees().Name(), value))
-	return EmployeesPatch{fields: fields}
+func (v EmployeesPatch) ID(value int64) EmployeesPatch {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(employeesMutationColumns.ID, value))
+	return v
 }
-func (p EmployeesPatch) ManagerID(value *int64) EmployeesPatch {
-	fields := append([]rasql.MutationField[EmployeesRow](nil), p.fields...)
-	fields = append(fields, rasql.SetNullableField[EmployeesRow](Employees().ManagerID(), value))
-	return EmployeesPatch{fields: fields}
+func (v EmployeesPatch) Name(value string) EmployeesPatch {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(employeesMutationColumns.Name, value))
+	return v
 }
-func (p EmployeesPatch) ClearManagerID() EmployeesPatch {
-	fields := append([]rasql.MutationField[EmployeesRow](nil), p.fields...)
-	fields = append(fields, rasql.ClearField[EmployeesRow](Employees().ManagerID()))
-	return EmployeesPatch{fields: fields}
+func (v EmployeesPatch) ManagerID(value int64) EmployeesPatch {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetNullableField(employeesMutationColumns.ManagerID, value))
+	return v
 }
-func (p EmployeesPatch) Where(predicate query.Predicate) (rasql.PatchPlan[EmployeesRow], error) {
-	return rasql.NewPatchPlan[EmployeesRow](Employees().Table, predicate, p.fields...)
+func (v EmployeesPatch) ClearManagerID() EmployeesPatch {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.ClearField(employeesMutationColumns.ManagerID))
+	return v
+}
+func (v EmployeesPatch) Where(value rasql.Predicate) (rasql.PatchPlan[EmployeesRow], error) {
+	return rasql.NewPatchPlan(Employees().Table, value, v.fields...)
 }

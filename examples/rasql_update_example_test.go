@@ -38,16 +38,26 @@ func Example_rasql_update() {
 		return
 	}
 	// Insert one row so the update has a persistent target.
-	createPlan := store.NewUsersCreate().ID(42).Email("ada@example.com").FirstName("First").LastName("Last").Plan()
+	createPlan, err := store.NewUsersCreate().ID(42).Email("ada@example.com").FirstName("First").LastName("Last").Plan()
+	if err != nil {
+		fmt.Printf("failed to build insert: %s\n", err)
+		return
+	}
 	if _, err := rasql.ExecMutation(ctx, db, createPlan); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
+		return
+	}
+
+	columns, err := (store.UsersColumns{}).Bind(users.Table)
+	if err != nil {
+		fmt.Printf("failed to bind users columns: %s\n", err)
 		return
 	}
 
 	// The generated patch builder writes only the fields named, and its
 	// Where takes the typed predicate that matches the target row.
 	// SQL: UPDATE users SET email = ? WHERE users.id = ? (arguments: "grace@example.com", 42)
-	patchPlan, err := store.NewUsersPatch().Email("grace@example.com").Where(query.EqualValue(users.ID(), int64(42)))
+	patchPlan, err := store.NewUsersPatch().Email("grace@example.com").Where(rasql.EqualValue(columns.ID.Expr(), int64(42)))
 	if err != nil {
 		fmt.Printf("failed to build patch: %s\n", err)
 		return
@@ -58,13 +68,15 @@ func Example_rasql_update() {
 	}
 
 	// A dynamic SELECT reads back the row, through the same query and render
-	// packages the typed layer builds on.
-	statement, err := query.NewSelect(users.Ref(), users.ID().Ref(), users.Email().Ref())
+	// packages the typed layer builds on. query.NewSelect takes a
+	// query.ColumnRef, and Column is the generated table's only way to
+	// produce one.
+	statement, err := query.NewSelect(users.Ref(), users.Column("id"), users.Column("email"))
 	if err != nil {
 		fmt.Printf("failed to build select: %s\n", err)
 		return
 	}
-	statement, err = statement.WithWhere(query.Equal(users.ID().Ref(), 42))
+	statement, err = statement.WithWhere(query.Equal(users.Column("id"), 42))
 	if err != nil {
 		fmt.Printf("failed to filter select: %s\n", err)
 		return

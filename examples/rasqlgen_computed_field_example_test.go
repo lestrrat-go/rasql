@@ -57,25 +57,19 @@ func Example_rasqlgen_computed_field() {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	plan := store.NewUsersCreate().ID(1).Email("ada@example.com").FirstName("Ada").LastName("Lovelace").Plan()
+	plan, err := store.NewUsersCreate().ID(1).Email("ada@example.com").FirstName("Ada").LastName("Lovelace").Plan()
+	if err != nil {
+		fmt.Printf("failed to build insert: %s\n", err)
+		return
+	}
 	if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
 
-	email, err := rasql.BindColumn[store.UsersRow, string](users, users.EmailRef().Name(), "")
+	columns, err := (store.UsersColumns{}).Bind(users.Table)
 	if err != nil {
-		fmt.Printf("failed to bind email column: %s\n", err)
-		return
-	}
-	firstName, err := rasql.BindColumn[store.UsersRow, string](users, users.FirstNameRef().Name(), "")
-	if err != nil {
-		fmt.Printf("failed to bind first_name column: %s\n", err)
-		return
-	}
-	lastName, err := rasql.BindColumn[store.UsersRow, string](users, users.LastNameRef().Name(), "")
-	if err != nil {
-		fmt.Printf("failed to bind last_name column: %s\n", err)
+		fmt.Printf("failed to bind users columns: %s\n", err)
 		return
 	}
 	result, err := rasql.NewResultSchema(
@@ -90,9 +84,9 @@ func Example_rasqlgen_computed_field() {
 	// The projection names what the caller wants, since the result shape is
 	// not the table's row type.
 	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
-		rasql.Item("email", email.Expr(), schema.TextType{}, ""),
-		rasql.Item("first_name", firstName.Expr(), schema.TextType{}, ""),
-		rasql.Item("last_name", lastName.Expr(), schema.TextType{}, ""),
+		rasql.Item("email", columns.Email.Expr(), schema.TextType{}, ""),
+		rasql.Item("first_name", columns.FirstName.Expr(), schema.TextType{}, ""),
+		rasql.Item("last_name", columns.LastName.Expr(), schema.TextType{}, ""),
 	}, userReportDecoder{result: result})
 	if err != nil {
 		fmt.Printf("failed to build projection: %s\n", err)

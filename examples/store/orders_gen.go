@@ -3,119 +3,188 @@
 package store
 
 import (
-	"fmt"
-
 	"github.com/lestrrat-go/rasql"
-	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/schema"
 )
 
-// OrdersRow is one row of the "orders" table.
 type OrdersRow struct {
-	ID     int64
-	UserID int64
-	Total  int64
+	ID, UserID, Total int64
 }
 
-// ScanRow scans each result column directly into its field.
-func (r *OrdersRow) ScanRow(src rasql.ScanSource) error {
-	return src.Scan(&r.ID, &r.UserID, &r.Total)
+var ordersDefinition = schema.TableDef{
+	Kind: schema.ObjectKind("table"),
+	Name: "orders",
+	Columns: []schema.ColumnDef{
+		{Name: "id", Type: schema.IntegerType{}},
+		{Name: "user_id", Type: schema.IntegerType{}},
+		{Name: "total", Type: schema.IntegerType{}},
+	},
+	PrimaryKey: []string{"id"},
 }
 
-// ScanDestinations maps result-column names to fields on r.
-func (r *OrdersRow) ScanDestinations(columns []string) ([]any, error) {
-	const (
-		scanIndexID = iota
-		scanIndexUserID
-		scanIndexTotal
-	)
-	destinations := make([]any, len(columns))
-	scanned := rasql.NewScanMask(3)
-	var discard any
-	for index, column := range columns {
-		switch column {
-		case "id":
-			if !scanned.Mark(scanIndexID) {
-				return nil, fmt.Errorf("duplicate result column %q", column)
-			}
-			destinations[index] = &r.ID
-		case "user_id":
-			if !scanned.Mark(scanIndexUserID) {
-				return nil, fmt.Errorf("duplicate result column %q", column)
-			}
-			destinations[index] = &r.UserID
-		case "total":
-			if !scanned.Mark(scanIndexTotal) {
-				return nil, fmt.Errorf("duplicate result column %q", column)
-			}
-			destinations[index] = &r.Total
-		default:
-			destinations[index] = &discard
-		}
+var ordersTable = rasql.MustTableOf[OrdersRow](ordersDefinition)
+
+type OrdersTable struct{ rasql.Table[OrdersRow] }
+
+func Orders() OrdersTable { return OrdersTable{Table: ordersTable} }
+
+func (t OrdersTable) Source(alias string) (rasql.TypedRelation[OrdersRow], error) {
+	return rasql.SourceOf[OrdersRow](t.Table, alias)
+}
+
+type OrdersColumns struct{}
+
+type OrdersExpressions struct {
+	ID, UserID, Total rasql.Column[OrdersRow, int64]
+}
+
+type OptionalOrdersExpressions struct {
+	ID, UserID, Total rasql.NullColumn[OrdersRow, int64]
+}
+
+func (OrdersColumns) Bind(source rasql.TypedRelation[OrdersRow]) (OrdersExpressions, error) {
+	var err error
+	result := OrdersExpressions{
+		ID:     rasqlgenBind(&err, source, "id", "", rasql.BindColumn[OrdersRow, int64]),
+		UserID: rasqlgenBind(&err, source, "user_id", "", rasql.BindColumn[OrdersRow, int64]),
+		Total:  rasqlgenBind(&err, source, "total", "", rasql.BindColumn[OrdersRow, int64]),
 	}
-	return destinations, nil
+	return result, err
 }
 
-// OrdersTable is the generated table type for the "orders" table.
-type OrdersTable struct {
-	rasql.Table[OrdersRow]
+func (OrdersColumns) BindOptional(source rasql.OptionalRelation[OrdersRow]) (OptionalOrdersExpressions, error) {
+	var err error
+	result := OptionalOrdersExpressions{
+		ID:     rasqlgenBind(&err, source, "id", "", rasql.BindOptionalColumn[OrdersRow, int64]),
+		UserID: rasqlgenBind(&err, source, "user_id", "", rasql.BindOptionalColumn[OrdersRow, int64]),
+		Total:  rasqlgenBind(&err, source, "total", "", rasql.BindOptionalColumn[OrdersRow, int64]),
+	}
+	return result, err
 }
 
-// ID returns a reference to the "id" column.
-func (t OrdersTable) ID() query.TypedColumn[OrdersRow, int64] {
-	return query.TypedColumnOf[OrdersRow, int64](t.Column("id"))
+var ordersResultColumns = []rasql.ResultColumn{
+	{Name: "id", Type: schema.IntegerType{}, Codec: ""},
+	{Name: "user_id", Type: schema.IntegerType{}, Codec: ""},
+	{Name: "total", Type: schema.IntegerType{}, Codec: ""},
 }
-func (t OrdersTable) IDRef() rasql.ColumnRef { return t.Column("id") }
+var ordersResultSchema = rasqlgenResultSchema(ordersResultColumns)
 
-// UserID returns a reference to the "user_id" column.
-func (t OrdersTable) UserID() query.TypedColumn[OrdersRow, int64] {
-	return query.TypedColumnOf[OrdersRow, int64](t.Column("user_id"))
-}
-func (t OrdersTable) UserIDRef() rasql.ColumnRef { return t.Column("user_id") }
+type ordersDecoder struct{}
 
-// Total returns a reference to the "total" column.
-func (t OrdersTable) Total() query.TypedColumn[OrdersRow, int64] {
-	return query.TypedColumnOf[OrdersRow, int64](t.Column("total"))
-}
-func (t OrdersTable) TotalRef() rasql.ColumnRef { return t.Column("total") }
-
-// Orders returns the descriptor for the "orders" table.
-func Orders() OrdersTable {
-	return ordersTable
+func (ordersDecoder) ResultSchema() rasql.ResultSchema { return ordersResultSchema }
+func (ordersDecoder) Presence() []rasql.Presence       { return nil }
+func (ordersDecoder) DecodeRow(source rasql.ScanSource, row *OrdersRow) error {
+	return source.Scan(&row.ID, &row.UserID, &row.Total)
 }
 
-// As returns the table under alias.
-func (t OrdersTable) As(alias string) (OrdersTable, error) {
-	aliased, err := t.Table.As(alias)
+func (row *OrdersRow) ScanRow(source rasql.ScanSource) error {
+	return ordersDecoder{}.DecodeRow(source, row)
+}
+
+var ordersOptionalResultSchema = rasqlgenOptionalResultSchema(ordersResultColumns)
+
+type ordersOptionalDecoder struct{}
+
+func (ordersOptionalDecoder) ResultSchema() rasql.ResultSchema { return ordersOptionalResultSchema }
+func (ordersOptionalDecoder) Presence() []rasql.Presence {
+	p, err := rasql.NewPresence("Orders", "id")
 	if err != nil {
-		return OrdersTable{}, err
+		panic(err)
 	}
-	return OrdersTable{Table: aliased}, nil
+	return []rasql.Presence{p}
 }
+func (ordersOptionalDecoder) DecodeRow(source rasql.ScanSource, row *OrdersRow) error {
+	var IDValue, UserIDValue, TotalValue rasql.Nullable[int64]
+	if err := source.Scan(&IDValue, &UserIDValue, &TotalValue); err != nil {
+		return err
+	}
+	rasqlgenAssignNullable(IDValue, &row.ID)
+	rasqlgenAssignNullable(UserIDValue, &row.UserID)
+	rasqlgenAssignNullable(TotalValue, &row.Total)
+	return nil
+}
+
+func OrdersProjection(expressions OrdersExpressions) (rasql.Projection[OrdersRow], error) {
+	items := []rasql.ProjectionItem{
+		rasql.Item("id", expressions.ID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("user_id", expressions.UserID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("total", expressions.Total.Expr(), schema.IntegerType{}, ""),
+	}
+	return rasql.NewProjection(items, ordersDecoder{})
+}
+
+func OptionalOrdersProjection(expressions OptionalOrdersExpressions) (rasql.Projection[OrdersRow], error) {
+	items := []rasql.ProjectionItem{
+		rasql.NullItem("id", expressions.ID.NullExpr(), schema.IntegerType{}, ""),
+		rasql.NullItem("user_id", expressions.UserID.NullExpr(), schema.IntegerType{}, ""),
+		rasql.NullItem("total", expressions.Total.NullExpr(), schema.IntegerType{}, ""),
+	}
+	return rasql.NewProjection(items, ordersOptionalDecoder{})
+}
+
+func OrdersGraphKey(source rasql.TypedRelation[OrdersRow]) (rasql.GraphKey[OrdersRow], error) {
+	expressions, err := (OrdersColumns{}).Bind(source)
+	if err != nil {
+		return rasql.GraphKey[OrdersRow]{}, err
+	}
+	return rasql.NewGraphKey[OrdersRow](rasql.KeyPart[OrdersRow, int64](expressions.ID, func(row OrdersRow) int64 { return row.ID }))
+}
+
+func OrdersIDPageKey(source rasql.TypedRelation[OrdersRow], direction rasql.PageDirection) (rasql.PageKey[OrdersRow], error) {
+	expressions, err := (OrdersColumns{}).Bind(source)
+	if err != nil {
+		return nil, err
+	}
+	return rasqlgenPageKey(direction, expressions.ID.Expr(), func(row OrdersRow) int64 { return row.ID })
+}
+
+func OrdersUserIDPageKey(source rasql.TypedRelation[OrdersRow], direction rasql.PageDirection) (rasql.PageKey[OrdersRow], error) {
+	expressions, err := (OrdersColumns{}).Bind(source)
+	if err != nil {
+		return nil, err
+	}
+	return rasqlgenPageKey(direction, expressions.UserID.Expr(), func(row OrdersRow) int64 { return row.UserID })
+}
+
+func OrdersTotalPageKey(source rasql.TypedRelation[OrdersRow], direction rasql.PageDirection) (rasql.PageKey[OrdersRow], error) {
+	expressions, err := (OrdersColumns{}).Bind(source)
+	if err != nil {
+		return nil, err
+	}
+	return rasqlgenPageKey(direction, expressions.Total.Expr(), func(row OrdersRow) int64 { return row.Total })
+}
+
+var ordersMutationColumns = func() OrdersExpressions {
+	source, err := Orders().Source("")
+	if err != nil {
+		panic(err)
+	}
+	value, err := (OrdersColumns{}).Bind(source)
+	if err != nil {
+		panic(err)
+	}
+	return value
+}()
 
 type OrdersCreate struct {
 	fields []rasql.MutationField[OrdersRow]
 }
 
 func NewOrdersCreate() OrdersCreate { return OrdersCreate{} }
-
-func (p OrdersCreate) ID(value int64) OrdersCreate {
-	fields := append([]rasql.MutationField[OrdersRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[OrdersRow](Orders().ID(), value))
-	return OrdersCreate{fields: fields}
+func (v OrdersCreate) ID(value int64) OrdersCreate {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(ordersMutationColumns.ID, value))
+	return v
 }
-func (p OrdersCreate) UserID(value int64) OrdersCreate {
-	fields := append([]rasql.MutationField[OrdersRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[OrdersRow](Orders().UserID(), value))
-	return OrdersCreate{fields: fields}
+func (v OrdersCreate) UserID(value int64) OrdersCreate {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(ordersMutationColumns.UserID, value))
+	return v
 }
-func (p OrdersCreate) Total(value int64) OrdersCreate {
-	fields := append([]rasql.MutationField[OrdersRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[OrdersRow](Orders().Total(), value))
-	return OrdersCreate{fields: fields}
+func (v OrdersCreate) Total(value int64) OrdersCreate {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(ordersMutationColumns.Total, value))
+	return v
 }
-func (p OrdersCreate) Plan() rasql.CreatePlan[OrdersRow] {
-	plan, _ := rasql.NewCreatePlan[OrdersRow](Orders().Table, p.fields...)
-	return plan
+func (v OrdersCreate) Plan() (rasql.CreatePlan[OrdersRow], error) {
+	return rasql.NewCreatePlan(Orders().Table, v.fields...)
 }
 
 type OrdersPatch struct {
@@ -123,17 +192,18 @@ type OrdersPatch struct {
 }
 
 func NewOrdersPatch() OrdersPatch { return OrdersPatch{} }
-
-func (p OrdersPatch) UserID(value int64) OrdersPatch {
-	fields := append([]rasql.MutationField[OrdersRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[OrdersRow](Orders().UserID(), value))
-	return OrdersPatch{fields: fields}
+func (v OrdersPatch) ID(value int64) OrdersPatch {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(ordersMutationColumns.ID, value))
+	return v
 }
-func (p OrdersPatch) Total(value int64) OrdersPatch {
-	fields := append([]rasql.MutationField[OrdersRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[OrdersRow](Orders().Total(), value))
-	return OrdersPatch{fields: fields}
+func (v OrdersPatch) UserID(value int64) OrdersPatch {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(ordersMutationColumns.UserID, value))
+	return v
 }
-func (p OrdersPatch) Where(predicate query.Predicate) (rasql.PatchPlan[OrdersRow], error) {
-	return rasql.NewPatchPlan[OrdersRow](Orders().Table, predicate, p.fields...)
+func (v OrdersPatch) Total(value int64) OrdersPatch {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(ordersMutationColumns.Total, value))
+	return v
+}
+func (v OrdersPatch) Where(value rasql.Predicate) (rasql.PatchPlan[OrdersRow], error) {
+	return rasql.NewPatchPlan(Orders().Table, value, v.fields...)
 }

@@ -25,7 +25,7 @@ Start with these two, whichever layer the task belongs to:
 ### The ORM layer
 
 1. [`rasql codegen`](orm/01-codegen.md) writes the store package from live metadata, driven by one settings file.
-2. [The generated store](orm/02-generated-store.md) says what that package contains: row types, table types, column accessors, and static query functions.
+2. [The generated store](orm/02-generated-store.md) says what that package contains: row types, table types, bound columns, projections, and static query functions.
 3. [Typed queries](orm/03-typed-queries.md) reads rows through the generated table: typed selects, joins, custom projections, and SQL inspection.
 4. [Writing rows](orm/04-writing.md) creates tables and inserts, updates, or deletes rows.
 

@@ -53,58 +53,43 @@ func Example_rasql_self_join() {
 		return
 	}
 	// A top-level employee has no manager, so manager_id is nullable and the
-	// generated field is a pointer.
-	ada := int64(1)
+	// generated field carries a validity flag.
+	ada := rasql.Nullable[int64]{Value: 1, Valid: true}
 	for _, employee := range []store.EmployeesRow{
 		{ID: 1, Name: "ada"},
-		{ID: 2, Name: "grace", ManagerID: &ada},
-		{ID: 3, Name: "edsger", ManagerID: &ada},
+		{ID: 2, Name: "grace", ManagerID: ada},
+		{ID: 3, Name: "edsger", ManagerID: ada},
 	} {
-		plan := store.NewEmployeesCreate().ID(employee.ID).Name(employee.Name)
-		if employee.ManagerID != nil {
-			plan = plan.ManagerID(employee.ManagerID)
+		create := store.NewEmployeesCreate().ID(employee.ID).Name(employee.Name)
+		if employee.ManagerID.Valid {
+			create = create.ManagerID(employee.ManagerID.Value)
 		}
-		if _, err := rasql.ExecMutation(ctx, db, plan.Plan()); err != nil {
+		plan, err := create.Plan()
+		if err != nil {
+			fmt.Printf("failed to build insert: %s\n", err)
+			return
+		}
+		if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
 			fmt.Printf("failed to insert employee: %s\n", err)
 			return
 		}
 	}
 
-	employeesSource := employees
-	employeeID, err := rasql.BindColumn[store.EmployeesRow, int64](employeesSource, employees.IDRef().Name(), "")
-	if err != nil {
-		fmt.Printf("failed to bind employees id column: %s\n", err)
-		return
-	}
-	employeeName, err := rasql.BindColumn[store.EmployeesRow, string](employeesSource, employees.NameRef().Name(), "")
-	if err != nil {
-		fmt.Printf("failed to bind employees name column: %s\n", err)
-		return
-	}
-	employeeManagerID, err := rasql.BindNullColumn[store.EmployeesRow, int64](employeesSource, employees.ManagerIDRef().Name(), "")
-	if err != nil {
-		fmt.Printf("failed to bind employees manager_id column: %s\n", err)
-		return
-	}
-
-	manager, err := employees.As("manager")
+	// As names the second appearance of the table, and each Bind reads the
+	// appearance it was given, so the two column sets stay apart.
+	managerSource, err := employees.As("manager")
 	if err != nil {
 		fmt.Printf("failed to alias employees: %s\n", err)
 		return
 	}
-	managerSource, err := manager.As("manager")
+	employeeColumns, err := (store.EmployeesColumns{}).Bind(employees.Table)
 	if err != nil {
-		fmt.Printf("failed to bind manager source: %s\n", err)
+		fmt.Printf("failed to bind employees columns: %s\n", err)
 		return
 	}
-	managerID, err := rasql.BindColumn[store.EmployeesRow, int64](managerSource, employees.IDRef().Name(), "")
+	managerColumns, err := (store.EmployeesColumns{}).Bind(managerSource)
 	if err != nil {
-		fmt.Printf("failed to bind manager id column: %s\n", err)
-		return
-	}
-	managerName, err := rasql.BindColumn[store.EmployeesRow, string](managerSource, employees.NameRef().Name(), "")
-	if err != nil {
-		fmt.Printf("failed to bind manager name column: %s\n", err)
+		fmt.Printf("failed to bind manager columns: %s\n", err)
 		return
 	}
 
@@ -117,8 +102,8 @@ func Example_rasql_self_join() {
 		return
 	}
 	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
-		rasql.Item("name", employeeName.Expr(), schema.TextType{}, ""),
-		rasql.Item("manager_name", managerName.Expr(), schema.TextType{}, ""),
+		rasql.Item("name", employeeColumns.Name.Expr(), schema.TextType{}, ""),
+		rasql.Item("manager_name", managerColumns.Name.Expr(), schema.TextType{}, ""),
 	}, managedEmployeeDecoder{result: result})
 	if err != nil {
 		fmt.Printf("failed to build projection: %s\n", err)
@@ -126,9 +111,9 @@ func Example_rasql_self_join() {
 	}
 
 	// SQL: SELECT employees.name, manager.name FROM employees INNER JOIN employees AS manager ON employees.manager_id = manager.id ORDER BY employees.id ASC
-	q := rasql.Select(employeesSource, projection).
-		Join(managerSource, rasql.EqualOptional(managerID.Expr(), employeeManagerID.NullExpr())).
-		OrderBy(rasql.AscExpr(employeeID.Expr()))
+	q := rasql.Select(employees, projection).
+		Join(managerSource, rasql.EqualOptional(managerColumns.ID.Expr(), employeeColumns.ManagerID.NullExpr())).
+		OrderBy(rasql.AscExpr(employeeColumns.ID.Expr()))
 	rows, err := rasql.All(ctx, db, q)
 	if err != nil {
 		fmt.Printf("failed to query employees: %s\n", err)

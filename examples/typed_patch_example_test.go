@@ -8,7 +8,6 @@ import (
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/examples/store"
-	"github.com/lestrrat-go/rasql/query"
 )
 
 func Example_typedPatch() {
@@ -18,9 +17,13 @@ func Example_typedPatch() {
 		WithArgs("active", int64(1)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	executor, _ := rasql.Open(context.Background(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
-	predicate := query.EqualValue(store.Users().ID(), int64(1))
-	plan, _ := store.NewUsersPatch().Status("active").Where(predicate)
-	_, err := rasql.ExecMutation(context.Background(), executor, plan)
+	columns, err := (store.UsersColumns{}).Bind(store.Users().Table)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	plan, _ := store.NewUsersPatch().Status("active").Where(rasql.EqualValue(columns.ID.Expr(), int64(1)))
+	_, err = rasql.ExecMutation(context.Background(), executor, plan)
 	fmt.Println(err)
 	// Output: <nil>
 }
