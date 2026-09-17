@@ -1,7 +1,6 @@
 package rasql
 
 import (
-	"context"
 	"database/sql/driver"
 	"errors"
 	"fmt"
@@ -99,27 +98,6 @@ func (e *EncodeError) Error() string {
 }
 func (e *EncodeError) Unwrap() error { return e.Err }
 
-type codecExec struct {
-	Executor
-	codecs CodecRegistry
-}
-
-func (e codecExec) Codecs() CodecRegistry    { return e.codecs }
-func (e codecExec) unwrapExecutor() Executor { return e.Executor }
-
-// The codec executor exposes a transaction scope only when the executor it
-// wraps has one, and forwards a logical invocation only when the executor it
-// wraps opens one, because each layer has to rewrap the child that invocation
-// returns. The compiler and the durability evidence need no variant of their
-// own: both are unexported, so executorCapability reaches them through
-// unwrapExecutor.
-type logicalCodecExec struct{ codecExec }
-
-func (e logicalCodecExec) beginLogicalInvocation(ctx context.Context, kind EventKind) (context.Context, Executor, logicalInvocationCompletion) {
-	callCtx, child, completion := beginLogicalFrom(e.Executor, ctx, kind)
-	return callCtx, wrapCodecExecutor(child, e.codecs), completion
-}
-
 // WithCodecs wraps executor so every value it binds and every column it decodes
 // passes through codecs.
 //
@@ -132,28 +110,6 @@ func WithCodecs(executor Executor, codecs CodecRegistry) (Executor, error) {
 		return nil, fmt.Errorf("codec registry must not be nil")
 	}
 	return wrapCodecExecutor(executor, codecs), nil
-}
-
-func wrapCodecExecutor(executor Executor, codecs CodecRegistry) Executor {
-	// A DB already carries its codec registry as a field, so setting it is
-	// enough: nothing needs a wrapper around a DB to answer Codecs.
-	if db, ok := executor.(DB); ok {
-		db.codecs = codecs
-		return db
-	}
-	base := codecExec{Executor: executor, codecs: codecs}
-	_, hasLogical := executor.(logicalInvocationProvider)
-	_, scope := executor.(ScopeBeginner)
-	if scope {
-		if hasLogical {
-			return logicalCodecScopedExecutor{codecScopedExecutor{base}}
-		}
-		return codecScopedExecutor{codecExec: base}
-	}
-	if hasLogical {
-		return logicalCodecExec{base}
-	}
-	return base
 }
 
 // executorCodecs reports the codec registry an executor carries, and the

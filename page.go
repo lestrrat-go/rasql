@@ -77,7 +77,7 @@ func preparePageAfter[R any](executor Executor, q Query[R], spec PageSpec[R], po
 	if err := ordered.Validate(); err != nil {
 		return result, err
 	}
-	provider, ok := executorCapability[compilerProvider](executor)
+	provider, ok := executor.(compilerProvider)
 	if !ok || provider.queryCompiler() == nil {
 		return result, planError("engine_profile_unavailable", "executor", "executor has no retained compiler")
 	}

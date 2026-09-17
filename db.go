@@ -237,7 +237,7 @@ type DB struct {
 	// observers derived for the scope it runs in. Begin, BeginScope,
 	// BeginSavepoint, and a logical invocation each mint a fresh generation
 	// of these three for the child DB they return, mirroring what
-	// eventExecutor.childScope minted for a wrapped executor.
+	// decoratedExecutor mints for a wrapped executor's own child.
 	eventParentID string
 	eventCounter  *atomic.Int64
 	eventScopeCtx context.Context

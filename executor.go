@@ -95,58 +95,13 @@ type returnedColumnBinder[R any] interface {
 	bindReturnedColumns([]string) (RowDecoder[R], ResultSchema, error)
 }
 
-// executorUnwrapper hands back the executor a wrapper wraps, so that
-// executorCapability can look past a wrapper that carries a capability without
-// implementing it. Every wrapper this package builds implements it.
-type executorUnwrapper interface{ unwrapExecutor() Executor }
-
-// executorCapability finds the first executor in a wrapper chain that
-// implements T, and reports whether it found one. It reads the value it is
-// given before unwrapping, so a wrapper carrying its own value for a capability
-// still shadows the one further in, the way profiledExecutor's compiler shadows
-// the compiler of the executor it wraps. A provider found this way wins even
-// when its method returns nil; every caller already treats a nil result the way
-// it treats no provider at all, and walking on until a non-nil one turned up
-// would change which executors report engine_profile_unavailable.
-//
-// Only compilerProvider and executionDurabilityProvider are looked up this way.
-// Both are unexported, so no executor written outside this package implements
-// one, and a chain holding neither reports false rather than a wrapper's
-// stand-in value. That is what lets a wrapper stay one type instead of one type
-// per combination of the capabilities its base happens to carry.
-//
-// Five capabilities are deliberately left out, and each wrapper still declares
-// them only when the executor it wraps has one:
-//
-//   - CodecProvider and ScopeBeginner, SavepointBeginner and ScopeState are
-//     exported, so a caller outside this package reads their presence off the
-//     wrapper and steers on it, as Within and ExecMutationBatch do.
-//   - logicalInvocationProvider must not be looked up past a layer, because
-//     every layer rewraps the child executor the inner call hands back. A walk
-//     that skipped layers would give a batch an unwrapped child and lose the
-//     codec registry and the compiler the skipped layers carried.
-//
-// scopeContextProvider is left out for the same reason as the exported ones,
-// stated where profiledScopedExecutor forwards it.
-func executorCapability[T any](executor Executor) (T, bool) {
-	for executor != nil {
-		if value, ok := any(executor).(T); ok {
-			return value, true
-		}
-		unwrapper, ok := executor.(executorUnwrapper)
-		if !ok {
-			break
-		}
-		executor = unwrapper.unwrapExecutor()
-	}
-	var zero T
-	return zero, false
-}
-
-// The three functions below hold the body every wrapper repeats for a capability
-// it declares only because the executor it wraps declares one. Each reads the
-// executor one layer in and never unwraps further, for the reasons
-// executorCapability's comment gives.
+// scopeStateFrom, scopeContextFrom, and beginLogicalFrom hold the one-level
+// forward decoratedExecutor uses for a capability it declares only because the
+// executor it wraps declares one. compilerProvider and CodecProvider need no
+// version of their own here: a decoratedExecutor always implements both
+// itself, resolving its own value or this same one-level forward inline,
+// so a plain type assertion on any executor in a chain already reaches the
+// right answer without walking past it.
 
 func scopeStateFrom(inner Executor) bool {
 	state, ok := inner.(ScopeState)
@@ -155,9 +110,7 @@ func scopeStateFrom(inner Executor) bool {
 
 // A scope context stays forwarded rather than looked up, because Within reads
 // it off the child a scope returned and takes the caller's context when the
-// child reports none. A lookup that unwrapped would reach an observer's derived
-// context through a child that carries no scope of its own, which is a
-// different context than the one Within uses today.
+// child reports none.
 func scopeContextFrom(inner Executor) context.Context {
 	provider, _ := inner.(scopeContextProvider)
 	if provider == nil {
@@ -166,32 +119,11 @@ func scopeContextFrom(inner Executor) context.Context {
 	return provider.scopeContext()
 }
 
-// A wrapper reports what the executor it wraps reports, nil included, so that
-// executorCodecs raises the one error rather than each wrapper deciding for
-// itself. Substituting the builtin registry here used to hide a nil behind an
-// unrelated fact, because WithEngineProfile picks profiledCodecExecutor for an
-// executor that opens no scope and profiledCodecScopedExecutor for one that does.
-func codecsFrom(inner Executor) CodecRegistry {
-	provider, _ := inner.(CodecProvider)
-	if provider == nil {
-		return nil
-	}
-	return provider.Codecs()
-}
-
-type profiledExecutor struct {
-	Executor
-	compiler *querycompile.Compiler
-}
-
-func (e profiledExecutor) queryCompiler() *querycompile.Compiler { return e.compiler }
-func (e profiledExecutor) unwrapExecutor() Executor              { return e.Executor }
-
-type profiledCodecExecutor struct{ profiledExecutor }
-
-type logicalProfiledExecutor struct{ profiledExecutor }
-type logicalProfiledCodecExecutor struct{ profiledCodecExecutor }
-
+// beginLogicalFrom starts a logical invocation on inner if it reports one,
+// and hands back a no-op otherwise. A decoratedExecutor with no event
+// observers of its own calls this to forward through the executor it wraps,
+// then re-applies its own compiler and codecs to whatever child comes back,
+// because the forwarded call has no way to know about a layer above it.
 func beginLogicalFrom(executor Executor, ctx context.Context, kind EventKind) (context.Context, Executor, logicalInvocationCompletion) {
 	provider, ok := executor.(logicalInvocationProvider)
 	if !ok {
@@ -199,17 +131,6 @@ func beginLogicalFrom(executor Executor, ctx context.Context, kind EventKind) (c
 	}
 	return provider.beginLogicalInvocation(ctx, kind)
 }
-
-func (e logicalProfiledExecutor) beginLogicalInvocation(ctx context.Context, kind EventKind) (context.Context, Executor, logicalInvocationCompletion) {
-	callCtx, child, completion := beginLogicalFrom(e.Executor, ctx, kind)
-	return callCtx, wrapProfiledChild(child, e.compiler), completion
-}
-func (e logicalProfiledCodecExecutor) beginLogicalInvocation(ctx context.Context, kind EventKind) (context.Context, Executor, logicalInvocationCompletion) {
-	callCtx, child, completion := beginLogicalFrom(e.Executor, ctx, kind)
-	return callCtx, wrapProfiledChildWithCodecs(child, e.compiler, e.Codecs()), completion
-}
-
-func (e profiledCodecExecutor) Codecs() CodecRegistry { return codecsFrom(e.Executor) }
 
 // WithEngineProfile wraps executor so every statement it compiles is rendered
 // for profile. It reports ErrInvalidEngineProfile when profile is zero and
@@ -256,7 +177,7 @@ type rowTerminalKey struct{}
 // prior compile goes through here, so the error stays the same wherever the
 // check runs.
 func executorCompiler(executor Executor) (*querycompile.Compiler, error) {
-	provider, ok := executorCapability[compilerProvider](executor)
+	provider, ok := executor.(compilerProvider)
 	if !ok {
 		return nil, &PlanError{Code: "engine_profile_unavailable", Detail: "executor has no retained compiler"}
 	}
