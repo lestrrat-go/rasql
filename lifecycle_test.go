@@ -26,7 +26,7 @@ func TestQueryCompletesExecutionAndConsumption(t *testing.T) {
 	})
 	var mu sync.Mutex
 	completions := make([]rasql.Completion, 0, 2)
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	db, err = db.WithInvocationObservers(rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), rasql.InvocationObserverFunc(func(ctx context.Context, operation rasql.Operation) (context.Context, rasql.CompletionObserver) {
 		derived := context.WithValue(ctx, lifecycleKey{}, operation.Kind().String())
@@ -71,7 +71,7 @@ func TestRowsFinishReportsConversionAndCardinalityErrors(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 	var completion rasql.Completion
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	db, err = db.WithInvocationObservers(rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), rasql.InvocationObserverFunc(func(context.Context, rasql.Operation) (context.Context, rasql.CompletionObserver) {
 		return context.Background(), rasql.CompletionObserverFunc(func(_ context.Context, value rasql.Completion) error {
@@ -103,7 +103,7 @@ func TestTransactionLifecycleReportsCommitFailure(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 	var phases []rasql.Completion
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	db, err = db.WithInvocationObservers(rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), rasql.InvocationObserverFunc(func(ctx context.Context, operation rasql.Operation) (context.Context, rasql.CompletionObserver) {
 		return ctx, rasql.CompletionObserverFunc(func(_ context.Context, completion rasql.Completion) error {
@@ -142,7 +142,9 @@ func TestInvocationObserversPropagateContextAndReverseCompletion(t *testing.T) {
 	var starts []string
 	var completions []string
 	var hookContext string
-	db, err := rasql.New(database, dialect.SQLite(), rasql.HookFunc{BeforeFunc: func(ctx context.Context, _ rasql.Operation) error {
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
+	require.NoError(t, err)
+	db, err = db.WithHooks(rasql.HookFunc{BeforeFunc: func(ctx context.Context, _ rasql.Operation) error {
 		hookContext, _ = ctx.Value(key("second")).(string)
 		return nil
 	}})
@@ -183,7 +185,9 @@ func TestRawQueryRenderedReportsExecutionOnlyAndOwnedPreservesHooks(t *testing.T
 	})
 	var phases []rasql.Phase
 	hooks := 0
-	db, err := rasql.New(database, dialect.SQLite(), rasql.HookFunc{BeforeFunc: func(_ context.Context, _ rasql.Operation) error {
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
+	require.NoError(t, err)
+	db, err = db.WithHooks(rasql.HookFunc{BeforeFunc: func(_ context.Context, _ rasql.Operation) error {
 		hooks++
 		return nil
 	}})
@@ -220,7 +224,7 @@ func TestConsumptionDurationIncludesPostExecutionWork(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 	var consumption rasql.Completion
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	db, err = db.WithInvocationObservers(rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), rasql.InvocationObserverFunc(func(ctx context.Context, _ rasql.Operation) (context.Context, rasql.CompletionObserver) {
 		return ctx, rasql.CompletionObserverFunc(func(_ context.Context, value rasql.Completion) error {
@@ -248,7 +252,7 @@ func TestTransactionBeginFailureAndRollbackNormalization(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 	var completions []rasql.Completion
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	db, err = db.WithInvocationObservers(rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), rasql.InvocationObserverFunc(func(ctx context.Context, _ rasql.Operation) (context.Context, rasql.CompletionObserver) {
 		return ctx, rasql.CompletionObserverFunc(func(_ context.Context, value rasql.Completion) error {
@@ -288,7 +292,7 @@ func TestRowsEarlyCloseAndIterationError(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 	var completions []rasql.Completion
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	db, err = db.WithInvocationObservers(rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), rasql.InvocationObserverFunc(func(ctx context.Context, _ rasql.Operation) (context.Context, rasql.CompletionObserver) {
 		return ctx, rasql.CompletionObserverFunc(func(_ context.Context, value rasql.Completion) error {
@@ -328,7 +332,7 @@ func TestCompletionErrorsGoOnlyToHandler(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 	var reported []error
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	db, err = db.WithInvocationObservers(rasql.ExtensionErrorHandlerFunc(func(_ context.Context, value rasql.ExtensionError) {
 		reported = append(reported, value.Errors...)
@@ -355,7 +359,7 @@ func TestDelayedDriverSeparatesExecutionAndConsumptionDuration(t *testing.T) {
 		queryStarted: queryStarted, queryRelease: queryRelease,
 		nextStarted: nextStarted, nextRelease: nextRelease,
 	}, recorder)
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	var completions []rasql.Completion
 	db, err = db.WithInvocationObservers(rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), rasql.InvocationObserverFunc(func(ctx context.Context, _ rasql.Operation) (context.Context, rasql.CompletionObserver) {
@@ -406,7 +410,7 @@ func TestDelayedDriverSeparatesExecutionAndConsumptionDuration(t *testing.T) {
 func TestConcurrentInvocationsKeepDerivedMarkersPaired(t *testing.T) {
 	recorder := &lifecycleDriverRecorder{}
 	database := openLifecycleDatabase(t, lifecycleDriverConfig{}, recorder)
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	var next atomic.Int64
 	var mu sync.Mutex

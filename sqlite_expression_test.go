@@ -21,15 +21,11 @@ func TestSQLiteComposableExpressionsInTransaction(t *testing.T) {
 	require.NoError(t, err)
 	_, err = database.ExecContext(t.Context(), `INSERT INTO accounts (id, balance) VALUES (1, 10), (2, 20)`)
 	require.NoError(t, err)
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite())
 	require.NoError(t, err)
-	tx, err := db.Begin(t.Context(), nil)
+	executor, err := db.Begin(t.Context(), nil)
 	require.NoError(t, err)
-	defer func() { _ = tx.Rollback() }()
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(tx, profile)
-	require.NoError(t, err)
+	defer func() { _ = executor.Rollback() }()
 
 	table := query.MustTableRef(schema.MustTableDef("accounts", schema.Integer("id"), schema.Integer("balance")))
 	id, balance := table.Column("id"), table.Column("balance")
@@ -51,7 +47,7 @@ func TestSQLiteComposableExpressionsInTransaction(t *testing.T) {
 	rendered, err := render.Select(dialect.SQLite(), selectStatement)
 	require.NoError(t, err)
 	require.Equal(t, []any{10, "large", "small", 4, 5}, rendered.Args())
-	rows, err := tx.QueryRendered(t.Context(), rendered)
+	rows, err := executor.QueryRendered(t.Context(), rendered)
 	require.NoError(t, err)
 	defer func() { _ = rows.Close() }()
 	type result struct {
@@ -74,7 +70,7 @@ func TestSQLiteComposableExpressionsInTransaction(t *testing.T) {
 	require.NoError(t, err)
 	windowRendered, err := render.Select(dialect.SQLite(), windowStatement)
 	require.NoError(t, err)
-	windowRows, err := tx.QueryRendered(t.Context(), windowRendered)
+	windowRows, err := executor.QueryRendered(t.Context(), windowRendered)
 	require.NoError(t, err)
 	defer func() { _ = windowRows.Close() }()
 	var windowResults []int64
@@ -85,7 +81,7 @@ func TestSQLiteComposableExpressionsInTransaction(t *testing.T) {
 	}
 	require.NoError(t, windowRows.Err())
 	require.Equal(t, []int64{1, 2}, windowResults)
-	require.NoError(t, tx.Commit())
+	require.NoError(t, executor.Commit())
 
 	var stored int64
 	require.NoError(t, database.QueryRowContext(t.Context(), `SELECT balance FROM accounts WHERE id = 1`).Scan(&stored))
@@ -269,11 +265,7 @@ func TestSQLiteConditionalUpsert(t *testing.T) {
 	t.Cleanup(func() { _ = database.Close() })
 	_, err = database.ExecContext(t.Context(), `CREATE TABLE items (id INTEGER PRIMARY KEY, version INTEGER NOT NULL, payload TEXT NOT NULL)`)
 	require.NoError(t, err)
-	db, err := rasql.New(database, dialect.SQLite())
-	require.NoError(t, err)
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(db, profile)
+	executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 	require.NoError(t, err)
 	table := query.MustTableRef(schema.MustTableDef("items", schema.Integer("id"), schema.Integer("version"), schema.Text("payload")))
 	id, version, payload := table.Column("id"), table.Column("version"), table.Column("payload")

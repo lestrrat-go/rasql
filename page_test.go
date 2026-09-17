@@ -41,11 +41,7 @@ func TestPageAfter(t *testing.T) {
 			_, err = database.Exec(`INSERT INTO page_rows (id) VALUES (?)`, i)
 			require.NoError(t, err)
 		}
-		db, err := rasql.New(database, dialect.SQLite())
-		require.NoError(t, err)
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
-		executor, err := rasql.AsExecutor(db, profile)
+		executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 		require.NoError(t, err)
 		table, err := rasql.ReadTableOf[pageAcceptanceRow](schema.TableDef{Name: "page_rows", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
 		require.NoError(t, err)
@@ -136,8 +132,7 @@ func TestPageAfter(t *testing.T) {
 	t.Run("concurrent reuse issues exactly one query", func(t *testing.T) {
 		executor, query, spec := r5PageQuery(t, "(1, 1), (2, 2), (3, 3)")
 		counted := &r5CountingExecutor{Executor: executor}
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
+		profile := rasql.SQLite335()
 		// WithEngineProfile re-attaches the compiler the decorator does not
 		// carry, so the counting wrapper can sit in the chain from outside.
 		profiled, err := rasql.WithEngineProfile(counted, profile)
@@ -225,15 +220,11 @@ func TestPageAfter(t *testing.T) {
 		require.NoError(t, err)
 		_, err = database.ExecContext(t.Context(), `INSERT INTO transaction_page_rows (id) VALUES (1),(2),(3),(4),(5)`)
 		require.NoError(t, err)
-		db, err := rasql.New(database, dialect.SQLite())
+		db, err := rasql.Open(t.Context(), database, dialect.SQLite())
 		require.NoError(t, err)
-		txDB, err := db.Begin(t.Context(), nil)
+		executor, err := db.Begin(t.Context(), nil)
 		require.NoError(t, err)
-		defer func() { _ = txDB.Rollback() }()
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
-		executor, err := rasql.AsExecutor(txDB, profile)
-		require.NoError(t, err)
+		defer func() { _ = executor.Rollback() }()
 		table, err := rasql.ReadTableOf[pageAcceptanceRow](schema.TableDef{Name: "transaction_page_rows", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
 		require.NoError(t, err)
 		relation, err := rasql.SourceOf(table, "p")
@@ -262,7 +253,7 @@ func TestPageAfter(t *testing.T) {
 			request.After = page.Next
 		}
 		require.Equal(t, []int64{1, 2, 3, 4, 5}, values)
-		require.NoError(t, txDB.Commit())
+		require.NoError(t, executor.Commit())
 	})
 }
 
@@ -299,11 +290,7 @@ func r5PageQuery(t *testing.T, values string) (rasql.Executor, rasql.Query[r5Pag
 	require.NoError(t, err)
 	_, err = database.Exec("INSERT INTO page_rows (id, rank) VALUES " + values)
 	require.NoError(t, err)
-	db, err := rasql.New(database, dialect.SQLite())
-	require.NoError(t, err)
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(db, profile)
+	executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 	require.NoError(t, err)
 	table, err := rasql.ReadTableOf[r5PageRow](schema.TableDef{Name: "page_rows", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}}, {Name: "rank", Type: schema.IntegerType{}, Nullable: true},
@@ -346,8 +333,7 @@ func (*r5LifecycleExecutor) Exec(context.Context, stmt.Statement) (sql.Result, e
 }
 func r5LifecycleExecutorWithRows(t *testing.T, rows *runtimeFakeRows) rasql.Executor {
 	t.Helper()
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
+	profile := rasql.SQLite335()
 	executor, err := rasql.WithEngineProfile(&r5LifecycleExecutor{rows: rows}, profile)
 	require.NoError(t, err)
 	return executor
@@ -428,8 +414,7 @@ func TestPageBinds(t *testing.T) {
 		spec, err := rasql.NewPageSpec([]rasql.PageKey[int64]{orderKey, idKey}, idKey)
 		require.NoError(t, err)
 		raw := &runtimeFakeExecutor{rows: [][]any{{int64(1)}, {int64(2)}}, dialect: dialect.SQLite()}
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
+		profile := rasql.SQLite335()
 		baseExecutor, err := rasql.WithEngineProfile(raw, profile)
 		require.NoError(t, err)
 		executor, err := rasql.WithCodecs(baseExecutor, registry)

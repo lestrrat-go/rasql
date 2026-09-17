@@ -75,8 +75,6 @@ func TestGeneratedColumnWriteAgainstLiveDatabases(t *testing.T) {
 			definition, err := inspector.Table(ctx, "live_write_measurements")
 			require.NoError(t, err, "inspect the table this subtest just created")
 
-			db, err := rasql.New(database, test.dialect)
-			require.NoError(t, err, "create rasql db")
 			type measurement struct {
 				ID         int64 `rasql:"id"`
 				Celsius    int64 `rasql:"celsius"`
@@ -85,13 +83,7 @@ func TestGeneratedColumnWriteAgainstLiveDatabases(t *testing.T) {
 			measurements, err := rasql.TableOf[measurement](definition)
 			require.NoError(t, err, "build a typed table from the inspected descriptor")
 
-			profileID := "postgresql-17"
-			if test.dialect.Name() == "mysql" {
-				profileID = "mysql-8.4"
-			}
-			profile, err := rasql.DiscoverEngineProfile(ctx, db, profileID)
-			require.NoError(t, err, "discover engine profile")
-			executor, err := rasql.AsExecutor(db, profile)
+			executor, err := rasql.Open(ctx, database, test.dialect)
 			require.NoError(t, err, "build executor")
 
 			id := query.TypedColumnOf[measurement, int64](measurements.Column("id"))
@@ -148,8 +140,6 @@ func TestIdentityColumnWriteAgainstLiveDatabases(t *testing.T) {
 		definition, err := inspector.Table(ctx, "live_write_members")
 		require.NoError(t, err, "inspect the table this test just created")
 
-		db, err := rasql.New(database, dialect.PostgreSQL())
-		require.NoError(t, err, "create rasql db")
 		type member struct {
 			ID   int64  `rasql:"id"`
 			Name string `rasql:"name"`
@@ -157,9 +147,7 @@ func TestIdentityColumnWriteAgainstLiveDatabases(t *testing.T) {
 		members, err := rasql.TableOf[member](definition)
 		require.NoError(t, err, "build a typed table from the inspected descriptor")
 
-		profile, err := rasql.DiscoverEngineProfile(ctx, db, "postgresql-17")
-		require.NoError(t, err, "discover engine profile")
-		executor, err := rasql.AsExecutor(db, profile)
+		executor, err := rasql.Open(ctx, database, dialect.PostgreSQL())
 		require.NoError(t, err, "build executor")
 
 		id := query.TypedColumnOf[member, int64](members.Column("id"))
@@ -230,8 +218,6 @@ func TestIdentityColumnWriteAgainstLiveDatabases(t *testing.T) {
 				definition, err := inspector.Table(ctx, "live_write_legacy_members")
 				require.NoError(t, err, "inspect the table this subtest just created")
 
-				db, err := rasql.New(database, test.dialect)
-				require.NoError(t, err, "create rasql db")
 				type member struct {
 					ID   int64  `rasql:"id"`
 					Name string `rasql:"name"`
@@ -239,13 +225,7 @@ func TestIdentityColumnWriteAgainstLiveDatabases(t *testing.T) {
 				members, err := rasql.TableOf[member](definition)
 				require.NoError(t, err, "build a typed table from the inspected descriptor")
 
-				profileID := "postgresql-17"
-				if test.dialect.Name() == "mysql" {
-					profileID = "mysql-8.4"
-				}
-				profile, err := rasql.DiscoverEngineProfile(ctx, db, profileID)
-				require.NoError(t, err, "discover engine profile")
-				executor, err := rasql.AsExecutor(db, profile)
+				executor, err := rasql.Open(ctx, database, test.dialect)
 				require.NoError(t, err, "build executor")
 
 				id := query.TypedColumnOf[member, int64](members.Column("id"))

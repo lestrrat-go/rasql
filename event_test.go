@@ -179,12 +179,9 @@ func TestEventObserver(t *testing.T) {
 		database, mock, err := sqlmock.New()
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, database.Close()); require.NoError(t, mock.ExpectationsWereMet()) })
-		db, err := rasql.New(database, dialect.SQLite())
+		db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 		require.NoError(t, err)
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
-		executor, err := rasql.AsExecutor(db, profile)
-		require.NoError(t, err)
+		var executor rasql.Executor = db
 		var terminal rasql.Event
 		executor, err = rasql.WithEventObservers(executor, rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), rasql.EventObserverFunc(func(ctx context.Context, event rasql.Event) (context.Context, rasql.EventCompletion) {
 			return ctx, rasql.EventCompletionFunc(func(_ context.Context, event rasql.Event) error {
@@ -215,11 +212,7 @@ func sqliteExecutor(t *testing.T) rasql.Executor {
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	_, err = database.ExecContext(t.Context(), "CREATE TABLE values_table (value INTEGER)")
 	require.NoError(t, err)
-	db, err := rasql.New(database, dialect.SQLite())
-	require.NoError(t, err)
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(db, profile)
+	executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 	require.NoError(t, err)
 	return executor
 }

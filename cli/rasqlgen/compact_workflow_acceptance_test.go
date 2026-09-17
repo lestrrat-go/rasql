@@ -169,11 +169,7 @@ func TestGeneratedCompactQueryExecutes(t *testing.T) {
 	if err != nil { t.Fatal(err) }
 	defer db.Close()
 	if _, err = db.ExecContext(t.Context(), "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL); INSERT INTO users VALUES (7, 'ada@example.test')"); err != nil { t.Fatal(err) }
-	rdb, err := rasql.New(db, dialect.SQLite())
-	if err != nil { t.Fatal(err) }
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 1)
-	if err != nil { t.Fatal(err) }
-	executor, err := rasql.AsExecutor(rdb, profile)
+	executor, err := rasql.Open(t.Context(), db, dialect.SQLite())
 	if err != nil { t.Fatal(err) }
 	query, err := store.UserByID(7)
 	if err != nil { t.Fatal(err) }

@@ -87,12 +87,11 @@ func runCanonicalWorkloads(t *testing.T, engine Engine, database *sql.DB, rawRoo
 			require.NoError(t, resetConformanceDatabase(t.Context(), database, engine.Name))
 			require.NoError(t, validateDatabaseSeedIdentity(t.Context(), database, engine.Name, signatureDocument))
 			invocations, events := &InvocationRecorder{}, &EventRecorder{}
-			profile, err := rasql.DiscoverEngineProfile(t.Context(), rawRoot, engine.ProfileID)
+			profile, err := engine.Profile()
 			require.NoError(t, err)
 			observedRoot, err := rawRoot.WithInvocationObservers(rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), invocations.Observer())
 			require.NoError(t, err)
-			executor, err := rasql.AsExecutor(observedRoot, profile)
-			require.NoError(t, err)
+			var executor rasql.Executor = observedRoot
 			executor, err = rasql.WithEventObservers(executor, rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), events.Observer())
 			require.NoError(t, err)
 			// Profile discovery uses the same observer chain. Keep setup traffic out of workload evidence.
@@ -177,7 +176,7 @@ func runCanonicalWorkloads(t *testing.T, engine Engine, database *sql.DB, rawRoo
 		})
 	}
 	start := timeNow()
-	_, profileErr := rasql.EngineProfileFromVersion(engine.ProfileID, 999, 0, 0)
+	_, profileErr := engineprofile.Builtin(engine.ProfileID, engineprofile.Version{Known: true, Major: 999})
 	if !errors.Is(profileErr, engineprofile.ErrUnsupportedVersion) {
 		t.Fatalf("unsupported version %q returned %v", engine.ProfileID, profileErr)
 	}

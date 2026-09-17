@@ -33,17 +33,8 @@ func benchmarkConformanceDatabase(b *testing.B) (*sql.DB, rasql.Executor, rasql.
 		_ = database.Close()
 		b.Fatal(err)
 	}
-	db, err := rasql.New(database, dialect.SQLite())
-	if err != nil {
-		_ = database.Close()
-		b.Fatal(err)
-	}
 	b.Cleanup(func() { _ = database.Close() })
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	if err != nil {
-		b.Fatal(err)
-	}
-	executor, err := rasql.AsExecutor(db, profile)
+	executor, err := rasql.Open(b.Context(), database, dialect.SQLite())
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -177,15 +168,7 @@ func benchmarkSingleSemantic(t testing.TB, database *sql.DB) {
 
 func benchmarkConformanceDatabaseFromDB(t testing.TB, database *sql.DB) (*sql.DB, rasql.Executor, rasql.Query[benchmarkProject]) {
 	t.Helper()
-	db, err := rasql.New(database, dialect.SQLite())
-	if err != nil {
-		t.Fatal(err)
-	}
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	executor, err := rasql.AsExecutor(db, profile)
+	executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 	if err != nil {
 		t.Fatal(err)
 	}

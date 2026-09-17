@@ -17,7 +17,7 @@ func TestSQLiteAutoincrementCreateTableAndNoReuse(t *testing.T) {
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite())
 	require.NoError(t, err)
 	table, err := rasql.TableOf[autoincrementRow](schema.TableDef{
 		Name:       "items",

@@ -67,9 +67,8 @@ func TestConsumer(t *testing.T) {
   if _, err = db.Exec("CREATE TABLE users (id INTEGER, name TEXT)"); err != nil { t.Fatal(err) }
   if _, err = db.Exec("INSERT INTO users VALUES (1, NULL), (2, 'two'), (3, 'three')"); err != nil { t.Fatal(err) }
   if _, err = db.Exec("CREATE TABLE payments (amount INTEGER, note TEXT)"); err != nil { t.Fatal(err) }; if _, err = db.Exec("INSERT INTO payments VALUES (1, NULL), (2, 'two')"); err != nil { t.Fatal(err) }
-  rdb, err := rasql.New(db, dialect.SQLite()); if err != nil { t.Fatal(err) }
-  profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 1); if err != nil { t.Fatal(err) }
-  executor, err := rasql.AsExecutor(rdb, profile); if err != nil { t.Fatal(err) }
+  rdb, err := rasql.Open(t.Context(), db, dialect.SQLite()); if err != nil { t.Fatal(err) }
+  executor := rasql.Executor(rdb)
   enc, dec := 0, 0; registry, err := rasql.NewCodecRegistry(map[rasql.CodecID]rasql.ValueCodec{"money": moneyCodec{enc: &enc, dec: &dec}}); if err != nil { t.Fatal(err) }; executor, err = rasql.WithCodecs(executor, registry); if err != nil { t.Fatal(err) }
   q, err := Find(1); if err != nil { t.Fatal(err) }
   rows, err := rasql.All(t.Context(), executor, q); if err != nil || len(rows) != 2 { t.Fatalf("many 2: %#v %v", rows, err) }

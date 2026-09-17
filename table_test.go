@@ -437,7 +437,7 @@ func TestTableCapabilities(t *testing.T) {
 		database, mock, err := sqlmock.New()
 		require.NoError(t, err)
 		t.Cleanup(func() { mock.ExpectClose(); require.NoError(t, database.Close()) })
-		db, err := rasql.New(database, dialect.SQLite())
+		db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 		require.NoError(t, err)
 		view := schema.TableDef{Name: "active_users", Kind: schema.ObjectView, Operations: schema.OperationRead, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}}
 		table := rasql.TableFrom[viewCapabilityRow](view)

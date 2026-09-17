@@ -18,6 +18,7 @@ import (
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/cli/rasqlgen"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/internal/gensum"
 	"github.com/lestrrat-go/rasql/internal/scratchmod"
 	"github.com/stretchr/testify/require"
@@ -71,7 +72,7 @@ func TestCompileRenderProfiles(t *testing.T) {
 			digest, err := PortableSignatureDigestChecked()
 			require.NoError(t, err)
 			require.Equal(t, digest, manifest.PortableSignatureDigest)
-			profile, err := rasql.EngineProfileFromVersion(tc.id, tc.major, tc.minor, 0)
+			profile, err := builtinProfileByID(tc.id)
 			require.NoError(t, err)
 			require.Equal(t, tc.id, profile.ID())
 			require.Equal(t, tc.maxBind, profile.Limits().MaxBindParameters)
@@ -138,6 +139,12 @@ func generatedCardinalityProfileTest(tc profileCase, modulePath string) string {
 	if tc.engine == "mysql" {
 		dialectName = "MySQL"
 	}
+	profileFuncName := map[string]string{
+		"postgresql-16": "PostgreSQL16",
+		"postgresql-17": "PostgreSQL17",
+		"mysql-8.4":     "MySQL84",
+		"sqlite-3.35":   "SQLite335",
+	}[tc.id]
 	querySQL := "SELECT id, project_id, assignee_id, title, is_open, due_on, created_at\nFROM tasks\nWHERE project_id = ?\n  AND is_open = ?\n  AND due_on IS NOT NULL\n  AND due_on < ?\nORDER BY id\n"
 	if tc.engine == "postgresql" {
 		querySQL = "SELECT id, project_id, assignee_id, title, is_open, due_on, created_at\nFROM tasks\nWHERE project_id = $1\n  AND is_open = $2\n  AND due_on IS NOT NULL\n  AND due_on < $3\nORDER BY id\n"
@@ -173,11 +180,7 @@ func TestGeneratedCardinalityProfile(t *testing.T) {
 	}}
 	db := openRecordingDB(state)
 	defer db.Close()
-	raw, err := rasql.New(db, dialect.%s())
-	if err != nil { t.Fatal(err) }
-	profile, err := rasql.EngineProfileFromVersion("%s", %d, %d, 0)
-	if err != nil { t.Fatal(err) }
-	executor, err := rasql.AsExecutor(raw, profile)
+	executor, err := rasql.Open(t.Context(), db, dialect.%s(), rasql.WithProfile(rasql.%s()))
 	if err != nil { t.Fatal(err) }
 	one, err := store.OverdueTask(1, true, cutoff); if err != nil { t.Fatal(err) }
 	assertSchema(t, one.Schema())
@@ -229,7 +232,7 @@ func assertProfileRow(t *testing.T, row any, id int64) {
 	if value.FieldByName("IsOpen").Interface() != true || !reflect.DeepEqual(value.FieldByName("DueOn").Interface(), rasql.Nullable[time.Time]{Value: wantDue, Valid: true}) { t.Fatalf("row due = %%#v", row) }
 	if value.FieldByName("CreatedAt").Interface() != time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC) { t.Fatalf("row created = %%#v", row) }
 }
-`, modulePath, querySQL, dialectName, tc.id, tc.major, tc.minor, querySQL)
+`, modulePath, querySQL, dialectName, profileFuncName, querySQL)
 }
 
 func readProfileManifest(t *testing.T, engine string) profileManifest {
@@ -588,6 +591,12 @@ func generatedProfileTest(tc profileCase, modulePath string) string {
 	if tc.engine == "mysql" {
 		dialectName = "MySQL"
 	}
+	profileFuncName := map[string]string{
+		"postgresql-16": "PostgreSQL16",
+		"postgresql-17": "PostgreSQL17",
+		"mysql-8.4":     "MySQL84",
+		"sqlite-3.35":   "SQLite335",
+	}[tc.id]
 	return fmt.Sprintf(`package conformance
 
 import (
@@ -639,11 +648,7 @@ func TestGeneratedProfile(t *testing.T) {
 	state := &recordingDriverState{strict: true, responses: responses}
 	database := openRecordingDB(state)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	raw, err := rasql.New(database, dialect.%s())
-	require.NoError(t, err)
-	profile, err := rasql.EngineProfileFromVersion(%q, %d, %d, 0)
-	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(raw, profile)
+	executor, err := rasql.Open(t.Context(), database, dialect.%s(), rasql.WithProfile(rasql.%s()))
 	require.NoError(t, err)
 	projects, err := store.Projects().Source("p")
 	require.NoError(t, err)
@@ -763,12 +768,12 @@ func TestGeneratedProfile(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(os.Getenv("RASQL_PROFILE_RECORDS"), append(data, '\n'), 0o600))
 }
-`, modulePath, tc.returning, dialectName, tc.id, tc.major, tc.minor, tc.returning, tc.returning)
+`, modulePath, tc.returning, dialectName, profileFuncName, tc.returning, tc.returning)
 }
 
 func TestUnsupportedVersionBeforeSQL(t *testing.T) {
 	for _, id := range []string{"postgresql-16", "postgresql-17", "mysql-8.4", "sqlite-3.35"} {
-		_, err := rasql.EngineProfileFromVersion(id, 99, 0, 0)
+		_, err := engineprofile.Builtin(id, engineprofile.Version{Known: true, Major: 99})
 		require.Error(t, err, id)
 	}
 }

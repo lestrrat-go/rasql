@@ -127,7 +127,7 @@ func TestExecMutation(t *testing.T) {
 
 		hookErr := errors.New("export failed")
 		hook := rasql.HookFunc{AfterFunc: func(context.Context, rasql.Operation, error) error { return hookErr }}
-		db, err := rasql.New(database, dialect.SQLite(), hook)
+		db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 		require.NoError(t, err)
 
 		table, err := query.NewTableRef(schema.TableDef{
@@ -139,9 +139,7 @@ func TestExecMutation(t *testing.T) {
 		require.NoError(t, err)
 		mock.ExpectExec("INSERT INTO").WithArgs("ada@example.com").WillReturnResult(sqlmock.NewResult(1, 1))
 
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
-		executor, err := rasql.AsExecutor(db, profile)
+		executor, err := db.WithHooks(hook)
 		require.NoError(t, err)
 		plan, err := rasql.NewStatementPlan(insert)
 		require.NoError(t, err)
@@ -202,20 +200,16 @@ func TestUpdateDefault(t *testing.T) {
 		for _, tc := range []struct {
 			name    string
 			dialect dialect.Dialect
-			profile string
-			major   int
-			minor   int
+			profile rasql.EngineProfile
 			want    string
 			fails   bool
 		}{
-			{name: "postgresql", dialect: dialect.PostgreSQL(), profile: "postgresql-17", major: 17, want: "DEFAULT"},
-			{name: "mysql", dialect: dialect.MySQL(), profile: "mysql-8.4", major: 8, minor: 4, want: "DEFAULT"},
-			{name: "sqlite", dialect: dialect.SQLite(), profile: "sqlite-3.35", major: 3, minor: 35, fails: true},
+			{name: "postgresql", dialect: dialect.PostgreSQL(), profile: rasql.PostgreSQL17(), want: "DEFAULT"},
+			{name: "mysql", dialect: dialect.MySQL(), profile: rasql.MySQL84(), want: "DEFAULT"},
+			{name: "sqlite", dialect: dialect.SQLite(), profile: rasql.SQLite335(), fails: true},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
-				profile, err := rasql.EngineProfileFromVersion(tc.profile, tc.major, tc.minor, 0)
-				require.NoError(t, err)
-				compiler, err := profile.Compiler(tc.dialect)
+				compiler, err := tc.profile.Compiler(tc.dialect)
 				require.NoError(t, err)
 				rendered, err := compiler.Mutation(plan)
 				if tc.fails {
@@ -233,11 +227,7 @@ func TestUpdateDefault(t *testing.T) {
 		database, err := sql.Open("sqlite", ":memory:")
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = database.Close() })
-		db, err := rasql.New(database, dialect.SQLite())
-		require.NoError(t, err)
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
-		executor, err := rasql.AsExecutor(db, profile)
+		executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 		require.NoError(t, err)
 		table, id, name := g5MutationTable(t)
 		plan, err := rasql.NewPatchPlan(table, rasql.EqualValue(id.Expr(), int64(1)), rasql.DefaultField(name))
@@ -300,8 +290,7 @@ func TestUpdateDefault(t *testing.T) {
 // only that lowering the plan succeeds or reports an error.
 func mutationCompiler(t *testing.T) rasql.Compiler {
 	t.Helper()
-	profile, err := rasql.EngineProfileFromVersion("postgresql-17", 17, 0, 0)
-	require.NoError(t, err)
+	profile := rasql.PostgreSQL17()
 	compiler, err := profile.Compiler(dialect.PostgreSQL())
 	require.NoError(t, err)
 	return compiler

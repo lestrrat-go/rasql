@@ -384,11 +384,9 @@ func TestSourceMismatchMatrix(t *testing.T) {
 		if _, err = sqlDB.ExecContext(context.Background(), statement); err != nil { t.Fatal(err) }
 	}
 	var statements []string
-	db, err := rasql.New(sqlDB, dialect.SQLite(), rasql.HookFunc{BeforeFunc: func(_ context.Context, operation rasql.Operation) error { statements = append(statements, operation.SQL()); return nil }})
+	db, err := rasql.Open(context.Background(), sqlDB, dialect.SQLite())
 	if err != nil { t.Fatal(err) }
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 1)
-	if err != nil { t.Fatal(err) }
-	executor, err := rasql.AsExecutor(db, profile)
+	executor, err := db.WithHooks(rasql.HookFunc{BeforeFunc: func(_ context.Context, operation rasql.Operation) error { statements = append(statements, operation.SQL()); return nil }})
 	if err != nil { t.Fatal(err) }
 	values, err := rasql.LoadGraph(context.Background(), executor, throughPlan)
 	if err != nil || len(values) != 1 || !values[0].Roles.Loaded || len(values[0].Roles.Values) != 1 || values[0].Roles.Values[0].ID != 9 { t.Fatalf("valid junction alias values=%#v err=%v", values, err) }

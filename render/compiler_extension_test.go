@@ -538,8 +538,7 @@ func TestCompilerExtensionExecutesCanonicalSelect(t *testing.T) {
 		`INSERT INTO users (email) VALUES ('a@example.com'), ('b@example.com'), ('c@example.com')`)
 	require.NoError(t, err)
 	compiler := &sqlitePaginationCompiler{}
-	db, err := rasql.New(database, compilerDialect{Dialect: dialect.SQLite(), compiler: compiler})
-	require.NoError(t, err)
+	d := compilerDialect{Dialect: dialect.SQLite(), compiler: compiler}
 	type user struct {
 		Email string `rasql:"email"`
 	}
@@ -562,9 +561,7 @@ func TestCompilerExtensionExecutesCanonicalSelect(t *testing.T) {
 	require.NoError(t, err)
 	statement, err := rasql.Select(source.Source(), projection).OrderBy(rasql.AscExpr(email.Expr())).Limit(2)
 	require.NoError(t, err)
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(db, profile)
+	executor, err := rasql.Open(t.Context(), database, d)
 	require.NoError(t, err)
 	typedRows, err := rasql.Rows(t.Context(), executor, statement)
 	require.NoError(t, err)

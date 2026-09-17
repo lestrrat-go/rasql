@@ -110,8 +110,9 @@ them.
 
 ## Start the service
 
-The process opens a SQL handle, discovers the retained PostgreSQL 17 profile,
-wraps it as an executor, and passes that executor to the repository.
+The process opens a SQL handle, asks the server its own PostgreSQL version to
+resolve the matching engine profile, and passes the resulting executor to the
+repository.
 
 <!-- INCLUDE(sample/taskboard/cmd/taskboard/main.go#open_database) -->
 ```go
@@ -122,18 +123,12 @@ if err != nil {
 database := stdlib.OpenDB(*config)
 defer func() { _ = database.Close() }()
 
-// A rasql.DB pairs the handle with the dialect used to render SQL.
-db, err := rasql.New(database, dialect.PostgreSQL())
+// Open pairs the handle with the dialect used to render SQL and asks the
+// server its own version, so it works against whatever supported
+// PostgreSQL release TASKBOARD_DSN actually points at.
+executor, err := rasql.Open(context.Background(), database, dialect.PostgreSQL())
 if err != nil {
-	return fmt.Errorf("create the rasql db: %w", err)
-}
-profile, err := rasql.DiscoverEngineProfile(context.Background(), db, "postgresql-17")
-if err != nil {
-	return fmt.Errorf("discover PostgreSQL engine profile: %w", err)
-}
-executor, err := rasql.AsExecutor(db, profile)
-if err != nil {
-	return fmt.Errorf("create the rasql executor: %w", err)
+	return fmt.Errorf("open the rasql database: %w", err)
 }
 ```
 source: [sample/taskboard/cmd/taskboard/main.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/cmd/taskboard/main.go)

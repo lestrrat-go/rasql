@@ -73,8 +73,7 @@ func TestNilCodecRegistryIsAnError(t *testing.T) {
 	idKey := rasql.AscKey[int64](id.Expr(), func(value int64) int64 { return value })
 	spec, err := rasql.NewPageSpec([]rasql.PageKey[int64]{orderKey, idKey}, idKey)
 	require.NoError(t, err)
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
+	profile := rasql.SQLite335()
 	raw := &runtimeFakeExecutor{rows: [][]any{{int64(1)}}, dialect: dialect.SQLite()}
 	executor, err := rasql.WithEngineProfile(nilCodecScopedExecutor{raw}, profile)
 	require.NoError(t, err)

@@ -365,35 +365,22 @@ func taskboardOpen(t testing.TB) *taskboardDatabase {
 		_ = database.Close()
 		t.Fatal(err)
 	}
-	db, err := rasql.New(database, dialect.SQLite())
+	profile := rasql.SQLite335()
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(profile))
 	if err != nil {
 		_ = database.Close()
 		t.Fatal(err)
 	}
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	if err != nil {
-		_ = database.Close()
-		t.Fatal(err)
-	}
-	executor, err := rasql.AsExecutor(db, profile)
-	if err != nil {
-		_ = database.Close()
-		t.Fatal(err)
-	}
-	result := &taskboardDatabase{sql: database, db: db, profile: profile, executor: executor}
+	result := &taskboardDatabase{sql: database, db: db, profile: profile, executor: db}
 	t.Cleanup(func() { _ = database.Close() })
 	return result
 }
 
 func taskboardObserved(t testing.TB, database *taskboardDatabase, recorder *conformance.InvocationRecorder) rasql.Executor {
 	t.Helper()
-	observed, err := database.db.WithInvocationObservers(
+	executor, err := database.db.WithInvocationObservers(
 		rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), recorder.Observer(),
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	executor, err := rasql.AsExecutor(observed, database.profile)
 	if err != nil {
 		t.Fatal(err)
 	}

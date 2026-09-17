@@ -101,22 +101,15 @@ func Example_rasql_transaction() {
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
-	// A DB couples a database handle with the dialect used to render SQL.
-	db, err := rasql.New(database, dialect.SQLite())
-	if err != nil {
-		fmt.Printf("failed to create rasql db: %s\n", err)
-		return
-	}
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 40, 0)
-	if err != nil {
-		fmt.Printf("failed to describe engine profile: %s\n", err)
-		return
-	}
-	executor, err := rasql.AsExecutor(db, profile)
+	// Open pairs the handle with the dialect used to render SQL and asks the
+	// server its version, resolving the engine profile a DB needs to run
+	// queries and mutations.
+	db, err := rasql.Open(ctx, database, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
 	}
+	executor := db
 	users := store.Users()
 	// Create the table before any transaction starts.
 	if err := rasql.CreateTable(ctx, db, users); err != nil {
@@ -125,9 +118,9 @@ func Example_rasql_transaction() {
 	}
 
 	// db.Begin starts a transaction on the same handle and returns another DB
-	// bound to it. There is no separate transaction type to carry around: tx is
-	// a DB, so an executor built from it takes exactly the plans and queries an
-	// executor built from db takes.
+	// bound to it, carrying the engine profile db already resolved. There is no
+	// separate transaction type to carry around: tx is a DB, and it already
+	// takes exactly the plans and queries executor takes.
 	tx, err := db.Begin(ctx, nil)
 	if err != nil {
 		fmt.Printf("failed to begin transaction: %s\n", err)
@@ -136,11 +129,7 @@ func Example_rasql_transaction() {
 	// Rollback reports nothing once Commit has already succeeded, which is what
 	// makes this bare defer correct rather than an error every caller discards.
 	defer func() { _ = tx.Rollback() }()
-	txExecutor, err := rasql.AsExecutor(tx, profile)
-	if err != nil {
-		fmt.Printf("failed to create transaction executor: %s\n", err)
-		return
-	}
+	txExecutor := tx
 
 	// SQL: INSERT INTO users (id, email) VALUES (?, ?) (arguments: 1, "ada@example.com")
 	if _, err := rasql.ExecMutation(ctx, txExecutor, store.NewUsersCreate().ID(1).Email("ada@example.com").FirstName("First").LastName("Last").Plan()); err != nil {

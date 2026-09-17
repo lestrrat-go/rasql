@@ -16,9 +16,7 @@ func Example_mutationBatch() {
 	mock.ExpectExec(`INSERT INTO "users" \("email", "first_name", "last_name"\) VALUES \(\?, \?, \?\), \(\?, \?, \?\)`).
 		WithArgs("ada@example.com", "Ada", "Lovelace", "grace@example.com", "Grace", "Hopper").
 		WillReturnResult(sqlmock.NewResult(1, 2))
-	db, _ := rasql.New(database, dialect.SQLite())
-	profile, _ := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 40, 0)
-	executor, _ := rasql.AsExecutor(db, profile)
+	executor, _ := rasql.Open(context.Background(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	// BEGIN(mutationBatch)
 	first := store.NewUsersCreate().Email("ada@example.com").FirstName("Ada").LastName("Lovelace").Plan()
 	second := store.NewUsersCreate().Email("grace@example.com").FirstName("Grace").LastName("Hopper").Plan()

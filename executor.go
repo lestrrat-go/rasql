@@ -179,27 +179,6 @@ func codecsFrom(inner Executor) CodecRegistry {
 	return provider.Codecs()
 }
 
-// AsExecutor validates db and attaches profile's compiler to it, returning
-// the same DB as an Executor. A DB bound to a transaction gets a fresh busy
-// token, so a statement run on it while another is still in flight is
-// rejected rather than racing the same *sql.Tx.
-func AsExecutor(db DB, profile EngineProfile) (Executor, error) {
-	if err := db.Validate(); err != nil {
-		return nil, err
-	}
-	c, err := profile.queryCompiler(db.Dialect())
-	if err != nil {
-		return nil, err
-	}
-	db.profile = profile
-	db.compiler = c
-	db.busy = nil
-	if db.IsTransaction() {
-		db.busy = newExecutorBusy()
-	}
-	return db, nil
-}
-
 type profiledExecutor struct {
 	Executor
 	compiler *querycompile.Compiler

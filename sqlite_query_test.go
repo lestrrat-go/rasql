@@ -266,11 +266,7 @@ func TestSQLiteCorrelatedProjectionConstructorsDecode(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	database.SetMaxOpenConns(1)
-	db, err := rasql.New(database, dialect.SQLite())
-	require.NoError(t, err)
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(db, profile)
+	executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 	require.NoError(t, err)
 
 	users, err := rasql.TableOf[apiQ7User](schema.TableDef{
@@ -285,8 +281,8 @@ func TestSQLiteCorrelatedProjectionConstructorsDecode(t *testing.T) {
 		}, PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	require.NoError(t, rasql.CreateTable(t.Context(), db, users))
-	require.NoError(t, rasql.CreateTable(t.Context(), db, orders))
+	require.NoError(t, rasql.CreateTable(t.Context(), executor, users))
+	require.NoError(t, rasql.CreateTable(t.Context(), executor, orders))
 
 	usersSource, err := rasql.SourceOf(users, "")
 	require.NoError(t, err)
@@ -401,11 +397,7 @@ func countUsersQuery(t *testing.T) (rasql.Query[countUser], rasql.Executor) {
 	require.NoError(t, err)
 	_, err = database.ExecContext(t.Context(), `INSERT INTO users VALUES (1, 1, 'a'), (2, 1, NULL), (3, 1, NULL), (4, 2, 'b')`)
 	require.NoError(t, err)
-	db, err := rasql.New(database, dialect.SQLite())
-	require.NoError(t, err)
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(db, profile)
+	executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 	require.NoError(t, err)
 	table, err := rasql.ReadTableOf[countUser](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},

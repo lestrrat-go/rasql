@@ -154,11 +154,7 @@ func TestGeneratedCreateAndPatchMatrix(t *testing.T) {
 	defer func() { _ = sqlDB.Close() }()
 	sqlDB.SetMaxOpenConns(1)
 	if _, err := sqlDB.ExecContext(ctx, "CREATE TABLE items (\n\t\tid INTEGER PRIMARY KEY AUTOINCREMENT,\n\t\trequired TEXT NOT NULL,\n\t\tcount INTEGER NOT NULL DEFAULT 7,\n\t\tenabled INTEGER NOT NULL DEFAULT 0,\n\t\tlabel TEXT,\n\t\tnote TEXT\n\t)"); err != nil { t.Fatal(err) }
-	raw, err := rasql.New(sqlDB, dialect.SQLite())
-	if err != nil { t.Fatal(err) }
-	profile, err := rasql.DiscoverEngineProfile(ctx, raw, "sqlite-3.35")
-	if err != nil { t.Fatal(err) }
-	executor, err := rasql.AsExecutor(raw, profile)
+	executor, err := rasql.Open(ctx, sqlDB, dialect.SQLite())
 	if err != nil { t.Fatal(err) }
 
 	source, err := generated.Items().Source("")

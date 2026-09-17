@@ -20,7 +20,7 @@ func TestAtomicOwnsTransactionAndNestedSavepoint(t *testing.T) {
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite())
 	require.NoError(t, err)
 	_, err = db.Exec(t.Context(), stmt.New("CREATE TABLE values_table (value INTEGER)"))
 	require.NoError(t, err)
@@ -51,7 +51,7 @@ func TestAtomicNestedNamesAreQuotedAndDistinct(t *testing.T) {
 		require.NoError(t, database.Close())
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	mock.ExpectBegin()
 	var statements []string
@@ -91,7 +91,7 @@ func TestAtomicSavepointChildRejectsOuterFinalization(t *testing.T) {
 	mock.ExpectExec(`SAVEPOINT "rasql_sp_[a-z0-9]+"`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`RELEASE SAVEPOINT "rasql_sp_[a-z0-9]+"`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	err = db.Atomic(t.Context(), nil, func(ctx context.Context, tx rasql.DB) error {
 		return tx.Atomic(ctx, nil, func(_ context.Context, scoped rasql.DB) error {
@@ -116,7 +116,7 @@ func TestAtomicCleanupUsesDetachedContextAfterCancellation(t *testing.T) {
 	mock.ExpectExec(`ROLLBACK TO SAVEPOINT "rasql_sp_[a-z0-9]+"`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`RELEASE SAVEPOINT "rasql_sp_[a-z0-9]+"`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectRollback()
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	tx, err := db.Begin(t.Context(), nil)
 	require.NoError(t, err)
@@ -159,7 +159,7 @@ func TestAtomicSavepointLifecycleObserversAreInherited(t *testing.T) {
 	mock.ExpectExec(`SAVEPOINT "rasql_sp_[a-z0-9]+"`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`RELEASE SAVEPOINT "rasql_sp_[a-z0-9]+"`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	var statements []string
 	db, err = db.WithInvocationObservers(rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), rasql.InvocationObserverFunc(func(ctx context.Context, _ rasql.Operation) (context.Context, rasql.CompletionObserver) {
@@ -187,7 +187,7 @@ func TestAtomicReleaseAndOuterRollbackErrorsRemainReachable(t *testing.T) {
 		require.NoError(t, database.Close())
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	mock.ExpectBegin()
 	mock.ExpectExec(`SAVEPOINT "rasql_sp_[a-z0-9]+"`).WillReturnResult(sqlmock.NewResult(0, 0))
@@ -222,7 +222,7 @@ func TestAtomicOuterPanicCleanupWrapsRollbackFailure(t *testing.T) {
 		require.NoError(t, database.Close())
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	mock.ExpectBegin()
 	rollbackErr := errors.New("outer rollback failed")
@@ -251,7 +251,16 @@ func TestAtomicRejectsNestedOptionsAndUnsupportedDialectBeforeCallback(t *testin
 	})
 	mock.ExpectBegin()
 	mock.ExpectRollback()
-	db, err := rasql.New(database, unsupportedSavepointDialect{Dialect: dialect.SQLite()})
+	// The pinned profile mirrors SQLite335's own capabilities except
+	// Savepoints, matching what unsupportedSavepointDialect actually answers
+	// for every capability. Open validates that the dialect and the profile
+	// agree, so a profile claiming a savepoint capability the dialect itself
+	// refuses would fail construction before ever reaching Atomic.
+	unsupportedCapabilities := rasql.SQLite335().Capabilities()
+	unsupportedCapabilities.Savepoints = false
+	unsupportedProfile, err := rasql.NewCustomEngineProfile("sqlite-no-savepoint", rasql.SQLite335().Version(), unsupportedCapabilities, rasql.SQLite335().Limits())
+	require.NoError(t, err)
+	db, err := rasql.Open(t.Context(), database, unsupportedSavepointDialect{Dialect: dialect.SQLite()}, rasql.WithProfile(unsupportedProfile))
 	require.NoError(t, err)
 	db, err = db.Begin(t.Context(), nil)
 	require.NoError(t, err)
@@ -262,7 +271,7 @@ func TestAtomicRejectsNestedOptionsAndUnsupportedDialectBeforeCallback(t *testin
 	require.NoError(t, db.Rollback())
 	mock.ExpectBegin()
 	mock.ExpectRollback()
-	tx, err := rasql.New(database, dialect.SQLite())
+	tx, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	tx, err = tx.Begin(t.Context(), nil)
 	require.NoError(t, err)
@@ -280,7 +289,7 @@ func TestAtomicJoinsCallbackAndBothCleanupErrors(t *testing.T) {
 		require.NoError(t, database.Close())
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	mock.ExpectBegin()
 	mock.ExpectExec(`SAVEPOINT "rasql_sp_[a-z0-9]+"`).WillReturnResult(sqlmock.NewResult(0, 0))
@@ -307,7 +316,7 @@ func TestAtomicPanicCleanupPreservesOriginalAndWrapsCleanupFailure(t *testing.T)
 		require.NoError(t, database.Close())
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	require.NoError(t, err)
 	mock.ExpectBegin()
 	mock.ExpectExec(`SAVEPOINT "rasql_sp_[a-z0-9]+"`).WillReturnResult(sqlmock.NewResult(0, 0))
@@ -358,3 +367,10 @@ func (d unsupportedSavepointDialect) Supports(capability dialect.Capability) boo
 	}
 	return d.Dialect.Supports(capability)
 }
+
+// Name reports a name distinct from "sqlite" so Open resolves this dialect
+// against a custom engine profile rather than the built-in SQLite one: the
+// built-in profile always claims Savepoints, which would make Open itself
+// reject the mismatch this dialect exists to exercise, before the callback
+// this test asserts never runs.
+func (unsupportedSavepointDialect) Name() string { return "sqlite-no-savepoint" }

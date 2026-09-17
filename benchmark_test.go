@@ -65,15 +65,7 @@ func benchmarkExecutor(b *testing.B) rasql.Executor {
 			b.Error(err)
 		}
 	})
-	db, err := rasql.New(database, dialect.SQLite())
-	if err != nil {
-		b.Fatal(err)
-	}
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	if err != nil {
-		b.Fatal(err)
-	}
-	executor, err := rasql.AsExecutor(db, profile)
+	executor, err := rasql.Open(b.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -393,7 +385,7 @@ func BenchmarkQueryRenderedBoundArgs(b *testing.B) {
 		}
 	})
 
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(b.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	if err != nil {
 		b.Fatal(err)
 	}

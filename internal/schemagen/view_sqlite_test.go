@@ -48,11 +48,7 @@ func TestGeneratedSQLiteViewCanBeRead(t *testing.T) {
 		"\tdb, err := sql.Open(\"sqlite\", `" + databasePath + "`)\n" +
 		"\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
 		"\tdefer db.Close()\n" +
-		"\traw, err := rasql.New(db, dialect.SQLite())\n" +
-		"\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
-		"\tprofile, err := rasql.DiscoverEngineProfile(ctx, raw, \"sqlite-3.35\")\n" +
-		"\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
-		"\texecutor, err := rasql.AsExecutor(raw, profile)\n" +
+		"\texecutor, err := rasql.Open(ctx, db, dialect.SQLite())\n" +
 		"\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
 		"\tcreatePlan, err := generated.NewUsersCreate().ID(1).Email(\"ada@example.com\").Plan()\n" +
 		"\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n" +

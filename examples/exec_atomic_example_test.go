@@ -21,7 +21,7 @@ func Example_execAtomic() {
 	}
 	defer func() { _ = database.Close() }()
 	database.SetMaxOpenConns(1)
-	db, err := rasql.New(database, dialect.SQLite())
+	db, err := rasql.Open(ctx, database, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to create database: %s\n", err)
 		return

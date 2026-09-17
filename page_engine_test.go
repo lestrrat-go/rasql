@@ -36,11 +36,7 @@ func TestPageAfterEngines(t *testing.T) {
 		t.Cleanup(func() { _, _ = database.ExecContext(t.Context(), "DROP TABLE "+tableName) })
 		_, err = database.ExecContext(t.Context(), "INSERT INTO "+tableName+" (id, rank) VALUES (1, 2), (2, NULL), (3, 1), (4, NULL), (5, 2), (6, 3)")
 		require.NoError(t, err)
-		db, err := rasql.New(database, dialect.PostgreSQL())
-		require.NoError(t, err)
-		profile, err := rasql.EngineProfileFromVersion("postgresql-17", 17, 0, 0)
-		require.NoError(t, err)
-		executor, err := rasql.AsExecutor(db, profile)
+		executor, err := rasql.Open(t.Context(), database, dialect.PostgreSQL())
 		require.NoError(t, err)
 		table, err := rasql.ReadTableOf[r5ComboRow](schema.TableDef{Name: tableName, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "rank", Type: schema.IntegerType{}, Nullable: true}}})
 		require.NoError(t, err)
@@ -99,11 +95,8 @@ func TestPageAfterEngines(t *testing.T) {
 		_, err := database.ExecContext(t.Context(), "CREATE TABLE "+tableName+" (id BIGINT NOT NULL, sort_value BIGINT NULL)")
 		require.NoError(t, err)
 		t.Cleanup(func() { _, _ = database.ExecContext(t.Context(), "DROP TABLE "+tableName) })
-		db, err := rasql.New(database, dialect.MySQL())
-		require.NoError(t, err)
-		profile, err := rasql.EngineProfileFromVersion("mysql-8.4", 8, 4, 0)
-		require.NoError(t, err)
-		base, err := rasql.AsExecutor(db, profile)
+		profile := rasql.MySQL84()
+		base, err := rasql.Open(t.Context(), database, dialect.MySQL(), rasql.WithProfile(profile))
 		require.NoError(t, err)
 		counted := &r5HandleCountingExecutor{Executor: base}
 		executor, err := rasql.WithEngineProfile(counted, profile)
@@ -143,13 +136,9 @@ func TestPageAfterEngines(t *testing.T) {
 		t.Cleanup(func() { _, _ = database.ExecContext(t.Context(), "DROP TABLE "+tableName) })
 		_, err = database.ExecContext(t.Context(), "INSERT INTO "+tableName+" (id) VALUES (1), (2), (3)")
 		require.NoError(t, err)
-		makeQuery := func(handle rasql.DB) (rasql.Executor, rasql.Query[r5LiveRow], rasql.PageSpec[r5LiveRow]) {
-			db, makeErr := rasql.New(handle.Handle(), dialect.PostgreSQL())
+		makeQuery := func(handle rasql.Handle) (rasql.Executor, rasql.Query[r5LiveRow], rasql.PageSpec[r5LiveRow]) {
+			executor, makeErr := rasql.Open(t.Context(), handle, dialect.PostgreSQL())
 			require.NoError(t, makeErr)
-			profile, profileErr := rasql.EngineProfileFromVersion("postgresql-17", 17, 0, 0)
-			require.NoError(t, profileErr)
-			executor, executorErr := rasql.AsExecutor(db, profile)
-			require.NoError(t, executorErr)
 			table, tableErr := rasql.ReadTableOf[r5LiveRow](schema.TableDef{Name: tableName, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
 			require.NoError(t, tableErr)
 			relation, relationErr := rasql.SourceOf(table, "p")
@@ -166,9 +155,7 @@ func TestPageAfterEngines(t *testing.T) {
 			require.NoError(t, specErr)
 			return executor, query, spec
 		}
-		db, err := rasql.New(database, dialect.PostgreSQL())
-		require.NoError(t, err)
-		executor, query, spec := makeQuery(db)
+		executor, query, spec := makeQuery(database)
 		first, err := rasql.PageAfter(t.Context(), executor, query, spec, rasql.PagePolicy{DefaultLimit: 1, MaxLimit: 2}, rasql.PageRequest{Limit: 1})
 		require.NoError(t, err)
 		require.Equal(t, int64(1), first.Values[0].ID)
@@ -200,10 +187,9 @@ func TestPageAfterEngines(t *testing.T) {
 			name    string
 			open    func(*testing.T) *sql.DB
 			dialect dialect.Dialect
-			profile string
 		}{
-			{name: "postgresql-17", open: dbtest.PostgreSQLDB, dialect: dialect.PostgreSQL(), profile: "postgresql-17"},
-			{name: "mysql-8.4", open: dbtest.MySQLDB, dialect: dialect.MySQL(), profile: "mysql-8.4"},
+			{name: "postgresql-17", open: dbtest.PostgreSQLDB, dialect: dialect.PostgreSQL()},
+			{name: "mysql-8.4", open: dbtest.MySQLDB, dialect: dialect.MySQL()},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				database := tc.open(t)
@@ -213,11 +199,7 @@ func TestPageAfterEngines(t *testing.T) {
 				t.Cleanup(func() { _, _ = database.ExecContext(t.Context(), "DROP TABLE "+tableName) })
 				_, err = database.ExecContext(t.Context(), "INSERT INTO "+tableName+" (id) VALUES (1),(2),(3),(4),(5)")
 				require.NoError(t, err)
-				db, err := rasql.New(database, tc.dialect)
-				require.NoError(t, err)
-				profile, err := rasql.EngineProfileFromVersion(tc.profile, map[string]int{"postgresql-17": 17, "mysql-8.4": 8}[tc.profile], map[string]int{"postgresql-17": 0, "mysql-8.4": 4}[tc.profile], 0)
-				require.NoError(t, err)
-				executor, err := rasql.AsExecutor(db, profile)
+				executor, err := rasql.Open(t.Context(), database, tc.dialect)
 				require.NoError(t, err)
 				table, err := rasql.ReadTableOf[r5LiveRow](schema.TableDef{Name: tableName, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
 				require.NoError(t, err)

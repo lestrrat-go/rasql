@@ -295,17 +295,8 @@ func Example_schema_qualified_table() {
 		return
 	}
 
-	db, err := rasql.New(database, dialect.SQLite())
-	if err != nil {
-		fmt.Printf("failed to create rasql db: %s\n", err)
-		return
-	}
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 40, 0)
-	if err != nil {
-		fmt.Printf("failed to describe engine profile: %s\n", err)
-		return
-	}
-	executor, err := rasql.AsExecutor(db, profile)
+	db, err := rasql.Open(ctx, database, dialect.SQLite())
+	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -512,17 +503,8 @@ func Example_schema_decimal_column() {
 	// An in-memory SQLite database is per connection, so keep this example on one.
 	database.SetMaxOpenConns(1)
 
-	db, err := rasql.New(database, dialect.SQLite())
-	if err != nil {
-		fmt.Printf("failed to create rasql db: %s\n", err)
-		return
-	}
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 40, 0)
-	if err != nil {
-		fmt.Printf("failed to describe engine profile: %s\n", err)
-		return
-	}
-	executor, err := rasql.AsExecutor(db, profile)
+	db, err := rasql.Open(ctx, database, dialect.SQLite())
+	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -965,7 +947,7 @@ func Example_inspect_sqlite_table_names() {
 source: [examples/inspect_sqlite_table_names_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/inspect_sqlite_table_names_example_test.go)
 <!-- END INCLUDE -->
 
-`inspect.New` takes the same kind of handle as `rasql.New`, plus the dialect that describes the database being read.
+`inspect.New` takes the same kind of handle as `rasql.Open`, plus the dialect that describes the database being read.
 The result is an ordinary descriptor, so you can validate it, compare it against a checked-in definition, or hand it to the generator.
 A PostgreSQL `NUMERIC(p,s)` or MySQL `DECIMAL(p,s)` column normalizes to `schema.DecimalType`, with `Precision` and `Scale` filled in from the catalog.
 On MySQL, a declaration carrying `UNSIGNED` sets `DecimalType.Unsigned`, and `ZEROFILL` sets `.ZeroFill` (see [Decimal UNSIGNED and ZEROFILL](#decimal-unsigned-and-zerofill)).

@@ -28,11 +28,32 @@ func (e Engine) Validate() error {
 	return nil
 }
 
+// Profile returns the built-in engine profile e names. It is the pinned
+// spec-level profile, not one discovered against a live server: every field
+// this package reads off it (Limits in particular) is a spec constant that
+// does not vary with the exact version a live server reports.
 func (e Engine) Profile() (rasql.EngineProfile, error) {
 	if err := e.Validate(); err != nil {
 		return rasql.EngineProfile{}, err
 	}
-	return rasql.EngineProfileFromVersion(e.ProfileID, int(e.Version.Major), int(e.Version.Minor), int(e.Version.Patch))
+	return builtinProfileByID(e.ProfileID)
+}
+
+// builtinProfileByID returns the built-in engine profile named id. See
+// Profile's doc comment for why a pinned, undiscovered profile is the right
+// value everywhere this package needs one.
+func builtinProfileByID(id string) (rasql.EngineProfile, error) {
+	switch id {
+	case "postgresql-16":
+		return rasql.PostgreSQL16(), nil
+	case "postgresql-17":
+		return rasql.PostgreSQL17(), nil
+	case "mysql-8.4":
+		return rasql.MySQL84(), nil
+	case "sqlite-3.35":
+		return rasql.SQLite335(), nil
+	}
+	return rasql.EngineProfile{}, fmt.Errorf("conformance: unknown profile %q", id)
 }
 
 func EngineByName(name string) (Engine, bool) {

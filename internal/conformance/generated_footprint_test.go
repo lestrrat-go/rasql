@@ -395,11 +395,7 @@ func main() {
 	db.SetMaxOpenConns(1)
 	if _, err = db.Exec("CREATE TABLE %s (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"); err != nil { panic(err) }
 	if _, err = db.Exec("INSERT INTO %s (id, name) VALUES (1, 'fixture')"); err != nil { panic(err) }
-	rdb, err := rasql.New(db, dialect.SQLite())
-	if err != nil { panic(err) }
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	if err != nil { panic(err) }
-	executor, err := rasql.AsExecutor(rdb, profile)
+	executor, err := rasql.Open(context.Background(), db, dialect.SQLite())
 	if err != nil { panic(err) }
 	source, err := generated.%s().Source("")
 	if err != nil { panic(err) }

@@ -307,15 +307,11 @@ func mtFixture(t *testing.T) (rasql.Executor, *mtCountingExecutor, rasql.Query[m
 	require.NoError(t, err)
 	_, err = database.Exec(`INSERT INTO mt_parents VALUES (1), (2); INSERT INTO mt_children VALUES (10, 1), (20, 1), (30, 1); INSERT INTO mt_junctions VALUES (1, 1, 10, 1), (2, 1, 10, 2), (3, 1, 20, 3), (4, 2, 10, 1), (5, 2, 20, 2);`)
 	require.NoError(t, err)
-	db, err := rasql.New(database, dialect.SQLite())
-	require.NoError(t, err)
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
-	base, err := rasql.AsExecutor(db, profile)
+	base, err := rasql.Open(t.Context(), database, dialect.SQLite())
 	require.NoError(t, err)
 	counter := &mtCountingExecutor{Executor: base}
 	// WithEngineProfile re-attaches the compiler the decorator does not carry.
-	executor, err := rasql.WithEngineProfile(counter, profile)
+	executor, err := rasql.WithEngineProfile(counter, rasql.SQLite335())
 	require.NoError(t, err)
 	parents := rasql.MustReadTableOf[mtParentRow](schema.TableDef{Name: "mt_parents", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}})
 	children := rasql.MustReadTableOf[mtChildRow](schema.TableDef{Name: "mt_children", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "active", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}})
@@ -469,14 +465,10 @@ CREATE TABLE r4_width_junctions (parent_id INTEGER NOT NULL, parent_tenant INTEG
 			require.NoError(t, err)
 		}
 	}
-	db, err := rasql.New(database, dialect.SQLite())
-	require.NoError(t, err)
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
-	base, err := rasql.AsExecutor(db, profile)
+	base, err := rasql.Open(t.Context(), database, dialect.SQLite())
 	require.NoError(t, err)
 	counter := &graphWidthExecutor{Executor: base}
-	executor, err := rasql.WithEngineProfile(counter, profile)
+	executor, err := rasql.WithEngineProfile(counter, rasql.SQLite335())
 	require.NoError(t, err)
 	parents, err := rasql.SourceOf(rasql.MustReadTableOf[graphWidthParentRow](schema.TableDef{
 		Name: "r4_width_parents", PrimaryKey: []string{"id"},
@@ -577,8 +569,7 @@ func graphWidthPlan(t *testing.T, fixture graphWidthFixture, parentWidth, childW
 // a wrapper sits in the chain from outside the package.
 func mtProfiled(t *testing.T, executor rasql.Executor) rasql.Executor {
 	t.Helper()
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
+	profile := rasql.SQLite335()
 	profiled, err := rasql.WithEngineProfile(executor, profile)
 	require.NoError(t, err)
 	return profiled

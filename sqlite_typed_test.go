@@ -36,11 +36,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 		})
 		database.SetMaxOpenConns(1)
 
-		db, err := rasql.New(database, dialect.SQLite())
-		require.NoError(t, err)
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
-		executor, err := rasql.AsExecutor(db, profile)
+		executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 		require.NoError(t, err)
 		events, err := rasql.TableOf[roundtripEvent](schema.TableDef{
 			Name: "events",
@@ -52,7 +48,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 			PrimaryKey: []string{"id"},
 		})
 		require.NoError(t, err)
-		require.NoError(t, rasql.CreateTable(t.Context(), db, events))
+		require.NoError(t, rasql.CreateTable(t.Context(), executor, events))
 
 		relation, err := rasql.SourceOf(events, "")
 		require.NoError(t, err)
@@ -108,11 +104,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 		})
 		database.SetMaxOpenConns(1)
 
-		db, err := rasql.New(database, dialect.SQLite())
-		require.NoError(t, err)
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
-		executor, err := rasql.AsExecutor(db, profile)
+		executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 		require.NoError(t, err)
 		records, err := rasql.TableOf[roundtripRecord](schema.TableDef{
 			Name: "records",
@@ -123,7 +115,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 			PrimaryKey: []string{"id"},
 		})
 		require.NoError(t, err)
-		require.NoError(t, rasql.CreateTable(t.Context(), db, records))
+		require.NoError(t, rasql.CreateTable(t.Context(), executor, records))
 		_, err = database.ExecContext(t.Context(), `INSERT INTO records (id, note) VALUES (1, NULL)`)
 		require.NoError(t, err)
 
@@ -159,11 +151,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 		})
 		database.SetMaxOpenConns(1)
 
-		db, err := rasql.New(database, dialect.SQLite())
-		require.NoError(t, err)
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
-		executor, err := rasql.AsExecutor(db, profile)
+		executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 		require.NoError(t, err)
 		users, err := rasql.TableOf[roundtripUser](schema.TableDef{
 			Name: "users",
@@ -174,7 +162,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 			PrimaryKey: []string{"id"},
 		})
 		require.NoError(t, err)
-		require.NoError(t, rasql.CreateTable(t.Context(), db, users))
+		require.NoError(t, rasql.CreateTable(t.Context(), executor, users))
 
 		relation, err := rasql.SourceOf(users, "")
 		require.NoError(t, err)
@@ -225,11 +213,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 		})
 		database.SetMaxOpenConns(1)
 
-		db, err := rasql.New(database, dialect.SQLite())
-		require.NoError(t, err)
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
-		executor, err := rasql.AsExecutor(db, profile)
+		executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 		require.NoError(t, err)
 		users, err := rasql.TableOf[roundtripUser](schema.TableDef{
 			Name: "users",
@@ -240,7 +224,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 			PrimaryKey: []string{"id"},
 		})
 		require.NoError(t, err)
-		require.NoError(t, rasql.CreateTable(t.Context(), db, users))
+		require.NoError(t, rasql.CreateTable(t.Context(), executor, users))
 
 		usersRelation, err := rasql.SourceOf(users, "")
 		require.NoError(t, err)
@@ -264,7 +248,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 			PrimaryKey: []string{"id"},
 		})
 		require.NoError(t, err)
-		require.NoError(t, rasql.CreateTable(t.Context(), db, orders))
+		require.NoError(t, rasql.CreateTable(t.Context(), executor, orders))
 		ordersRelation, err := rasql.SourceOf(orders, "")
 		require.NoError(t, err)
 		orderID, err := rasql.BindColumn[roundtripOrder, int64](ordersRelation, "id", "")
@@ -330,11 +314,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 		})
 		database.SetMaxOpenConns(1)
 
-		db, err := rasql.New(database, dialect.SQLite())
-		require.NoError(t, err)
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
-		executor, err := rasql.AsExecutor(db, profile)
+		executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 		require.NoError(t, err)
 		users, err := rasql.TableOf[roundtripScoredUser](schema.TableDef{
 			Name: "users",
@@ -346,7 +326,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 			PrimaryKey: []string{"id"},
 		})
 		require.NoError(t, err)
-		require.NoError(t, rasql.CreateTable(t.Context(), db, users))
+		require.NoError(t, rasql.CreateTable(t.Context(), executor, users))
 
 		relation, err := rasql.SourceOf(users, "")
 		require.NoError(t, err)
@@ -404,11 +384,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 		})
 		database.SetMaxOpenConns(1)
 
-		db, err := rasql.New(database, dialect.SQLite())
-		require.NoError(t, err)
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
-		executor, err := rasql.AsExecutor(db, profile)
+		executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 		require.NoError(t, err)
 		events, err := rasql.TableOf[roundtripCountedEvent](schema.TableDef{
 			Name: "events",
@@ -419,7 +395,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 			PrimaryKey: []string{"id"},
 		})
 		require.NoError(t, err)
-		require.NoError(t, rasql.CreateTable(t.Context(), db, events))
+		require.NoError(t, rasql.CreateTable(t.Context(), executor, events))
 
 		relation, err := rasql.SourceOf(events, "")
 		require.NoError(t, err)
@@ -564,11 +540,7 @@ func TestSQLiteRoundTrip(t *testing.T) {
 		})
 		database.SetMaxOpenConns(1)
 
-		db, err := rasql.New(database, dialect.SQLite())
-		require.NoError(t, err)
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
-		executor, err := rasql.AsExecutor(db, profile)
+		executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 		require.NoError(t, err)
 		decimalType := schema.DecimalType{Precision: 19, Scale: schema.NewDecimalScale(4)}
 		invoices, err := rasql.TableOf[roundtripInvoice](schema.TableDef{
@@ -580,7 +552,7 @@ func TestSQLiteRoundTrip(t *testing.T) {
 			PrimaryKey: []string{"id"},
 		})
 		require.NoError(t, err)
-		require.NoError(t, rasql.CreateTable(t.Context(), db, invoices))
+		require.NoError(t, rasql.CreateTable(t.Context(), executor, invoices))
 
 		relation, err := rasql.SourceOf(invoices, "")
 		require.NoError(t, err)
@@ -622,11 +594,7 @@ func TestSQLiteRoundTrip(t *testing.T) {
 		_, err = database.ExecContext(t.Context(), `ATTACH DATABASE ':memory:' AS audit`)
 		require.NoError(t, err)
 
-		db, err := rasql.New(database, dialect.SQLite())
-		require.NoError(t, err)
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
-		executor, err := rasql.AsExecutor(db, profile)
+		executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 		require.NoError(t, err)
 
 		events, err := rasql.TableOf[roundtripQualifiedEvent](schema.TableDef{
@@ -640,7 +608,7 @@ func TestSQLiteRoundTrip(t *testing.T) {
 			PrimaryKey: []string{"id"},
 		})
 		require.NoError(t, err)
-		require.NoError(t, rasql.CreateTable(t.Context(), db, events))
+		require.NoError(t, rasql.CreateTable(t.Context(), executor, events))
 		queryEvents := events.Ref()
 		id := queryEvents.Column("id")
 		userIDColumn := queryEvents.Column("user_id")
@@ -777,11 +745,7 @@ func TestSQLiteRoundTrip(t *testing.T) {
 		})
 		database.SetMaxOpenConns(1)
 
-		db, err := rasql.New(database, dialect.SQLite())
-		require.NoError(t, err)
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
-		executor, err := rasql.AsExecutor(db, profile)
+		executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 		require.NoError(t, err)
 		table := schema.TableDef{
 			Name: "returning_users",
@@ -798,7 +762,7 @@ func TestSQLiteRoundTrip(t *testing.T) {
 		id := queryUsers.Column("id")
 		email := queryUsers.Column("email")
 		status := queryUsers.Column("status")
-		require.NoError(t, rasql.CreateTable(t.Context(), db, users))
+		require.NoError(t, rasql.CreateTable(t.Context(), executor, users))
 
 		relation, err := rasql.SourceOf(users, "")
 		require.NoError(t, err)

@@ -97,28 +97,6 @@ func correlatedUserProjection(
 	return projection
 }
 
-// correlatedExecutor builds the executor engine.dialect needs, reading the
-// engine straight from db's own dialect rather than from a separate
-// parameter, so a helper that only has db still resolves the right profile.
-func correlatedExecutor(t *testing.T, db rasql.DB) rasql.Executor {
-	t.Helper()
-
-	var profile rasql.EngineProfile
-	var err error
-	switch db.Dialect().Name() {
-	case "postgresql":
-		profile, err = rasql.DiscoverEngineProfile(t.Context(), db, "postgresql-17")
-	case "mysql":
-		profile, err = rasql.DiscoverEngineProfile(t.Context(), db, "mysql-8.4")
-	default:
-		profile, err = rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	}
-	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(db, profile)
-	require.NoError(t, err)
-	return executor
-}
-
 // correlatedAllUsers reads every user back in id order, through the typed
 // Query API, the way every subtest below confirms what a write actually did.
 func correlatedAllUsers(
@@ -189,9 +167,9 @@ func testCorrelatedSubquery(t *testing.T, engine correlatedEngine) {
 	t.Helper()
 
 	database := engine.open(t)
-	db, err := rasql.New(database, engine.dialect)
+	db, err := rasql.Open(t.Context(), database, engine.dialect)
 	require.NoError(t, err)
-	executor := correlatedExecutor(t, db)
+	executor := db
 
 	users, orders := createCorrelatedFixture(t, db)
 	usersRelation, usersID, usersEmail, usersOrderCount := correlatedUserColumns(t, users)
@@ -326,7 +304,7 @@ func testCorrelatedSubquery(t *testing.T, engine correlatedEngine) {
 // assumed.
 func TestMySQLRefusesALimitInsideInSelectButNotInsideExists(t *testing.T) {
 	database := dbtest.MySQLDB(t)
-	db, err := rasql.New(database, dialect.MySQL())
+	db, err := rasql.Open(t.Context(), database, dialect.MySQL())
 	require.NoError(t, err)
 
 	users, _ := createCorrelatedFixture(t, db)
@@ -382,7 +360,7 @@ func createCorrelatedFixture(t *testing.T, db rasql.DB) (rasql.Table[correlatedU
 	require.NoError(t, rasql.CreateTable(t.Context(), db, users))
 	require.NoError(t, rasql.CreateTable(t.Context(), db, orders))
 
-	executor := correlatedExecutor(t, db)
+	executor := db
 
 	_, usersID, usersEmail, usersOrderCount := correlatedUserColumns(t, users)
 	for _, user := range []correlatedUser{
@@ -463,9 +441,9 @@ func testCorrelatedWrite(t *testing.T, engine correlatedEngine) {
 	t.Helper()
 
 	database := engine.open(t)
-	db, err := rasql.New(database, engine.dialect)
+	db, err := rasql.Open(t.Context(), database, engine.dialect)
 	require.NoError(t, err)
-	executor := correlatedExecutor(t, db)
+	executor := db
 
 	// Each clause gets its own pair of tables, since each one writes. The names
 	// come from dbtest.UniqueName, so the three pairs never collide even on the

@@ -202,8 +202,6 @@ func TestDynamicProjection(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, database.Close()) })
 		database.SetMaxOpenConns(1)
-		db, err := rasql.New(database, dialect.SQLite())
-		require.NoError(t, err)
 		for _, statement := range []string{
 			"CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
 			"CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, amount INTEGER NOT NULL)",
@@ -234,9 +232,7 @@ func TestDynamicProjection(t *testing.T) {
 		dynamicProjection, err := rasql.DynamicProjection[dynamicProjectionAggregateRow](resultSchema)
 		require.NoError(t, err)
 		sqlText := "SELECT u.id AS user_id, u.name AS name, SUM(o.amount) AS total FROM users u LEFT JOIN orders o ON o.user_id = u.id GROUP BY u.id ORDER BY u.id"
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
-		executor, err := rasql.AsExecutor(db, profile)
+		executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 		require.NoError(t, err)
 		staticQuery := dynamicProjectionNativeQuery(t, staticProjection, sqlText)
 		dynamicQuery := dynamicProjectionNativeQuery(t, dynamicProjection, sqlText)
@@ -371,8 +367,7 @@ func TestDynamicProjection(t *testing.T) {
 			calls.Add(1)
 			return &dynamicProjectionRows{columns: []string{"id"}, values: [][]any{{int64(9)}}}
 		}}
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-		require.NoError(t, err)
+		profile := rasql.SQLite335()
 		profiled, err := rasql.WithEngineProfile(reusable, profile)
 		require.NoError(t, err)
 		var wg sync.WaitGroup
@@ -435,8 +430,7 @@ type dynamicProjectionExecutor struct {
 func dynamicProjectionExecutorFor(t *testing.T, rows *dynamicProjectionRows) rasql.Executor {
 	t.Helper()
 	executor := &dynamicProjectionExecutor{dialect: dialect.SQLite(), factory: func() *dynamicProjectionRows { return rows }}
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	require.NoError(t, err)
+	profile := rasql.SQLite335()
 	profiled, err := rasql.WithEngineProfile(executor, profile)
 	require.NoError(t, err)
 	return profiled

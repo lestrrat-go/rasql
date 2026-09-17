@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/internal/querycompile"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/render"
@@ -18,7 +19,7 @@ import (
 
 // Handle is a database/sql handle that both reads rows and executes
 // statements. *sql.DB, *sql.Conn, and *sql.Tx all implement it, and so does a
-// logging or debugging wrapper around one. New requires it, so a DB can always
+// logging or debugging wrapper around one. Open requires it, so a DB can always
 // run a write; a value that only reads is rejected where it is supplied rather
 // than where a write is attempted.
 // A debug Handle may return nil rows after logging a query; dynamic.Scan
@@ -30,7 +31,7 @@ type Handle interface {
 
 // beginner is a Handle that can also start a transaction. *sql.DB and
 // *sql.Conn implement it; *sql.Tx does not. Begin asks the handle for it
-// instead of requiring it in New, so reading and writing outside a transaction
+// instead of requiring it in Open, so reading and writing outside a transaction
 // works with any Handle at all.
 type beginner interface {
 	BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
@@ -123,7 +124,7 @@ func (db DB) BeginSavepoint(ctx context.Context) (Executor, ScopeFinalizer, erro
 
 // DB executes statements against one database/sql handle for one SQL dialect.
 //
-// It is the only type this package executes through. A DB from New runs
+// It is the only type this package executes through. A DB from Open runs
 // statements on the handle it was given; a DB from Begin runs them inside the
 // transaction it started, and Commit or Rollback finishes it. Everything that
 // takes a DB takes either one, so moving work into a transaction changes which
@@ -136,10 +137,10 @@ func (db DB) BeginSavepoint(ctx context.Context) (Executor, ScopeFinalizer, erro
 // transaction means one goroutine at a time, because *sql.Tx is bound to a
 // single connection.
 //
-// A DB configured through AsExecutor also satisfies Executor: its Query and
-// Exec methods compile and run statements through the engine profile and
-// compiler AsExecutor attached, guarded by the same busy token a transaction
-// DB carries so two goroutines cannot run statements on it at once.
+// A DB from Open also satisfies Executor: its Query and Exec methods compile
+// and run statements through the engine profile and compiler Open resolved,
+// guarded by the same busy token a transaction DB carries so two goroutines
+// cannot run statements on it at once.
 type DB struct {
 	handle                Handle
 	dialect               dialect.Dialect
@@ -161,25 +162,46 @@ type DB struct {
 	busy *executorBusy
 }
 
-// Option configures the DB that New returns.
+// Option configures the DB that Open returns.
 type Option interface{ apply(*DB) error }
 
-// New pairs a database/sql handle with the dialect used to render SQL for it.
-// handle may be a *sql.DB for a connection pool, a *sql.Conn for one pinned
-// connection, a *sql.Tx for a transaction that is already open, or any other
-// Handle. New opens no connection and starts no transaction.
+// withProfileOption is Option's only implementation. It pins the EngineProfile
+// Open uses instead of discovering one from the server.
+type withProfileOption struct{ profile EngineProfile }
+
+func (o withProfileOption) apply(db *DB) error {
+	db.profile = o.profile
+	return nil
+}
+
+// WithProfile pins the EngineProfile that Open attaches to the returned DB,
+// so Open runs no version query against the server. Use it for a custom
+// engine profile, built with NewCustomEngineProfile, which cannot be
+// discovered; use it too when handle cannot answer a version query, such as
+// one built from sqlmock.
+func WithProfile(p EngineProfile) Option {
+	return withProfileOption{profile: p}
+}
+
+// Open pairs a database/sql handle with the dialect used to render SQL for it
+// and readies the returned DB to run queries and mutations. handle may be a
+// *sql.DB for a connection pool, a *sql.Conn for one pinned connection, a
+// *sql.Tx for a transaction that is already open, or any other Handle. Open
+// starts no transaction.
 //
 // A DB built from a *sql.Tx is a transaction: its Commit and Rollback finish
 // that transaction, and its Begin reports an error rather than nesting. Use
 // Atomic when work must compose inside an existing transaction.
 //
-// Optional hooks and observers configure the returned DB and observe every
-// statement run through it and, unless narrowed or extended by WithHooks,
-// WithObservers, or by Begin's own hooks parameter, every transaction Begin
-// starts from it.
+// With no WithProfile option, Open runs one query against handle asking the
+// server its version, and resolves the built-in EngineProfile whose engine
+// and version range match what it observed. Pass WithProfile to skip that
+// query entirely, either because the dialect names a custom engine, which
+// Open cannot discover on its own, or because handle cannot answer a version
+// query.
 //
 // `handle` and `d` must not be nil.
-func New(handle Handle, d dialect.Dialect, options ...any) (DB, error) {
+func Open(ctx context.Context, handle Handle, d dialect.Dialect, options ...Option) (DB, error) {
 	if handle == nil {
 		return DB{}, fmt.Errorf("rasql: handle must not be nil")
 	}
@@ -191,20 +213,31 @@ func New(handle Handle, d dialect.Dialect, options ...any) (DB, error) {
 		db.tx = transaction
 	}
 	for _, option := range options {
-		switch value := option.(type) {
-		case Hook:
-			var err error
-			db, err = db.WithHooks(value)
-			if err != nil {
-				return DB{}, err
-			}
-		case Option:
-			if err := value.apply(&db); err != nil {
-				return DB{}, err
-			}
-		default:
-			return DB{}, fmt.Errorf("rasql: unsupported database option %T", option)
+		if err := option.apply(&db); err != nil {
+			return DB{}, err
 		}
+	}
+	profile := db.profile
+	if profile.profile.ID == "" {
+		engine := engineForDialect(d)
+		if engine == CustomEngine {
+			return DB{}, fmt.Errorf("rasql: dialect %s has no built-in engine profile: pass rasql.WithProfile", d.Name())
+		}
+		observed, err := engineprofile.DiscoverBuiltin(ctx, handle, engine)
+		if err != nil {
+			return DB{}, err
+		}
+		profile = EngineProfile{profile: observed}
+	}
+	c, err := profile.queryCompiler(d)
+	if err != nil {
+		return DB{}, err
+	}
+	db.profile = profile
+	db.compiler = c
+	db.busy = nil
+	if db.IsTransaction() {
+		db.busy = newExecutorBusy()
 	}
 	return db, nil
 }
@@ -347,7 +380,7 @@ func (db DB) Begin(ctx context.Context, opts *sql.TxOptions, hooks ...Hook) (DB,
 
 // Commit commits the transaction db runs in. It reports an error when db is
 // not a transaction, which is every DB except one from Begin and one built by
-// New from a *sql.Tx.
+// Open from a *sql.Tx.
 //
 // The caller owns the transaction: every path out of the function that called
 // Begin must reach Commit or Rollback. A bare defer of Rollback right after
@@ -383,7 +416,7 @@ func (db DB) commitContext(ctx context.Context) error {
 // error a caller learns to discard.
 //
 // It reports an error when db is not a transaction, which is every DB except
-// one from Begin and one built by New from a *sql.Tx.
+// one from Begin and one built by Open from a *sql.Tx.
 func (db DB) Rollback() error {
 	return db.rollbackContext(context.Background())
 }
@@ -601,25 +634,25 @@ func (db DB) executionDurability() executionDurabilityEvidence {
 	return executionDurabilityPending
 }
 
-// Validate reports whether db came from New rather than being a zero DB.
+// Validate reports whether db came from Open rather than being a zero DB.
 // Every entry point in this package calls it, so a zero DB produces an error
 // rather than a nil dereference.
 func (db DB) Validate() error {
 	return db.valid()
 }
 
-// ValidateStatement reports whether db came from New and s carries SQL to
+// ValidateStatement reports whether db came from Open and s carries SQL to
 // run. rasql's typed QueryRendered calls it so an unusable statement is
 // reported by the call itself rather than by the sequence it would return.
 func (db DB) ValidateStatement(s stmt.Statement) error {
 	return db.validStatement(s)
 }
 
-// valid reports whether db came from New rather than being a zero DB, so every
+// valid reports whether db came from Open rather than being a zero DB, so every
 // entry point answers a zero value with an error instead of a nil dereference.
 func (db DB) valid() error {
 	if db.handle == nil || db.dialect == nil {
-		return fmt.Errorf("rasql: invalid DB: create one with rasql.New")
+		return fmt.Errorf("rasql: invalid DB: create one with rasql.Open")
 	}
 	return nil
 }

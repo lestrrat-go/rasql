@@ -29,17 +29,8 @@ func Example_rasql_dynamicNativeProjection() {
 		return
 	}
 
-	db, err := rasql.New(database, dialect.SQLite())
-	if err != nil {
-		fmt.Printf("failed to create database: %s\n", err)
-		return
-	}
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 35, 0)
-	if err != nil {
-		fmt.Printf("failed to create engine profile: %s\n", err)
-		return
-	}
-	executor, err := rasql.AsExecutor(db, profile)
+	db, err := rasql.Open(ctx, database, dialect.SQLite())
+	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return

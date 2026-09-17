@@ -37,17 +37,13 @@ func mutationFixture(t *testing.T) (rasql.Executor, rasql.Table[mutationRow], qu
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	_, err = database.ExecContext(t.Context(), `CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT NOT NULL)`)
 	require.NoError(t, err)
-	db, err := rasql.New(database, dialect.SQLite())
-	require.NoError(t, err)
 	_, err = database.ExecContext(t.Context(), `ALTER TABLE items ADD COLUMN version INTEGER NOT NULL DEFAULT 1`)
 	require.NoError(t, err)
 	table, err := rasql.TableOf[mutationRow](schema.TableDef{
 		Name: "items", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "value", Type: schema.TextType{}}, {Name: "version", Type: schema.IntegerType{}, Default: "1"}}, PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 40, 0)
-	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(db, profile)
+	executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 	require.NoError(t, err)
 	return executor, table, query.TypedColumnOf[mutationRow, int64](table.Column("id"))
 }
@@ -172,11 +168,7 @@ func TestMutation(t *testing.T) {
 		tx, err := database.BeginTx(t.Context(), nil)
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = tx.Rollback() })
-		db, err := rasql.New(tx, dialect.SQLite())
-		require.NoError(t, err)
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 40, 0)
-		require.NoError(t, err)
-		executor, err := rasql.AsExecutor(db, profile)
+		executor, err := rasql.Open(t.Context(), tx, dialect.SQLite())
 		require.NoError(t, err)
 		table, err := rasql.TableOf[mutationRow](schema.TableDef{Name: "items", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "value", Type: schema.TextType{}}}})
 		require.NoError(t, err)
@@ -427,11 +419,7 @@ func newMutationAcceptanceFixture(t *testing.T) mutationAcceptanceFixture {
 		UNIQUE(required_text)
 	)`)
 	require.NoError(t, err)
-	db, err := rasql.New(database, dialect.SQLite())
-	require.NoError(t, err)
-	profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 40, 0)
-	require.NoError(t, err)
-	executor, err := rasql.AsExecutor(db, profile)
+	executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 	require.NoError(t, err)
 	table := rasql.MustTableOf[mutationAcceptanceItem](schema.TableDef{
 		Name: "mutation_items", PrimaryKey: []string{"id"},
@@ -595,16 +583,12 @@ func TestMutationCodec(t *testing.T) {
 		t.Cleanup(func() { require.NoError(t, database.Close()) })
 		_, err = database.ExecContext(t.Context(), "CREATE TABLE codec_items (id INTEGER PRIMARY KEY, value TEXT NOT NULL, nullable TEXT NULL)")
 		require.NoError(t, err)
-		db, err := rasql.New(database, dialect.SQLite())
-		require.NoError(t, err)
-		profile, err := rasql.EngineProfileFromVersion("sqlite-3.35", 3, 40, 0)
-		require.NoError(t, err)
-		executor, err := rasql.AsExecutor(db, profile)
+		db, err := rasql.Open(t.Context(), database, dialect.SQLite())
 		require.NoError(t, err)
 		count := 0
 		registry, err := rasql.NewCodecRegistry(map[rasql.CodecID]rasql.ValueCodec{"prefix": mutationCodec{enc: &count}})
 		require.NoError(t, err)
-		executor, err = rasql.WithCodecs(executor, registry)
+		executor, err := rasql.WithCodecs(db, registry)
 		require.NoError(t, err)
 		table := rasql.MustTableOf[mutationCodecRow](schema.TableDef{
 			Name: "codec_items", PrimaryKey: []string{"id"},

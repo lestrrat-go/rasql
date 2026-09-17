@@ -31,17 +31,9 @@ func openTx(t *testing.T) (store.Repository, rasql.Executor) {
 		t.Fatalf("begin: %s", err)
 	}
 	t.Cleanup(func() { _ = tx.Rollback() })
-	db, err := rasql.New(tx, dialect.PostgreSQL())
+	executor, err := rasql.Open(t.Context(), tx, dialect.PostgreSQL())
 	if err != nil {
-		t.Fatalf("create the rasql db: %s", err)
-	}
-	profile, err := rasql.DiscoverEngineProfile(t.Context(), db, "postgresql-17")
-	if err != nil {
-		t.Fatalf("discover PostgreSQL engine profile: %s", err)
-	}
-	executor, err := rasql.AsExecutor(db, profile)
-	if err != nil {
-		t.Fatalf("create the rasql executor: %s", err)
+		t.Fatalf("open the rasql database: %s", err)
 	}
 	return store.New(executor), executor
 }

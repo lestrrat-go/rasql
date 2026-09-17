@@ -19,7 +19,7 @@ func dbForBuild(t *testing.T) rasql.DB {
 		mock.ExpectClose()
 		require.NoError(t, database.Close())
 	})
-	db, err := rasql.New(database, dialect.PostgreSQL())
+	db, err := rasql.Open(t.Context(), database, dialect.PostgreSQL(), rasql.WithProfile(rasql.PostgreSQL17()))
 	require.NoError(t, err)
 	return db
 }

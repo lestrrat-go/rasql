@@ -83,11 +83,7 @@ func TestGeneratedCardinalityRuntime(t *testing.T) {
 		_, err = db.Exec("INSERT INTO tasks(id, project_id, assignee_id, title, is_open, due_on, created_at) VALUES (?, 1, ?, ?, 1, ?, ?)", row.id, row.assignee, fmt.Sprintf("task-%04d", row.id), row.due, "2024-01-01T00:00:00Z")
 		if err != nil { t.Fatal(err) }
 	}
-	raw, err := rasql.New(db, dialect.SQLite())
-	if err != nil { t.Fatal(err) }
-	profile, err := rasql.DiscoverEngineProfile(t.Context(), raw, "sqlite-3.35")
-	if err != nil { t.Fatal(err) }
-	executor, err := rasql.AsExecutor(raw, profile)
+	executor, err := rasql.Open(t.Context(), db, dialect.SQLite())
 	if err != nil { t.Fatal(err) }
 	cutoffs := map[string]time.Time{"zero": time.Date(2024,1,1,0,0,0,0,time.UTC), "one": time.Date(2024,1,2,0,0,0,0,time.UTC), "two": time.Date(2024,1,4,0,0,0,0,time.UTC)}
 	for name, cutoff := range cutoffs {
