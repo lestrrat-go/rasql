@@ -153,6 +153,42 @@ func labelFor(row SeedRow) string {
 	}
 	return "closed"
 }
+// canonicalSeedRows builds the seed the portable signature describes, in the order
+// SeedDatabaseForEngine inserts it: every member, then every project, then each task followed by
+// its own label. LoadPortableSignature calls this and fills SignatureDocument.Seed.Rows with the
+// result, so the rows the signature validates are the rows this package actually writes.
+//
+// testdata/portable-signature.json used to carry all 11,000 of these rows as JSON, a second copy
+// of what the loops below produce. Nothing regenerated that copy, and portableSeedSHA256 still
+// pins the same digest, so a drift between the two representations fails signature validation.
+//
+// Every integer is a float64 because validateSignatureValue type-checks integer columns as
+// float64, matching what encoding/json produced when these rows were decoded from a file.
+func canonicalSeedRows() []SignatureRow {
+	rows := make([]SignatureRow, 0, 11000)
+	for id := int64(1); id <= 3500; id++ {
+		rows = append(rows, SignatureRow{Table: "members", Values: []any{float64(id), fmt.Sprintf("member-%02d", id)}})
+	}
+	for id := int64(1); id <= 500; id++ {
+		rows = append(rows, SignatureRow{Table: "projects", Values: []any{float64(id), fmt.Sprintf("project-%03d", id)}})
+	}
+	for _, row := range SeedRows() {
+		var assignee any
+		if row.AssigneeID != nil {
+			assignee = float64(*row.AssigneeID)
+		}
+		var dueOn any
+		if row.DueOn != nil {
+			dueOn = *row.DueOn
+		}
+		rows = append(rows, SignatureRow{Table: "tasks", Values: []any{
+			float64(row.ID), float64(row.ProjectID), assignee, row.Title, row.Open, dueOn, row.CreatedAt,
+		}})
+		rows = append(rows, SignatureRow{Table: "task_labels", Values: []any{float64(row.ID), labelFor(row)}})
+	}
+	return rows
+}
+
 func SchemaSQLDigest() string { return DigestSQL(schemaStatements...) }
 func SeedDigestValue() string {
 	parts := []string{strings.Join(schemaStatements, "\n")}

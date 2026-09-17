@@ -2,11 +2,11 @@ package conformance
 
 import "testing"
 
-// skipUnderShort lets a developer skip this package's three genuinely
-// expensive tests -- TestGeneratedFootprintBuild, TestConformancePostgreSQL17,
-// and TestConformanceMySQL84 -- while iterating locally, by running `go test
-// -short`. Every other test in this package already runs in well under a
-// second, so -short has nothing else to shorten here.
+// skipUnderShort lets a developer skip this package's two genuinely expensive
+// tests -- TestConformancePostgreSQL17 and TestConformanceMySQL84 -- while
+// iterating locally, by running `go test -short`. Both seed a live server with
+// 11,000 rows and run the whole canonical workload matrix twice over it, once
+// through rasql and once through database/sql.
 //
 // CI must never trigger this skip. Both CI jobs reach `go test` through
 // scripts/test.sh, which writes out the flags each mode uses and passes
