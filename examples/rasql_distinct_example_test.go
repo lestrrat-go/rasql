@@ -42,7 +42,6 @@ func Example_rasql_distinct() {
 	database.SetMaxOpenConns(1)
 
 	db, err := rasql.Open(ctx, database, dialect.SQLite())
-	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -58,7 +57,7 @@ func Example_rasql_distinct() {
 		{ID: 3, UserID: 1},
 	} {
 		plan := store.NewOrdersCreate().ID(order.ID).UserID(order.UserID).Total(order.Total).Plan()
-		if _, err := rasql.ExecMutation(ctx, executor, plan); err != nil {
+		if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
 			fmt.Printf("failed to insert order: %s\n", err)
 			return
 		}
@@ -92,7 +91,7 @@ func Example_rasql_distinct() {
 	// primary key, which makes every row unique before DISTINCT runs.
 	// SQL: SELECT DISTINCT orders.user_id FROM orders ORDER BY orders.user_id
 	q := rasql.Select(source.Source(), projection).Distinct().OrderBy(rasql.AscExpr(userID.Expr()))
-	rows, err := rasql.All(ctx, executor, q)
+	rows, err := rasql.All(ctx, db, q)
 	if err != nil {
 		fmt.Printf("failed to query ordering users: %s\n", err)
 		return

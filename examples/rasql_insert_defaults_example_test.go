@@ -28,7 +28,6 @@ func Example_rasql_insert_defaults() {
 	database.SetMaxOpenConns(1)
 
 	db, err := rasql.Open(ctx, database, dialect.SQLite())
-	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -45,7 +44,7 @@ func Example_rasql_insert_defaults() {
 	// column, and every other column is written from the value given.
 	// SQL: INSERT INTO users (email, nickname, first_name, last_name) VALUES (?, ?, ?, ?) (arguments: "", NULL, "", "")
 	plan := store.NewUsersCreate().Email("").ClearNickname().DefaultStatus().FirstName("").LastName("").Plan()
-	if _, err := rasql.ExecMutation(ctx, executor, plan); err != nil {
+	if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}

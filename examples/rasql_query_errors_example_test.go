@@ -103,7 +103,6 @@ func Example_rasql_query_errors() {
 	database.SetMaxOpenConns(1)
 
 	db, err := rasql.Open(ctx, database, dialect.SQLite())
-	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -114,7 +113,7 @@ func Example_rasql_query_errors() {
 		return
 	}
 	plan := store.NewUsersCreate().ID(1).Email("ada@example.com").FirstName("First").LastName("Last").Plan()
-	if _, err := rasql.ExecMutation(ctx, executor, plan); err != nil {
+	if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
@@ -125,7 +124,7 @@ func Example_rasql_query_errors() {
 		return
 	}
 
-	rows, err := rasql.Rows(ctx, executor, base)
+	rows, err := rasql.Rows(ctx, db, base)
 	if err != nil {
 		// The statement could not be validated or rendered.
 		fmt.Printf("failed to query users: %s\n", err)
@@ -147,7 +146,7 @@ func Example_rasql_query_errors() {
 		fmt.Printf("failed to drop users table: %s\n", err)
 		return
 	}
-	dropped, err := rasql.Rows(ctx, executor, base)
+	dropped, err := rasql.Rows(ctx, db, base)
 	fmt.Println("error from Rows:", err)
 	for _, err := range dropped {
 		fmt.Println("error from the loop:", err)

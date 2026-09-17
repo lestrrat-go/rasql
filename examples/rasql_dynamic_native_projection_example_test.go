@@ -30,7 +30,6 @@ func Example_rasql_dynamicNativeProjection() {
 	}
 
 	db, err := rasql.Open(ctx, database, dialect.SQLite())
-	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -60,7 +59,7 @@ func Example_rasql_dynamicNativeProjection() {
 		fmt.Printf("failed to define native query: %s\n", err)
 		return
 	}
-	rows, err := rasql.All(ctx, executor, query)
+	rows, err := rasql.All(ctx, db, query)
 	if err != nil {
 		fmt.Printf("failed to execute query: %s\n", err)
 		return

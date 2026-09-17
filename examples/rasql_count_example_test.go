@@ -27,7 +27,6 @@ func Example_rasql_count() {
 
 	// A DB couples a database handle with the dialect used to render SQL.
 	db, err := rasql.Open(ctx, database, dialect.SQLite())
-	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -45,7 +44,7 @@ func Example_rasql_count() {
 		{ID: 3, Email: "cyd@example.com"},
 	} {
 		plan := store.NewUsersCreate().ID(user.ID).Email(user.Email).FirstName("First").LastName("Last").Plan()
-		if _, err := rasql.ExecMutation(ctx, executor, plan); err != nil {
+		if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
@@ -70,7 +69,7 @@ func Example_rasql_count() {
 
 	// One decodes the single COUNT(*) result, never a matched row.
 	// SQL: SELECT COUNT(*) AS count FROM users
-	total, err := rasql.One(ctx, executor, base)
+	total, err := rasql.One(ctx, db, base)
 	if err != nil {
 		fmt.Printf("failed to count users: %s\n", err)
 		return
@@ -78,7 +77,7 @@ func Example_rasql_count() {
 	fmt.Println("total:", total)
 
 	// SQL: SELECT COUNT(*) AS count FROM users WHERE users.id = ? (argument: 2)
-	filtered, err := rasql.One(ctx, executor, base.Where(rasql.EqualValue(id.Expr(), int64(2))))
+	filtered, err := rasql.One(ctx, db, base.Where(rasql.EqualValue(id.Expr(), int64(2))))
 	if err != nil {
 		fmt.Printf("failed to count filtered users: %s\n", err)
 		return

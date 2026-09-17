@@ -121,7 +121,6 @@ func Example_rasql_debug_query() {
 	database.SetMaxOpenConns(1)
 
 	db, err := rasql.Open(ctx, database, dialect.SQLite())
-	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -135,7 +134,7 @@ func Example_rasql_debug_query() {
 	// The table is empty, so a real database reports zero rows rather than
 	// failing the way a fake one that answers every query with no columns at
 	// all would.
-	rows, err := rasql.All(ctx, executor, selected)
+	rows, err := rasql.All(ctx, db, selected)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return

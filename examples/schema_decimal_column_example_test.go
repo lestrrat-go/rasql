@@ -56,7 +56,6 @@ func Example_schema_decimal_column() {
 	database.SetMaxOpenConns(1)
 
 	db, err := rasql.Open(ctx, database, dialect.SQLite())
-	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -105,7 +104,7 @@ func Example_schema_decimal_column() {
 		fmt.Printf("failed to build create plan: %s\n", err)
 		return
 	}
-	if _, err := rasql.ExecMutation(ctx, executor, createPlan); err != nil {
+	if _, err := rasql.ExecMutation(ctx, db, createPlan); err != nil {
 		fmt.Printf("failed to insert invoice: %s\n", err)
 		return
 	}
@@ -128,7 +127,7 @@ func Example_schema_decimal_column() {
 	}
 
 	// SQL: SELECT invoices.id, invoices.amount FROM invoices WHERE invoices.id = ? (argument: 1)
-	invoice, err := rasql.One(ctx, executor,
+	invoice, err := rasql.One(ctx, db,
 		rasql.Select(source.Source(), projection).Where(rasql.EqualValue(id.Expr(), int64(1))))
 	if err != nil {
 		fmt.Printf("failed to query invoices: %s\n", err)

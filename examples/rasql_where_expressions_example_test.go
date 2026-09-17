@@ -104,7 +104,6 @@ func Example_rasql_where_expressions() {
 	database.SetMaxOpenConns(1)
 
 	db, err := rasql.Open(ctx, database, dialect.SQLite())
-	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -125,7 +124,7 @@ func Example_rasql_where_expressions() {
 		if user.Nickname != nil {
 			plan = plan.Nickname(user.Nickname)
 		}
-		if _, err := rasql.ExecMutation(ctx, executor, plan.Plan()); err != nil {
+		if _, err := rasql.ExecMutation(ctx, db, plan.Plan()); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
@@ -140,7 +139,7 @@ func Example_rasql_where_expressions() {
 	// id=17 has id > 10 but no nickname, so it shows the And's second
 	// condition is doing real work rather than repeating the first.
 	// SQL: SELECT users.id, users.email, users.nickname, users.status, users.first_name, users.last_name FROM users WHERE (users.id > ? AND users.nickname IS NOT NULL) ORDER BY users.id DESC (argument: 10)
-	rows, err := rasql.All(ctx, executor,
+	rows, err := rasql.All(ctx, db,
 		base.Where(rasql.And(
 			rasql.GreaterValue(cols.ID.Expr(), int64(10)),
 			rasql.IsNotNull(cols.Nickname.NullExpr()),

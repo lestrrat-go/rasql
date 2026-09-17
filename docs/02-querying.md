@@ -94,7 +94,7 @@ if err != nil {
 // Prepare validates, lowers, renders and resolves codecs once. minTotal
 // still has no value, so running prepared as it stands would report
 // parameter_unbound.
-prepared, err := rasql.Prepare(executor, query)
+prepared, err := rasql.Prepare(db, query)
 if err != nil {
 	fmt.Printf("failed to prepare query: %s\n", err)
 	return

@@ -43,7 +43,6 @@ func Example_rasql_self_join() {
 	database.SetMaxOpenConns(1)
 
 	db, err := rasql.Open(ctx, database, dialect.SQLite())
-	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -65,7 +64,7 @@ func Example_rasql_self_join() {
 		if employee.ManagerID != nil {
 			plan = plan.ManagerID(employee.ManagerID)
 		}
-		if _, err := rasql.ExecMutation(ctx, executor, plan.Plan()); err != nil {
+		if _, err := rasql.ExecMutation(ctx, db, plan.Plan()); err != nil {
 			fmt.Printf("failed to insert employee: %s\n", err)
 			return
 		}
@@ -134,7 +133,7 @@ func Example_rasql_self_join() {
 	q := rasql.Select(employeesSource.Source(), projection).
 		Join(managerSource.Source(), rasql.EqualOptional(managerID.Expr(), employeeManagerID.NullExpr())).
 		OrderBy(rasql.AscExpr(employeeID.Expr()))
-	rows, err := rasql.All(ctx, executor, q)
+	rows, err := rasql.All(ctx, db, q)
 	if err != nil {
 		fmt.Printf("failed to query employees: %s\n", err)
 		return

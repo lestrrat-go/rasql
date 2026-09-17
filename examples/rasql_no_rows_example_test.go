@@ -104,7 +104,6 @@ func Example_rasql_no_rows() {
 
 	// A DB couples a database handle with the dialect used to render SQL.
 	db, err := rasql.Open(ctx, database, dialect.SQLite())
-	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -123,7 +122,7 @@ func Example_rasql_no_rows() {
 	}
 
 	// SQL: SELECT users.id, users.email, users.nickname, users.status, users.first_name, users.last_name FROM users WHERE users.id = ? (argument: 1)
-	_, err = rasql.One(ctx, executor, base.Where(rasql.EqualValue(cols.ID.Expr(), int64(1))))
+	_, err = rasql.One(ctx, db, base.Where(rasql.EqualValue(cols.ID.Expr(), int64(1))))
 	if errors.Is(err, rasql.ErrNoRows) {
 		fmt.Println("no such user")
 	}

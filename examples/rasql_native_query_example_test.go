@@ -19,7 +19,6 @@ func Example_rasql_nativeQuery() {
 	}
 	defer func() { _ = database.Close() }()
 	db, err := rasql.Open(context.Background(), database, dialect.SQLite())
-	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -34,7 +33,7 @@ func Example_rasql_nativeQuery() {
 		fmt.Printf("failed to create native query: %s\n", err)
 		return
 	}
-	value, err := rasql.One(context.Background(), executor, query)
+	value, err := rasql.One(context.Background(), db, query)
 	if err != nil {
 		fmt.Printf("failed to run native query: %s\n", err)
 		return

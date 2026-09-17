@@ -78,7 +78,6 @@ func TestDatabaseIntegration(t *testing.T) {
 func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, coalesced coalescedAmounts) {
 	db, err := rasql.Open(t.Context(), database, d)
 	require.NoError(t, err)
-	executor := db
 	// A fixed table name here would be inherited into every fresh PostgreSQL
 	// database this test runs against: CREATE DATABASE copies template1 by
 	// default, and an object added to template1 is copied into every
@@ -129,13 +128,13 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 		rasql.SetField(recordID, first.ID), rasql.SetField(recordActive, first.Active),
 		rasql.SetField(recordEmail, first.Email), rasql.SetField(recordAmount, first.Amount))
 	require.NoError(t, err)
-	_, err = rasql.ExecMutation(t.Context(), executor, firstCreate)
+	_, err = rasql.ExecMutation(t.Context(), db, firstCreate)
 	require.NoError(t, err)
 	secondCreate, err := rasql.NewCreatePlan(records,
 		rasql.SetField(recordID, second.ID), rasql.SetField(recordActive, second.Active),
 		rasql.SetField(recordEmail, second.Email), rasql.SetField(recordAmount, second.Amount))
 	require.NoError(t, err)
-	_, err = rasql.ExecMutation(t.Context(), executor, secondCreate)
+	_, err = rasql.ExecMutation(t.Context(), db, secondCreate)
 	require.NoError(t, err)
 
 	first.Email = "ada.lovelace@example.com"
@@ -143,7 +142,7 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 		rasql.SetField(recordActive, first.Active), rasql.SetField(recordEmail, first.Email),
 		rasql.SetField(recordAmount, first.Amount))
 	require.NoError(t, err)
-	_, err = rasql.ExecMutation(t.Context(), executor, firstPatch)
+	_, err = rasql.ExecMutation(t.Context(), db, firstPatch)
 	require.NoError(t, err)
 
 	// PostgreSQL and MySQL both return an exact decimal in the scale its
@@ -165,11 +164,11 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	secondStored.Amount = "5.0000"
 
 	selectRecords := rasql.Select(relation.Source(), recordProjection)
-	actual, err := rasql.One(t.Context(), executor, selectRecords.Where(rasql.EqualValue(recordID.Expr(), first.ID)))
+	actual, err := rasql.One(t.Context(), db, selectRecords.Where(rasql.EqualValue(recordID.Expr(), first.ID)))
 	require.NoError(t, err)
 	require.Equal(t, firstStored, actual)
 
-	all, err := rasql.All(t.Context(), executor, selectRecords.OrderBy(rasql.AscExpr(recordID.Expr())))
+	all, err := rasql.All(t.Context(), db, selectRecords.OrderBy(rasql.AscExpr(recordID.Expr())))
 	require.NoError(t, err)
 	require.Equal(t, []integrationRecord{firstStored, secondStored}, all)
 
@@ -260,7 +259,7 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 		{ID: second.ID, Amount: secondStored.Amount},
 	}, viaNullIf)
 
-	total, err := rasql.One(t.Context(), executor, rasql.CountQuery(selectRecords, false))
+	total, err := rasql.One(t.Context(), db, rasql.CountQuery(selectRecords, false))
 	require.NoError(t, err)
 	require.Equal(t, int64(2), total)
 
@@ -286,7 +285,7 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 		require.NoError(t, planErr)
 		returned, returningErr := rasql.Returning(insertPlan, recordProjection)
 		require.NoError(t, returningErr)
-		inserted, queryErr := rasql.One(t.Context(), executor, returned)
+		inserted, queryErr := rasql.One(t.Context(), db, returned)
 		require.NoError(t, queryErr)
 		require.Equal(t, thirdStored, inserted)
 	} else {
@@ -389,7 +388,6 @@ func testQualifiedDDLPostgreSQL(t *testing.T) {
 	database := dbtest.PostgreSQLDB(t)
 	db, err := rasql.Open(t.Context(), database, dialect.PostgreSQL())
 	require.NoError(t, err)
-	executor := db
 
 	type customerRow struct {
 		ID   int64  `rasql:"id"`
@@ -466,12 +464,12 @@ func testQualifiedDDLPostgreSQL(t *testing.T) {
 	customerCreate, err := rasql.NewCreatePlan(customers,
 		rasql.SetField(customersID, int64(1)), rasql.SetField(customersNameColumn, "ada"))
 	require.NoError(t, err)
-	_, err = rasql.ExecMutation(t.Context(), executor, customerCreate)
+	_, err = rasql.ExecMutation(t.Context(), db, customerCreate)
 	require.NoError(t, err)
 	orderCreate, err := rasql.NewCreatePlan(orders,
 		rasql.SetField(ordersID, int64(1)), rasql.SetField(ordersCustomerID, int64(1)))
 	require.NoError(t, err)
-	_, err = rasql.ExecMutation(t.Context(), executor, orderCreate)
+	_, err = rasql.ExecMutation(t.Context(), db, orderCreate)
 	require.NoError(t, err)
 
 	orderSchema, err := rasql.NewResultSchema(
@@ -488,7 +486,7 @@ func testQualifiedDDLPostgreSQL(t *testing.T) {
 	require.NoError(t, err)
 	orderQuery := rasql.Select(ordersSource.Source(), orderProjection).
 		Where(rasql.EqualValue(ordersID.Expr(), int64(1)))
-	order, err := rasql.One(t.Context(), executor, orderQuery)
+	order, err := rasql.One(t.Context(), db, orderQuery)
 	require.NoError(t, err)
 	require.Equal(t, orderRow{ID: 1, CustomerID: 1}, order)
 }
@@ -503,7 +501,6 @@ func testQualifiedDDLMySQL(t *testing.T) {
 	database := dbtest.MySQLDB(t)
 	db, err := rasql.Open(t.Context(), database, dialect.MySQL())
 	require.NoError(t, err)
-	executor := db
 
 	schemaName := dbtest.UniqueName(t, "rasql_qualified_schema")
 	_, err = database.ExecContext(t.Context(), "CREATE DATABASE "+schemaName)
@@ -568,7 +565,7 @@ func testQualifiedDDLMySQL(t *testing.T) {
 		rasql.SetField(eventID, int64(1)), rasql.SetField(eventActorID, int64(7)),
 		rasql.SetField(eventAction, "created"))
 	require.NoError(t, err)
-	_, err = rasql.ExecMutation(t.Context(), executor, eventCreate)
+	_, err = rasql.ExecMutation(t.Context(), db, eventCreate)
 	require.NoError(t, err)
 
 	eventSchema, err := rasql.NewResultSchema(
@@ -587,7 +584,7 @@ func testQualifiedDDLMySQL(t *testing.T) {
 	require.NoError(t, err)
 	eventQuery := rasql.Select(eventsSource.Source(), eventProjection).
 		Where(rasql.EqualValue(eventID.Expr(), int64(1)))
-	event, err := rasql.One(t.Context(), executor, eventQuery)
+	event, err := rasql.One(t.Context(), db, eventQuery)
 	require.NoError(t, err)
 	require.Equal(t, eventRow{ID: 1, ActorID: 7, Action: "created"}, event)
 }

@@ -27,7 +27,6 @@ func Example_rasql_update() {
 
 	// A DB couples a database handle with the dialect used to render SQL.
 	db, err := rasql.Open(ctx, database, dialect.SQLite())
-	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -40,7 +39,7 @@ func Example_rasql_update() {
 	}
 	// Insert one row so the update has a persistent target.
 	createPlan := store.NewUsersCreate().ID(42).Email("ada@example.com").FirstName("First").LastName("Last").Plan()
-	if _, err := rasql.ExecMutation(ctx, executor, createPlan); err != nil {
+	if _, err := rasql.ExecMutation(ctx, db, createPlan); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
@@ -53,7 +52,7 @@ func Example_rasql_update() {
 		fmt.Printf("failed to build patch: %s\n", err)
 		return
 	}
-	if _, err := rasql.ExecMutation(ctx, executor, patchPlan); err != nil {
+	if _, err := rasql.ExecMutation(ctx, db, patchPlan); err != nil {
 		fmt.Printf("failed to update user: %s\n", err)
 		return
 	}

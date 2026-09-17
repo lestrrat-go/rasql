@@ -169,7 +169,6 @@ func testCorrelatedSubquery(t *testing.T, engine correlatedEngine) {
 	database := engine.open(t)
 	db, err := rasql.Open(t.Context(), database, engine.dialect)
 	require.NoError(t, err)
-	executor := db
 
 	users, orders := createCorrelatedFixture(t, db)
 	usersRelation, usersID, usersEmail, usersOrderCount := correlatedUserColumns(t, users)
@@ -189,7 +188,7 @@ func testCorrelatedSubquery(t *testing.T, engine correlatedEngine) {
 	t.Run("exists keeps the users that have an order", func(t *testing.T) {
 		exists, err := rasql.ExistsQuery(hasOrder)
 		require.NoError(t, err)
-		got, err := rasql.All(t.Context(), executor, rasql.Select(usersRelation.Source(), userProjection).
+		got, err := rasql.All(t.Context(), db, rasql.Select(usersRelation.Source(), userProjection).
 			Where(exists).
 			OrderBy(rasql.AscExpr(usersID.Expr())))
 		require.NoError(t, err)
@@ -202,7 +201,7 @@ func testCorrelatedSubquery(t *testing.T, engine correlatedEngine) {
 	t.Run("not exists keeps the user that has none", func(t *testing.T) {
 		notExists, err := rasql.NotExistsQuery(hasOrder)
 		require.NoError(t, err)
-		got, err := rasql.All(t.Context(), executor, rasql.Select(usersRelation.Source(), userProjection).
+		got, err := rasql.All(t.Context(), db, rasql.Select(usersRelation.Source(), userProjection).
 			Where(notExists).
 			OrderBy(rasql.AscExpr(usersID.Expr())))
 		require.NoError(t, err)
@@ -242,7 +241,7 @@ func testCorrelatedSubquery(t *testing.T, engine correlatedEngine) {
 		boundExists, err := rasql.ExistsQuery(bound)
 		require.NoError(t, err)
 
-		got, err := rasql.All(t.Context(), executor, rasql.Select(usersRelation.Source(), userProjection).
+		got, err := rasql.All(t.Context(), db, rasql.Select(usersRelation.Source(), userProjection).
 			Where(boundExists).
 			OrderBy(rasql.AscExpr(usersID.Expr())))
 		if engine.refusesBoundIntegerBody {
@@ -264,7 +263,7 @@ func testCorrelatedSubquery(t *testing.T, engine correlatedEngine) {
 		textExists, err := rasql.ExistsQuery(text)
 		require.NoError(t, err)
 
-		got, err = rasql.All(t.Context(), executor, rasql.Select(usersRelation.Source(), userProjection).
+		got, err = rasql.All(t.Context(), db, rasql.Select(usersRelation.Source(), userProjection).
 			Where(textExists).
 			OrderBy(rasql.AscExpr(usersID.Expr())))
 		require.NoError(t, err,
@@ -284,7 +283,7 @@ func testCorrelatedSubquery(t *testing.T, engine correlatedEngine) {
 		require.NoError(t, err)
 		limitedExists, err := rasql.ExistsQuery(limited)
 		require.NoError(t, err)
-		got, err := rasql.All(t.Context(), executor, rasql.Select(usersRelation.Source(), userProjection).
+		got, err := rasql.All(t.Context(), db, rasql.Select(usersRelation.Source(), userProjection).
 			Where(limitedExists).
 			OrderBy(rasql.AscExpr(usersID.Expr())))
 		require.NoError(t, err)
@@ -360,8 +359,6 @@ func createCorrelatedFixture(t *testing.T, db rasql.DB) (rasql.Table[correlatedU
 	require.NoError(t, rasql.CreateTable(t.Context(), db, users))
 	require.NoError(t, rasql.CreateTable(t.Context(), db, orders))
 
-	executor := db
-
 	_, usersID, usersEmail, usersOrderCount := correlatedUserColumns(t, users)
 	for _, user := range []correlatedUser{
 		{ID: 1, Email: "ada@example.com"},
@@ -374,7 +371,7 @@ func createCorrelatedFixture(t *testing.T, db rasql.DB) (rasql.Table[correlatedU
 			rasql.SetField(usersOrderCount, user.OrderCount),
 		)
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), executor, plan)
+		_, err = rasql.ExecMutation(t.Context(), db, plan)
 		require.NoError(t, err)
 	}
 	_, ordersID, ordersUserID, ordersAmount := correlatedOrderColumns(t, orders)
@@ -389,7 +386,7 @@ func createCorrelatedFixture(t *testing.T, db rasql.DB) (rasql.Table[correlatedU
 			rasql.SetField(ordersAmount, order.Amount),
 		)
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), executor, plan)
+		_, err = rasql.ExecMutation(t.Context(), db, plan)
 		require.NoError(t, err)
 	}
 	return users, orders
@@ -443,7 +440,6 @@ func testCorrelatedWrite(t *testing.T, engine correlatedEngine) {
 	database := engine.open(t)
 	db, err := rasql.Open(t.Context(), database, engine.dialect)
 	require.NoError(t, err)
-	executor := db
 
 	// Each clause gets its own pair of tables, since each one writes. The names
 	// come from dbtest.UniqueName, so the three pairs never collide even on the
@@ -457,9 +453,9 @@ func testCorrelatedWrite(t *testing.T, engine correlatedEngine) {
 		require.NoError(t, err)
 		statement, err = statement.WithWhere(query.Exists(correlatedOrdersOfUser(t, users, orders, orders.Ref().Column("id"))))
 		require.NoError(t, err)
-		correlatedExecStatement(t, executor, statement)
+		correlatedExecStatement(t, db, statement)
 
-		remaining := correlatedAllUsers(t, executor, usersRelation, userProjection, usersID)
+		remaining := correlatedAllUsers(t, db, usersRelation, userProjection, usersID)
 		require.Equal(t, []correlatedUser{{ID: 2, Email: "bob@example.com"}}, remaining,
 			"only the user with no order may survive, so the subquery read each user's own row")
 	})
@@ -474,9 +470,9 @@ func testCorrelatedWrite(t *testing.T, engine correlatedEngine) {
 		require.NoError(t, err)
 		statement, err = statement.WithWhere(query.Exists(correlatedOrdersOfUser(t, users, orders, orders.Ref().Column("id"))))
 		require.NoError(t, err)
-		correlatedExecStatement(t, executor, statement)
+		correlatedExecStatement(t, db, statement)
 
-		updated := correlatedAllUsers(t, executor, usersRelation, userProjection, usersID)
+		updated := correlatedAllUsers(t, db, usersRelation, userProjection, usersID)
 		require.Equal(t, []correlatedUser{
 			{ID: 1, Email: "buyer@example.com"},
 			{ID: 2, Email: "bob@example.com"},
@@ -495,9 +491,9 @@ func testCorrelatedWrite(t *testing.T, engine correlatedEngine) {
 		require.NoError(t, err)
 		statement, err = statement.AllowAll()
 		require.NoError(t, err)
-		correlatedExecStatement(t, executor, statement)
+		correlatedExecStatement(t, db, statement)
 
-		counts := correlatedAllUsers(t, executor, usersRelation, userProjection, usersID)
+		counts := correlatedAllUsers(t, db, usersRelation, userProjection, usersID)
 		require.Equal(t, []correlatedUser{
 			{ID: 1, Email: "ada@example.com", OrderCount: 2},
 			{ID: 2, Email: "bob@example.com", OrderCount: 0},

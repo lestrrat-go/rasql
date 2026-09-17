@@ -48,7 +48,6 @@ func Example_rasqlgen_computed_field() {
 	database.SetMaxOpenConns(1)
 
 	db, err := rasql.Open(ctx, database, dialect.SQLite())
-	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -59,7 +58,7 @@ func Example_rasqlgen_computed_field() {
 		return
 	}
 	plan := store.NewUsersCreate().ID(1).Email("ada@example.com").FirstName("Ada").LastName("Lovelace").Plan()
-	if _, err := rasql.ExecMutation(ctx, executor, plan); err != nil {
+	if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
@@ -105,7 +104,7 @@ func Example_rasqlgen_computed_field() {
 		return
 	}
 
-	report, err := rasql.One(ctx, executor, rasql.Select(source.Source(), projection))
+	report, err := rasql.One(ctx, db, rasql.Select(source.Source(), projection))
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return

@@ -102,7 +102,6 @@ func Example_rasql_where_in() {
 
 	// A DB couples a database handle with the dialect used to render SQL.
 	db, err := rasql.Open(ctx, database, dialect.SQLite())
-	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -119,7 +118,7 @@ func Example_rasql_where_in() {
 		{ID: 3, Email: "cyd@example.com"},
 	} {
 		plan := store.NewUsersCreate().ID(user.ID).Email(user.Email).FirstName("First").LastName("Last").Plan()
-		if _, err := rasql.ExecMutation(ctx, executor, plan); err != nil {
+		if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
@@ -135,7 +134,7 @@ func Example_rasql_where_in() {
 	// not in the list. It takes the first value separately so an empty IN
 	// list, which is not legal SQL, cannot be written at all.
 	// SQL: SELECT users.id, users.email, users.nickname, users.status, users.first_name, users.last_name FROM users WHERE users.id IN (?, ?) ORDER BY users.id ASC (arguments: 1, 3)
-	rows, err := rasql.All(ctx, executor,
+	rows, err := rasql.All(ctx, db,
 		base.Where(rasql.InValues(cols.ID.Expr(), int64(1), int64(3))).
 			OrderBy(rasql.AscExpr(cols.ID.Expr())))
 	if err != nil {

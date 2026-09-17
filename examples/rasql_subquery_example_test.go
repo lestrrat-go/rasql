@@ -47,7 +47,6 @@ func Example_rasql_subquery() {
 	database.SetMaxOpenConns(1)
 
 	db, err := rasql.Open(ctx, database, dialect.SQLite())
-	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -69,7 +68,7 @@ func Example_rasql_subquery() {
 		{ID: 3, Email: "cyd@other.example"},
 	} {
 		plan := store.NewUsersCreate().ID(user.ID).Email(user.Email).FirstName("First").LastName("Last").Plan()
-		if _, err := rasql.ExecMutation(ctx, executor, plan); err != nil {
+		if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
@@ -80,7 +79,7 @@ func Example_rasql_subquery() {
 		{ID: 3, UserID: 3, Total: 100},
 	} {
 		plan := store.NewOrdersCreate().ID(order.ID).UserID(order.UserID).Total(order.Total).Plan()
-		if _, err := rasql.ExecMutation(ctx, executor, plan); err != nil {
+		if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
 			fmt.Printf("failed to insert order: %s\n", err)
 			return
 		}
@@ -218,7 +217,7 @@ func Example_rasql_subquery() {
 	}
 	fmt.Println(statement.SQL())
 
-	rows, err := rasql.All(ctx, executor, selected)
+	rows, err := rasql.All(ctx, db, selected)
 	if err != nil {
 		fmt.Printf("failed to query orders: %s\n", err)
 		return

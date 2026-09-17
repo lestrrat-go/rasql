@@ -40,7 +40,6 @@ func Example_rasql_exists() {
 	database.SetMaxOpenConns(1)
 
 	db, err := rasql.Open(ctx, database, dialect.SQLite())
-	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -62,7 +61,7 @@ func Example_rasql_exists() {
 		{ID: 3, Email: "cyd@example.com"},
 	} {
 		plan := store.NewUsersCreate().ID(user.ID).Email(user.Email).FirstName("First").LastName("Last").Plan()
-		if _, err := rasql.ExecMutation(ctx, executor, plan); err != nil {
+		if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
@@ -72,7 +71,7 @@ func Example_rasql_exists() {
 		{ID: 2, UserID: 3, Total: 100},
 	} {
 		plan := store.NewOrdersCreate().ID(order.ID).UserID(order.UserID).Total(order.Total).Plan()
-		if _, err := rasql.ExecMutation(ctx, executor, plan); err != nil {
+		if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
 			fmt.Printf("failed to insert order: %s\n", err)
 			return
 		}
@@ -147,7 +146,7 @@ func Example_rasql_exists() {
 		return
 	}
 	// SQL: SELECT users.id, users.email FROM users WHERE EXISTS (SELECT orders.id FROM orders WHERE orders.user_id = users.id) ORDER BY users.id ASC
-	buyers, err := rasql.All(ctx, executor,
+	buyers, err := rasql.All(ctx, db,
 		rasql.Select(usersSource.Source(), projection).
 			Where(exists).
 			OrderBy(rasql.AscExpr(usersID.Expr())))
@@ -166,7 +165,7 @@ func Example_rasql_exists() {
 		fmt.Printf("failed to build the not-exists predicate: %s\n", err)
 		return
 	}
-	quiet, err := rasql.All(ctx, executor,
+	quiet, err := rasql.All(ctx, db,
 		rasql.Select(usersSource.Source(), projection).
 			Where(notExists).
 			OrderBy(rasql.AscExpr(usersID.Expr())))

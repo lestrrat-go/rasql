@@ -104,7 +104,6 @@ func Example_rasql_nested_predicates() {
 	database.SetMaxOpenConns(1)
 
 	db, err := rasql.Open(ctx, database, dialect.SQLite())
-	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -126,7 +125,7 @@ func Example_rasql_nested_predicates() {
 		if user.Nickname != nil {
 			plan = plan.Nickname(user.Nickname)
 		}
-		if _, err := rasql.ExecMutation(ctx, executor, plan.Plan()); err != nil {
+		if _, err := rasql.ExecMutation(ctx, db, plan.Plan()); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
@@ -162,7 +161,7 @@ func Example_rasql_nested_predicates() {
 	}
 	fmt.Println(statement.SQL())
 
-	found, err := rasql.All(ctx, executor, selected)
+	found, err := rasql.All(ctx, db, selected)
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return

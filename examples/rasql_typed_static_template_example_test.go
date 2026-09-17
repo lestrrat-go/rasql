@@ -46,7 +46,6 @@ func Example_rasql_typed_static_template() {
 	database.SetMaxOpenConns(1)
 
 	db, err := rasql.Open(ctx, database, dialect.SQLite())
-	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -62,7 +61,7 @@ func Example_rasql_typed_static_template() {
 		{ID: 3, Email: "cyd@example.com"},
 	} {
 		plan := store.NewUsersCreate().ID(user.ID).Email(user.Email).FirstName("First").LastName("Last").Plan()
-		if _, err := rasql.ExecMutation(ctx, executor, plan); err != nil {
+		if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
@@ -116,7 +115,7 @@ func Example_rasql_typed_static_template() {
 	}
 
 	// SQL: WITH ranked_users AS (SELECT id, email, ROW_NUMBER() OVER (ORDER BY id) AS rank FROM users) SELECT id, email, rank FROM ranked_users WHERE id >= ? ORDER BY rank (argument: 2)
-	rows, err := rasql.All(ctx, executor, q)
+	rows, err := rasql.All(ctx, db, q)
 	if err != nil {
 		fmt.Printf("failed to query ranked users: %s\n", err)
 		return

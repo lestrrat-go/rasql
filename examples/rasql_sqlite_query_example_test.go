@@ -101,7 +101,6 @@ func Example_rasql_sqlite_query() {
 
 	// A DB couples a database handle with the dialect used to render SQL.
 	db, err := rasql.Open(ctx, database, dialect.SQLite())
-	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -119,7 +118,7 @@ func Example_rasql_sqlite_query() {
 	// The generated create builder binds the row's fields as values, through
 	// the column accessors the generator wrote.
 	plan := store.NewUsersCreate().ID(42).Email("ada@example.com").FirstName("First").LastName("Last").Plan()
-	if _, err := rasql.ExecMutation(ctx, executor, plan); err != nil {
+	if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
@@ -132,7 +131,7 @@ func Example_rasql_sqlite_query() {
 		fmt.Printf("failed to build users query: %s\n", err)
 		return
 	}
-	user, err := rasql.One(ctx, executor, base.Where(rasql.EqualValue(cols.ID.Expr(), int64(42))))
+	user, err := rasql.One(ctx, db, base.Where(rasql.EqualValue(cols.ID.Expr(), int64(42))))
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return

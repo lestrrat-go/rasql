@@ -54,7 +54,6 @@ func Example_schema_bind_row_type() {
 	database.SetMaxOpenConns(1)
 
 	db, err := rasql.Open(ctx, database, dialect.SQLite())
-	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -88,7 +87,7 @@ func Example_schema_bind_row_type() {
 		fmt.Printf("failed to build create plan: %s\n", err)
 		return
 	}
-	if _, err := rasql.ExecMutation(ctx, executor, createPlan); err != nil {
+	if _, err := rasql.ExecMutation(ctx, db, createPlan); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
@@ -112,7 +111,7 @@ func Example_schema_bind_row_type() {
 
 	// The bound table is what the typed API takes, so a select from it
 	// already knows it returns a UserRow.
-	user, err := rasql.One(ctx, executor, rasql.Select(source.Source(), projection))
+	user, err := rasql.One(ctx, db, rasql.Select(source.Source(), projection))
 	if err != nil {
 		fmt.Printf("failed to query user: %s\n", err)
 		return

@@ -25,7 +25,6 @@ func Example_rasql_insert() {
 
 	// A DB couples a database handle with the dialect used to render SQL.
 	db, err := rasql.Open(ctx, database, dialect.SQLite())
-	executor := db
 	if err != nil {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
@@ -41,7 +40,7 @@ func Example_rasql_insert() {
 	// the column accessors the generator wrote.
 	// SQL: INSERT INTO users (id, email) VALUES (?, ?) (arguments: 42, "ada@example.com")
 	plan := store.NewUsersCreate().ID(42).Email("ada@example.com").FirstName("First").LastName("Last").Plan()
-	outcome, err := rasql.ExecMutation(ctx, executor, plan)
+	outcome, err := rasql.ExecMutation(ctx, db, plan)
 	if err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
