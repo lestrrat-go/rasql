@@ -13,9 +13,8 @@ type ProjectsRow struct {
 }
 
 var projectsDefinition = schema.TableDef{
-	Schema: "main",
-	Kind:   schema.ObjectKind("table"),
-	Name:   "projects",
+	Kind: schema.ObjectKind("table"),
+	Name: "projects",
 	Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "name", Type: schema.TextType{}, NativeType: &schema.NativeTypeDef{Dialect: "sqlite", Name: "VARCHAR", Kind: schema.NativeTypeKind("other"), Arguments: []string{"64"}}},

@@ -790,7 +790,7 @@ func compileRenderStatements(profileID string) ([]profileStatement, bool) {
 			{
 				Operation: "single_row_read",
 				Kind:      "query",
-				SQL:       "SELECT \"p\".\"id\" AS \"id\", \"p\".\"name\" AS \"name\" FROM \"main\".\"projects\" AS \"p\" WHERE (\"p\".\"id\" = ?) ORDER BY \"p\".\"id\"",
+				SQL:       "SELECT \"p\".\"id\" AS \"id\", \"p\".\"name\" AS \"name\" FROM \"projects\" AS \"p\" WHERE (\"p\".\"id\" = ?) ORDER BY \"p\".\"id\"",
 				Args: []profileArgument{
 					{Type: "int64", Value: "1"},
 				},
@@ -808,7 +808,7 @@ func compileRenderStatements(profileID string) ([]profileStatement, bool) {
 			{
 				Operation: "graph_root",
 				Kind:      "query",
-				SQL:       "SELECT \"p\".\"id\" AS \"id\", \"p\".\"name\" AS \"name\" FROM \"main\".\"projects\" AS \"p\" WHERE (\"p\".\"id\" = ?) ORDER BY \"p\".\"id\"",
+				SQL:       "SELECT \"p\".\"id\" AS \"id\", \"p\".\"name\" AS \"name\" FROM \"projects\" AS \"p\" WHERE (\"p\".\"id\" = ?) ORDER BY \"p\".\"id\"",
 				Args: []profileArgument{
 					{Type: "int64", Value: "1"},
 				},
@@ -816,7 +816,7 @@ func compileRenderStatements(profileID string) ([]profileStatement, bool) {
 			{
 				Operation: "graph_tasks",
 				Kind:      "query",
-				SQL:       "SELECT \"partition_source\".\"id\" AS \"id\", \"partition_source\".\"project_id\" AS \"project_id\", \"partition_source\".\"assignee_id\" AS \"assignee_id\", \"partition_source\".\"title\" AS \"title\", \"partition_source\".\"is_open\" AS \"is_open\", \"partition_source\".\"due_on\" AS \"due_on\", \"partition_source\".\"created_at\" AS \"created_at\" FROM (SELECT \"t\".\"id\" AS \"id\", \"t\".\"project_id\" AS \"project_id\", \"t\".\"assignee_id\" AS \"assignee_id\", \"t\".\"title\" AS \"title\", \"t\".\"is_open\" AS \"is_open\", \"t\".\"due_on\" AS \"due_on\", \"t\".\"created_at\" AS \"created_at\", row_number() OVER (PARTITION BY \"t\".\"project_id\" ORDER BY \"t\".\"id\") AS \"__rasql_partition_row\" FROM \"main\".\"tasks\" AS \"t\" WHERE (\"t\".\"project_id\" = ?) ORDER BY \"t\".\"id\", \"t\".\"id\") AS \"partition_source\" WHERE (\"partition_source\".\"__rasql_partition_row\" <= ?)",
+				SQL:       "SELECT \"partition_source\".\"id\" AS \"id\", \"partition_source\".\"project_id\" AS \"project_id\", \"partition_source\".\"assignee_id\" AS \"assignee_id\", \"partition_source\".\"title\" AS \"title\", \"partition_source\".\"is_open\" AS \"is_open\", \"partition_source\".\"due_on\" AS \"due_on\", \"partition_source\".\"created_at\" AS \"created_at\" FROM (SELECT \"t\".\"id\" AS \"id\", \"t\".\"project_id\" AS \"project_id\", \"t\".\"assignee_id\" AS \"assignee_id\", \"t\".\"title\" AS \"title\", \"t\".\"is_open\" AS \"is_open\", \"t\".\"due_on\" AS \"due_on\", \"t\".\"created_at\" AS \"created_at\", row_number() OVER (PARTITION BY \"t\".\"project_id\" ORDER BY \"t\".\"id\") AS \"__rasql_partition_row\" FROM \"tasks\" AS \"t\" WHERE (\"t\".\"project_id\" = ?) ORDER BY \"t\".\"id\", \"t\".\"id\") AS \"partition_source\" WHERE (\"partition_source\".\"__rasql_partition_row\" <= ?)",
 				Args: []profileArgument{
 					{Type: "int64", Value: "1"},
 					{Type: "int64", Value: "5"},
@@ -825,7 +825,7 @@ func compileRenderStatements(profileID string) ([]profileStatement, bool) {
 			{
 				Operation: "graph_assignees",
 				Kind:      "query",
-				SQL:       "SELECT \"partition_source\".\"id\" AS \"id\", \"partition_source\".\"name\" AS \"name\" FROM (SELECT \"m\".\"id\" AS \"id\", \"m\".\"name\" AS \"name\", row_number() OVER (PARTITION BY \"m\".\"id\" ORDER BY \"m\".\"id\") AS \"__rasql_partition_row\" FROM \"main\".\"members\" AS \"m\" WHERE (\"m\".\"id\" = ?) ORDER BY \"m\".\"id\", \"m\".\"id\") AS \"partition_source\" WHERE (\"partition_source\".\"__rasql_partition_row\" <= ?)",
+				SQL:       "SELECT \"partition_source\".\"id\" AS \"id\", \"partition_source\".\"name\" AS \"name\" FROM (SELECT \"m\".\"id\" AS \"id\", \"m\".\"name\" AS \"name\", row_number() OVER (PARTITION BY \"m\".\"id\" ORDER BY \"m\".\"id\") AS \"__rasql_partition_row\" FROM \"members\" AS \"m\" WHERE (\"m\".\"id\" = ?) ORDER BY \"m\".\"id\", \"m\".\"id\") AS \"partition_source\" WHERE (\"partition_source\".\"__rasql_partition_row\" <= ?)",
 				Args: []profileArgument{
 					{Type: "int64", Value: "20"},
 					{Type: "int64", Value: "2"},
@@ -834,7 +834,7 @@ func compileRenderStatements(profileID string) ([]profileStatement, bool) {
 			{
 				Operation: "create",
 				Kind:      "query",
-				SQL:       "INSERT INTO \"main\".\"members\" (\"id\", \"name\") VALUES (?, ?) RETURNING \"id\" AS \"id\", \"name\" AS \"name\"",
+				SQL:       "INSERT INTO \"members\" (\"id\", \"name\") VALUES (?, ?) RETURNING \"id\" AS \"id\", \"name\" AS \"name\"",
 				Args: []profileArgument{
 					{Type: "int64", Value: "4001"},
 					{Type: "string", Value: "created"},
@@ -843,7 +843,7 @@ func compileRenderStatements(profileID string) ([]profileStatement, bool) {
 			{
 				Operation: "patch",
 				Kind:      "query",
-				SQL:       "UPDATE \"main\".\"members\" SET \"name\" = ? WHERE (\"main\".\"members\".\"id\" = ?) RETURNING \"id\" AS \"id\", \"name\" AS \"name\"",
+				SQL:       "UPDATE \"members\" SET \"name\" = ? WHERE (\"members\".\"id\" = ?) RETURNING \"id\" AS \"id\", \"name\" AS \"name\"",
 				Args: []profileArgument{
 					{Type: "string", Value: "patched"},
 					{Type: "int64", Value: "4001"},

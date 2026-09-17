@@ -18,9 +18,8 @@ type TasksRow struct {
 }
 
 var tasksDefinition = schema.TableDef{
-	Schema: "main",
-	Kind:   schema.ObjectKind("table"),
-	Name:   "tasks",
+	Kind: schema.ObjectKind("table"),
+	Name: "tasks",
 	Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "project_id", Type: schema.IntegerType{}},

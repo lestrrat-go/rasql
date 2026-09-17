@@ -13,9 +13,8 @@ type MembersRow struct {
 }
 
 var membersDefinition = schema.TableDef{
-	Schema: "main",
-	Kind:   schema.ObjectKind("table"),
-	Name:   "members",
+	Kind: schema.ObjectKind("table"),
+	Name: "members",
 	Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "name", Type: schema.TextType{}, NativeType: &schema.NativeTypeDef{Dialect: "sqlite", Name: "VARCHAR", Kind: schema.NativeTypeKind("other"), Arguments: []string{"64"}}},
