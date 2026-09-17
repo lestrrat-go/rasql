@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -198,6 +199,10 @@ func (c command) prepareLiveGeneration(ctx context.Context, configPath string, c
 	generation := compilerir.GoConfig{Package: cfg.Package, Output: cfg.Output, Emitter: emitter, Prune: prune, Scalars: mappings.Scalars}
 	rowNames := cfg.Tables.RowNames
 	configuredNames, err := cfg.names()
+	if err != nil {
+		return liveGeneration{}, err
+	}
+	configuredNames, err = unqualifyConfiguredNames(configuredNames, result.Namespace)
 	if err != nil {
 		return liveGeneration{}, err
 	}
@@ -588,6 +593,60 @@ func queryConfigFor(cfg config, id compilerir.QueryID) configQuery {
 
 func schemaObjectName(namespace, name string) schema.ObjectName {
 	return schema.ObjectName{Schema: namespace, Name: name}
+}
+
+// unqualifyConfiguredNames rewrites every key naming namespace so that it names no namespace,
+// which is what the descriptors it is matched against now carry: schemasource.Read clears the
+// namespace the generating connection is using, so a key written "main.users" would otherwise
+// match nothing and report nothing, leaving the row name it states silently unused.
+//
+// Two keys that name one table after the rewrite refuse the run, naming both. "main.users" and
+// "users" address the same table on a connection using main, and picking one of them here would
+// discard the other's settings without saying so.
+func unqualifyConfiguredNames(names map[schema.ObjectName]configObjectNames, namespace string) (map[schema.ObjectName]configObjectNames, error) {
+	if namespace == "" || len(names) == 0 {
+		return names, nil
+	}
+	written := make(map[schema.ObjectName]string, len(names))
+	result := make(map[schema.ObjectName]configObjectNames, len(names))
+	for _, identity := range sortedObjectNames(names) {
+		key := identity
+		if key.Schema == namespace {
+			key.Schema = ""
+		}
+		if previous, ok := written[key]; ok {
+			return nil, fmt.Errorf(
+				"generate: config names keys %q and %q both name table %q, which this connection reaches without naming %q",
+				previous, objectNameKey(identity), key.Name, namespace)
+		}
+		written[key] = objectNameKey(identity)
+		result[key] = names[identity]
+	}
+	return result, nil
+}
+
+// sortedObjectNames orders a name map's keys by namespace and then name, so that a refusal
+// naming two of them reads the same on every run.
+func sortedObjectNames(names map[schema.ObjectName]configObjectNames) []schema.ObjectName {
+	ordered := make([]schema.ObjectName, 0, len(names))
+	for identity := range names {
+		ordered = append(ordered, identity)
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].Schema != ordered[j].Schema {
+			return ordered[i].Schema < ordered[j].Schema
+		}
+		return ordered[i].Name < ordered[j].Name
+	})
+	return ordered
+}
+
+// objectNameKey spells an object name the way rasql.json's own names key spells it.
+func objectNameKey(identity schema.ObjectName) string {
+	if identity.Schema == "" {
+		return identity.Name
+	}
+	return identity.Schema + "." + identity.Name
 }
 
 func exportGoName(name string) string {

@@ -13,9 +13,8 @@ type Task_labelsRow struct {
 }
 
 var task_labelsDefinition = schema.TableDef{
-	Schema: "main",
-	Kind:   schema.ObjectKind("table"),
-	Name:   "task_labels",
+	Kind: schema.ObjectKind("table"),
+	Name: "task_labels",
 	Columns: []schema.ColumnDef{
 		{Name: "task_id", Type: schema.IntegerType{}},
 		{Name: "label", Type: schema.TextType{}, NativeType: &schema.NativeTypeDef{Dialect: "sqlite", Name: "VARCHAR", Kind: schema.NativeTypeKind("other"), Arguments: []string{"32"}}},

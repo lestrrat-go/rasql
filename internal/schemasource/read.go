@@ -47,6 +47,15 @@ type ReadResult struct {
 	Queries    []compilerir.QueryAnalysis
 	Unresolved []catalogread.UnresolvedFact
 	Snapshots  []sourcefile.SourceFileSnapshot
+
+	// Namespace is what the server answered when asked which namespace the connection is
+	// using, and the one unqualifyDefaultNamespace therefore cleared from every descriptor in
+	// Catalog. It is empty when the server answered NULL, and for an engine this package has
+	// no such question for, and then nothing was cleared.
+	//
+	// A caller that matches configuration against a descriptor's namespace reads it, so that
+	// a setting written as "main.users" still reaches the table Catalog now calls "users".
+	Namespace string
 }
 
 func (r ReadResult) Clone() ReadResult {
@@ -64,9 +73,11 @@ func (r ReadResult) Clone() ReadResult {
 
 // Read opens req.DSN (or, with Scratch, creates a throwaway database through DisposableFactory),
 // discovers the engine profile from the server alone (ProfileDiscoverer, no config override),
-// applies or checks any configured migration directory, reads the catalog under req.Scope, and
-// runs the query analyzer against the same connection. ReadResult carries no lock record: there
-// is nothing here to compare against a checked-in file.
+// applies or checks any configured migration directory, reads the catalog under req.Scope, asks
+// the server which namespace the connection is using and clears that one from every descriptor
+// it read, and runs the query analyzer against the same connection. unqualifyDefaultNamespace
+// states what that clearing does and what it leaves alone. ReadResult carries no lock record:
+// there is nothing here to compare against a checked-in file.
 //
 // When MigrationsDir is set and Scratch is false, Read first asks the catalog whether the
 // migration history table exists, and refuses - naming "rasql migrate apply -dir <dir>" as the
@@ -169,7 +180,12 @@ func Read(ctx context.Context, req ReadRequest, deps Dependencies) (ReadResult, 
 		if e != nil {
 			return e
 		}
-		catalog, diagnostics := compilerir.PhysicalFromTableDefs(readEngineIdentity(req.Dialect, profile), read.Tables)
+		namespace, e := defaultNamespace(ctx, db, profile)
+		if e != nil {
+			return e
+		}
+		tables := unqualifyDefaultNamespace(read.Tables, namespace)
+		catalog, diagnostics := compilerir.PhysicalFromTableDefs(readEngineIdentity(req.Dialect, profile), tables)
 		if len(diagnostics) > 0 {
 			return fmt.Errorf("schema source: catalog conversion: %s", diagnostics[0].Message)
 		}
@@ -190,7 +206,7 @@ func Read(ctx context.Context, req ReadRequest, deps Dependencies) (ReadResult, 
 		allSnapshots := append([]sourcefile.SourceFileSnapshot(nil), migrationSnaps...)
 		allSnapshots = append(allSnapshots, querySnapshots...)
 
-		returnResult = ReadResult{Catalog: catalog, Profile: profile, Migrations: migrations, Queries: queries, Unresolved: read.Unresolved, Snapshots: allSnapshots}
+		returnResult = ReadResult{Catalog: catalog, Profile: profile, Migrations: migrations, Queries: queries, Unresolved: read.Unresolved, Snapshots: allSnapshots, Namespace: namespace}
 		return nil
 	}
 
