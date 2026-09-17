@@ -22,7 +22,7 @@ func runtimeParamQuery(t *testing.T) (rasql.Query[int64], rasql.Parameter[int64]
 	t.Helper()
 	table, err := rasql.TableOf[struct{}](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "value", Type: schema.IntegerType{}}}})
 	require.NoError(t, err)
-	relation, err := table.Source("i")
+	relation, err := table.As("i")
 	require.NoError(t, err)
 	column, err := rasql.BindColumn[struct{}, int64](relation, "value", "")
 	require.NoError(t, err)
@@ -31,7 +31,7 @@ func runtimeParamQuery(t *testing.T) (rasql.Query[int64], rasql.Parameter[int64]
 	projection, err := rasql.NewProjection([]rasql.ProjectionItem{rasql.Item("value", column.Expr(), schema.IntegerType{}, "")}, runtimeDecoder{schema: resultSchema})
 	require.NoError(t, err)
 	param := rasql.NewParameter[int64]()
-	query := rasql.Select(relation.Source(), projection).Where(rasql.EqualExpr(column.Expr(), param.Expr()))
+	query := rasql.Select(relation, projection).Where(rasql.EqualExpr(column.Expr(), param.Expr()))
 	return query, param
 }
 
@@ -42,7 +42,7 @@ func runtimeParamTwiceQuery(t *testing.T) (rasql.Query[int64], rasql.Parameter[i
 	t.Helper()
 	table, err := rasql.TableOf[struct{}](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "value", Type: schema.IntegerType{}}}})
 	require.NoError(t, err)
-	relation, err := table.Source("i")
+	relation, err := table.As("i")
 	require.NoError(t, err)
 	column, err := rasql.BindColumn[struct{}, int64](relation, "value", "")
 	require.NoError(t, err)
@@ -51,7 +51,7 @@ func runtimeParamTwiceQuery(t *testing.T) (rasql.Query[int64], rasql.Parameter[i
 	projection, err := rasql.NewProjection([]rasql.ProjectionItem{rasql.Item("value", column.Expr(), schema.IntegerType{}, "")}, runtimeDecoder{schema: resultSchema})
 	require.NoError(t, err)
 	param := rasql.NewParameter[int64]()
-	query := rasql.Select(relation.Source(), projection).Where(rasql.Or(
+	query := rasql.Select(relation, projection).Where(rasql.Or(
 		rasql.EqualExpr(column.Expr(), param.Expr()),
 		rasql.EqualExpr(column.Expr(), param.Expr()),
 	))
@@ -65,7 +65,7 @@ func runtimeParamCodecQuery(t *testing.T) (rasql.Query[int64], rasql.Parameter[i
 	t.Helper()
 	table, err := rasql.TableOf[struct{}](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "value", Type: schema.IntegerType{}}}})
 	require.NoError(t, err)
-	relation, err := table.Source("i")
+	relation, err := table.As("i")
 	require.NoError(t, err)
 	column, err := rasql.BindColumn[struct{}, int64](relation, "value", "")
 	require.NoError(t, err)
@@ -75,7 +75,7 @@ func runtimeParamCodecQuery(t *testing.T) (rasql.Query[int64], rasql.Parameter[i
 	require.NoError(t, err)
 	param, err := rasql.NewParameterWithCodec[int64]("age")
 	require.NoError(t, err)
-	query := rasql.Select(relation.Source(), projection).Where(rasql.EqualExpr(column.Expr(), param.Expr()))
+	query := rasql.Select(relation, projection).Where(rasql.EqualExpr(column.Expr(), param.Expr()))
 	return query, param
 }
 

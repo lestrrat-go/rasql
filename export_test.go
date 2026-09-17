@@ -134,8 +134,15 @@ func Q1NativeStatement(statement NativeStatement) (stmt.Statement, error) {
 // from sources rather than taking them back out.
 func Q1PlanSources(plan QueryPlan) []Source { return plan.sources }
 
-// Q1SourceColumns returns the columns a source declares.
-func Q1SourceColumns(source Source) []query.ResultColumn { return source.ref.Columns() }
+// Q1RowSource names the row type of a source a test read back out of a plan.
+// A plan keeps its sources normalized and drops the row type with them, so a
+// test holding only a plan has no other way to bind one of its columns.
+func Q1RowSource[R any](source Source) TypedSource[R] { return TypedSource[R]{source: source} }
+
+// Q1SourceColumns returns the columns a relation declares.
+func Q1SourceColumns(source Relation) []query.ResultColumn {
+	return source.relationSource().ref.Columns()
+}
 
 // Q1ProjectionExpressions returns the expression behind each projected column,
 // which is empty for a native projection because its columns come from the SQL
@@ -208,13 +215,6 @@ func Q1FailingPageKey[R any](q Query[R], err error) PageKey[R] {
 // caller composes a plan from queries and never takes one back out.
 func Q1GraphChildQuery[R, G, CR, CG any](plan GraphPlan[R, G]) Query[CR] {
 	return plan.node.query.(graphQuery[CR, CG]).value
-}
-
-// Q1TypedRelation rebuilds a typed relation from a source. SourceOf goes the
-// other way, from a table to a relation, so a caller holding only a source has
-// no way back to the relation that names its columns.
-func Q1TypedRelation[R any](source Source) TypedRelation[R] {
-	return TypedRelation[R]{source: source}
 }
 
 // Q1QueryCompilerOf returns the query compiler an executor carries, or nil when

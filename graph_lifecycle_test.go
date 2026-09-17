@@ -44,8 +44,8 @@ func lifecycleGraphPlan(t *testing.T, base rasql.Executor, one bool, attach func
 	t.Helper()
 	_, parentSource, childSource, _, parentQuery, childQuery := graphAcceptanceFixture(t, 1)
 	var err error
-	parents := rasql.Q1TypedRelation[graphParentRow](parentSource)
-	children := rasql.Q1TypedRelation[graphChildRow](childSource)
+	parents := parentSource
+	children := childSource
 	parentID, err := rasql.BindColumn[graphParentRow, int64](parents, "id", "")
 	require.NoError(t, err)
 	parentTenant, err := rasql.BindNullColumn[graphParentRow, int64](parents, "tenant", "")
@@ -84,8 +84,8 @@ func TestGraphLifecycle(t *testing.T) {
 		var err error
 		parentQuery, err = parentQuery.Limit(1)
 		require.NoError(t, err)
-		parents := rasql.Q1TypedRelation[graphParentRow](parentSource)
-		children := rasql.Q1TypedRelation[graphChildRow](childSource)
+		parents := parentSource
+		children := childSource
 		parentID, err := rasql.BindColumn[graphParentRow, int64](parents, "id", "")
 		require.NoError(t, err)
 		parentTenant, err := rasql.BindNullColumn[graphParentRow, int64](parents, "tenant", "")
@@ -253,9 +253,9 @@ func graphContractPlan(t *testing.T, order bool) (rasql.Executor, rasql.GraphPla
 	require.NoError(t, err)
 	parentTable := rasql.MustTableOf[graphParentRow](schema.TableDef{Name: "contract_parents", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}, Nullable: true}}, PrimaryKey: []string{"id"}})
 	childTable := rasql.MustTableOf[graphChildRow](schema.TableDef{Name: "contract_children", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "parent", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}}, {Name: "rank", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}})
-	parents, err := parentTable.Source("p")
+	parents, err := parentTable.As("p")
 	require.NoError(t, err)
-	children, err := childTable.Source("c")
+	children, err := childTable.As("c")
 	require.NoError(t, err)
 	parentID, err := rasql.BindColumn[graphParentRow, int64](parents, "id", "")
 	require.NoError(t, err)
@@ -277,8 +277,8 @@ func graphContractPlan(t *testing.T, order bool) (rasql.Executor, rasql.GraphPla
 	require.NoError(t, err)
 	childProjection, err := rasql.NewProjection([]rasql.ProjectionItem{rasql.Item("id", childID.Expr(), schema.IntegerType{}, ""), rasql.Item("parent", childParent.Expr(), schema.IntegerType{}, ""), rasql.Item("tenant", childTenant.Expr(), schema.IntegerType{}, ""), rasql.Item("rank", childRank.Expr(), schema.IntegerType{}, "")}, graphChildDecoder{schema: childSchema})
 	require.NoError(t, err)
-	parentQuery := rasql.Select(parents.Source(), parentProjection).OrderBy(rasql.AscExpr(parentID.Expr()))
-	childQuery := rasql.Select(children.Source(), childProjection)
+	parentQuery := rasql.Select(parents, parentProjection).OrderBy(rasql.AscExpr(parentID.Expr()))
+	childQuery := rasql.Select(children, childProjection)
 	if order {
 		childQuery = childQuery.OrderBy(rasql.AscExpr(childRank.Expr()), rasql.AscExpr(childID.Expr()))
 	} else {

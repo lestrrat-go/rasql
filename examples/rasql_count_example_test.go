@@ -50,12 +50,7 @@ func Example_rasql_count() {
 		}
 	}
 
-	source, err := users.Source("")
-	if err != nil {
-		fmt.Printf("failed to bind users source: %s\n", err)
-		return
-	}
-	id, err := rasql.BindColumn[store.UsersRow, int64](source, users.IDRef().Name(), "")
+	id, err := rasql.BindColumn[store.UsersRow, int64](users, users.IDRef().Name(), "")
 	if err != nil {
 		fmt.Printf("failed to bind id column: %s\n", err)
 		return
@@ -65,7 +60,7 @@ func Example_rasql_count() {
 		fmt.Printf("failed to build count projection: %s\n", err)
 		return
 	}
-	base := rasql.Select(source.Source(), countProjection)
+	base := rasql.Select(users, countProjection)
 
 	// One decodes the single COUNT(*) result, never a matched row.
 	// SQL: SELECT COUNT(*) AS count FROM users

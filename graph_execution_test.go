@@ -61,7 +61,7 @@ func (d graphChildDecoder) DecodeRow(source rasql.ScanSource, row *graphChildRow
 	return source.Scan(&row.ID, &row.Parent, &row.Tenant, &row.Rank)
 }
 
-func graphAcceptanceFixture(t *testing.T, childRows int) (rasql.Executor, rasql.Source, rasql.Source, rasql.Source, rasql.Query[graphParentRow], rasql.Query[graphChildRow]) {
+func graphAcceptanceFixture(t *testing.T, childRows int) (rasql.Executor, rasql.Table[graphParentRow], rasql.Table[graphChildRow], rasql.Source, rasql.Query[graphParentRow], rasql.Query[graphChildRow]) {
 	t.Helper()
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
@@ -95,9 +95,9 @@ func graphAcceptanceFixture(t *testing.T, childRows int) (rasql.Executor, rasql.
 		{Name: "tenant", Type: schema.IntegerType{}}, {Name: "rank", Type: schema.IntegerType{}},
 	}})
 	require.NoError(t, err)
-	parents, err := parentTable.Source("p")
+	parents, err := parentTable.As("p")
 	require.NoError(t, err)
-	children, err := childTable.Source("c")
+	children, err := childTable.As("c")
 	require.NoError(t, err)
 	parentID, err := rasql.BindColumn[graphParentRow, int64](parents, "id", "")
 	require.NoError(t, err)
@@ -119,9 +119,9 @@ func graphAcceptanceFixture(t *testing.T, childRows int) (rasql.Executor, rasql.
 	require.NoError(t, err)
 	childProjection, err := rasql.NewProjection([]rasql.ProjectionItem{rasql.Item("id", childID.Expr(), schema.IntegerType{}, ""), rasql.Item("parent", childParent.Expr(), schema.IntegerType{}, ""), rasql.Item("tenant", childTenant.Expr(), schema.IntegerType{}, ""), rasql.Item("rank", childRank.Expr(), schema.IntegerType{}, "")}, graphChildDecoder{schema: childSchema})
 	require.NoError(t, err)
-	parentQuery := rasql.Select(parents.Source(), parentProjection).OrderBy(rasql.AscExpr(parentID.Expr()))
-	childQuery := rasql.Select(children.Source(), childProjection).OrderBy(rasql.AscExpr(childRank.Expr()), rasql.AscExpr(childID.Expr()))
-	return executor, parents.Source(), children.Source(), rasql.Source{}, parentQuery, childQuery
+	parentQuery := rasql.Select(parents, parentProjection).OrderBy(rasql.AscExpr(parentID.Expr()))
+	childQuery := rasql.Select(children, childProjection).OrderBy(rasql.AscExpr(childRank.Expr()), rasql.AscExpr(childID.Expr()))
+	return executor, parents, children, rasql.Source{}, parentQuery, childQuery
 }
 
 func TestGraphExecution(t *testing.T) {
@@ -129,9 +129,9 @@ func TestGraphExecution(t *testing.T) {
 		executor, _, _, _, parentQuery, childQuery := graphAcceptanceFixture(t, 4_750)
 		parentTable := rasql.MustTableOf[graphParentRow](schema.TableDef{Name: "graph_parents", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}, Nullable: true}}})
 		childTable := rasql.MustTableOf[graphChildRow](schema.TableDef{Name: "graph_children", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "parent", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}}, {Name: "rank", Type: schema.IntegerType{}}}})
-		parentRelation, err := parentTable.Source("p")
+		parentRelation, err := parentTable.As("p")
 		require.NoError(t, err)
-		childRelation, err := childTable.Source("c")
+		childRelation, err := childTable.As("c")
 		require.NoError(t, err)
 		parentID, err := rasql.BindColumn[graphParentRow, int64](parentRelation, "id", "")
 		require.NoError(t, err)
@@ -169,9 +169,9 @@ func TestGraphExecution(t *testing.T) {
 		executor, _, _, _, parentQuery, childQuery := graphAcceptanceFixture(t, 100)
 		parentTable := rasql.MustTableOf[graphParentRow](schema.TableDef{Name: "graph_parents", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}, Nullable: true}}})
 		childTable := rasql.MustTableOf[graphChildRow](schema.TableDef{Name: "graph_children", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "parent", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}}, {Name: "rank", Type: schema.IntegerType{}}}})
-		parents, err := parentTable.Source("p")
+		parents, err := parentTable.As("p")
 		require.NoError(t, err)
-		children, err := childTable.Source("c")
+		children, err := childTable.As("c")
 		require.NoError(t, err)
 		pid, err := rasql.BindColumn[graphParentRow, int64](parents, "id", "")
 		require.NoError(t, err)
@@ -208,9 +208,9 @@ func TestGraphExecution(t *testing.T) {
 		_, _, _, _, parentQuery, childQuery := graphAcceptanceFixture(t, 0)
 		parentTable := rasql.MustTableOf[graphParentRow](schema.TableDef{Name: "graph_parents", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}, Nullable: true}}})
 		childTable := rasql.MustTableOf[graphChildRow](schema.TableDef{Name: "graph_children", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "parent", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}}, {Name: "rank", Type: schema.IntegerType{}}}})
-		parents, err := parentTable.Source("p")
+		parents, err := parentTable.As("p")
 		require.NoError(t, err)
-		children, err := childTable.Source("c")
+		children, err := childTable.As("c")
 		require.NoError(t, err)
 		parentID, err := rasql.BindColumn[graphParentRow, int64](parents, "id", "")
 		require.NoError(t, err)
@@ -231,8 +231,8 @@ func TestGraphExecution(t *testing.T) {
 
 	t.Run("ten heterogeneous levels copy their callbacks", func(t *testing.T) {
 		base, parentSource, childSource, _, parentQuery, childQuery := graphAcceptanceFixture(t, 1)
-		parents := rasql.Q1TypedRelation[graphParentRow](parentSource)
-		children := rasql.Q1TypedRelation[graphChildRow](childSource)
+		parents := parentSource
+		children := childSource
 		parentID, err := rasql.BindColumn[graphParentRow, int64](parents, "id", "")
 		require.NoError(t, err)
 		parentTenant, err := rasql.BindNullColumn[graphParentRow, int64](parents, "tenant", "")
@@ -330,8 +330,8 @@ func TestGraphExecution(t *testing.T) {
 
 	t.Run("duplicate attachments own independent slices", func(t *testing.T) {
 		base, parentSource, childSource, _, parentQuery, childQuery := graphAcceptanceFixture(t, 10)
-		parents := rasql.Q1TypedRelation[graphParentRow](parentSource)
-		children := rasql.Q1TypedRelation[graphChildRow](childSource)
+		parents := parentSource
+		children := childSource
 		parentID, err := rasql.BindColumn[graphParentRow, int64](parents, "id", "")
 		require.NoError(t, err)
 		parentTenant, err := rasql.BindNullColumn[graphParentRow, int64](parents, "tenant", "")
@@ -368,8 +368,8 @@ func TestGraphExecution(t *testing.T) {
 		base, parentSource, childSource, _, parentQuery, childQuery := graphAcceptanceFixture(t, 110)
 		counter := &graphCountingExecutor{Executor: base}
 		executor := graphProfiled(t, counter)
-		parents := rasql.Q1TypedRelation[graphParentRow](parentSource)
-		children := rasql.Q1TypedRelation[graphChildRow](childSource)
+		parents := parentSource
+		children := childSource
 		parentID, err := rasql.BindColumn[graphParentRow, int64](parents, "id", "")
 		require.NoError(t, err)
 		parentTenant, err := rasql.BindNullColumn[graphParentRow, int64](parents, "tenant", "")
@@ -403,8 +403,8 @@ func TestGraphExecution(t *testing.T) {
 		counter := &graphCountingExecutor{Executor: base}
 		executor := graphProfiled(t, counter)
 
-		parents := rasql.Q1TypedRelation[graphParentRow](parentSource)
-		children := rasql.Q1TypedRelation[graphChildRow](childSource)
+		parents := parentSource
+		children := childSource
 		parentID, err := rasql.BindColumn[graphParentRow, int64](parents, "id", "")
 		require.NoError(t, err)
 		parentTenant, err := rasql.BindNullColumn[graphParentRow, int64](parents, "tenant", "")
@@ -440,8 +440,8 @@ func TestGraphExecution(t *testing.T) {
 		counter := &graphRuntimeCountingExecutor{Executor: base}
 		executor := graphProfiled(t, counter)
 
-		parents := rasql.Q1TypedRelation[graphParentRow](parentSource)
-		children := rasql.Q1TypedRelation[graphChildRow](childSource)
+		parents := parentSource
+		children := childSource
 		parentID, err := rasql.BindColumn[graphParentRow, int64](parents, "id", "")
 		require.NoError(t, err)
 		parentTenant, err := rasql.BindNullColumn[graphParentRow, int64](parents, "tenant", "")
@@ -501,8 +501,8 @@ func TestGraphExecution(t *testing.T) {
 
 	t.Run("a direct child mapper panic reports the decoded row count", func(t *testing.T) {
 		base, parentSource, childSource, _, parentQuery, childQuery := graphAcceptanceFixture(t, 1)
-		parents := rasql.Q1TypedRelation[graphParentRow](parentSource)
-		children := rasql.Q1TypedRelation[graphChildRow](childSource)
+		parents := parentSource
+		children := childSource
 		parentID, err := rasql.BindColumn[graphParentRow, int64](parents, "id", "")
 		require.NoError(t, err)
 		parentTenant, err := rasql.BindNullColumn[graphParentRow, int64](parents, "tenant", "")
@@ -556,8 +556,8 @@ func TestGraphExecution(t *testing.T) {
 			}},
 		}}
 		executor := graphProfiled(t, counter)
-		parents := rasql.Q1TypedRelation[graphParentRow](parentSource)
-		children := rasql.Q1TypedRelation[graphChildRow](childSource)
+		parents := parentSource
+		children := childSource
 		parentID, err := rasql.BindColumn[graphParentRow, int64](parents, "id", "")
 		require.NoError(t, err)
 		parentTenant, err := rasql.BindNullColumn[graphParentRow, int64](parents, "tenant", "")

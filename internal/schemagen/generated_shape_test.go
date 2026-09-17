@@ -30,11 +30,17 @@ var updateGeneratedShape = flag.Bool("update-golden", false, "rewrite testdata/g
 // patch builder for schema.OperationUpdate -- so the second gets neither
 // builder and the third gets only the create one.
 //
+// Two declarations in these files are already narrower than they read.
+// rasql.TypedRelation[TasksRow] is an alias for rasql.Table[TasksRow], so the
+// emitted Bind takes the table itself, and the emitted Source method is the
+// deprecated widening that rasql.SourceOf performs: an alias and a read check,
+// and nothing else.
+//
 // What these files do not yet show is the wrapper holding its rasql.Table in
-// an unexported field, with Ref, Source and Delete methods over it. That
-// change moves the bytes of every checked-in generated store, so it lands in
-// the PR that regenerates sample/taskboard and internal/conformance/testdata
-// and rebuilds the walkthrough bundle.
+// an unexported field, with Ref and Delete methods over it and no Source method
+// at all. That change moves the bytes of every checked-in generated store, so
+// it lands in the PR that regenerates sample/taskboard and
+// internal/conformance/testdata and rebuilds the walkthrough bundle.
 func TestGeneratedShape(t *testing.T) {
 	for _, testcase := range []struct {
 		file  string

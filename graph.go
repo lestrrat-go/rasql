@@ -458,13 +458,14 @@ func HasOne[P, G, C, CG any](name string, parent GraphKey[P], child GraphKey[C],
 	options.Order = append([]OrderTerm(nil), options.Order...)
 	return graphEdgeValue[P, G, C, CG]{spec: &graphEdgeSpec{kind: graphHasOne, name: name, parentKey: parent.key, childKey: child.key, child: children.node, options: options, attach: graphAttachOne[G, CG]{fn: attach}}}, nil
 }
-func ManyThrough[P, G, J, C, CG any](name string, parent GraphKey[P], junctionParent GraphKey[J], junctionChild GraphKey[J], child GraphKey[C], junction Source, children GraphPlan[C, CG], options EdgeOptions, attach func(*G, LoadedMany[CG])) (GraphEdge[P, G], error) {
-	if attach == nil || children.node == nil || parent.key == nil || junctionParent.key == nil || junctionChild.key == nil || child.key == nil || junction.ref.QualifiedName() == "" {
+func ManyThrough[P, G, J, C, CG any](name string, parent GraphKey[P], junctionParent GraphKey[J], junctionChild GraphKey[J], child GraphKey[C], junction Relation, children GraphPlan[C, CG], options EdgeOptions, attach func(*G, LoadedMany[CG])) (GraphEdge[P, G], error) {
+	junctionRef := junction.relationSource()
+	if attach == nil || children.node == nil || parent.key == nil || junctionParent.key == nil || junctionChild.key == nil || child.key == nil || junctionRef.ref.QualifiedName() == "" {
 		return nil, planError("invalid_graph_edge", "edge", "is incomplete")
 	}
 	if len(junctionParent.key.Parts) != len(parent.key.Parts) || len(junctionChild.key.Parts) != len(child.key.Parts) {
 		return nil, planError("invalid_graph_edge", "edge", "key widths differ")
 	}
 	options.Order = append([]OrderTerm(nil), options.Order...)
-	return graphEdgeValue[P, G, C, CG]{spec: &graphEdgeSpec{kind: graphManyThrough, name: name, parentKey: parent.key, childKey: child.key, junctionParent: junctionParent.key, junctionChild: junctionChild.key, junction: junction, child: children.node, options: options, attach: graphAttachMany[G, CG]{fn: attach}}}, nil
+	return graphEdgeValue[P, G, C, CG]{spec: &graphEdgeSpec{kind: graphManyThrough, name: name, parentKey: parent.key, childKey: child.key, junctionParent: junctionParent.key, junctionChild: junctionChild.key, junction: junctionRef, child: children.node, options: options, attach: graphAttachMany[G, CG]{fn: attach}}}, nil
 }

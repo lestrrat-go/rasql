@@ -50,8 +50,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, rasql.CreateTable(t.Context(), executor, events.Ref()))
 
-		relation, err := events.Source("")
-		require.NoError(t, err)
+		relation := events
 		eventID, err := rasql.BindColumn[roundtripEvent, int64](relation, "id", "")
 		require.NoError(t, err)
 		eventActive, err := rasql.BindColumn[roundtripEvent, bool](relation, "active", "")
@@ -85,12 +84,12 @@ func TestSQLiteTypedSelect(t *testing.T) {
 		_, err = rasql.ExecMutation(t.Context(), executor, createPlan)
 		require.NoError(t, err)
 
-		actual, err := rasql.One(t.Context(), executor, rasql.Select(relation.Source(), projection).
+		actual, err := rasql.One(t.Context(), executor, rasql.Select(relation, projection).
 			Where(rasql.EqualValue(eventID.Expr(), expected.ID)))
 		require.NoError(t, err)
 		require.Equal(t, expected, actual)
 
-		_, err = rasql.One(t.Context(), executor, rasql.Select(relation.Source(), projection).
+		_, err = rasql.One(t.Context(), executor, rasql.Select(relation, projection).
 			Where(rasql.EqualValue(eventID.Expr(), expected.ID+1)))
 		require.ErrorIs(t, err, rasql.ErrNoRows)
 		require.ErrorIs(t, err, sql.ErrNoRows)
@@ -119,8 +118,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 		_, err = database.ExecContext(t.Context(), `INSERT INTO records (id, note) VALUES (1, NULL)`)
 		require.NoError(t, err)
 
-		relation, err := records.Source("")
-		require.NoError(t, err)
+		relation := records
 		recordID, err := rasql.BindColumn[roundtripRecord, int64](relation, "id", "")
 		require.NoError(t, err)
 		recordNote, err := rasql.BindNullColumn[roundtripRecord, string](relation, "note", "")
@@ -136,7 +134,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 		}, roundtripRecordDecoder{schema: resultSchema})
 		require.NoError(t, err)
 
-		actual, err := rasql.One(t.Context(), executor, rasql.Select(relation.Source(), projection).
+		actual, err := rasql.One(t.Context(), executor, rasql.Select(relation, projection).
 			Where(rasql.EqualValue(recordID.Expr(), int64(1))))
 		require.NoError(t, err)
 		require.False(t, actual.Note.Valid)
@@ -164,8 +162,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, rasql.CreateTable(t.Context(), executor, users.Ref()))
 
-		relation, err := users.Source("")
-		require.NoError(t, err)
+		relation := users
 		userID, err := rasql.BindColumn[roundtripUser, int64](relation, "id", "")
 		require.NoError(t, err)
 		userEmail, err := rasql.BindColumn[roundtripUser, string](relation, "email", "")
@@ -188,7 +185,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 			require.NoError(t, err)
 		}
 
-		actual, err := rasql.All(t.Context(), executor, rasql.Select(relation.Source(), projection).
+		actual, err := rasql.All(t.Context(), executor, rasql.Select(relation, projection).
 			Where(rasql.InValues(userID.Expr(), inserted[0].ID, inserted[2].ID)).
 			OrderBy(rasql.AscExpr(userID.Expr())))
 		require.NoError(t, err)
@@ -226,8 +223,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, rasql.CreateTable(t.Context(), executor, users.Ref()))
 
-		usersRelation, err := users.Source("")
-		require.NoError(t, err)
+		usersRelation := users
 		userID, err := rasql.BindColumn[roundtripUser, int64](usersRelation, "id", "")
 		require.NoError(t, err)
 		userEmail, err := rasql.BindColumn[roundtripUser, string](usersRelation, "email", "")
@@ -249,8 +245,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.NoError(t, rasql.CreateTable(t.Context(), executor, orders.Ref()))
-		ordersRelation, err := orders.Source("")
-		require.NoError(t, err)
+		ordersRelation := orders
 		orderID, err := rasql.BindColumn[roundtripOrder, int64](ordersRelation, "id", "")
 		require.NoError(t, err)
 		orderUserID, err := rasql.BindColumn[roundtripOrder, int64](ordersRelation, "user_id", "")
@@ -283,12 +278,12 @@ func TestSQLiteTypedSelect(t *testing.T) {
 
 		highSpenderUserID, err := rasql.Scalar("user_id", orderUserID.Expr(), schema.IntegerType{}, "")
 		require.NoError(t, err)
-		highSpenders := rasql.Select(ordersRelation.Source(), highSpenderUserID).
+		highSpenders := rasql.Select(ordersRelation, highSpenderUserID).
 			Where(rasql.GreaterValue(orderAmount.Expr(), int64(50)))
 
 		inHighSpenders, err := rasql.InQuery(userID.Expr(), highSpenders)
 		require.NoError(t, err)
-		viaInSelect, err := rasql.All(t.Context(), executor, rasql.Select(usersRelation.Source(), userProjection).
+		viaInSelect, err := rasql.All(t.Context(), executor, rasql.Select(usersRelation, userProjection).
 			Where(inHighSpenders).
 			OrderBy(rasql.AscExpr(userID.Expr())))
 		require.NoError(t, err)
@@ -328,8 +323,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, rasql.CreateTable(t.Context(), executor, users.Ref()))
 
-		relation, err := users.Source("")
-		require.NoError(t, err)
+		relation := users
 		userID, err := rasql.BindColumn[roundtripScoredUser, int64](relation, "id", "")
 		require.NoError(t, err)
 		email, err := rasql.BindColumn[roundtripScoredUser, string](relation, "email", "")
@@ -370,7 +364,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 			require.NoError(t, err)
 		}
 
-		byLowerEmail, err := rasql.All(t.Context(), executor, rasql.Select(relation.Source(), projection).
+		byLowerEmail, err := rasql.All(t.Context(), executor, rasql.Select(relation, projection).
 			Where(rasql.EqualValue(rasql.LowerExpr(email.Expr()), "ada@example.com")))
 		require.NoError(t, err)
 		require.Equal(t, []roundtripScoredUser{inserted[0]}, byLowerEmail)
@@ -397,8 +391,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, rasql.CreateTable(t.Context(), executor, events.Ref()))
 
-		relation, err := events.Source("")
-		require.NoError(t, err)
+		relation := events
 		eventID, err := rasql.BindColumn[roundtripCountedEvent, int64](relation, "id", "")
 		require.NoError(t, err)
 		eventActive, err := rasql.BindColumn[roundtripCountedEvent, bool](relation, "active", "")
@@ -418,18 +411,18 @@ func TestSQLiteTypedSelect(t *testing.T) {
 		countProjection, err := rasql.Scalar("count", rasql.CountRows(), schema.IntegerType{}, "")
 		require.NoError(t, err)
 
-		total, err := rasql.One(t.Context(), executor, rasql.Select(relation.Source(), countProjection))
+		total, err := rasql.One(t.Context(), executor, rasql.Select(relation, countProjection))
 		require.NoError(t, err)
 		require.Equal(t, int64(3), total)
 
-		active, err := rasql.One(t.Context(), executor, rasql.Select(relation.Source(), countProjection).
+		active, err := rasql.One(t.Context(), executor, rasql.Select(relation, countProjection).
 			Where(rasql.EqualValue(eventActive.Expr(), true)))
 		require.NoError(t, err)
 		require.Equal(t, int64(2), active)
 
 		// Two predicates must both reach the counted statement, so the count has
 		// to drop the inactive row and the second active row alike.
-		activeFirst, err := rasql.One(t.Context(), executor, rasql.Select(relation.Source(), countProjection).
+		activeFirst, err := rasql.One(t.Context(), executor, rasql.Select(relation, countProjection).
 			Where(rasql.And(rasql.EqualValue(eventActive.Expr(), true), rasql.EqualValue(eventID.Expr(), int64(1)))))
 		require.NoError(t, err)
 		require.Equal(t, int64(1), activeFirst)
@@ -554,8 +547,7 @@ func TestSQLiteRoundTrip(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, rasql.CreateTable(t.Context(), executor, invoices.Ref()))
 
-		relation, err := invoices.Source("")
-		require.NoError(t, err)
+		relation := invoices
 		invoiceID, err := rasql.BindColumn[roundtripInvoice, int64](relation, "id", "")
 		require.NoError(t, err)
 		invoiceAmount, err := rasql.BindColumn[roundtripInvoice, string](relation, "amount", "")
@@ -577,7 +569,7 @@ func TestSQLiteRoundTrip(t *testing.T) {
 		_, err = rasql.ExecMutation(t.Context(), executor, plan)
 		require.NoError(t, err)
 
-		actual, err := rasql.One(t.Context(), executor, rasql.Select(relation.Source(), projection).
+		actual, err := rasql.One(t.Context(), executor, rasql.Select(relation, projection).
 			Where(rasql.EqualValue(invoiceID.Expr(), expected.ID)))
 		require.NoError(t, err)
 		require.Equal(t, expected, actual)
@@ -614,8 +606,7 @@ func TestSQLiteRoundTrip(t *testing.T) {
 		userIDColumn := queryEvents.Column("user_id")
 		action := queryEvents.Column("action")
 
-		relation, err := events.Source("")
-		require.NoError(t, err)
+		relation := events
 		eventID, err := rasql.BindColumn[roundtripQualifiedEvent, int64](relation, "id", "")
 		require.NoError(t, err)
 		eventUserID, err := rasql.BindColumn[roundtripQualifiedEvent, int64](relation, "user_id", "")
@@ -650,7 +641,7 @@ func TestSQLiteRoundTrip(t *testing.T) {
 		require.NoError(t, err)
 
 		// SELECT with a qualified predicate.
-		byUser, err := rasql.All(t.Context(), executor, rasql.Select(relation.Source(), eventProjection).
+		byUser, err := rasql.All(t.Context(), executor, rasql.Select(relation, eventProjection).
 			Where(rasql.EqualValue(eventUserID.Expr(), int64(10))).
 			OrderBy(rasql.AscExpr(eventID.Expr())))
 		require.NoError(t, err)
@@ -670,7 +661,7 @@ func TestSQLiteRoundTrip(t *testing.T) {
 			rasql.Item("total", rasql.CountRows(), schema.IntegerType{}, ""),
 		}, roundtripUserEventCountDecoder{schema: countResultSchema})
 		require.NoError(t, err)
-		grouped, err := rasql.All(t.Context(), executor, rasql.Select(relation.Source(), countProjection).
+		grouped, err := rasql.All(t.Context(), executor, rasql.Select(relation, countProjection).
 			GroupBy(rasql.Group(eventUserID.Expr())).
 			OrderBy(rasql.AscExpr(eventUserID.Expr())))
 		require.NoError(t, err)
@@ -683,12 +674,12 @@ func TestSQLiteRoundTrip(t *testing.T) {
 		// statement.
 		prolificUserID, err := rasql.Scalar("user_id", eventUserID.Expr(), schema.IntegerType{}, "")
 		require.NoError(t, err)
-		prolific := rasql.Select(relation.Source(), prolificUserID).
+		prolific := rasql.Select(relation, prolificUserID).
 			GroupBy(rasql.Group(eventUserID.Expr())).
 			Having(rasql.GreaterValue(rasql.CountRows(), int64(1)))
 		inProlific, err := rasql.InQuery(eventUserID.Expr(), prolific)
 		require.NoError(t, err)
-		viaSubquery, err := rasql.All(t.Context(), executor, rasql.Select(relation.Source(), eventProjection).
+		viaSubquery, err := rasql.All(t.Context(), executor, rasql.Select(relation, eventProjection).
 			Where(inProlific).
 			OrderBy(rasql.AscExpr(eventID.Expr())))
 		require.NoError(t, err)
@@ -709,7 +700,7 @@ func TestSQLiteRoundTrip(t *testing.T) {
 		_, err = rasql.ExecMutation(t.Context(), executor, updatePlan)
 		require.NoError(t, err)
 
-		updated, err := rasql.One(t.Context(), executor, rasql.Select(relation.Source(), eventProjection).
+		updated, err := rasql.One(t.Context(), executor, rasql.Select(relation, eventProjection).
 			Where(rasql.EqualValue(eventID.Expr(), int64(1))))
 		require.NoError(t, err)
 		require.Equal(t, "closed", updated.Action)
@@ -724,7 +715,7 @@ func TestSQLiteRoundTrip(t *testing.T) {
 		_, err = rasql.ExecMutation(t.Context(), executor, deletePlan)
 		require.NoError(t, err)
 
-		remaining, err := rasql.All(t.Context(), executor, rasql.Select(relation.Source(), eventProjection).
+		remaining, err := rasql.All(t.Context(), executor, rasql.Select(relation, eventProjection).
 			OrderBy(rasql.AscExpr(eventID.Expr())))
 		require.NoError(t, err)
 		require.Equal(t, []roundtripQualifiedEvent{
@@ -764,8 +755,7 @@ func TestSQLiteRoundTrip(t *testing.T) {
 		status := queryUsers.Column("status")
 		require.NoError(t, rasql.CreateTable(t.Context(), executor, users.Ref()))
 
-		relation, err := users.Source("")
-		require.NoError(t, err)
+		relation := users
 		userID, err := rasql.BindColumn[roundtripReturningUser, int64](relation, "id", "")
 		require.NoError(t, err)
 		userEmail, err := rasql.BindColumn[roundtripReturningUser, string](relation, "email", "")
@@ -826,7 +816,7 @@ func TestSQLiteRoundTrip(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []roundtripDeletedRow{{ID: 1}}, deleted)
 
-		remaining, err := rasql.All(t.Context(), executor, rasql.Select(relation.Source(), userProjection))
+		remaining, err := rasql.All(t.Context(), executor, rasql.Select(relation, userProjection))
 		require.NoError(t, err)
 		require.Empty(t, remaining)
 	})

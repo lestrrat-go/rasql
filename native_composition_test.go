@@ -127,7 +127,7 @@ func nativeCompositionOuterQuery(t *testing.T, source rasql.TypedSource[nativeCo
 		rasql.Item("marker", marker, schema.IntegerType{}, codecID),
 	}, nativeCompositionOuterDecoder{schema: resultSchema})
 	require.NoError(t, err)
-	return rasql.Select(source.Source(), projection).Where(rasql.EqualExpr(first.Expr(), whereValue))
+	return rasql.Select(source, projection).Where(rasql.EqualExpr(first.Expr(), whereValue))
 }
 
 func TestNativeComposition(t *testing.T) {
@@ -153,7 +153,7 @@ func TestNativeComposition(t *testing.T) {
 		codec.mu.Unlock()
 		cte, err := rasql.CTEOf("native_values", base)
 		require.NoError(t, err)
-		cteSource, err := cte.Source("native_alias")
+		cteSource, err := cte.As("native_alias")
 		require.NoError(t, err)
 		cteQuery := nativeCompositionOuterQuery(t, cteSource, "count")
 		cteQuery, err = rasql.With(cteQuery, cte)
@@ -185,8 +185,8 @@ func TestNativeComposition(t *testing.T) {
 		second, err := rasql.Derive(base, "second_values")
 		require.NoError(t, err)
 		executor := nativeCompositionSQLiteExecutor(t, "snapshot", nativeCompositionSnapshotCodec{})
-		firstQuery := rasql.Select(first.Source(), projectionFromSnapshotSource(t, first))
-		secondQuery := rasql.Select(second.Source(), projectionFromSnapshotSource(t, second))
+		firstQuery := rasql.Select(first, projectionFromSnapshotSource(t, first))
+		secondQuery := rasql.Select(second, projectionFromSnapshotSource(t, second))
 		firstValues, err := rasql.All(t.Context(), executor, firstQuery)
 		require.NoError(t, err)
 		secondValues, err := rasql.All(t.Context(), executor, secondQuery)
@@ -308,7 +308,7 @@ func TestNativeComposition(t *testing.T) {
 		require.NoError(t, err)
 		outerProjection, err := rasql.NewProjection([]rasql.ProjectionItem{rasql.Item("value", value.Expr(), schema.TextType{}, "missing")}, nativeCompositionStringDecoder{schema: outerSchema})
 		require.NoError(t, err)
-		query := rasql.Select(source.Source(), outerProjection)
+		query := rasql.Select(source, outerProjection)
 		spy := &nativeCompositionSpyExecutor{dialect: dialect.PostgreSQL()}
 		profile := rasql.PostgreSQL17()
 		executor, err := rasql.WithEngineProfile(spy, profile)
@@ -344,7 +344,7 @@ func TestNativeComposition(t *testing.T) {
 		require.NoError(t, err)
 		outerProjection, err := rasql.Scalar("value", value.Expr(), schema.IntegerType{}, "")
 		require.NoError(t, err)
-		query := rasql.Select(source.Source(), outerProjection)
+		query := rasql.Select(source, outerProjection)
 		spy := &nativeCompositionSpyExecutor{dialect: dialect.SQLite()}
 		profile := rasql.SQLite335()
 		executor, err := rasql.WithEngineProfile(spy, profile)
@@ -383,7 +383,7 @@ func TestNativeComposition(t *testing.T) {
 		}, nativeCompositionNullableDecoder{schema: outerSchema})
 		require.NoError(t, err)
 		executor := nativeCompositionSQLiteExecutor(t, "unused", &nativeCompositionCodec{})
-		rows, err := rasql.All(t.Context(), executor, rasql.Select(source.Source(), outerProjection))
+		rows, err := rasql.All(t.Context(), executor, rasql.Select(source, outerProjection))
 		require.NoError(t, err)
 		require.Equal(t, []nativeCompositionNullableRow{{}}, rows)
 	})
@@ -417,20 +417,20 @@ func TestNativeComposition(t *testing.T) {
 		require.NoError(t, err)
 		outerProjection, err := rasql.NewProjection([]rasql.ProjectionItem{rasql.Item("first", first.Expr(), schema.IntegerType{}, ""), rasql.Item("marker", rasql.Value("99"), schema.TextType{}, "")}, nativeCompositionPGOuterDecoder{schema: outerSchema})
 		require.NoError(t, err)
-		derivedQuery := rasql.Select(derived.Source(), outerProjection).Where(rasql.EqualExpr(first.Expr(), whereValue))
+		derivedQuery := rasql.Select(derived, outerProjection).Where(rasql.EqualExpr(first.Expr(), whereValue))
 		values, err := rasql.All(t.Context(), executor, derivedQuery)
 		require.NoError(t, err)
 		require.Equal(t, []nativeCompositionPGOuter{{First: 22, Marker: "99"}}, values)
 
 		cte, err := rasql.CTEOf("native_values", base)
 		require.NoError(t, err)
-		cteSource, err := cte.Source("native_alias")
+		cteSource, err := cte.As("native_alias")
 		require.NoError(t, err)
 		cteFirst, err := rasql.BindResultColumn[nativeCompositionPGRow, int64](cteSource, "first")
 		require.NoError(t, err)
 		cteProjection, err := rasql.NewProjection([]rasql.ProjectionItem{rasql.Item("first", cteFirst.Expr(), schema.IntegerType{}, ""), rasql.Item("marker", rasql.Value("99"), schema.TextType{}, "")}, nativeCompositionPGOuterDecoder{schema: outerSchema})
 		require.NoError(t, err)
-		cteQuery, err := rasql.With(rasql.Select(cteSource.Source(), cteProjection).Where(rasql.EqualExpr(cteFirst.Expr(), rasql.Value(int64(22)))), cte)
+		cteQuery, err := rasql.With(rasql.Select(cteSource, cteProjection).Where(rasql.EqualExpr(cteFirst.Expr(), rasql.Value(int64(22)))), cte)
 		require.NoError(t, err)
 		values, err = rasql.All(t.Context(), executor, cteQuery)
 		require.NoError(t, err)
@@ -586,13 +586,13 @@ func nativeCompositionLifecycleQuery(t *testing.T, cte bool) rasql.Query[int64] 
 	if cte {
 		common, commonErr := rasql.CTEOf("native_values", base)
 		require.NoError(t, commonErr)
-		source, err = common.Source("native_alias")
+		source, err = common.As("native_alias")
 		require.NoError(t, err)
 		value, valueErr := rasql.BindResultColumn[int64, int64](source, "value")
 		require.NoError(t, valueErr)
 		outer, outerErr := rasql.Scalar("value", value.Expr(), schema.IntegerType{}, "")
 		require.NoError(t, outerErr)
-		query, queryErr := rasql.With(rasql.Select(source.Source(), outer), common)
+		query, queryErr := rasql.With(rasql.Select(source, outer), common)
 		require.NoError(t, queryErr)
 		return query
 	}
@@ -602,7 +602,7 @@ func nativeCompositionLifecycleQuery(t *testing.T, cte bool) rasql.Query[int64] 
 	require.NoError(t, err)
 	outer, err := rasql.Scalar("value", value.Expr(), schema.IntegerType{}, "")
 	require.NoError(t, err)
-	return rasql.Select(source.Source(), outer)
+	return rasql.Select(source, outer)
 }
 
 type nativeCompositionPGOuter struct {

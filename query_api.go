@@ -199,56 +199,89 @@ func cloneItems(items []ProjectionItem) []ProjectionItem {
 
 type Source struct{ ref query.RelationRef }
 
-// Source returns t as a relation a query selects from, under alias. An empty
-// alias keeps the alias t already carries.
+// Relation is one appearance of something a statement selects from: a table, a
+// derived query, or a CTE reference. Only this package implements it, so the
+// set is closed.
 //
-// It reports an error for a descriptor that does not permit
-// schema.OperationRead, which is how a view-kinded descriptor written for
-// something other than reading is refused before a statement is assembled, and
-// it reports one wrapping query.ErrNilTable for the zero Table.
-//
-// It keeps the ref it holds rather than rebuilding one, so a relation reads the
-// descriptor a TableFrom handle was given in place, the way TableFrom's own doc
-// describes.
-func (t Table[T]) Source(alias string) (TypedRelation[T], error) {
-	if err := t.ref.Validate(); err != nil {
-		return TypedRelation[T]{}, fmt.Errorf("rasql: table source: %w", err)
-	}
-	if !t.ref.Supports(schema.OperationRead) {
-		return TypedRelation[T]{}, fmt.Errorf("rasql: object %q does not support operation %d",
-			t.ref.Definition().QualifiedName(), schema.OperationRead)
-	}
-	ref := t.ref
-	var err error
-	if alias == "" {
-		alias = ref.Alias()
-	}
-	if alias != "" {
-		ref, err = ref.As(alias)
-		if err != nil {
-			return TypedRelation[T]{}, planError("invalid_source", "alias", err.Error())
-		}
-	}
-	return TypedRelation[T]{source: Source{ref: query.Relation(ref)}}, nil
+// It exists for the entry points that take several appearances of different row
+// types at once, such as Query.Correlated. Everything that selects rows of one
+// Go type takes RowSource instead.
+type Relation interface {
+	relationSource() Source
 }
 
-// SourceOf returns table as a relation a query selects from, under alias.
+// RowSource is a Relation whose rows decode into R: rasql.Table[R], the
+// relation Derive gives back for a derived query, and the one TypedCTE.As gives
+// back for a CTE reference.
 //
-// Deprecated: it is Table.Source under the free-function spelling the compact
-// emitter still writes. It is deleted together with that emitted call, in the
-// PR that regenerates every checked-in store.
+// A table is one of these already, so Select and BindColumn take a table as it
+// stands. Widening a table into a relation changes nothing about it, and a step
+// that changes nothing should not be one a caller writes.
+type RowSource[R any] interface {
+	Relation
+	relationRow() R
+}
+
+func (s Source) relationSource() Source { return s }
+
+// relationSource widens t into the one appearance a statement selects from. It
+// reads the ref t holds rather than rebuilding one, so a relation over a
+// TableFrom handle reads that descriptor's slices in place, the way TableFrom's
+// own doc describes.
+func (t Table[T]) relationSource() Source { return Source{ref: query.Relation(t.ref)} }
+
+// relationRow ties Table[T] to RowSource[T] and to no other row type. It is
+// never called.
+func (t Table[T]) relationRow() T { var zero T; return zero }
+
+// Source returns t unchanged.
+//
+// Deprecated: a table is already a RowSource, so nothing needs converting. It
+// survives for sample/taskboard, whose hand-written repository still calls it
+// and which the emitter PR regenerates; that PR deletes this method, the
+// TypedRelation alias and SourceOf together.
+func (t Table[T]) Source() Table[T] { return t }
+
+// SourceOf returns table under alias, and reports an error for a descriptor
+// that does not permit schema.OperationRead.
+//
+// Deprecated: Table.As sets an alias and a table needs no widening, so this is
+// two steps that do nothing between them. It survives because the compact
+// emitter still writes it into every generated store, and the PR that
+// regenerates those stores deletes it.
 func SourceOf[R any](table Table[R], alias string) (TypedRelation[R], error) {
-	return table.Source(alias)
+	if err := table.ref.Validate(); err != nil {
+		return Table[R]{}, fmt.Errorf("rasql: table source: %w", err)
+	}
+	if !table.ref.Supports(schema.OperationRead) {
+		return Table[R]{}, fmt.Errorf("rasql: object %q does not support operation %d",
+			table.ref.Definition().QualifiedName(), schema.OperationRead)
+	}
+	if alias == "" {
+		return table, nil
+	}
+	return table.As(alias)
 }
 
-type TypedRelation[R any] struct{ source Source }
+// TypedRelation is rasql.Table under the name the compact emitter still writes.
+//
+// Deprecated: it is an alias rather than a type of its own because the two were
+// always the same thing: every TypedRelation ever built came from one table and
+// carried nothing the table did not already carry. The PR that regenerates every
+// checked-in store deletes it.
+type TypedRelation[R any] = Table[R]
+
+// OptionalRelation is one appearance whose rows may be absent, which is what an
+// outer join produces. Optional builds one, and BindOptionalColumn binds a
+// column of it as nullable whatever the descriptor says.
 type OptionalRelation[R any] struct{ source Source }
 
-func Optional[R any](source TypedRelation[R]) OptionalRelation[R] {
-	return OptionalRelation[R](source)
+func Optional[R any](source RowSource[R]) OptionalRelation[R] {
+	return OptionalRelation[R]{source: source.relationSource()}
 }
-func (r TypedRelation[R]) Source() Source    { return r.source }
-func (r OptionalRelation[R]) Source() Source { return r.source }
+func (r OptionalRelation[R]) relationSource() Source { return r.source }
+func (r OptionalRelation[R]) relationRow() R         { var zero R; return zero }
+func (r OptionalRelation[R]) Source() Source         { return r.source }
 
 type QueryPlan struct {
 	sources             []Source
@@ -515,12 +548,55 @@ func validateQ1DecoderMetadata(resultSchema ResultSchema, decoder interface{ Pre
 	return nil
 }
 
-func Select[R any](from Source, projection Projection[R]) Query[R] {
+// Select reads projection's columns from one relation. A table is a RowSource
+// already, so rasql.Select(store.Tasks(), projection) needs nothing in between.
+//
+// projection decodes into R and the relation yields rows of S, and the two
+// differ whenever a statement joins: a query reading from tasks and joining
+// members projects a row type of its own. What ties a column to the relation it
+// came from is the bind, not this call.
+//
+// Two appearances of one table in a single statement must be two values, since
+// a column expression binds to the appearance it was bound against. Give at
+// least one of them an alias with Table.As.
+func Select[R, S any](from RowSource[S], projection Projection[R]) Query[R] {
+	return selectFrom(from.relationSource(), projection)
+}
+
+// selectFrom is Select with the row types already reconciled, for the one
+// caller that reshapes a relation's rows into a different Go type: the junction
+// read a many-through edge issues, which projects key columns into
+// graphJunctionRow whatever the junction table's own row type is.
+func selectFrom[R any](from Source, projection Projection[R]) Query[R] {
 	plan := QueryPlan{sources: []Source{from}, projection: cloneItems(projection.items)}
 	if projection.native {
 		plan.planErr = planError("unsupported_feature", "projection", "native projections require Native")
 	}
+	if plan.planErr == nil {
+		plan.planErr = requireReadableRelation(from)
+	}
 	return Query[R]{plan: plan, projection: projection}
+}
+
+// requireReadableRelation reports a relation over a descriptor that does not
+// permit schema.OperationRead, and one over the zero table.
+//
+// A statement is where the read happens, so it is where the descriptor's read
+// bit is tested, the same way NewCreatePlan tests the insert bit. A derived
+// query or a CTE reference names no descriptor and passes.
+func requireReadableRelation(source Source) error {
+	table, ok := source.ref.Table()
+	if !ok {
+		return nil
+	}
+	if err := table.Validate(); err != nil {
+		return planerr.Wrap("invalid_source", "table", err.Error(), err)
+	}
+	if !table.Supports(schema.OperationRead) {
+		return planError("invalid_source", "table",
+			fmt.Sprintf("object %q does not support operation %d", table.Definition().QualifiedName(), schema.OperationRead))
+	}
+	return nil
 }
 func Project[R any](base QueryPlan, projection Projection[R]) Query[R] {
 	base.projection = cloneItems(projection.items)
@@ -560,22 +636,34 @@ func (q Query[R]) Where(p Predicate) Query[R] {
 	q.plan.where = append(q.plan.where, p)
 	return q
 }
-func (q Query[R]) Join(s Source, on Predicate) Query[R] {
+
+// Join adds an inner join on s. A table is a Relation already, so the joined
+// side is written as the table itself; give it an alias with Table.As when the
+// statement already reads from that table.
+func (q Query[R]) Join(s Relation, on Predicate) Query[R] {
 	q.plan = clonePlan(q.plan)
 	if q.plan.native != nil {
 		q.plan.planErr = planError("unsupported_feature", "native", "native plans cannot be composed")
 		return q
 	}
-	q.plan.joins = append(q.plan.joins, query.InnerJoin(s.ref, on.node))
+	source := s.relationSource()
+	if q.plan.planErr == nil {
+		q.plan.planErr = requireReadableRelation(source)
+	}
+	q.plan.joins = append(q.plan.joins, query.InnerJoin(source.ref, on.node))
 	return q
 }
-func (q Query[R]) LeftJoin(s Source, on Predicate) Query[R] {
+func (q Query[R]) LeftJoin(s Relation, on Predicate) Query[R] {
 	q.plan = clonePlan(q.plan)
 	if q.plan.native != nil {
 		q.plan.planErr = planError("unsupported_feature", "native", "native plans cannot be composed")
 		return q
 	}
-	q.plan.joins = append(q.plan.joins, query.LeftJoin(s.ref, on.node))
+	source := s.relationSource()
+	if q.plan.planErr == nil {
+		q.plan.planErr = requireReadableRelation(source)
+	}
+	q.plan.joins = append(q.plan.joins, query.LeftJoin(source.ref, on.node))
 	return q
 }
 func (q Query[R]) GroupBy(keys ...GroupKey) Query[R] {
@@ -606,13 +694,18 @@ func (q Query[R]) Having(p Predicate) Query[R] {
 // exactly what this query gets; the enclosing query's other sources stay out
 // of scope. query.Select.WithCorrelation owns the full rule, including what a
 // correlation reaching two levels out has to declare.
-func (q Query[R]) Correlated(sources ...Source) Query[R] {
+func (q Query[R]) Correlated(sources ...Relation) Query[R] {
 	q.plan = clonePlan(q.plan)
 	if q.plan.native != nil {
 		q.plan.planErr = planError("unsupported_feature", "native", "native plans cannot be composed")
 		return q
 	}
-	q.plan.correlations = append(q.plan.correlations, sources...)
+	// Relation rather than RowSource, because the enclosing query's
+	// appearances rarely share one row type and a variadic parameter takes
+	// one type argument for all of them.
+	for _, source := range sources {
+		q.plan.correlations = append(q.plan.correlations, source.relationSource())
+	}
 	return q
 }
 func (q Query[R]) OrderBy(terms ...OrderTerm) Query[R] {

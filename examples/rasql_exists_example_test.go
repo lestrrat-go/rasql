@@ -77,11 +77,7 @@ func Example_rasql_exists() {
 		}
 	}
 
-	usersSource, err := users.Source("")
-	if err != nil {
-		fmt.Printf("failed to bind users source: %s\n", err)
-		return
-	}
+	usersSource := users
 	usersID, err := rasql.BindColumn[store.UsersRow, int64](usersSource, users.IDRef().Name(), "")
 	if err != nil {
 		fmt.Printf("failed to bind users id column: %s\n", err)
@@ -92,11 +88,7 @@ func Example_rasql_exists() {
 		fmt.Printf("failed to bind users email column: %s\n", err)
 		return
 	}
-	ordersSource, err := orders.Source("")
-	if err != nil {
-		fmt.Printf("failed to bind orders source: %s\n", err)
-		return
-	}
+	ordersSource := orders
 	ordersID, err := rasql.BindColumn[store.OrdersRow, int64](ordersSource, orders.IDRef().Name(), "")
 	if err != nil {
 		fmt.Printf("failed to bind orders id column: %s\n", err)
@@ -136,8 +128,8 @@ func Example_rasql_exists() {
 		fmt.Printf("failed to build the orders subquery projection: %s\n", err)
 		return
 	}
-	hasOrder := rasql.Select(ordersSource.Source(), ordersIDProjection).
-		Correlated(usersSource.Source()).
+	hasOrder := rasql.Select(ordersSource, ordersIDProjection).
+		Correlated(usersSource).
 		Where(rasql.EqualExpr(ordersUserID.Expr(), usersID.Expr()))
 
 	exists, err := rasql.ExistsQuery(hasOrder)
@@ -147,7 +139,7 @@ func Example_rasql_exists() {
 	}
 	// SQL: SELECT users.id, users.email FROM users WHERE EXISTS (SELECT orders.id FROM orders WHERE orders.user_id = users.id) ORDER BY users.id ASC
 	buyers, err := rasql.All(ctx, db,
-		rasql.Select(usersSource.Source(), projection).
+		rasql.Select(usersSource, projection).
 			Where(exists).
 			OrderBy(rasql.AscExpr(usersID.Expr())))
 	if err != nil {
@@ -166,7 +158,7 @@ func Example_rasql_exists() {
 		return
 	}
 	quiet, err := rasql.All(ctx, db,
-		rasql.Select(usersSource.Source(), projection).
+		rasql.Select(usersSource, projection).
 			Where(notExists).
 			OrderBy(rasql.AscExpr(usersID.Expr())))
 	if err != nil {

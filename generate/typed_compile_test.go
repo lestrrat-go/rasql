@@ -25,10 +25,7 @@ func (usersIDDecoder) DecodeRow(source rasql.ScanSource, result *store.UsersRow)
 }
 
 func usersQuery() rasql.Query[store.UsersRow] {
-	relation, err := store.Users().Source("")
-	if err != nil {
-		panic(err)
-	}
+	relation := store.Users()
 	id, err := rasql.BindColumn[store.UsersRow, int64](relation, "id", "")
 	if err != nil {
 		panic(err)
@@ -43,7 +40,7 @@ func usersQuery() rasql.Query[store.UsersRow] {
 	if err != nil {
 		panic(err)
 	}
-	return rasql.Select(relation.Source(), projection)
+	return rasql.Select(relation, projection)
 }
 `
 
@@ -115,10 +112,7 @@ func compile() {
     _ = query.TypedInnerJoin(other.Ref(), query.EqualColumns(id, other.ID()))
     _ = query.TypedLeftJoin(other.Ref(), query.EqualColumns(id, other.ID()))
 
-    relation, err := store.Users().Source("")
-    if err != nil {
-        panic(err)
-    }
+    relation := store.Users()
     relationID, err := rasql.BindColumn[store.UsersRow, int64](relation, "id", "")
     if err != nil {
         panic(err)
@@ -133,7 +127,7 @@ func compile() {
     if err != nil {
         panic(err)
     }
-    otherRelation, err := store.Users().Source("other2")
+    otherRelation, err := store.Users().As("other2")
     if err != nil {
         panic(err)
     }
@@ -141,8 +135,8 @@ func compile() {
     if err != nil {
         panic(err)
     }
-    selectQuery := rasql.Select(relation.Source(), projection).
-        Join(otherRelation.Source(), rasql.EqualExpr(relationID.Expr(), otherRelationID.Expr())).
+    selectQuery := rasql.Select(relation, projection).
+        Join(otherRelation, rasql.EqualExpr(relationID.Expr(), otherRelationID.Expr())).
         Where(rasql.EqualValue(relationID.Expr(), int64(1))).
         GroupBy(rasql.Group(relationID.Expr())).
         Having(rasql.EqualValue(relationID.Expr(), int64(1))).

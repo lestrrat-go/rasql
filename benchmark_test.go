@@ -175,10 +175,7 @@ func benchmarkCollectionQuery(b *testing.B, limit *int) rasql.Query[benchmarkMem
 	if err != nil {
 		b.Fatal(err)
 	}
-	relation, err := table.Source("")
-	if err != nil {
-		b.Fatal(err)
-	}
+	relation := table
 	id, err := rasql.BindColumn[benchmarkMemberRow, int64](relation, "id", "")
 	if err != nil {
 		b.Fatal(err)
@@ -207,7 +204,7 @@ func benchmarkCollectionQuery(b *testing.B, limit *int) rasql.Query[benchmarkMem
 	if err != nil {
 		b.Fatal(err)
 	}
-	query := rasql.Select(relation.Source(), projection)
+	query := rasql.Select(relation, projection)
 	if limit != nil {
 		query, err = query.Limit(*limit)
 		if err != nil {
@@ -269,10 +266,7 @@ func benchmarkCountBaseQuery(b *testing.B) rasql.Query[benchmarkCountRow] {
 	if err != nil {
 		b.Fatal(err)
 	}
-	relation, err := table.Source("")
-	if err != nil {
-		b.Fatal(err)
-	}
+	relation := table
 	id, err := rasql.BindColumn[benchmarkCountRow, int64](relation, "id", "")
 	if err != nil {
 		b.Fatal(err)
@@ -288,7 +282,7 @@ func benchmarkCountBaseQuery(b *testing.B) rasql.Query[benchmarkCountRow] {
 	if err != nil {
 		b.Fatal(err)
 	}
-	return rasql.Select(relation.Source(), projection)
+	return rasql.Select(relation, projection)
 }
 
 func BenchmarkTypedSelectCount(b *testing.B) {
@@ -448,10 +442,11 @@ func benchmarkTasksDefinition() schema.TableDef {
 	}
 }
 
-// BenchmarkSourceOf measures rasql.SourceOf building a relation from a table
-// handle that already holds a validated ref. It exists to pin the cost of
-// SourceOf itself, once per table per query build, separate from the
-// end-to-end query benchmarks above.
+// BenchmarkSourceOf measures the widening every generated store still pays once
+// per table per query build, through the rasql.SourceOf the compact emitter
+// writes. A caller writing the query by hand pays none of it, because Select
+// takes the table itself; the emitter PR that stops writing SourceOf retires
+// this benchmark with it.
 func BenchmarkSourceOf(b *testing.B) {
 	table, err := rasql.TableOf[benchmarkTaskRow](benchmarkTasksDefinition())
 	if err != nil {
@@ -460,7 +455,7 @@ func BenchmarkSourceOf(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		if _, err := table.Source(""); err != nil {
+		if _, err := rasql.SourceOf(table, ""); err != nil {
 			b.Fatal(err)
 		}
 	}

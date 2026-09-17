@@ -341,7 +341,7 @@ func bindQueryRelation(t *testing.T) (rasql.Query[bindFixtureRow], rasql.TypedRe
 		},
 	})
 	require.NoError(t, err)
-	relation, err := table.Source("i")
+	relation, err := table.As("i")
 	require.NoError(t, err)
 	category, err := rasql.BindNullColumn[bindFixtureRow, string](relation, "category", "category.codec")
 	require.NoError(t, err)
@@ -357,7 +357,7 @@ func bindQueryRelation(t *testing.T) (rasql.Query[bindFixtureRow], rasql.TypedRe
 		rasql.Item("amount", amount.Expr(), schema.IntegerType{}, "amount.codec"),
 	}, bindFixtureDecoder{result: result})
 	require.NoError(t, err)
-	return rasql.Select(relation.Source(), projection), relation
+	return rasql.Select(relation, projection), relation
 }
 
 func bindCompiler(t *testing.T) rasql.Compiler {

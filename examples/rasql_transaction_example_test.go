@@ -40,27 +40,24 @@ type txnUsersColumns struct {
 func txnUsersQuery() (rasql.Query[store.UsersRow], txnUsersColumns, error) {
 	users := store.Users()
 	def := store.UsersDef()
-	source, err := users.Source("")
-	if err != nil {
-		return rasql.Query[store.UsersRow]{}, txnUsersColumns{}, err
-	}
 	var cols txnUsersColumns
-	if cols.ID, err = rasql.BindColumn[store.UsersRow, int64](source, users.IDRef().Name(), ""); err != nil {
+	var err error
+	if cols.ID, err = rasql.BindColumn[store.UsersRow, int64](users, users.IDRef().Name(), ""); err != nil {
 		return rasql.Query[store.UsersRow]{}, txnUsersColumns{}, err
 	}
-	if cols.Email, err = rasql.BindColumn[store.UsersRow, string](source, users.EmailRef().Name(), ""); err != nil {
+	if cols.Email, err = rasql.BindColumn[store.UsersRow, string](users, users.EmailRef().Name(), ""); err != nil {
 		return rasql.Query[store.UsersRow]{}, txnUsersColumns{}, err
 	}
-	if cols.Nickname, err = rasql.BindNullColumn[store.UsersRow, string](source, users.NicknameRef().Name(), ""); err != nil {
+	if cols.Nickname, err = rasql.BindNullColumn[store.UsersRow, string](users, users.NicknameRef().Name(), ""); err != nil {
 		return rasql.Query[store.UsersRow]{}, txnUsersColumns{}, err
 	}
-	if cols.Status, err = rasql.BindColumn[store.UsersRow, string](source, users.StatusRef().Name(), ""); err != nil {
+	if cols.Status, err = rasql.BindColumn[store.UsersRow, string](users, users.StatusRef().Name(), ""); err != nil {
 		return rasql.Query[store.UsersRow]{}, txnUsersColumns{}, err
 	}
-	if cols.FirstName, err = rasql.BindColumn[store.UsersRow, string](source, users.FirstNameRef().Name(), ""); err != nil {
+	if cols.FirstName, err = rasql.BindColumn[store.UsersRow, string](users, users.FirstNameRef().Name(), ""); err != nil {
 		return rasql.Query[store.UsersRow]{}, txnUsersColumns{}, err
 	}
-	if cols.LastName, err = rasql.BindColumn[store.UsersRow, string](source, users.LastNameRef().Name(), ""); err != nil {
+	if cols.LastName, err = rasql.BindColumn[store.UsersRow, string](users, users.LastNameRef().Name(), ""); err != nil {
 		return rasql.Query[store.UsersRow]{}, txnUsersColumns{}, err
 	}
 	result, err := rasql.NewResultSchema(
@@ -85,7 +82,7 @@ func txnUsersQuery() (rasql.Query[store.UsersRow], txnUsersColumns, error) {
 	if err != nil {
 		return rasql.Query[store.UsersRow]{}, txnUsersColumns{}, err
 	}
-	return rasql.Select(source.Source(), projection), cols, nil
+	return rasql.Select(users, projection), cols, nil
 }
 
 func Example_rasql_transaction() {

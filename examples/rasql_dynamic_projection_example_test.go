@@ -73,11 +73,7 @@ func Example_rasql_dynamic_projection() {
 		}
 	}
 
-	usersSource, err := users.Source("")
-	if err != nil {
-		fmt.Printf("failed to bind users source: %s\n", err)
-		return
-	}
+	usersSource := users
 	usersID, err := rasql.BindColumn[store.UsersRow, int64](usersSource, users.IDRef().Name(), "")
 	if err != nil {
 		fmt.Printf("failed to bind users id column: %s\n", err)
@@ -88,11 +84,7 @@ func Example_rasql_dynamic_projection() {
 		fmt.Printf("failed to bind users email column: %s\n", err)
 		return
 	}
-	ordersSource, err := orders.Source("")
-	if err != nil {
-		fmt.Printf("failed to bind orders source: %s\n", err)
-		return
-	}
+	ordersSource := orders
 	ordersUserID, err := rasql.BindColumn[store.OrdersRow, int64](ordersSource, orders.UserIDRef().Name(), "")
 	if err != nil {
 		fmt.Printf("failed to bind orders user_id column: %s\n", err)
@@ -122,8 +114,8 @@ func Example_rasql_dynamic_projection() {
 	}
 
 	// SQL: SELECT users.id AS user_id, users.email FROM users INNER JOIN orders ON users.id = orders.user_id WHERE orders.total > ? ORDER BY orders.total DESC (argument: 20)
-	q := rasql.Select(usersSource.Source(), projection).
-		Join(ordersSource.Source(), rasql.EqualExpr(usersID.Expr(), ordersUserID.Expr())).
+	q := rasql.Select(usersSource, projection).
+		Join(ordersSource, rasql.EqualExpr(usersID.Expr(), ordersUserID.Expr())).
 		Where(rasql.GreaterValue(ordersTotal.Expr(), int64(20))).
 		OrderBy(rasql.DescExpr(ordersTotal.Expr()))
 	rows, err := rasql.All(ctx, db, q)

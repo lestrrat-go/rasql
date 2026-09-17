@@ -63,12 +63,7 @@ func Example_rasql_distinct() {
 		}
 	}
 
-	source, err := orders.Source("")
-	if err != nil {
-		fmt.Printf("failed to bind orders source: %s\n", err)
-		return
-	}
-	userID, err := rasql.BindColumn[store.OrdersRow, int64](source, orders.UserIDRef().Name(), "")
+	userID, err := rasql.BindColumn[store.OrdersRow, int64](orders, orders.UserIDRef().Name(), "")
 	if err != nil {
 		fmt.Printf("failed to bind user_id column: %s\n", err)
 		return
@@ -90,7 +85,7 @@ func Example_rasql_distinct() {
 	// user_id alone; a full-row select would already select the orders
 	// primary key, which makes every row unique before DISTINCT runs.
 	// SQL: SELECT DISTINCT orders.user_id FROM orders ORDER BY orders.user_id
-	q := rasql.Select(source.Source(), projection).Distinct().OrderBy(rasql.AscExpr(userID.Expr()))
+	q := rasql.Select(orders, projection).Distinct().OrderBy(rasql.AscExpr(userID.Expr()))
 	rows, err := rasql.All(ctx, db, q)
 	if err != nil {
 		fmt.Printf("failed to query ordering users: %s\n", err)

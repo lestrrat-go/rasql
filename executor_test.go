@@ -148,7 +148,7 @@ func runtimeQuery(t *testing.T) rasql.Query[int64] {
 	t.Helper()
 	table, err := rasql.TableOf[struct{}](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "value", Type: schema.IntegerType{}}}})
 	require.NoError(t, err)
-	relation, err := table.Source("i")
+	relation, err := table.As("i")
 	require.NoError(t, err)
 	column, err := rasql.BindColumn[struct{}, int64](relation, "value", "")
 	require.NoError(t, err)
@@ -156,7 +156,7 @@ func runtimeQuery(t *testing.T) rasql.Query[int64] {
 	require.NoError(t, err)
 	projection, err := rasql.NewProjection([]rasql.ProjectionItem{rasql.Item("value", column.Expr(), schema.IntegerType{}, "")}, runtimeDecoder{schema: resultSchema})
 	require.NoError(t, err)
-	return rasql.Select(relation.Source(), projection)
+	return rasql.Select(relation, projection)
 }
 
 // runtimeBytesQuery projects one bytes column, so a caller can check that two
@@ -165,7 +165,7 @@ func runtimeBytesQuery(t *testing.T) rasql.Query[[]byte] {
 	t.Helper()
 	table, err := rasql.TableOf[struct{}](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "value", Type: schema.BytesType{}}}})
 	require.NoError(t, err)
-	relation, err := table.Source("i")
+	relation, err := table.As("i")
 	require.NoError(t, err)
 	column, err := rasql.BindColumn[struct{}, []byte](relation, "value", "")
 	require.NoError(t, err)
@@ -173,7 +173,7 @@ func runtimeBytesQuery(t *testing.T) rasql.Query[[]byte] {
 	require.NoError(t, err)
 	projection, err := rasql.NewProjection([]rasql.ProjectionItem{rasql.Item("value", column.Expr(), schema.BytesType{}, "")}, runtimeBytesDecoder{schema: resultSchema})
 	require.NoError(t, err)
-	return rasql.Select(relation.Source(), projection)
+	return rasql.Select(relation, projection)
 }
 
 // runtimeRowsProfiled returns an executor that answers every query with rows,
@@ -192,7 +192,7 @@ func runtimeCodecQuery(t *testing.T, codec string) rasql.Query[int64] {
 	t.Helper()
 	table, err := rasql.TableOf[struct{}](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "value", Type: schema.IntegerType{}, Nullable: true}}})
 	require.NoError(t, err)
-	relation, err := table.Source("i")
+	relation, err := table.As("i")
 	require.NoError(t, err)
 	column, err := rasql.BindNullColumn[struct{}, int64](relation, "value", codec)
 	require.NoError(t, err)
@@ -200,14 +200,14 @@ func runtimeCodecQuery(t *testing.T, codec string) rasql.Query[int64] {
 	require.NoError(t, err)
 	projection, err := rasql.NewProjection([]rasql.ProjectionItem{rasql.NullItem("value", column.NullExpr(), schema.IntegerType{}, codec)}, runtimeDecoder{schema: resultSchema})
 	require.NoError(t, err)
-	return rasql.Select(relation.Source(), projection)
+	return rasql.Select(relation, projection)
 }
 
 func runtimePairQuery(t *testing.T, firstCodec, secondCodec string) rasql.Query[runtimePair] {
 	t.Helper()
 	table, err := rasql.TableOf[runtimePair](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "first", Type: schema.IntegerType{}}, {Name: "second", Type: schema.IntegerType{}}}})
 	require.NoError(t, err)
-	relation, err := table.Source("i")
+	relation, err := table.As("i")
 	require.NoError(t, err)
 	first, err := rasql.BindColumn[runtimePair, int64](relation, "first", firstCodec)
 	require.NoError(t, err)
@@ -217,7 +217,7 @@ func runtimePairQuery(t *testing.T, firstCodec, secondCodec string) rasql.Query[
 	require.NoError(t, err)
 	projection, err := rasql.NewProjection([]rasql.ProjectionItem{rasql.Item("first", first.Expr(), schema.IntegerType{}, firstCodec), rasql.Item("second", second.Expr(), schema.IntegerType{}, secondCodec)}, runtimePairDecoder{schema: schemaValue})
 	require.NoError(t, err)
-	return rasql.Select(relation.Source(), projection)
+	return rasql.Select(relation, projection)
 }
 
 // runtimeExecutor returns an executor and the fake behind it, so a caller that
@@ -544,7 +544,7 @@ func TestExecutor(t *testing.T) {
 		require.NoError(t, err)
 		table, err := rasql.TableOf[sqliteRuntimeRow](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "name", Type: schema.TextType{}, Nullable: true}, {Name: "payload", Type: schema.BytesType{}, Nullable: true}}})
 		require.NoError(t, err)
-		relation, err := table.Source("i")
+		relation, err := table.As("i")
 		require.NoError(t, err)
 		id, err := rasql.BindColumn[sqliteRuntimeRow, int64](relation, "id", "")
 		require.NoError(t, err)
@@ -556,7 +556,7 @@ func TestExecutor(t *testing.T) {
 		require.NoError(t, err)
 		projection, err := rasql.NewProjection([]rasql.ProjectionItem{rasql.Item("id", id.Expr(), schema.IntegerType{}, ""), rasql.NullItem("name", name.NullExpr(), schema.TextType{}, ""), rasql.NullItem("payload", payload.NullExpr(), schema.BytesType{}, "")}, sqliteRuntimeDecoder{schema: resultSchema})
 		require.NoError(t, err)
-		query := rasql.Select(relation.Source(), projection)
+		query := rasql.Select(relation, projection)
 		values, err := rasql.All(t.Context(), executor, query)
 		require.NoError(t, err)
 		require.Len(t, values, 100)

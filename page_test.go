@@ -45,7 +45,7 @@ func TestPageAfter(t *testing.T) {
 		require.NoError(t, err)
 		table, err := rasql.TableOf[pageAcceptanceRow](schema.TableDef{Name: "page_rows", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
 		require.NoError(t, err)
-		relation, err := table.Source("p")
+		relation, err := table.As("p")
 		require.NoError(t, err)
 		id, err := rasql.BindColumn[pageAcceptanceRow, int64](relation, "id", "")
 		require.NoError(t, err)
@@ -53,7 +53,7 @@ func TestPageAfter(t *testing.T) {
 		require.NoError(t, err)
 		projection, err := rasql.NewProjection([]rasql.ProjectionItem{rasql.Item("id", id.Expr(), schema.IntegerType{}, "")}, pageAcceptanceDecoder{schema: resultSchema})
 		require.NoError(t, err)
-		query := rasql.Select(relation.Source(), projection)
+		query := rasql.Select(relation, projection)
 		key := rasql.AscKey[pageAcceptanceRow](id.Expr(), func(row pageAcceptanceRow) int64 { return row.ID })
 		spec, err := rasql.NewPageSpec([]rasql.PageKey[pageAcceptanceRow]{key}, key)
 		require.NoError(t, err)
@@ -227,7 +227,7 @@ func TestPageAfter(t *testing.T) {
 		defer func() { _ = executor.Rollback() }()
 		table, err := rasql.TableOf[pageAcceptanceRow](schema.TableDef{Name: "transaction_page_rows", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
 		require.NoError(t, err)
-		relation, err := table.Source("p")
+		relation, err := table.As("p")
 		require.NoError(t, err)
 		id, err := rasql.BindColumn[pageAcceptanceRow, int64](relation, "id", "")
 		require.NoError(t, err)
@@ -235,7 +235,7 @@ func TestPageAfter(t *testing.T) {
 		require.NoError(t, err)
 		projection, err := rasql.NewProjection([]rasql.ProjectionItem{rasql.Item("id", id.Expr(), schema.IntegerType{}, "")}, pageAcceptanceDecoder{schema: resultSchema})
 		require.NoError(t, err)
-		query := rasql.Select(relation.Source(), projection)
+		query := rasql.Select(relation, projection)
 		key := rasql.AscKey[pageAcceptanceRow](id.Expr(), func(row pageAcceptanceRow) int64 { return row.ID })
 		spec, err := rasql.NewPageSpec([]rasql.PageKey[pageAcceptanceRow]{key}, key)
 		require.NoError(t, err)
@@ -296,7 +296,7 @@ func r5PageQuery(t *testing.T, values string) (rasql.Executor, rasql.Query[r5Pag
 		{Name: "id", Type: schema.IntegerType{}}, {Name: "rank", Type: schema.IntegerType{}, Nullable: true},
 	}})
 	require.NoError(t, err)
-	relation, err := table.Source("p")
+	relation, err := table.As("p")
 	require.NoError(t, err)
 	id, err := rasql.BindColumn[r5PageRow, int64](relation, "id", "")
 	require.NoError(t, err)
@@ -306,7 +306,7 @@ func r5PageQuery(t *testing.T, values string) (rasql.Executor, rasql.Query[r5Pag
 	require.NoError(t, err)
 	projection, err := rasql.NewProjection([]rasql.ProjectionItem{rasql.Item("id", id.Expr(), schema.IntegerType{}, ""), rasql.NullItem("rank", rank.NullExpr(), schema.IntegerType{}, "")}, r5PageDecoder{schema: resultSchema})
 	require.NoError(t, err)
-	query := rasql.Select(relation.Source(), projection)
+	query := rasql.Select(relation, projection)
 	first := rasql.DescNullKey[r5PageRow](rank.NullExpr(), func(row r5PageRow) rasql.Nullable[int64] {
 		return rasql.Nullable[int64]{Value: row.Rank.Int64, Valid: row.Rank.Valid}
 	}, rasql.NullsLast)
@@ -358,7 +358,7 @@ func r5LifecycleQuery(t *testing.T, decoder r5LifecycleDecoder) (rasql.Query[r5L
 	t.Helper()
 	table, err := rasql.TableOf[r5LifecycleRow](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
 	require.NoError(t, err)
-	relation, err := table.Source("i")
+	relation, err := table.As("i")
 	require.NoError(t, err)
 	id, err := rasql.BindColumn[r5LifecycleRow, int64](relation, "id", "")
 	require.NoError(t, err)
@@ -367,7 +367,7 @@ func r5LifecycleQuery(t *testing.T, decoder r5LifecycleDecoder) (rasql.Query[r5L
 	key := rasql.AscKey[r5LifecycleRow](id.Expr(), func(row r5LifecycleRow) int64 { return row.ID })
 	spec, err := rasql.NewPageSpec([]rasql.PageKey[r5LifecycleRow]{key}, key)
 	require.NoError(t, err)
-	return rasql.Select(relation.Source(), projection), spec
+	return rasql.Select(relation, projection), spec
 }
 
 type r5CountingCursorCodec struct{ enc atomic.Int64 }
@@ -391,7 +391,7 @@ func TestPageBinds(t *testing.T) {
 	t.Run("named codec occurrences are counted without re-encoding the fingerprint or rows", func(t *testing.T) {
 		table, err := rasql.TableOf[int64](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
 		require.NoError(t, err)
-		relation, err := table.Source("i")
+		relation, err := table.As("i")
 		require.NoError(t, err)
 		id, err := rasql.BindColumn[int64, int64](relation, "id", "")
 		require.NoError(t, err)
@@ -399,7 +399,7 @@ func TestPageBinds(t *testing.T) {
 		require.NoError(t, err)
 		projection, err := rasql.NewProjection([]rasql.ProjectionItem{rasql.Item("value", id.Expr(), schema.IntegerType{}, "")}, runtimeDecoder{schema: resultSchema})
 		require.NoError(t, err)
-		baseQuery := rasql.Select(relation.Source(), projection)
+		baseQuery := rasql.Select(relation, projection)
 		// One bound value used in two predicates, so the compiled statement
 		// carries the same bind twice and the cursor has to match both.
 		filter := rasql.Value(int64(1))

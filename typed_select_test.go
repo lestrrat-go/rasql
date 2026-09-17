@@ -48,7 +48,7 @@ func newSelectFixture(t *testing.T) selectFixture {
 		{Name: "id", Type: schema.IntegerType{}}, {Name: "email", Type: schema.TextType{}},
 	}})
 	require.NoError(t, err)
-	source, err := table.Source("users")
+	source, err := table.As("users")
 	require.NoError(t, err)
 	id, err := rasql.BindColumn[selectUser, int64](source, "id", "")
 	require.NoError(t, err)
@@ -69,7 +69,7 @@ func selectUserQuery(t *testing.T, fixture selectFixture) rasql.Query[selectUser
 		rasql.Item("email", fixture.email.Expr(), schema.TextType{}, ""),
 	}, selectUserDecoder{schema: resultSchema})
 	require.NoError(t, err)
-	return rasql.Select(fixture.source.Source(), projection).OrderBy(rasql.AscExpr(fixture.id.Expr()))
+	return rasql.Select(fixture.source, projection).OrderBy(rasql.AscExpr(fixture.id.Expr()))
 }
 
 func TestTypedSelect(t *testing.T) {
@@ -147,7 +147,7 @@ func reusableUsers(t *testing.T) (rasql.TypedRelation[reusableUser], rasql.Colum
 		{Name: "email", Type: schema.TextType{}},
 	}})
 	require.NoError(t, err)
-	relation, err := table.Source("users")
+	relation, err := table.As("users")
 	require.NoError(t, err)
 	id, err := rasql.BindColumn[reusableUser, int64](relation, "id", "")
 	require.NoError(t, err)
@@ -169,7 +169,7 @@ func reusableUserQuery(t *testing.T) rasql.Query[reusableUser] {
 		rasql.Item("email", email.Expr(), schema.TextType{}, ""),
 	}, reusableUserDecoder{schema: resultSchema})
 	require.NoError(t, err)
-	return rasql.Select(relation.Source(), projection).Where(rasql.EqualExpr(id.Expr(), rasql.Value(int64(7))))
+	return rasql.Select(relation, projection).Where(rasql.EqualExpr(id.Expr(), rasql.Value(int64(7))))
 }
 
 func TestTypedReusableQuery(t *testing.T) {
@@ -194,20 +194,20 @@ func TestTypedReusableQuery(t *testing.T) {
 			rasql.Item("email", email.Expr(), schema.TextType{}, ""),
 		}, reusableEmailDecoder{schema: emailSchema})
 		require.NoError(t, err)
-		emailQuery := rasql.Select(derived.Source(), emailProjection)
+		emailQuery := rasql.Select(derived, emailProjection)
 		require.NoError(t, emailQuery.Validate())
 
 		id, err := rasql.BindResultColumn[reusableUser, int64](derived, "id")
 		require.NoError(t, err)
 		count := rasql.CountQuery(page, true)
 		require.NoError(t, count.Validate())
-		countByID := rasql.Select(derived.Source(), emailProjection).Where(rasql.EqualExpr(id.Expr(), rasql.Value(int64(7))))
+		countByID := rasql.Select(derived, emailProjection).Where(rasql.EqualExpr(id.Expr(), rasql.Value(int64(7))))
 		require.NoError(t, countByID.Validate())
 
 		_, err = rasql.BindResultColumn[reusableUser, string](derived, "missing")
 		require.ErrorContains(t, err, "not a member")
 		var zero rasql.Table[reusableUser]
-		_, err = zero.Source("users")
+		_, err = zero.As("users")
 		require.ErrorIs(t, err, query.ErrNilTable)
 	})
 
@@ -223,6 +223,6 @@ func TestTypedReusableQuery(t *testing.T) {
 			rasql.Item("email", projected.Expr(), schema.TextType{}, ""),
 		}, reusableEmailDecoder{schema: resultSchema})
 		require.NoError(t, err)
-		require.NoError(t, rasql.Select(derived.Source(), projection).Validate())
+		require.NoError(t, rasql.Select(derived, projection).Validate())
 	})
 }

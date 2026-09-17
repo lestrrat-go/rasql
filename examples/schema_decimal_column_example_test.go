@@ -79,17 +79,12 @@ func Example_schema_decimal_column() {
 		return
 	}
 
-	source, err := invoices.Source("")
-	if err != nil {
-		fmt.Printf("failed to bind invoices source: %s\n", err)
-		return
-	}
-	id, err := rasql.BindColumn[InvoiceRow, int64](source, "id", "")
+	id, err := rasql.BindColumn[InvoiceRow, int64](invoices, "id", "")
 	if err != nil {
 		fmt.Printf("failed to bind id column: %s\n", err)
 		return
 	}
-	amount, err := rasql.BindColumn[InvoiceRow, string](source, "amount", "")
+	amount, err := rasql.BindColumn[InvoiceRow, string](invoices, "amount", "")
 	if err != nil {
 		fmt.Printf("failed to bind amount column: %s\n", err)
 		return
@@ -128,7 +123,7 @@ func Example_schema_decimal_column() {
 
 	// SQL: SELECT invoices.id, invoices.amount FROM invoices WHERE invoices.id = ? (argument: 1)
 	invoice, err := rasql.One(ctx, db,
-		rasql.Select(source.Source(), projection).Where(rasql.EqualValue(id.Expr(), int64(1))))
+		rasql.Select(invoices, projection).Where(rasql.EqualValue(id.Expr(), int64(1))))
 	if err != nil {
 		fmt.Printf("failed to query invoices: %s\n", err)
 		return

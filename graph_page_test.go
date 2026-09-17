@@ -373,7 +373,7 @@ func tasksQuery(plan rasql.GraphPlan[pageTaskRow, pageTaskGraph]) rasql.Query[pa
 	return rasql.Q1GraphChildQuery[pageTaskRow, pageTaskGraph, pageTaskRow, pageTaskGraph](plan)
 }
 
-func pageFixture(t *testing.T) (rasql.Executor, rasql.Query[pageParentRow], rasql.GraphKey[pageParentRow], rasql.GraphKey[pageTaskRow], rasql.GraphKey[pageTaskRow], rasql.GraphKey[pageTaskRow], rasql.GraphKey[pageAssigneeRow], rasql.GraphKey[pageLabelRow], rasql.GraphKey[pageJunctionRow], rasql.GraphKey[pageJunctionRow], rasql.Source, rasql.GraphPlan[pageTaskRow, pageTaskGraph], rasql.GraphPlan[pageAssigneeRow, pageAssigneeGraph], rasql.GraphPlan[pageLabelRow, pageLabelGraph]) {
+func pageFixture(t *testing.T) (rasql.Executor, rasql.Query[pageParentRow], rasql.GraphKey[pageParentRow], rasql.GraphKey[pageTaskRow], rasql.GraphKey[pageTaskRow], rasql.GraphKey[pageTaskRow], rasql.GraphKey[pageAssigneeRow], rasql.GraphKey[pageLabelRow], rasql.GraphKey[pageJunctionRow], rasql.GraphKey[pageJunctionRow], rasql.Table[pageJunctionRow], rasql.GraphPlan[pageTaskRow, pageTaskGraph], rasql.GraphPlan[pageAssigneeRow, pageAssigneeGraph], rasql.GraphPlan[pageLabelRow, pageLabelGraph]) {
 	t.Helper()
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
@@ -408,15 +408,15 @@ func pageFixture(t *testing.T) (rasql.Executor, rasql.Query[pageParentRow], rasq
 	assigneeTable := rasql.MustTableOf[pageAssigneeRow](schema.TableDef{Name: "page_assignees", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "name", Type: schema.TextType{}}}, PrimaryKey: []string{"id"}})
 	labelTable := rasql.MustTableOf[pageLabelRow](schema.TableDef{Name: "page_labels", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "name", Type: schema.TextType{}}}, PrimaryKey: []string{"id"}})
 	junctionTable := rasql.MustTableOf[pageJunctionRow](schema.TableDef{Name: "page_task_labels", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "task", Type: schema.IntegerType{}}, {Name: "label", Type: schema.IntegerType{}}, {Name: "rank", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}})
-	parents, err := parentTable.Source("p")
+	parents, err := parentTable.As("p")
 	require.NoError(t, err)
-	tasksSource, err := taskTable.Source("t")
+	tasksSource, err := taskTable.As("t")
 	require.NoError(t, err)
-	assigneesSource, err := assigneeTable.Source("a")
+	assigneesSource, err := assigneeTable.As("a")
 	require.NoError(t, err)
-	labelsSource, err := labelTable.Source("l")
+	labelsSource, err := labelTable.As("l")
 	require.NoError(t, err)
-	junctionSource, err := junctionTable.Source("j")
+	junctionSource, err := junctionTable.As("j")
 	require.NoError(t, err)
 	pid, err := rasql.BindColumn[pageParentRow, int64](parents, "id", "")
 	require.NoError(t, err)
@@ -446,10 +446,10 @@ func pageFixture(t *testing.T) (rasql.Executor, rasql.Query[pageParentRow], rasq
 	aProjection, _ := rasql.NewProjection([]rasql.ProjectionItem{rasql.Item("id", aid.Expr(), schema.IntegerType{}, ""), rasql.Item("name", aname.Expr(), schema.TextType{}, "")}, pageAssigneeDecoder{schema: aSchema})
 	lSchema, _ := rasql.NewResultSchema(rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}}, rasql.ResultColumn{Name: "name", Type: schema.TextType{}})
 	lProjection, _ := rasql.NewProjection([]rasql.ProjectionItem{rasql.Item("id", lid.Expr(), schema.IntegerType{}, ""), rasql.Item("name", lname.Expr(), schema.TextType{}, "")}, pageLabelDecoder{schema: lSchema})
-	parentQuery := rasql.Select(parents.Source(), parentProjection).OrderBy(rasql.AscExpr(pid.Expr()))
-	taskQuery := rasql.Select(tasksSource.Source(), taskProjection).OrderBy(rasql.AscExpr(tparent.Expr()), rasql.AscExpr(tid.Expr()))
-	assigneeQuery := rasql.Select(assigneesSource.Source(), aProjection).OrderBy(rasql.AscExpr(aid.Expr()))
-	labelQuery := rasql.Select(labelsSource.Source(), lProjection).OrderBy(rasql.AscExpr(lid.Expr()))
+	parentQuery := rasql.Select(parents, parentProjection).OrderBy(rasql.AscExpr(pid.Expr()))
+	taskQuery := rasql.Select(tasksSource, taskProjection).OrderBy(rasql.AscExpr(tparent.Expr()), rasql.AscExpr(tid.Expr()))
+	assigneeQuery := rasql.Select(assigneesSource, aProjection).OrderBy(rasql.AscExpr(aid.Expr()))
+	labelQuery := rasql.Select(labelsSource, lProjection).OrderBy(rasql.AscExpr(lid.Expr()))
 	parentKey, _ := rasql.NewGraphKey(rasql.KeyPart(pid, func(v pageParentRow) int64 { return v.ID }))
 	taskParentKey, _ := rasql.NewGraphKey(rasql.KeyPart(tparent, func(v pageTaskRow) int64 { return v.Parent }))
 	taskIDKey, _ := rasql.NewGraphKey(rasql.KeyPart(tid, func(v pageTaskRow) int64 { return v.ID }))
@@ -461,15 +461,14 @@ func pageFixture(t *testing.T) (rasql.Executor, rasql.Query[pageParentRow], rasq
 	tasksPlan, _ := rasql.NewGraphPlan(taskQuery, func(v pageTaskRow) pageTaskGraph { return pageTaskGraph{ID: v.ID} })
 	assigneesPlan, _ := rasql.NewGraphPlan(assigneeQuery, func(v pageAssigneeRow) pageAssigneeGraph { return pageAssigneeGraph(v) })
 	labelsPlan, _ := rasql.NewGraphPlan(labelQuery, func(v pageLabelRow) pageLabelGraph { return pageLabelGraph(v) })
-	return executor, parentQuery, parentKey, taskParentKey, taskIDKey, taskAssigneeKey, assigneeIDKey, labelIDKey, junctionParent, junctionChild, junctionSource.Source(), tasksPlan, assigneesPlan, labelsPlan
+	return executor, parentQuery, parentKey, taskParentKey, taskIDKey, taskAssigneeKey, assigneeIDKey, labelIDKey, junctionParent, junctionChild, junctionSource, tasksPlan, assigneesPlan, labelsPlan
 }
 
 type pageJunctionRow struct{ ID, Task, Label int64 }
 
-func pageJunctionOrder(source rasql.Source) []rasql.OrderTerm {
-	relation := rasql.Q1TypedRelation[pageJunctionRow](source)
-	task, _ := rasql.BindColumn[pageJunctionRow, int64](relation, "task", "")
-	id, _ := rasql.BindColumn[pageJunctionRow, int64](relation, "id", "")
+func pageJunctionOrder(source rasql.Table[pageJunctionRow]) []rasql.OrderTerm {
+	task, _ := rasql.BindColumn[pageJunctionRow, int64](source, "task", "")
+	id, _ := rasql.BindColumn[pageJunctionRow, int64](source, "id", "")
 	return []rasql.OrderTerm{rasql.AscExpr(task.Expr()), rasql.AscExpr(id.Expr())}
 }
 

@@ -58,8 +58,7 @@ func TestExecution(t *testing.T) {
 		{Name: "id", Type: schema.IntegerType{}}, {Name: "email", Type: schema.TextType{}},
 	}})
 	require.NoError(t, err)
-	relation, err := table.Source("")
-	require.NoError(t, err)
+	relation := table
 	email, err := rasql.BindColumn[user, string](relation, "email", "")
 	require.NoError(t, err)
 	id, err := rasql.BindColumn[user, int64](relation, "id", "")
@@ -120,8 +119,7 @@ func TestExecPreservesResultAfterHookError(t *testing.T) {
 		Columns: []schema.ColumnDef{{Name: "email", Type: schema.TextType{}}},
 	})
 	require.NoError(t, err)
-	usersSource, err := users.Source("")
-	require.NoError(t, err)
+	usersSource := users
 	email, err := rasql.BindColumn[user, string](usersSource, "email", "")
 	require.NoError(t, err)
 	mock.ExpectExec("INSERT INTO \"users\" (\"email\") VALUES (?)").WithArgs("grace@example.com").WillReturnResult(sqlmock.NewResult(2, 1))

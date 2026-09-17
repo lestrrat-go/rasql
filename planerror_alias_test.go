@@ -39,10 +39,8 @@ func TestPlanErrorUnwrapsItsCause(t *testing.T) {
 		Columns: []schema.ColumnDef{{Name: "flag", Type: schema.IntegerType{}}},
 	})
 	require.NoError(t, err)
-	relation, err := table.Source("")
-	require.NoError(t, err)
 
-	err = rasql.Select(relation.Source(), projection).Validate()
+	err = rasql.Select(table, projection).Validate()
 	require.Error(t, err)
 	var planErr *rasql.PlanError
 	require.ErrorAs(t, err, &planErr)

@@ -101,11 +101,11 @@ func TestValueSnapshot(t *testing.T) {
 
 		table, err := rasql.TableOf[int64](schema.TableDef{Name: "values", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
 		require.NoError(t, err)
-		relation, err := table.Source("v")
+		relation, err := table.As("v")
 		require.NoError(t, err)
 		projection, err := rasql.Scalar("value", rasql.Value(int64(1)), schema.IntegerType{}, "")
 		require.NoError(t, err)
-		query := rasql.Select(relation.Source(), projection).Where(rasql.EqualValue(rasql.Value(cycle), cycle))
+		query := rasql.Select(relation, projection).Where(rasql.EqualValue(rasql.Value(cycle), cycle))
 		err = query.Validate()
 		require.Error(t, err)
 		var planErr *rasql.PlanError
@@ -160,11 +160,11 @@ func TestValueSnapshot(t *testing.T) {
 
 		table, err := rasql.TableOf[int64](schema.TableDef{Name: "values", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
 		require.NoError(t, err)
-		relation, err := table.Source("v")
+		relation, err := table.As("v")
 		require.NoError(t, err)
 		projection, err := rasql.Scalar("value", expression, schema.JSONType{}, "snapshot.codec")
 		require.NoError(t, err)
-		query := rasql.Select(relation.Source(), projection)
+		query := rasql.Select(relation, projection)
 		require.NoError(t, query.Validate())
 		require.NoError(t, query.Validate())
 		require.Equal(t, 1, calls)

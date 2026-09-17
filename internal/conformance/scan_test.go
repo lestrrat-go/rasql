@@ -66,7 +66,7 @@ func scanTypedTaskQuery(f typedFixture) (rasql.Query[scanTaskRow], error) {
 	if err != nil {
 		return rasql.Query[scanTaskRow]{}, err
 	}
-	query := rasql.Select(relation.Source(), projection).OrderBy(rasql.AscExpr(f.taskID.Expr()))
+	query := rasql.Select(relation, projection).OrderBy(rasql.AscExpr(f.taskID.Expr()))
 	return query.Limit(32)
 }
 

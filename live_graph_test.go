@@ -83,10 +83,8 @@ func testLiveGraph(t *testing.T, database *sql.DB, d dialect.Dialect) {
 	require.NoError(t, err)
 	childTable, err := rasql.TableOf[graphLiveChild](schema.TableDef{Name: childrenName, PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "parent_id", Type: schema.IntegerType{}}, {Name: "rank_value", Type: schema.IntegerType{}}}})
 	require.NoError(t, err)
-	parents, err := parentTable.Source("")
-	require.NoError(t, err)
-	children, err := childTable.Source("")
-	require.NoError(t, err)
+	parents := parentTable
+	children := childTable
 	parentID, err := rasql.BindColumn[graphLiveParent, int64](parents, "id", "")
 	require.NoError(t, err)
 	childID, err := rasql.BindColumn[graphLiveChild, int64](children, "id", "")
@@ -103,8 +101,8 @@ func testLiveGraph(t *testing.T, database *sql.DB, d dialect.Dialect) {
 	require.NoError(t, err)
 	childProjection, err := rasql.NewProjection([]rasql.ProjectionItem{rasql.Item("id", childID.Expr(), schema.IntegerType{}, ""), rasql.Item("parent_id", childParent.Expr(), schema.IntegerType{}, ""), rasql.Item("rank_value", childRank.Expr(), schema.IntegerType{}, "")}, graphLiveChildDecoder{schema: childSchema})
 	require.NoError(t, err)
-	parentQuery := rasql.Select(parents.Source(), parentProjection)
-	childQuery := rasql.Select(children.Source(), childProjection)
+	parentQuery := rasql.Select(parents, parentProjection)
+	childQuery := rasql.Select(children, childProjection)
 	childQuery = childQuery.OrderBy(rasql.AscExpr(childRank.Expr()), rasql.AscExpr(childID.Expr()))
 	parentKey, err := rasql.NewGraphKey(rasql.KeyPart(parentID, func(row graphLiveParent) int64 { return row.ID }))
 	require.NoError(t, err)

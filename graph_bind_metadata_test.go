@@ -65,7 +65,7 @@ func partitionQuery(t *testing.T) rasql.Query[partitionRow] {
 		Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 	})
 	require.NoError(t, err)
-	relation, err := table.Source("i")
+	relation, err := table.As("i")
 	require.NoError(t, err)
 	column, err := rasql.BindColumn[partitionRow, int64](relation, "id", "")
 	require.NoError(t, err)
@@ -75,7 +75,7 @@ func partitionQuery(t *testing.T) rasql.Query[partitionRow] {
 	)
 	require.NoError(t, err)
 	q, err := rasql.Q1WithPartitionLimit(
-		rasql.Select(relation.Source(), projection),
+		rasql.Select(relation, projection),
 		[]rasql.GroupKey{rasql.Group(column.Expr())},
 		[]rasql.OrderTerm{rasql.AscExpr(column.Expr())}, 2)
 	require.NoError(t, err)

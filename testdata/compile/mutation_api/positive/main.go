@@ -18,11 +18,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	relation, err := table.Source("")
-	if err != nil {
-		panic(err)
-	}
-	rootID, err := rasql.BindColumn[row, int64](relation, "id", "")
+	rootID, err := rasql.BindColumn[row, int64](table, "id", "")
 	if err != nil {
 		panic(err)
 	}

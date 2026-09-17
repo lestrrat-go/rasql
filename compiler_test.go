@@ -26,8 +26,7 @@ func compilerTable(t *testing.T) (rasql.Table[compilerRow], rasql.Column[compile
 		},
 	})
 	require.NoError(t, err)
-	relation, err := table.Source("")
-	require.NoError(t, err)
+	relation := table
 	id, err := rasql.BindColumn[compilerRow, int64](relation, "id", "")
 	require.NoError(t, err)
 	name, err := rasql.BindColumn[compilerRow, int64](relation, "name", "")
@@ -246,8 +245,7 @@ func compilerSelect(t *testing.T) rasql.Query[compilerCountRow] {
 		Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 	})
 	require.NoError(t, err)
-	relation, err := table.Source("")
-	require.NoError(t, err)
+	relation := table
 	id, err := rasql.BindColumn[compilerCountRow, int64](relation, "id", "")
 	require.NoError(t, err)
 	result, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}})
@@ -257,7 +255,7 @@ func compilerSelect(t *testing.T) rasql.Query[compilerCountRow] {
 		compilerCountDecoder{result: result},
 	)
 	require.NoError(t, err)
-	return rasql.Select(relation.Source(), projection).Where(rasql.EqualValue(id.Expr(), int64(7)))
+	return rasql.Select(relation, projection).Where(rasql.EqualValue(id.Expr(), int64(7)))
 }
 
 type compilerCountRow struct{ ID int64 }
@@ -311,9 +309,8 @@ func TestCompileQuery(t *testing.T) {
 			Columns: []schema.ColumnDef{{Name: "payload", Type: schema.BytesType{}}},
 		})
 		require.NoError(t, err)
-		relation, err := table.Source("")
-		require.NoError(t, err)
-		query := rasql.Select(relation.Source(), projection)
+		relation := table
+		query := rasql.Select(relation, projection)
 
 		compiler := compilerFor(t, rasql.PostgreSQL17(), dialect.PostgreSQL())
 		first, err := rasql.CompileQuery(compiler, query)
@@ -345,8 +342,7 @@ func TestCompileQuery(t *testing.T) {
 					Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 				})
 				require.NoError(t, err)
-				relation, err := table.Source("")
-				require.NoError(t, err)
+				relation := table
 				id, err := rasql.BindColumn[compilerCountRow, int64](relation, "id", "")
 				require.NoError(t, err)
 				result, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}})
@@ -358,8 +354,8 @@ func TestCompileQuery(t *testing.T) {
 				require.NoError(t, err)
 
 				param := rasql.NewParameter[int64]()
-				paramQuery := rasql.Select(relation.Source(), projection).Where(rasql.EqualExpr(id.Expr(), param.Expr()))
-				valueQuery := rasql.Select(relation.Source(), projection).Where(rasql.EqualValue(id.Expr(), int64(7)))
+				paramQuery := rasql.Select(relation, projection).Where(rasql.EqualExpr(id.Expr(), param.Expr()))
+				valueQuery := rasql.Select(relation, projection).Where(rasql.EqualValue(id.Expr(), int64(7)))
 
 				compiler := compilerFor(t, tc.profile, tc.dialect)
 				paramStatement, err := rasql.CompileQuery(compiler, paramQuery)
@@ -399,7 +395,6 @@ func (compilerBytesDecoder) DecodeRow(source rasql.ScanSource, row *compilerByte
 
 func mustRelation(t *testing.T, table rasql.Table[compilerRow]) rasql.TypedRelation[compilerRow] {
 	t.Helper()
-	relation, err := table.Source("")
-	require.NoError(t, err)
+	relation := table
 	return relation
 }

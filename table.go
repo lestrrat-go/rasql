@@ -170,8 +170,6 @@ const (
 	Except    = query.Except
 )
 
-func Relation(table query.TableRef) query.RelationRef { return query.Relation(table) }
-
 func Derived(result query.ResultQuery, alias string) (query.RelationRef, error) {
 	return query.Derived(result, alias)
 }

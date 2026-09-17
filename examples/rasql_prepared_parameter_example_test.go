@@ -28,19 +28,15 @@ func (d preparedParamOrdersDecoder) DecodeRow(src rasql.ScanSource, row *store.O
 func preparedParamOrdersQuery() (rasql.Query[store.OrdersRow], rasql.Parameter[int64], error) {
 	orders := store.Orders()
 	def := store.OrdersDef()
-	source, err := orders.Source("")
+	id, err := rasql.BindColumn[store.OrdersRow, int64](orders, orders.IDRef().Name(), "")
 	if err != nil {
 		return rasql.Query[store.OrdersRow]{}, rasql.Parameter[int64]{}, err
 	}
-	id, err := rasql.BindColumn[store.OrdersRow, int64](source, orders.IDRef().Name(), "")
+	userID, err := rasql.BindColumn[store.OrdersRow, int64](orders, orders.UserIDRef().Name(), "")
 	if err != nil {
 		return rasql.Query[store.OrdersRow]{}, rasql.Parameter[int64]{}, err
 	}
-	userID, err := rasql.BindColumn[store.OrdersRow, int64](source, orders.UserIDRef().Name(), "")
-	if err != nil {
-		return rasql.Query[store.OrdersRow]{}, rasql.Parameter[int64]{}, err
-	}
-	total, err := rasql.BindColumn[store.OrdersRow, int64](source, orders.TotalRef().Name(), "")
+	total, err := rasql.BindColumn[store.OrdersRow, int64](orders, orders.TotalRef().Name(), "")
 	if err != nil {
 		return rasql.Query[store.OrdersRow]{}, rasql.Parameter[int64]{}, err
 	}
@@ -61,7 +57,7 @@ func preparedParamOrdersQuery() (rasql.Query[store.OrdersRow], rasql.Parameter[i
 		return rasql.Query[store.OrdersRow]{}, rasql.Parameter[int64]{}, err
 	}
 	minTotal := rasql.NewParameter[int64]()
-	query := rasql.Select(source.Source(), projection).
+	query := rasql.Select(orders, projection).
 		Where(rasql.GreaterOrEqualExpr(total.Expr(), minTotal.Expr())).
 		OrderBy(rasql.AscExpr(id.Expr()))
 	return query, minTotal, nil

@@ -472,7 +472,7 @@ func rasqlNullableReport(ctx context.Context, executor rasql.Executor, _ rasql.D
 	if err != nil {
 		return parityEvidence{}, err
 	}
-	m, err := optionalMembers.Source("m")
+	m, err := optionalMembers.As("m")
 	if err != nil {
 		return parityEvidence{}, err
 	}
@@ -518,7 +518,7 @@ func rasqlNullableReport(ctx context.Context, executor rasql.Executor, _ rasql.D
 	if err != nil {
 		return parityEvidence{}, err
 	}
-	queryValue := rasql.Select(p.Source(), projection).Join(tSource.Source(), rasql.EqualExpr(pid.Expr(), tproject.Expr())).LeftJoin(m.Source(), rasql.EqualOptional(memberID.Expr(), assignee.NullExpr())).Where(rasql.EqualValue(pid.Expr(), int64(2))).OrderBy(rasql.AscExpr(tid.Expr()))
+	queryValue := rasql.Select(p, projection).Join(tSource, rasql.EqualExpr(pid.Expr(), tproject.Expr())).LeftJoin(m, rasql.EqualOptional(memberID.Expr(), assignee.NullExpr())).Where(rasql.EqualValue(pid.Expr(), int64(2))).OrderBy(rasql.AscExpr(tid.Expr()))
 	values, err := rasql.All(ctx, executor, queryValue)
 	if err != nil {
 		return parityEvidence{}, err

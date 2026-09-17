@@ -546,9 +546,7 @@ func TestCompilerExtensionExecutesCanonicalSelect(t *testing.T) {
 		Name: "users", Columns: []schema.ColumnDef{{Name: "email", Type: schema.TextType{}}},
 	})
 	require.NoError(t, err)
-	source, err := table.Source("")
-	require.NoError(t, err)
-	email, err := rasql.BindColumn[user, string](source, "email", "")
+	email, err := rasql.BindColumn[user, string](table, "email", "")
 	require.NoError(t, err)
 	resultSchema, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "email", Type: schema.TextType{}})
 	require.NoError(t, err)
@@ -559,7 +557,7 @@ func TestCompilerExtensionExecutesCanonicalSelect(t *testing.T) {
 		dynamicProjection.Decoder(),
 	)
 	require.NoError(t, err)
-	statement, err := rasql.Select(source.Source(), projection).OrderBy(rasql.AscExpr(email.Expr())).Limit(2)
+	statement, err := rasql.Select(table, projection).OrderBy(rasql.AscExpr(email.Expr())).Limit(2)
 	require.NoError(t, err)
 	executor, err := rasql.Open(t.Context(), database, d)
 	require.NoError(t, err)

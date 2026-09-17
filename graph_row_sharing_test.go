@@ -335,9 +335,9 @@ type graphSharedFixture struct {
 	// need and what a decorator built from outside does not have on its own.
 	counter      *graphSharedExecutor
 	executor     rasql.Executor
-	parentSource rasql.Source
-	childSource  rasql.Source
-	junction     rasql.Source
+	parentSource rasql.Table[graphSharedParentRow]
+	childSource  rasql.Table[graphSharedChildRow]
+	junction     rasql.Table[graphSharedJunctionRow]
 	parentQuery  rasql.Query[graphSharedParentRow]
 	childQuery   rasql.Query[graphSharedChildRow]
 	parentKey    rasql.GraphKey[graphSharedParentRow]
@@ -377,9 +377,7 @@ INSERT INTO graph_shared_junction VALUES (1, 11), (2, 11)`)
 	parents, err := rasql.MustTableOf[graphSharedParentRow](schema.TableDef{
 		Name: "graph_shared_parents", PrimaryKey: []string{"id"},
 		Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
-	}).Source(
-
-		"p")
+	}).As("p")
 
 	require.NoError(t, err)
 	children, err := rasql.MustTableOf[graphSharedChildRow](schema.TableDef{
@@ -388,21 +386,17 @@ INSERT INTO graph_shared_junction VALUES (1, 11), (2, 11)`)
 			{Name: "id", Type: schema.IntegerType{}}, {Name: "parent", Type: schema.IntegerType{}},
 			{Name: "rank", Type: schema.IntegerType{}}, {Name: "payload", Type: schema.BytesType{}},
 		},
-	}).Source(
-
-		"c")
+	}).As("c")
 
 	require.NoError(t, err)
 	junction, err := rasql.MustTableOf[graphSharedJunctionRow](schema.TableDef{
 		Name:    "graph_shared_junction",
 		Columns: []schema.ColumnDef{{Name: "parent", Type: schema.IntegerType{}}, {Name: "child", Type: schema.IntegerType{}}},
-	}).Source(
-
-		"j")
+	}).As("j")
 
 	require.NoError(t, err)
-	parentRelation := rasql.Q1TypedRelation[graphSharedParentRow](parents.Source())
-	childRelation := rasql.Q1TypedRelation[graphSharedChildRow](children.Source())
+	parentRelation := parents
+	childRelation := children
 	parentID, err := rasql.BindColumn[graphSharedParentRow, int64](parentRelation, "id", "")
 	require.NoError(t, err)
 	childID, err := rasql.BindColumn[graphSharedChildRow, int64](childRelation, "id", "")
@@ -413,7 +407,7 @@ INSERT INTO graph_shared_junction VALUES (1, 11), (2, 11)`)
 	require.NoError(t, err)
 	childPayload, err := rasql.BindColumn[graphSharedChildRow, []byte](childRelation, "payload", "")
 	require.NoError(t, err)
-	junctionRelation := rasql.Q1TypedRelation[graphSharedJunctionRow](junction.Source())
+	junctionRelation := junction
 	junctionParent, err := rasql.BindColumn[graphSharedJunctionRow, int64](junctionRelation, "parent", "")
 	require.NoError(t, err)
 	junctionChild, err := rasql.BindColumn[graphSharedJunctionRow, int64](junctionRelation, "child", "")
@@ -437,8 +431,8 @@ INSERT INTO graph_shared_junction VALUES (1, 11), (2, 11)`)
 	}
 	childProjection, err := rasql.NewProjection(childItems, graphSharedChildDecoder{schema: childSchema})
 	require.NoError(t, err)
-	parentQuery := rasql.Select(parents.Source(), parentProjection).OrderBy(rasql.AscExpr(parentID.Expr()))
-	childQuery := rasql.Select(children.Source(), childProjection).OrderBy(rasql.AscExpr(childRank.Expr()), rasql.AscExpr(childID.Expr()))
+	parentQuery := rasql.Select(parents, parentProjection).OrderBy(rasql.AscExpr(parentID.Expr()))
+	childQuery := rasql.Select(children, childProjection).OrderBy(rasql.AscExpr(childRank.Expr()), rasql.AscExpr(childID.Expr()))
 	parentKey, err := rasql.NewGraphKey(rasql.KeyPart(parentID, func(row graphSharedParentRow) int64 { return row.ID }))
 	require.NoError(t, err)
 	childKey := graphSharedDirectKey(t, childParent, func(row graphSharedChildRow) int64 { return row.Parent })
@@ -447,7 +441,7 @@ INSERT INTO graph_shared_junction VALUES (1, 11), (2, 11)`)
 	require.NoError(t, err)
 	throughKey, err := rasql.NewGraphKey(rasql.KeyPart(junctionChild, func(row graphSharedJunctionRow) int64 { return row.Child }))
 	require.NoError(t, err)
-	return graphSharedFixture{counter: counter, executor: executor, parentSource: parents.Source(), childSource: children.Source(), junction: junction.Source(), parentQuery: parentQuery, childQuery: childQuery, parentKey: parentKey, childKey: childKey, childIDKey: childIDKey, junctionKey: junctionKey, throughKey: throughKey, parentID: parentID.Expr(), childID: childID.Expr(), childParent: childParent.Expr(), childRank: childRank.Expr(), childPayload: childPayload.Expr(), childItems: childItems, childSchema: childSchema}
+	return graphSharedFixture{counter: counter, executor: executor, parentSource: parents, childSource: children, junction: junction, parentQuery: parentQuery, childQuery: childQuery, parentKey: parentKey, childKey: childKey, childIDKey: childIDKey, junctionKey: junctionKey, throughKey: throughKey, parentID: parentID.Expr(), childID: childID.Expr(), childParent: childParent.Expr(), childRank: childRank.Expr(), childPayload: childPayload.Expr(), childItems: childItems, childSchema: childSchema}
 }
 
 func graphSharedDirectKey[R any](t *testing.T, column rasql.Column[R, int64], extract func(R) int64) rasql.GraphKey[R] {

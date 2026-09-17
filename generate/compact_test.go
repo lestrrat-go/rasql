@@ -233,26 +233,26 @@ type projectGraph struct { Owner rasql.LoadedOne[userGraph] }
 type userGraph struct { ID int64 }
 
 func TestGeneratedEdgeUsesExactAliasedStage(t *testing.T) {
-	parentSource, err := generated.Projects().Source("p")
+	parentSource, err := generated.Projects().As("p")
 	if err != nil { t.Fatal(err) }
 	parentExpressions, err := (generated.ProjectsColumns{}).Bind(parentSource)
 	if err != nil { t.Fatal(err) }
 	parentProjection, err := generated.ProjectsProjection(parentExpressions)
 	if err != nil { t.Fatal(err) }
-	parentQuery := rasql.Select(parentSource.Source(), parentProjection)
-	childSource, err := generated.Users().Source("u")
+	parentQuery := rasql.Select(parentSource, parentProjection)
+	childSource, err := generated.Users().As("u")
 	if err != nil { t.Fatal(err) }
 	childExpressions, err := (generated.UsersColumns{}).Bind(childSource)
 	if err != nil { t.Fatal(err) }
 	childProjection, err := generated.UsersProjection(childExpressions)
 	if err != nil { t.Fatal(err) }
-	childQuery := rasql.Select(childSource.Source(), childProjection)
+	childQuery := rasql.Select(childSource, childProjection)
 	childPlan, err := rasql.NewGraphPlan(childQuery, func(row generated.UsersRow) userGraph { return userGraph{ID: row.ID} })
 	if err != nil { t.Fatal(err) }
 	edge, err := generated.ProjectsOwnerEdge(parentSource, childSource, childPlan, rasql.EdgeOptions{}, func(graph *projectGraph, value rasql.LoadedOne[userGraph]) { graph.Owner = value })
 	if err != nil { t.Fatal(err) }
 	if _, err = rasql.NewGraphPlan(parentQuery, func(generated.ProjectsRow) projectGraph { return projectGraph{} }, edge); err != nil { t.Fatal(err) }
-	wrongParent, err := generated.Projects().Source("p2")
+	wrongParent, err := generated.Projects().As("p2")
 	if err != nil { t.Fatal(err) }
 	wrongEdge, err := generated.ProjectsOwnerEdge(wrongParent, childSource, childPlan, rasql.EdgeOptions{}, func(graph *projectGraph, value rasql.LoadedOne[userGraph]) { graph.Owner = value })
 	if err != nil { t.Fatal(err) }
@@ -306,26 +306,26 @@ type mismatchAccountGraph struct { Roles rasql.LoadedMany[mismatchRoleGraph] }
 type mismatchProjectGraph struct { ID int64 }
 
 func TestSourceMismatchMatrix(t *testing.T) {
-	parentSource, err := store.Project().Source("p")
+	parentSource, err := store.Project().As("p")
 	if err != nil { t.Fatal(err) }
 	parentExpressions, err := (store.ProjectColumns{}).Bind(parentSource)
 	if err != nil { t.Fatal(err) }
 	parentProjection, err := store.ProjectProjection(parentExpressions)
 	if err != nil { t.Fatal(err) }
-	parentQuery := rasql.Select(parentSource.Source(), parentProjection)
-	childSource, err := store.Account().Source("u")
+	parentQuery := rasql.Select(parentSource, parentProjection)
+	childSource, err := store.Account().As("u")
 	if err != nil { t.Fatal(err) }
 	childExpressions, err := (store.AccountColumns{}).Bind(childSource)
 	if err != nil { t.Fatal(err) }
 	childProjection, err := store.AccountProjection(childExpressions)
 	if err != nil { t.Fatal(err) }
-	childQuery := rasql.Select(childSource.Source(), childProjection)
+	childQuery := rasql.Select(childSource, childProjection)
 	childPlan, err := rasql.NewGraphPlan(childQuery, func(row store.AccountRecord) mismatchAccountGraph { return mismatchAccountGraph{} })
 	if err != nil { t.Fatal(err) }
 	validEdge, err := store.ProjectOwnerEdge(parentSource, childSource, childPlan, rasql.EdgeOptions{}, func(*mismatchProjectGraph, rasql.LoadedOne[mismatchAccountGraph]) {})
 	if err != nil { t.Fatal(err) }
 	if _, err = rasql.NewGraphPlan(parentQuery, func(store.ProjectRecord) mismatchProjectGraph { return mismatchProjectGraph{} }, validEdge); err != nil { t.Fatal(err) }
-	wrongChildSource, err := store.Account().Source("u2")
+	wrongChildSource, err := store.Account().As("u2")
 	if err != nil { t.Fatal(err) }
 	wrongChildEdge, err := store.ProjectOwnerEdge(parentSource, wrongChildSource, childPlan, rasql.EdgeOptions{}, func(*mismatchProjectGraph, rasql.LoadedOne[mismatchAccountGraph]) {})
 	if err != nil { t.Fatal(err) }
@@ -334,24 +334,24 @@ func TestSourceMismatchMatrix(t *testing.T) {
 		t.Fatalf("wrong child error = %v", err)
 	}
 
-	rootSource, err := store.Account().Source("u3")
+	rootSource, err := store.Account().As("u3")
 	if err != nil { t.Fatal(err) }
 	rootExpressions, err := (store.AccountColumns{}).Bind(rootSource)
 	if err != nil { t.Fatal(err) }
 	rootProjection, err := store.AccountProjection(rootExpressions)
 	if err != nil { t.Fatal(err) }
-	rootQuery := rasql.Select(rootSource.Source(), rootProjection)
-	junctionSource, err := store.Membership().Source("ur")
+	rootQuery := rasql.Select(rootSource, rootProjection)
+	junctionSource, err := store.Membership().As("ur")
 	if err != nil { t.Fatal(err) }
 	junctionExpressions, err := (store.MembershipColumns{}).Bind(junctionSource)
 	if err != nil { t.Fatal(err) }
-	rolesSource, err := store.Role().Source("r")
+	rolesSource, err := store.Role().As("r")
 	if err != nil { t.Fatal(err) }
 	rolesExpressions, err := (store.RoleColumns{}).Bind(rolesSource)
 	if err != nil { t.Fatal(err) }
 	rolesProjection, err := store.RoleProjection(rolesExpressions)
 	if err != nil { t.Fatal(err) }
-	rolesPlan, err := rasql.NewGraphPlan(rasql.Select(rolesSource.Source(), rolesProjection), func(row store.RoleRecord) mismatchRoleGraph { return mismatchRoleGraph{ID: row.ID} })
+	rolesPlan, err := rasql.NewGraphPlan(rasql.Select(rolesSource, rolesProjection), func(row store.RoleRecord) mismatchRoleGraph { return mismatchRoleGraph{ID: row.ID} })
 	if err != nil { t.Fatal(err) }
 	attachRoles := func(graph *mismatchAccountGraph, value rasql.LoadedMany[mismatchRoleGraph]) { graph.Roles = value }
 	// The junctionSource argument selects the through stage, so any valid alias is legal.
@@ -359,7 +359,7 @@ func TestSourceMismatchMatrix(t *testing.T) {
 	if err != nil { t.Fatal(err) }
 	throughPlan, err := rasql.NewGraphPlan(rootQuery, func(store.AccountRecord) mismatchAccountGraph { return mismatchAccountGraph{} }, throughEdge)
 	if err != nil { t.Fatal(err) }
-	wrongJunctionSource, err := store.Membership().Source("ur2")
+	wrongJunctionSource, err := store.Membership().As("ur2")
 	if err != nil { t.Fatal(err) }
 	wrongJunctionExpressions, err := (store.MembershipColumns{}).Bind(wrongJunctionSource)
 	if err != nil { t.Fatal(err) }
@@ -394,7 +394,7 @@ func TestSourceMismatchMatrix(t *testing.T) {
 	for _, statement := range statements { if strings.Contains(statement, "\"user_roles\" AS \"ur\"") { foundAlias = true } }
 	if !foundAlias { t.Fatalf("through SQL did not retain junction alias: %v", statements) }
 
-	pageSource, err := store.Account().Source("u")
+	pageSource, err := store.Account().As("u")
 	if err != nil { t.Fatal(err) }
 	pageKey, err := store.AccountIDPageKey(pageSource, rasql.PageAscending)
 	if err != nil { t.Fatal(err) }

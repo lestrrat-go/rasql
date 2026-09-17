@@ -810,7 +810,7 @@ func writeCompactRelations(b *bytes.Buffer, object CompactObject, accessor, row 
 			b.WriteString(")\n\tif err != nil { return nil, err }\n")
 			b.WriteString("\treturn rasql.ManyThrough(\"")
 			b.WriteString(relation.Name)
-			b.WriteString("\", parent, junctionParent, junctionChild, child, junctionSource.Source(), children, options, attach)\n}\n\n")
+			b.WriteString("\", parent, junctionParent, junctionChild, child, junctionSource, children, options, attach)\n}\n\n")
 			continue
 		}
 		b.WriteString("\tchild, err := rasql.NewGraphKey[")

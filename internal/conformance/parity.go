@@ -597,8 +597,8 @@ func newTypedFixture() (typedFixture, error) {
 		taskAssignee: taskAssignee, taskTitle: taskTitle, taskOpen: taskOpen, memberID: memberID, memberName: memberName}, nil
 }
 
-func mustSource[T any](table rasql.Table[T], alias string) rasql.TypedRelation[T] {
-	relation, err := table.Source(alias)
+func mustSource[T any](table rasql.Table[T], alias string) rasql.Table[T] {
+	relation, err := table.As(alias)
 	if err != nil {
 		panic(err)
 	}
@@ -625,7 +625,7 @@ func typedProjectQuery(f typedFixture, id int64) (rasql.Query[projectRow], error
 	if err != nil {
 		return rasql.Query[projectRow]{}, err
 	}
-	return rasql.Select(relation.Source(), projection).Where(rasql.EqualValue(idColumn.Expr(), id)).OrderBy(rasql.AscExpr(idColumn.Expr())), nil
+	return rasql.Select(relation, projection).Where(rasql.EqualValue(idColumn.Expr(), id)).OrderBy(rasql.AscExpr(idColumn.Expr())), nil
 }
 
 func typedTaskQuery(f typedFixture, projectID int64, openOnly bool, observers ...func(taskRow)) (rasql.Query[taskRow], error) {
@@ -686,7 +686,7 @@ func typedTaskQueryWhere(f typedFixture, projectID, idValue int64, openOnly bool
 	if err != nil {
 		return rasql.Query[taskRow]{}, err
 	}
-	queryValue := rasql.Select(relation.Source(), projection).OrderBy(rasql.AscExpr(id.Expr()))
+	queryValue := rasql.Select(relation, projection).OrderBy(rasql.AscExpr(id.Expr()))
 	if projectID > 0 {
 		queryValue = queryValue.Where(rasql.EqualValue(project.Expr(), projectID))
 	}
@@ -717,7 +717,7 @@ func typedMemberQuery(f typedFixture, ids []int64, observers ...func(memberRow))
 	if err != nil {
 		return rasql.Query[memberRow]{}, err
 	}
-	queryValue := rasql.Select(relation.Source(), projection).OrderBy(rasql.AscExpr(id.Expr()))
+	queryValue := rasql.Select(relation, projection).OrderBy(rasql.AscExpr(id.Expr()))
 	if len(ids) == 1 {
 		queryValue = queryValue.Where(rasql.EqualValue(id.Expr(), ids[0]))
 	} else if len(ids) > 1 {
@@ -833,7 +833,7 @@ func typedProjectAllQuery(f typedFixture, maxProject int64, observers ...func(pr
 	if err != nil {
 		return rasql.Query[projectRow]{}, err
 	}
-	queryValue := rasql.Select(relation.Source(), projection).OrderBy(rasql.AscExpr(id.Expr()))
+	queryValue := rasql.Select(relation, projection).OrderBy(rasql.AscExpr(id.Expr()))
 	if maxProject > 0 {
 		predicates := make([]rasql.Predicate, 0, maxProject)
 		for value := int64(1); value <= maxProject; value++ {

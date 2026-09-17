@@ -59,7 +59,7 @@ func TestGeneratedSQLiteViewCanBeRead(t *testing.T) {
 		"\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
 		"\tviewProjection, err := generated.ActiveUsersProjection(viewColumns)\n" +
 		"\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
-		"\trows, err := rasql.All(ctx, executor, rasql.Select(viewSource.Source(), viewProjection))\n" +
+		"\trows, err := rasql.All(ctx, executor, rasql.Select(viewSource, viewProjection))\n" +
 		"\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
 		"\tif len(rows) != 1 {\n\t\tt.Fatalf(\"got %d rows\", len(rows))\n\t}\n" +
 		"\tfmt.Println(rows[0].Email)\n" +

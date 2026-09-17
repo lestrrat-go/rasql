@@ -27,11 +27,11 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	relation, err := table.Source("u")
+	relation, err := table.As("u")
 	if err != nil {
 		panic(err)
 	}
-	query := rasql.Select(relation.Source(), projection).Where(rasql.EqualValue(rasql.Value(int64(1)), int64(1)))
+	query := rasql.Select(relation, projection).Where(rasql.EqualValue(rasql.Value(int64(1)), int64(1)))
 	if err := query.Validate(); err != nil {
 		panic(err)
 	}

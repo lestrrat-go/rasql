@@ -70,17 +70,12 @@ func Example_rasqlgen_embedded_row() {
 	}
 
 	users := store.Users()
-	source, err := users.Source("")
-	if err != nil {
-		fmt.Printf("failed to bind users source: %s\n", err)
-		return
-	}
-	id, err := rasql.BindColumn[store.UsersRow, int64](source, users.IDRef().Name(), "")
+	id, err := rasql.BindColumn[store.UsersRow, int64](users, users.IDRef().Name(), "")
 	if err != nil {
 		fmt.Printf("failed to bind id column: %s\n", err)
 		return
 	}
-	email, err := rasql.BindColumn[store.UsersRow, string](source, users.EmailRef().Name(), "")
+	email, err := rasql.BindColumn[store.UsersRow, string](users, users.EmailRef().Name(), "")
 	if err != nil {
 		fmt.Printf("failed to bind email column: %s\n", err)
 		return
@@ -102,7 +97,7 @@ func Example_rasqlgen_embedded_row() {
 		return
 	}
 
-	wrapped, err := rasql.One(ctx, db, rasql.Select(source.Source(), projection))
+	wrapped, err := rasql.One(ctx, db, rasql.Select(users, projection))
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return

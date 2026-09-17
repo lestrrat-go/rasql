@@ -87,6 +87,21 @@ func contractors(t *testing.T) rasql.Table[staffRow] {
 	return table
 }
 
+// staffProjection is the smallest projection over a staff table, so a test can
+// assemble one statement and read back what the plan refused.
+func staffProjection(table rasql.Table[staffRow]) rasql.Projection[int64] {
+	id, _ := rasql.BindColumn[staffRow, int64](table, "id", "")
+	projection, _ := rasql.Scalar("id", id.Expr(), schema.IntegerType{}, "")
+	return projection
+}
+
+// viewCapabilityProjection is staffProjection for the capability fixtures.
+func viewCapabilityProjection(table rasql.Table[viewCapabilityRow]) rasql.Projection[int64] {
+	id, _ := rasql.BindColumn[viewCapabilityRow, int64](table, "id", "")
+	projection, _ := rasql.Scalar("id", id.Expr(), schema.IntegerType{}, "")
+	return projection
+}
+
 func TestTable(t *testing.T) {
 	t.Run("describes a table", func(t *testing.T) {
 		t.Run("Column resolves and rejects names", func(t *testing.T) {
@@ -226,6 +241,99 @@ func TestTable(t *testing.T) {
 	})
 }
 
+// TestTableIsARelation pins that a table is what a statement selects from, and
+// that nothing converts it first. rasql.Table[T] satisfies rasql.RowSource[T],
+// a generated wrapper holding one satisfies it by promotion, and Select, Join
+// and BindColumn each take it as it stands.
+func TestTableIsARelation(t *testing.T) {
+	t.Run("a table selects and binds directly", func(t *testing.T) {
+		table, err := rasql.TableOf[staffRow](staffDefinition())
+		require.NoError(t, err)
+
+		id, err := rasql.BindColumn[staffRow, int64](table, "id", "")
+		require.NoError(t, err)
+		projection, err := rasql.Scalar("id", id.Expr(), schema.IntegerType{}, "")
+		require.NoError(t, err)
+		require.NoError(t, rasql.Select(table, projection).Validate())
+	})
+
+	t.Run("a generated wrapper selects and binds directly", func(t *testing.T) {
+		// The wrapper declares no relation method of its own; both come from
+		// the handle it holds.
+		wrapper := staff(t)
+
+		id, err := rasql.BindColumn[staffRow, int64](wrapper, "id", "")
+		require.NoError(t, err)
+		projection, err := rasql.Scalar("id", id.Expr(), schema.IntegerType{}, "")
+		require.NoError(t, err)
+		require.NoError(t, rasql.Select(wrapper, projection).Validate())
+	})
+
+	t.Run("a derived query and a CTE reference are relations too", func(t *testing.T) {
+		base := staffSelect(t, staff(t).Table)
+		derived, err := rasql.Derive(base, "recent_staff")
+		require.NoError(t, err)
+		id, err := rasql.BindResultColumn[int64, int64](derived, "id")
+		require.NoError(t, err)
+		projection, err := rasql.Scalar("id", id.Expr(), schema.IntegerType{}, "")
+		require.NoError(t, err)
+		require.NoError(t, rasql.Select(derived, projection).Validate())
+
+		common, err := rasql.CTEOf("recent", base)
+		require.NoError(t, err)
+		reference, err := common.As("r")
+		require.NoError(t, err)
+		referenceID, err := rasql.BindResultColumn[int64, int64](reference, "id")
+		require.NoError(t, err)
+		referenceProjection, err := rasql.Scalar("id", referenceID.Expr(), schema.IntegerType{}, "")
+		require.NoError(t, err)
+		require.NoError(t, rasql.Select(reference, referenceProjection).Validate())
+	})
+
+	// Two appearances of one table in a single statement have to be two
+	// values, because a column expression binds to the appearance it was
+	// bound against and a rendered reference would resolve to both. Table.As
+	// is the one way to separate them, and there is no second spelling.
+	//
+	// The plan refuses the second appearance by its SQL qualifier;
+	// query.validateSourceReference states the same rule one layer down, for
+	// a statement assembled through the query package directly.
+	t.Run("two appearances of one table need an alias on one of them", func(t *testing.T) {
+		employees := staff(t)
+		projection := staffProjection(employees.Table)
+		employeeManagerID, err := rasql.BindColumn[staffRow, int64](employees, "manager_id", "")
+		require.NoError(t, err)
+
+		unaliased := rasql.Select(employees, projection).
+			Join(employees, rasql.EqualExpr(employeeManagerID.Expr(), employeeManagerID.Expr()))
+		require.ErrorContains(t, unaliased.Validate(), "duplicate SQL qualifier")
+
+		manager, err := employees.As("manager")
+		require.NoError(t, err)
+		managerID, err := rasql.BindColumn[staffRow, int64](manager, "id", "")
+		require.NoError(t, err)
+		aliased := rasql.Select(employees, projection).
+			Join(manager, rasql.EqualExpr(employeeManagerID.Expr(), managerID.Expr()))
+		require.NoError(t, aliased.Validate())
+
+		statement, err := rasql.Render(aliased, dialect.PostgreSQL())
+		require.NoError(t, err)
+		require.Contains(t, statement.SQL(), `INNER JOIN "staff" AS "manager"`)
+	})
+}
+
+// staffSelect is the smallest valid statement over a staff table, for a test
+// that needs something to derive from.
+func staffSelect(t *testing.T, table rasql.Table[staffRow]) rasql.Query[int64] {
+	t.Helper()
+
+	id, err := rasql.BindColumn[staffRow, int64](table, "id", "")
+	require.NoError(t, err)
+	projection, err := rasql.Scalar("id", id.Expr(), schema.IntegerType{}, "")
+	require.NoError(t, err)
+	return rasql.Select(table, projection)
+}
+
 // zeroTableEntryPoints returns every exported entry point that reads a table
 // through rasql.Table[staffRow]. Each one takes the zero handle, which carries
 // no descriptor, and each is required to report query.ErrNilTable rather than
@@ -237,9 +345,8 @@ func TestTable(t *testing.T) {
 // nil pointer at the other, and only the first was caught.
 func zeroTableEntryPoints() map[string]func(t *testing.T, table rasql.Table[staffRow]) error {
 	return map[string]func(t *testing.T, table rasql.Table[staffRow]) error{
-		"Source": func(_ *testing.T, table rasql.Table[staffRow]) error {
-			_, err := table.Source("")
-			return err
+		"Select": func(_ *testing.T, table rasql.Table[staffRow]) error {
+			return rasql.Select(table, staffProjection(table)).Validate()
 		},
 		"As": func(_ *testing.T, table rasql.Table[staffRow]) error {
 			_, err := table.As("alias")
@@ -285,8 +392,7 @@ func TestZeroTable(t *testing.T) {
 		require.ErrorIs(t, err, query.ErrNilTable)
 		require.Equal(t, staffTable{}, aliased)
 
-		_, err = wrapper.Source("")
-		require.ErrorIs(t, err, query.ErrNilTable)
+		require.ErrorIs(t, rasql.Select(wrapper, staffProjection(wrapper.Table)).Validate(), query.ErrNilTable)
 	})
 
 	t.Run("Column answers with a ColumnRef that reports it", func(t *testing.T) {
@@ -306,8 +412,7 @@ func requireTableUsable(t *testing.T, name string, table rasql.Table[staffRow]) 
 	t.Helper()
 
 	t.Run(name, func(t *testing.T) {
-		_, err := table.Source("")
-		require.NoError(t, err)
+		require.NoError(t, rasql.Select(table, staffProjection(table)).Validate())
 
 		selected, err := render.SelectFrom(dbForBuild(t).Dialect(), table.Ref()).Select("id").Build()
 		require.NoError(t, err)
@@ -377,8 +482,7 @@ func capabilityCalls(t *testing.T, table rasql.Table[viewCapabilityRow]) map[str
 	db := viewCapabilityDB(t)
 	return map[string]func() error{
 		"read": func() error {
-			_, err := table.Source("")
-			return err
+			return rasql.Select(table, viewCapabilityProjection(table)).Validate()
 		},
 		"insert": func() error {
 			_, err := rasql.NewCreatePlan(table, rasql.SetField[viewCapabilityRow, int64](id, 1))
@@ -458,8 +562,9 @@ func TestTableOperations(t *testing.T) {
 		requireCapabilities(t, table, "read", "insert")
 	})
 
-	t.Run("a descriptor withholding read refuses Source", func(t *testing.T) {
-		// Nothing in this repository read OperationRead before Source did.
+	t.Run("a descriptor withholding read refuses the select", func(t *testing.T) {
+		// Nothing in this repository read OperationRead before a statement
+		// did.
 		writeOnly := schema.TableDef{
 			Name:       "outbox",
 			Operations: schema.OperationInsert,
@@ -467,8 +572,8 @@ func TestTableOperations(t *testing.T) {
 		}
 		table, err := rasql.TableOf[viewCapabilityRow](writeOnly)
 		require.NoError(t, err)
-		_, err = table.Source("")
-		require.ErrorContains(t, err, `object "outbox" does not support operation 1`)
+		require.ErrorContains(t, rasql.Select(table, viewCapabilityProjection(table)).Validate(),
+			`object "outbox" does not support operation 1`)
 	})
 
 	// TableFrom validates nothing, so it is how a handle reaches a mutation
@@ -532,20 +637,18 @@ func TestInSchema(t *testing.T) {
 		)
 	})
 
-	t.Run("a relation built from a moved table carries the namespace", func(t *testing.T) {
+	t.Run("a moved built from a moved table carries the namespace", func(t *testing.T) {
 		// Source is how a generated table becomes something a query selects
 		// from, so the namespace has to survive that step rather than only the
 		// table wrapper.
 		moved, err := staff(t).InSchema("tenant_0001")
 		require.NoError(t, err)
-		relation, err := moved.Source("")
-		require.NoError(t, err)
-		id, err := rasql.BindColumn[staffRow, int64](relation, "id", "")
+		id, err := rasql.BindColumn[staffRow, int64](moved, "id", "")
 		require.NoError(t, err)
 		projection, err := rasql.Scalar("id", id.Expr(), schema.IntegerType{}, "")
 		require.NoError(t, err)
 
-		statement, err := rasql.Render(rasql.Select(relation.Source(), projection), dialect.PostgreSQL())
+		statement, err := rasql.Render(rasql.Select(moved, projection), dialect.PostgreSQL())
 		require.NoError(t, err)
 		require.Equal(
 			t,
@@ -555,21 +658,21 @@ func TestInSchema(t *testing.T) {
 	})
 
 	t.Run("an alias still replaces the whole qualified name", func(t *testing.T) {
-		// InSchema writes the descriptor's namespace and Source writes the
-		// alias, two different fields, so the two compose in either order. What
+		// InSchema writes the descriptor's namespace and As writes the alias,
+		// two different fields, so the two compose in either order. What
 		// the renderer does with the pair is today's rule unchanged: only the
 		// FROM entry names the namespace, and every column renders under the
 		// bare alias.
 		moved, err := staff(t).InSchema("tenant_0001")
 		require.NoError(t, err)
-		relation, err := moved.Source("s")
+		moved, err = moved.As("s")
 		require.NoError(t, err)
-		id, err := rasql.BindColumn[staffRow, int64](relation, "id", "")
+		id, err := rasql.BindColumn[staffRow, int64](moved, "id", "")
 		require.NoError(t, err)
 		projection, err := rasql.Scalar("id", id.Expr(), schema.IntegerType{}, "")
 		require.NoError(t, err)
 
-		statement, err := rasql.Render(rasql.Select(relation.Source(), projection), dialect.PostgreSQL())
+		statement, err := rasql.Render(rasql.Select(moved, projection), dialect.PostgreSQL())
 		require.NoError(t, err)
 		require.Equal(
 			t,
