@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -29,6 +30,37 @@ var bundleDivergences = map[string]struct{}{
 	"scripts/generate.sh":                  {},
 	"scripts/migrate.sh":                   {},
 	"scripts/rasql.sh":                     {},
+}
+
+// generatedStoreDir is where rasql codegen generate writes the sample's store
+// package.
+const generatedStoreDir = "internal/store/"
+
+// isGeneratedStoreOutput reports whether relative names a file directly
+// inside generatedStoreDir that codegen writes rather than a reader types: a
+// _gen.go source file, or the rasql.sum fingerprint file codegen writes
+// beside them. A reader following the walkthrough runs one command and gets
+// whatever the generator writes that day, so those bytes record the
+// generator's version rather than anything the reader did, and comparing
+// them here would turn every change to the generator red. The files are
+// still checked, against a fresh run of the generator rather than against
+// the bundle: .github/workflows/ci.yml's "check" job runs
+// `./scripts/rasql.sh codegen check` offline, and its "integration" job runs
+// the same check against a live PostgreSQL database.
+func isGeneratedStoreOutput(relative string) bool {
+	name, direct := strings.CutPrefix(relative, generatedStoreDir)
+	if !direct || strings.Contains(name, "/") {
+		return false
+	}
+	return name == "rasql.sum" || strings.HasSuffix(name, "_gen.go")
+}
+
+// skipComparison reports whether relative is exempt from the byte-for-byte
+// comparison the walk in TestWalkthroughBundleMatchesSample runs: either
+// bundleDivergences names it, or isGeneratedStoreOutput does.
+func skipComparison(relative string) bool {
+	_, diverges := bundleDivergences[relative]
+	return diverges || isGeneratedStoreOutput(relative)
 }
 
 // TestWalkthroughBundleMatchesSample holds the checked-in application to the
@@ -62,35 +94,7 @@ func TestWalkthroughBundleMatchesSample(t *testing.T) {
 		require.NotContains(t, string(source), "go run github.com/lestrrat-go/rasql/cmd/rasql", "%s must not use a module path command", script)
 	}
 
-	compared := 0
-	err = filepath.WalkDir(clone, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		relative, err := filepath.Rel(clone, path)
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			if relative == ".git" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if _, diverges := bundleDivergences[filepath.ToSlash(relative)]; diverges {
-			return nil
-		}
-
-		step, err := os.ReadFile(path)
-		require.NoError(t, err)
-		checkedIn, err := os.ReadFile(filepath.Join(samplePath, relative))
-		require.NoError(t, err, "%s is in the bundle and not in %s; rebuild one from the other", relative, samplePath)
-		require.Equal(t, normalizeTrailer(string(step)), normalizeTrailer(withoutRegionMarkers(string(checkedIn))),
-			"%s differs from the step that produced it; see CONTRIBUTING.md's \"Rebuilding the walkthrough's application\"", relative)
-		compared++
-		return nil
-	})
-	require.NoError(t, err)
+	compared := compareTree(t, clone, samplePath, skipComparison)
 	require.NotZero(t, compared, "the bundle holds no files to compare")
 
 	// The walk above only checks that every file the bundle holds also exists
@@ -113,12 +117,128 @@ func TestWalkthroughBundleMatchesSample(t *testing.T) {
 		if strings.HasPrefix(relative, "walkthrough/") {
 			continue
 		}
-		if _, diverges := bundleDivergences[relative]; diverges {
+		if skipComparison(relative) {
 			continue
 		}
 		_, err := os.Stat(filepath.Join(clone, filepath.FromSlash(relative)))
 		require.NoError(t, err, "%s is in %s and not in the bundle; see CONTRIBUTING.md's \"Rebuilding the walkthrough's application\"", relative, samplePath)
 	}
+}
+
+// treeT is the subset of *testing.T that compareTree needs. Declaring it as
+// an interface lets a test substitute a fake for *testing.T, to observe a
+// failing comparison without failing the real test itself.
+type treeT interface {
+	require.TestingT
+	Helper()
+}
+
+// compareTree walks every file under clone and requires its contents, once
+// stripped of region markers and normalized to one trailing newline, match
+// the file at the same relative path under sample. It skips a path skip
+// reports true for, comparing neither its content nor its presence under
+// sample. It returns how many files it compared.
+func compareTree(t treeT, clone, sample string, skip func(relative string) bool) int {
+	t.Helper()
+
+	compared := 0
+	err := filepath.WalkDir(clone, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(clone, path)
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if relative == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		slashRelative := filepath.ToSlash(relative)
+		if skip(slashRelative) {
+			return nil
+		}
+
+		step, err := os.ReadFile(path)
+		require.NoError(t, err)
+		checkedIn, err := os.ReadFile(filepath.Join(sample, relative))
+		require.NoError(t, err, "%s is in the bundle and not in %s; rebuild one from the other", relative, sample)
+		require.Equal(t, normalizeTrailer(string(step)), normalizeTrailer(withoutRegionMarkers(string(checkedIn))),
+			"%s differs from the step that produced it; see CONTRIBUTING.md's \"Rebuilding the walkthrough's application\"", relative)
+		compared++
+		return nil
+	})
+	require.NoError(t, err)
+	return compared
+}
+
+// TestCompareTreeSkipsGeneratedStoreOutputButCatchesHandWrittenFiles proves
+// what skipComparison buys the walk above: a difference inside a generated
+// store file never reaches the byte comparison, while the same kind of
+// difference in a hand-written file still fails it. It builds its own clone
+// and sample directories rather than reusing the walkthrough's, so it never
+// touches sample/taskboard.
+func TestCompareTreeSkipsGeneratedStoreOutputButCatchesHandWrittenFiles(t *testing.T) {
+	clone := t.TempDir()
+	sample := t.TempDir()
+	writeTestFile(t, clone, "internal/store/schema_gen.go", "package store\n// clone's generated schema\n")
+	writeTestFile(t, sample, "internal/store/schema_gen.go", "package store\n// sample's generated schema, deliberately different\n")
+	writeTestFile(t, clone, "internal/store/repository.go", "package store\n// same on both sides\n")
+	writeTestFile(t, sample, "internal/store/repository.go", "package store\n// same on both sides\n")
+
+	compared, failed := captureCompareTree(clone, sample, skipComparison)
+	require.False(t, failed, "a generated store file that differs between clone and sample must not fail the comparison")
+	require.Equal(t, 1, compared, "only repository.go should have reached the byte comparison")
+
+	writeTestFile(t, sample, "internal/store/repository.go", "package store\n// sample's repository, deliberately different\n")
+	_, failed = captureCompareTree(clone, sample, skipComparison)
+	require.True(t, failed, "a hand-written file that differs between clone and sample must fail the comparison")
+}
+
+// captureCompareTree runs compareTree against a fakeT in a goroutine of its
+// own, the same way testing.T.Run isolates a subtest, so the FailNow a failed
+// require.Equal raises inside compareTree stops only that goroutine. It
+// reports how many files compareTree reached the byte comparison for, and
+// whether that comparison failed.
+func captureCompareTree(clone, sample string, skip func(relative string) bool) (compared int, failed bool) {
+	fake := &fakeT{}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		compared = compareTree(fake, clone, sample, skip)
+	}()
+	<-done
+	return compared, fake.failed
+}
+
+// fakeT is the treeT captureCompareTree substitutes for *testing.T. It
+// records a failure instead of stopping the real test, and its FailNow calls
+// runtime.Goexit the same way *testing.T.FailNow does, so it unwinds only the
+// goroutine compareTree runs in.
+type fakeT struct {
+	failed bool
+}
+
+func (f *fakeT) Helper() {}
+
+func (f *fakeT) Errorf(string, ...interface{}) {
+	f.failed = true
+}
+
+func (f *fakeT) FailNow() {
+	f.failed = true
+	runtime.Goexit()
+}
+
+// writeTestFile creates relative under root, including any parent
+// directories, and writes contents to it.
+func writeTestFile(t *testing.T, root, relative, contents string) {
+	t.Helper()
+	full := filepath.Join(root, filepath.FromSlash(relative))
+	require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o755))
+	require.NoError(t, os.WriteFile(full, []byte(contents), 0o644))
 }
 
 // withoutRegionMarkers drops the include-block markers the checked-in copy
