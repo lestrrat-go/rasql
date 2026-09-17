@@ -207,16 +207,10 @@ func SourceOf[R any](table ReadTable[R], alias string) (TypedRelation[R], error)
 	if table == nil {
 		return TypedRelation[R]{}, planError("invalid_source", "table", "must not be nil")
 	}
-	originalRef := table.Ref()
-	definition := originalRef.Definition()
-	detached, detachErr := ReadTableOf[R](definition)
-	if detachErr != nil {
-		return TypedRelation[R]{}, planError("invalid_source", "table", detachErr.Error())
-	}
-	ref := detached.Ref()
+	ref := table.Ref()
 	var err error
 	if alias == "" {
-		alias = originalRef.Alias()
+		alias = ref.Alias()
 	}
 	if alias != "" {
 		ref, err = ref.As(alias)
