@@ -54,7 +54,11 @@ func (db DB) Atomic(ctx context.Context, opts *sql.TxOptions, fn AtomicFunc) err
 }
 
 func (db DB) atomicTransaction(ctx context.Context, opts *sql.TxOptions, fn AtomicFunc) error {
-	transaction, err := db.Begin(ctx, opts)
+	// beginTxCore rather than Begin: Atomic has never gone through any event
+	// layer, since it runs on a concrete DB rather than through Executor, and
+	// this keeps it that way rather than growing a new EventScope the moment
+	// db happens to carry observers.
+	transaction, err := db.beginTxCore(ctx, opts)
 	if err != nil {
 		return err
 	}

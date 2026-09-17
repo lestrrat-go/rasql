@@ -28,7 +28,11 @@ type logicalInvocationProvider interface {
 	beginLogicalInvocation(context.Context, EventKind) (context.Context, Executor, logicalInvocationCompletion)
 }
 
-var _ logicalInvocationProvider = eventExecutor{}
+var (
+	_ logicalInvocationProvider = eventExecutor{}
+	_ logicalInvocationProvider = DB{}
+	_ scopeContextProvider      = DB{}
+)
 
 type logicalInvocationCompletion interface {
 	completeLogicalInvocation(error, int64, bool)
@@ -121,13 +125,15 @@ type eventExecutor struct {
 	handler   ExtensionErrorHandler
 	observers []EventObserver
 	parentID  string
-	statement *atomic.Int64
 	counter   *atomic.Int64
 	scopeCtx  context.Context
 }
 
+// observedLogicalCompletion closes the logical invocation a mutation batch or
+// a graph query opened, exactly once, whichever eventExecutor or DB opened
+// it: completeEvent needs nothing from either, so this carries no reference
+// back to the executor that started it.
 type observedLogicalCompletion struct {
-	e          eventExecutor
 	ctx        context.Context
 	completion EventCompletion
 	event      Event
@@ -141,7 +147,7 @@ func (c *observedLogicalCompletion) completeLogicalInvocation(err error, rows in
 	c.event.Err = err
 	c.event.Rows = rows
 	c.event.EarlyClose = early
-	c.e.complete(c.ctx, c.completion, c.event)
+	completeEvent(c.ctx, c.completion, c.event)
 }
 
 func (e eventExecutor) beginLogicalInvocation(ctx context.Context, kind EventKind) (context.Context, Executor, logicalInvocationCompletion) {
@@ -152,7 +158,7 @@ func (e eventExecutor) beginLogicalInvocation(ctx context.Context, kind EventKin
 	callCtx, completion := e.start(ctx, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: kind, Phase: EventStart})
 	child := e.childScope(e.Executor, callCtx, logicalID, &atomic.Int64{})
 	return callCtx, child, &observedLogicalCompletion{
-		e: e, ctx: callCtx, completion: completion,
+		ctx: callCtx, completion: completion,
 		event: Event{LogicalID: logicalID, ParentID: e.parentID, Kind: kind, Phase: EventTerminal},
 	}
 }
@@ -171,6 +177,10 @@ type eventCodecScopedExecutor struct{ eventScopedExecutor }
 // handler receives the extension errors those observers raise. It returns
 // executor unchanged when observers is empty.
 //
+// A DB already carries event observers as fields, and a scope it opens mints
+// its own event identity as it goes, so setting them is enough: nothing needs
+// a wrapper around a DB to report events.
+//
 // `executor` must not be nil; `handler` must not be nil when any observer is
 // given, and no element of `observers` may be nil.
 func WithEventObservers(executor Executor, handler ExtensionErrorHandler, observers ...EventObserver) (Executor, error) {
@@ -188,7 +198,17 @@ func WithEventObservers(executor Executor, handler ExtensionErrorHandler, observ
 	if len(observers) == 0 {
 		return executor, nil
 	}
-	base := eventExecutor{Executor: executor, handler: handler, observers: append([]EventObserver(nil), observers...), parentID: "", statement: &atomic.Int64{}}
+	copied := append([]EventObserver(nil), observers...)
+	if db, ok := executor.(DB); ok {
+		db.eventHandler = handler
+		db.eventObservers = copied
+		db.eventParentID = ""
+		db.eventCounter = nil
+		db.eventScopeCtx = nil
+		db.eventScopeComplete = nil
+		return db, nil
+	}
+	base := eventExecutor{Executor: executor, handler: handler, observers: copied, parentID: ""}
 	return wrapEventExecutor(base), nil
 }
 
@@ -201,21 +221,21 @@ func (e eventScopedExecutor) BeginScope(ctx context.Context, opts *sql.TxOptions
 	callCtx, completion := e.start(ctx, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventStart})
 	beginner, ok := e.Executor.(ScopeBeginner)
 	if !ok {
-		e.complete(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: unsupportedScopeError()})
+		completeEvent(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: unsupportedScopeError()})
 		return nil, nil, unsupportedScopeError()
 	}
 	child, finalizer, err := beginner.BeginScope(callCtx, opts)
 	if err != nil {
-		e.complete(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
+		completeEvent(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
 		return nil, nil, err
 	}
 	if child == nil || finalizer == nil {
 		err := planError("transaction_scope_invalid", "scope", "begin returned a nil child or finalizer")
-		e.complete(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
+		completeEvent(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
 		return nil, nil, err
 	}
 	return e.childScope(child, callCtx, logicalID, counter), &observedFinalizer{ScopeFinalizer: finalizer, finish: func(err error) {
-		e.complete(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
+		completeEvent(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
 	}}, nil
 }
 
@@ -229,21 +249,21 @@ func (e eventScopedExecutor) BeginSavepoint(ctx context.Context) (Executor, Scop
 	beginner, ok := e.Executor.(SavepointBeginner)
 	if !ok {
 		err := unsupportedSavepointError()
-		e.complete(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
+		completeEvent(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
 		return nil, nil, err
 	}
 	child, finalizer, err := beginner.BeginSavepoint(callCtx)
 	if err != nil {
-		e.complete(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
+		completeEvent(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
 		return nil, nil, err
 	}
 	if child == nil || finalizer == nil {
 		err := planError("transaction_scope_invalid", "scope", "begin returned a nil child or finalizer")
-		e.complete(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
+		completeEvent(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
 		return nil, nil, err
 	}
 	return e.childScope(child, callCtx, logicalID, counter), &observedFinalizer{ScopeFinalizer: finalizer, finish: func(err error) {
-		e.complete(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
+		completeEvent(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
 	}}, nil
 }
 
@@ -253,12 +273,109 @@ func (e eventCodecExecutor) Codecs() CodecRegistry       { return codecsFrom(e.E
 func (e eventCodecScopedExecutor) Codecs() CodecRegistry { return codecsFrom(e.Executor) }
 
 func (e eventExecutor) childScope(child Executor, ctx context.Context, parentID string, counter *atomic.Int64) Executor {
-	base := eventExecutor{Executor: child, handler: e.handler, observers: e.observers, parentID: parentID, statement: e.statement, counter: counter, scopeCtx: ctx}
+	base := eventExecutor{Executor: child, handler: e.handler, observers: e.observers, parentID: parentID, counter: counter, scopeCtx: ctx}
 	return wrapEventExecutor(base)
 }
 
 func (e eventExecutor) scopeContext() context.Context { return e.scopeCtx }
 func (e eventExecutor) unwrapExecutor() Executor      { return e.Executor }
+
+// childEventScope returns a copy of db that reports parentID as its own
+// event identity from here on, sharing observers and handler with db but
+// carrying ctx and counter as its own scope-local state. It mirrors what
+// eventExecutor.childScope does for a wrapped executor, without needing a
+// wrapper: a DB already carries every field childScope would otherwise have
+// to reconstruct.
+func (db DB) childEventScope(parentID string, ctx context.Context, counter *atomic.Int64) DB {
+	db.eventParentID = parentID
+	db.eventCounter = counter
+	db.eventScopeCtx = ctx
+	return db
+}
+
+// scopeContext satisfies scopeContextProvider, so Within runs a scope's
+// callback under the ctx event observers derived for it, the same way it
+// would for a wrapped executor. It is nil for a DB that never opened an
+// observed scope, which Within already treats as no override.
+func (db DB) scopeContext() context.Context { return db.eventScopeCtx }
+
+// startEvent starts event against db's own observers and handler.
+func (db DB) startEvent(ctx context.Context, event Event) (context.Context, EventCompletion) {
+	return startEventObservers(ctx, db.eventObservers, db.eventHandler, event)
+}
+
+// beginLogicalInvocation satisfies logicalInvocationProvider unconditionally,
+// the same way ScopeBeginner and CodecProvider do: a DB with no event
+// observers reports back the same ctx and itself unchanged, exactly what a
+// caller would see if it held the executor logicalInvocationProvider is
+// missing from entirely.
+func (db DB) beginLogicalInvocation(ctx context.Context, kind EventKind) (context.Context, Executor, logicalInvocationCompletion) {
+	if len(db.eventObservers) == 0 {
+		return ctx, db, noLogicalInvocation
+	}
+	logicalID := nextEventID()
+	callCtx, completion := db.startEvent(ctx, Event{LogicalID: logicalID, ParentID: db.eventParentID, Kind: kind, Phase: EventStart})
+	child := db.childEventScope(logicalID, callCtx, &atomic.Int64{})
+	return callCtx, child, &observedLogicalCompletion{
+		ctx: callCtx, completion: completion,
+		event: Event{LogicalID: logicalID, ParentID: db.eventParentID, Kind: kind, Phase: EventTerminal},
+	}
+}
+
+// queryObserved is Query's event layer, added on top of queryGuarded.
+func (db DB) queryObserved(ctx context.Context, statement stmt.Statement) (ResultRows, error) {
+	logicalID := nextEventID()
+	statementIndex := nextEventStatement(db.eventCounter)
+	callCtx, completion := db.startEvent(ctx, Event{LogicalID: logicalID, ParentID: db.eventParentID, Kind: EventStatement, Phase: EventStart, StatementIndex: statementIndex})
+	rows, err := db.queryGuarded(callCtx, statement)
+	if err != nil {
+		completeEvent(callCtx, completion, Event{LogicalID: logicalID, ParentID: db.eventParentID, Kind: EventStatement, Phase: EventTerminal, StatementIndex: statementIndex, Err: err})
+		return nil, err
+	}
+	if rows == nil {
+		completeEvent(callCtx, completion, Event{LogicalID: logicalID, ParentID: db.eventParentID, Kind: EventStatement, Phase: EventTerminal, StatementIndex: statementIndex})
+		return nil, nil
+	}
+	return &eventRows{ResultRows: rows, finish: func(rowsRead int64, early bool, err error) {
+		completeEvent(callCtx, completion, Event{LogicalID: logicalID, ParentID: db.eventParentID, Kind: EventStatement, Phase: EventTerminal, StatementIndex: statementIndex, Rows: rowsRead, EarlyClose: early, Err: err})
+	}}, nil
+}
+
+// execObserved is Exec's event layer, added on top of execGuarded.
+func (db DB) execObserved(ctx context.Context, statement stmt.Statement) (sql.Result, error) {
+	logicalID := nextEventID()
+	statementIndex := nextEventStatement(db.eventCounter)
+	callCtx, completion := db.startEvent(ctx, Event{LogicalID: logicalID, ParentID: db.eventParentID, Kind: EventStatement, Phase: EventStart, StatementIndex: statementIndex})
+	result, err := db.execGuarded(callCtx, statement)
+	completeEvent(callCtx, completion, Event{LogicalID: logicalID, ParentID: db.eventParentID, Kind: EventStatement, Phase: EventTerminal, StatementIndex: statementIndex, Err: err})
+	return result, err
+}
+
+// eventScopeCompletion fires the EventScope terminal event Begin started,
+// exactly once, from whichever of Commit or Rollback finishes the
+// transaction first. It fires using the ctx and identity Begin captured
+// rather than whatever ctx Commit or Rollback themselves were called with,
+// the same way observedFinalizer does for BeginScope and BeginSavepoint.
+type eventScopeCompletion struct {
+	ctx        context.Context
+	completion EventCompletion
+	event      Event
+	done       atomic.Bool
+}
+
+// finish is safe to call on a nil *eventScopeCompletion, which is what a DB
+// Begin did not build one for carries: Commit and Rollback call it
+// unconditionally rather than checking db.eventScopeComplete themselves.
+func (c *eventScopeCompletion) finish(err error) {
+	if c == nil {
+		return
+	}
+	if !c.done.CompareAndSwap(false, true) {
+		return
+	}
+	c.event.Err = err
+	completeEvent(c.ctx, c.completion, c.event)
+}
 
 type observedFinalizer struct {
 	ScopeFinalizer
@@ -307,47 +424,59 @@ func wrapEventExecutor(base eventExecutor) Executor {
 
 func (e eventExecutor) Query(ctx context.Context, statement stmt.Statement) (ResultRows, error) {
 	logicalID := nextEventID()
-	statementIndex := e.nextStatement()
+	statementIndex := nextEventStatement(e.counter)
 	callCtx, completion := e.start(ctx, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventStatement, Phase: EventStart, StatementIndex: statementIndex})
 	rows, err := e.Executor.Query(callCtx, statement)
 	if err != nil {
-		e.complete(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventStatement, Phase: EventTerminal, StatementIndex: statementIndex, Err: err})
+		completeEvent(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventStatement, Phase: EventTerminal, StatementIndex: statementIndex, Err: err})
 		return nil, err
 	}
 	if rows == nil {
-		e.complete(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventStatement, Phase: EventTerminal, StatementIndex: statementIndex})
+		completeEvent(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventStatement, Phase: EventTerminal, StatementIndex: statementIndex})
 		return nil, nil
 	}
 	return &eventRows{ResultRows: rows, finish: func(rows int64, early bool, err error) {
-		e.complete(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventStatement, Phase: EventTerminal, StatementIndex: statementIndex, Rows: rows, EarlyClose: early, Err: err})
+		completeEvent(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventStatement, Phase: EventTerminal, StatementIndex: statementIndex, Rows: rows, EarlyClose: early, Err: err})
 	}}, nil
 }
 
 func (e eventExecutor) Exec(ctx context.Context, statement stmt.Statement) (sql.Result, error) {
 	logicalID := nextEventID()
-	statementIndex := e.nextStatement()
+	statementIndex := nextEventStatement(e.counter)
 	callCtx, completion := e.start(ctx, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventStatement, Phase: EventStart, StatementIndex: statementIndex})
 	result, err := e.Executor.Exec(callCtx, statement)
-	e.complete(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventStatement, Phase: EventTerminal, StatementIndex: statementIndex, Err: err})
+	completeEvent(callCtx, completion, Event{LogicalID: logicalID, ParentID: e.parentID, Kind: EventStatement, Phase: EventTerminal, StatementIndex: statementIndex, Err: err})
 	return result, err
 }
 
-func (e eventExecutor) nextStatement() int {
-	if e.counter == nil {
+// nextEventStatement numbers a statement within counter's scope, or reports
+// StatementIndex 0 for one that runs outside any scope at all, which is what
+// a nil counter means for both eventExecutor and DB.
+func nextEventStatement(counter *atomic.Int64) int {
+	if counter == nil {
 		return 0
 	}
-	return int(e.counter.Add(1) - 1)
+	return int(counter.Add(1) - 1)
 }
 
 func nextEventID() string { return fmt.Sprintf("rasql-%d", eventID.Add(1)) }
 
 func (e eventExecutor) start(ctx context.Context, event Event) (context.Context, EventCompletion) {
+	return startEventObservers(ctx, e.observers, e.handler, event)
+}
+
+// startEventObservers starts event against observers in registration order,
+// derives the ctx each hands back in turn, and returns a completion that
+// closes every completion an observer returned, in reverse order, when the
+// event's terminal half is reported. eventExecutor and DB both carry their
+// own observers and handler as fields and call this the same way.
+func startEventObservers(ctx context.Context, observers []EventObserver, handler ExtensionErrorHandler, event Event) (context.Context, EventCompletion) {
 	current := ctx
 	var completions []EventCompletion
-	for _, observer := range e.observers {
+	for _, observer := range observers {
 		derived, completion, err := safeEventStart(observer, current, event)
 		if err != nil {
-			e.reportEventError(current, err)
+			reportEventError(current, handler, err)
 		}
 		if derived != nil {
 			current = derived
@@ -359,24 +488,26 @@ func (e eventExecutor) start(ctx context.Context, event Event) (context.Context,
 	return current, eventCompletionFunc(func(ctx context.Context, terminal Event) error {
 		for index := len(completions) - 1; index >= 0; index-- {
 			if err := safeEventComplete(completions[index], ctx, terminal); err != nil {
-				e.reportEventError(ctx, err)
+				reportEventError(ctx, handler, err)
 			}
 		}
 		return nil
 	})
 }
 
-func (e eventExecutor) complete(ctx context.Context, completion EventCompletion, event Event) {
+// completeEvent reports event's terminal half to completion, which is nil
+// when every observer start returned no completion of its own.
+func completeEvent(ctx context.Context, completion EventCompletion, event Event) {
 	if completion != nil {
 		_ = completion.Complete(ctx, event)
 	}
 }
 
-func (e eventExecutor) reportEventError(ctx context.Context, err error) {
-	if e.handler != nil {
+func reportEventError(ctx context.Context, handler ExtensionErrorHandler, err error) {
+	if handler != nil {
 		func() {
 			defer func() { _ = recover() }()
-			e.handler.HandleExtensionError(ctx, ExtensionError{Errors: []error{err}})
+			handler.HandleExtensionError(ctx, ExtensionError{Errors: []error{err}})
 		}()
 	}
 }

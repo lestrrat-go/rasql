@@ -336,8 +336,20 @@ func TestScopeCapabilities(t *testing.T) {
 
 		withoutObservers, err := rasql.WithEventObservers(base, handler)
 		require.NoError(t, err)
+		// WithEventObservers with no observers hands base back unchanged, and
+		// a DB always implements the interface a logical invocation looks
+		// for, the same way it always implements ScopeBeginner: unlike a
+		// foreign executor, whose wrapper only grows the interface once it
+		// carries observers, a DB with none still structurally forwards, and
+		// behaves as a no-op when it does, reporting back the same ctx and
+		// itself unchanged.
 		hasProvider = rasql.Q1ForwardsLogicalInvocation(withoutObservers)
-		require.False(t, hasProvider)
+		require.True(t, hasProvider)
+		noopCtx, noopChild, noopInvocation := rasql.Q1BeginLogicalInvocation(t.Context(), withoutObservers, rasql.EventMutationBatch)
+		require.Equal(t, t.Context(), noopCtx)
+		require.Equal(t, withoutObservers.(rasql.DB).Handle(), noopChild.(rasql.DB).Handle())
+		require.Same(t, rasql.Q1QueryCompilerOf(withoutObservers), rasql.Q1QueryCompilerOf(noopChild))
+		noopInvocation.Complete()
 	})
 
 	t.Run("the child a logical invocation returns retains its capabilities", func(t *testing.T) {

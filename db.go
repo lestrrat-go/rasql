@@ -50,8 +50,12 @@ func (db DB) IsTransaction() bool { return db.tx != nil }
 
 // beginScope starts an owned transaction and returns its child DB and
 // finalizer. BeginScope below wraps this to satisfy ScopeBeginner.
+//
+// It calls beginTxCore rather than Begin, so opening a scope through
+// ScopeBeginner reports exactly the one EventScope BeginScope itself adds,
+// not a second one from Begin's own event layer.
 func (db DB) beginScope(ctx context.Context, opts *sql.TxOptions) (DB, ScopeFinalizer, error) {
-	child, err := db.Begin(ctx, opts)
+	child, err := db.beginTxCore(ctx, opts)
 	if err != nil {
 		return DB{}, nil, err
 	}
@@ -90,10 +94,41 @@ func (db DB) beginSavepoint(ctx context.Context) (DB, ScopeFinalizer, error) {
 // carries db's engine profile and compiler and a fresh busy token, so a
 // statement run concurrently on the child while another is still in flight is
 // rejected rather than racing the same *sql.Tx.
+//
+// When db carries event observers, BeginScope reports an EventScope around
+// the transaction it starts, the same way it would if db were still wrapped
+// by WithEventObservers rather than carrying its observers as fields.
 func (db DB) BeginScope(ctx context.Context, opts *sql.TxOptions) (Executor, ScopeFinalizer, error) {
+	if len(db.eventObservers) == 0 {
+		child, finalizer, err := db.beginScopeGuarded(ctx, opts)
+		if err != nil {
+			return nil, nil, err
+		}
+		return child, finalizer, nil
+	}
+	logicalID := nextEventID()
+	counter := db.eventCounter
+	if counter == nil {
+		counter = &atomic.Int64{}
+	}
+	callCtx, completion := db.startEvent(ctx, Event{LogicalID: logicalID, ParentID: db.eventParentID, Kind: EventScope, Phase: EventStart})
+	child, finalizer, err := db.beginScopeGuarded(callCtx, opts)
+	if err != nil {
+		completeEvent(callCtx, completion, Event{LogicalID: logicalID, ParentID: db.eventParentID, Kind: EventScope, Phase: EventTerminal, Err: err})
+		return nil, nil, err
+	}
+	child = child.childEventScope(logicalID, callCtx, counter)
+	return child, &observedFinalizer{ScopeFinalizer: finalizer, finish: func(err error) {
+		completeEvent(callCtx, completion, Event{LogicalID: logicalID, ParentID: db.eventParentID, Kind: EventScope, Phase: EventTerminal, Err: err})
+	}}, nil
+}
+
+// beginScopeGuarded starts an owned transaction and wraps its finalizer for
+// the busy-token guard, without the event layer BeginScope adds on top.
+func (db DB) beginScopeGuarded(ctx context.Context, opts *sql.TxOptions) (DB, ScopeFinalizer, error) {
 	child, finalizer, err := db.beginScope(ctx, opts)
 	if err != nil {
-		return nil, nil, err
+		return DB{}, nil, err
 	}
 	child.busy = newExecutorBusy()
 	return child, guardedScopeFinalizer{ScopeFinalizer: finalizer, busy: child.busy}, nil
@@ -103,9 +138,40 @@ func (db DB) BeginScope(ctx context.Context, opts *sql.TxOptions) (Executor, Sco
 // child DB as an Executor, along with the finalizer that ends it. It satisfies
 // SavepointBeginner. The child shares db's busy token, because a savepoint
 // runs on the same underlying transaction and connection as its parent.
+//
+// When db carries event observers, BeginSavepoint reports an EventScope
+// around the savepoint it opens, the same way BeginScope does.
 func (db DB) BeginSavepoint(ctx context.Context) (Executor, ScopeFinalizer, error) {
+	if len(db.eventObservers) == 0 {
+		child, finalizer, err := db.beginSavepointGuarded(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		return child, finalizer, nil
+	}
+	logicalID := nextEventID()
+	counter := db.eventCounter
+	if counter == nil {
+		counter = &atomic.Int64{}
+	}
+	callCtx, completion := db.startEvent(ctx, Event{LogicalID: logicalID, ParentID: db.eventParentID, Kind: EventScope, Phase: EventStart})
+	child, finalizer, err := db.beginSavepointGuarded(callCtx)
+	if err != nil {
+		completeEvent(callCtx, completion, Event{LogicalID: logicalID, ParentID: db.eventParentID, Kind: EventScope, Phase: EventTerminal, Err: err})
+		return nil, nil, err
+	}
+	child = child.childEventScope(logicalID, callCtx, counter)
+	return child, &observedFinalizer{ScopeFinalizer: finalizer, finish: func(err error) {
+		completeEvent(callCtx, completion, Event{LogicalID: logicalID, ParentID: db.eventParentID, Kind: EventScope, Phase: EventTerminal, Err: err})
+	}}, nil
+}
+
+// beginSavepointGuarded starts an owned savepoint on a transaction DB and
+// wraps its finalizer for the busy-token guard, without the event layer
+// BeginSavepoint adds on top.
+func (db DB) beginSavepointGuarded(ctx context.Context) (DB, ScopeFinalizer, error) {
 	if db.busy != nil && !db.busy.acquire() {
-		return nil, nil, planError("transaction_concurrent_use", "executor", "transaction executor is already in use")
+		return DB{}, nil, planError("transaction_concurrent_use", "executor", "transaction executor is already in use")
 	}
 	child, finalizer, err := db.beginSavepoint(ctx)
 	if db.busy != nil {
@@ -114,9 +180,9 @@ func (db DB) BeginSavepoint(ctx context.Context) (Executor, ScopeFinalizer, erro
 	if err != nil {
 		var planErr *PlanError
 		if errors.As(err, &planErr) {
-			return nil, nil, err
+			return DB{}, nil, err
 		}
-		return nil, nil, planError("savepoint_unsupported", "scope", err.Error())
+		return DB{}, nil, planError("savepoint_unsupported", "scope", err.Error())
 	}
 	child.busy = db.busy
 	return child, guardedScopeFinalizer{ScopeFinalizer: finalizer, busy: db.busy}, nil
@@ -160,6 +226,27 @@ type DB struct {
 	// profile and compiler do. Codecs falls back to the builtin registry when
 	// this is nil, so a DB Open returned needs no registry of its own.
 	codecs CodecRegistry
+	// eventHandler and eventObservers are set by WithEventObservers, and
+	// propagate to every child Begin, BeginScope, and BeginSavepoint returns
+	// by ordinary struct copy, the same way hooks and observers do.
+	eventHandler   ExtensionErrorHandler
+	eventObservers []EventObserver
+	// eventParentID, eventCounter, and eventScopeCtx are this DB's own event
+	// identity: which logical scope or invocation its statements report
+	// under, the counter they number themselves with, and the ctx event
+	// observers derived for the scope it runs in. Begin, BeginScope,
+	// BeginSavepoint, and a logical invocation each mint a fresh generation
+	// of these three for the child DB they return, mirroring what
+	// eventExecutor.childScope minted for a wrapped executor.
+	eventParentID string
+	eventCounter  *atomic.Int64
+	eventScopeCtx context.Context
+	// eventScopeComplete, set only by Begin, fires the EventScope terminal
+	// event Begin started, exactly once, from whichever of Commit or
+	// Rollback finishes this transaction first. BeginScope and BeginSavepoint
+	// fire their own terminal event through the ScopeFinalizer they return
+	// instead, so this stays nil for the DB they hand back.
+	eventScopeComplete *eventScopeCompletion
 	// busy guards concurrent use of this DB as an Executor. It is nil for a
 	// non-transaction DB, because concurrent statements on a connection pool
 	// need no such guard.
@@ -378,7 +465,37 @@ func (db DB) Handle() Handle {
 // database/sql's own behavior for the transaction it returns.
 //
 // No element of `hooks` may be nil.
+//
+// When db carries event observers, Begin reports an EventScope around the
+// transaction it starts, exactly as BeginScope does for the child it hands
+// back through ScopeBeginner. Commit or Rollback, whichever finishes the
+// returned DB's transaction first, reports the terminal half.
 func (db DB) Begin(ctx context.Context, opts *sql.TxOptions, hooks ...Hook) (DB, error) {
+	if len(db.eventObservers) == 0 {
+		return db.beginTxCore(ctx, opts, hooks...)
+	}
+	logicalID := nextEventID()
+	parentID := db.eventParentID
+	callCtx, eventCompletion := db.startEvent(ctx, Event{LogicalID: logicalID, ParentID: parentID, Kind: EventScope, Phase: EventStart})
+	child, err := db.beginTxCore(callCtx, opts, hooks...)
+	if err != nil {
+		completeEvent(callCtx, eventCompletion, Event{LogicalID: logicalID, ParentID: parentID, Kind: EventScope, Phase: EventTerminal, Err: err})
+		return DB{}, err
+	}
+	counter := child.eventCounter
+	if counter == nil {
+		counter = &atomic.Int64{}
+	}
+	child = child.childEventScope(logicalID, callCtx, counter)
+	child.eventScopeComplete = &eventScopeCompletion{ctx: callCtx, completion: eventCompletion, event: Event{LogicalID: logicalID, ParentID: parentID, Kind: EventScope, Phase: EventTerminal}}
+	return child, nil
+}
+
+// beginTxCore is Begin without the event layer Begin adds on top: BeginScope
+// calls it too, through beginScope below, so opening a scope through
+// ScopeBeginner reports exactly one EventScope rather than one from Begin
+// and a second from BeginScope wrapping it.
+func (db DB) beginTxCore(ctx context.Context, opts *sql.TxOptions, hooks ...Hook) (DB, error) {
 	if err := db.valid(); err != nil {
 		return DB{}, err
 	}
@@ -444,9 +561,11 @@ func (db DB) commitContext(ctx context.Context) error {
 	if err := db.tx.Commit(); err != nil {
 		err = fmt.Errorf("rasql: commit transaction: %w", err)
 		db.completeInvocation(invocation, operation, TransactionPhase, callContext, err, 0, false)
+		db.eventScopeComplete.finish(err)
 		return err
 	}
 	db.completeInvocation(invocation, operation, TransactionPhase, callContext, nil, 0, false)
+	db.eventScopeComplete.finish(nil)
 	return nil
 }
 
@@ -474,13 +593,16 @@ func (db DB) rollbackContext(ctx context.Context) error {
 	if err := db.tx.Rollback(); err != nil {
 		if errors.Is(err, sql.ErrTxDone) {
 			db.completeInvocation(invocation, operation, TransactionPhase, callContext, nil, 0, false)
+			db.eventScopeComplete.finish(nil)
 			return nil
 		}
 		err = fmt.Errorf("rasql: roll back transaction: %w", err)
 		db.completeInvocation(invocation, operation, TransactionPhase, callContext, err, 0, false)
+		db.eventScopeComplete.finish(err)
 		return err
 	}
 	db.completeInvocation(invocation, operation, TransactionPhase, callContext, nil, 0, false)
+	db.eventScopeComplete.finish(nil)
 	return nil
 }
 
@@ -631,7 +753,18 @@ func RenderWrite(db DB, s query.WriteStatement) (stmt.Statement, error) {
 // Exec with a busy token when it is a transaction, so a second call made while
 // the first is still running is rejected with transaction_concurrent_use
 // rather than racing the same *sql.Tx.
+//
+// When db carries event observers, Query reports an EventStatement around the
+// call, the same way it would if db were still wrapped by WithEventObservers.
 func (db DB) Query(ctx context.Context, statement stmt.Statement) (ResultRows, error) {
+	if len(db.eventObservers) == 0 {
+		return db.queryGuarded(ctx, statement)
+	}
+	return db.queryObserved(ctx, statement)
+}
+
+// queryGuarded is Query without the event layer Query adds on top.
+func (db DB) queryGuarded(ctx context.Context, statement stmt.Statement) (ResultRows, error) {
 	if db.busy != nil && !db.busy.acquire() {
 		return nil, planError("transaction_concurrent_use", "executor", "transaction executor is already in use")
 	}
@@ -655,8 +788,17 @@ func (db DB) Query(ctx context.Context, statement stmt.Statement) (ResultRows, e
 }
 
 // Exec runs statement, already compiled and rendered by the caller, and
-// satisfies Executor.Exec. See Query for the busy-token guard it shares.
+// satisfies Executor.Exec. See Query for the busy-token guard and the event
+// layer it shares.
 func (db DB) Exec(ctx context.Context, statement stmt.Statement) (sql.Result, error) {
+	if len(db.eventObservers) == 0 {
+		return db.execGuarded(ctx, statement)
+	}
+	return db.execObserved(ctx, statement)
+}
+
+// execGuarded is Exec without the event layer Exec adds on top.
+func (db DB) execGuarded(ctx context.Context, statement stmt.Statement) (sql.Result, error) {
 	if db.busy != nil && !db.busy.acquire() {
 		return nil, planError("transaction_concurrent_use", "executor", "transaction executor is already in use")
 	}
