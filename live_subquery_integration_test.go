@@ -354,8 +354,8 @@ func createCorrelatedFixture(t *testing.T, db rasql.DB) (rasql.Table[correlatedU
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, rasql.CreateTable(t.Context(), db, users.Ref()))
-	require.NoError(t, rasql.CreateTable(t.Context(), db, orders.Ref()))
+	require.NoError(t, rasql.CreateTable(t.Context(), db, users))
+	require.NoError(t, rasql.CreateTable(t.Context(), db, orders))
 
 	_, usersID, usersEmail, usersOrderCount := correlatedUserColumns(t, users)
 	for _, user := range []correlatedUser{

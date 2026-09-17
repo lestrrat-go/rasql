@@ -53,7 +53,7 @@ func Example_rasqlgen_computed_field() {
 		return
 	}
 	users := store.Users()
-	if err := rasql.CreateTable(ctx, db, users.Ref()); err != nil {
+	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}

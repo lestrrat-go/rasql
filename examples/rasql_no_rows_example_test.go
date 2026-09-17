@@ -107,7 +107,7 @@ func Example_rasql_no_rows() {
 	}
 	users := store.Users()
 	// Create the users table, but never insert into it, so One matches no row.
-	if err := rasql.CreateTable(ctx, db, users.Ref()); err != nil {
+	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}

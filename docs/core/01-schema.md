@@ -310,7 +310,7 @@ func Example_schema_qualified_table() {
 	))}
 
 	// SQL: CREATE TABLE audit.events (id INTEGER NOT NULL, action TEXT NOT NULL, PRIMARY KEY (id))
-	if err := rasql.CreateTable(ctx, db, events.Ref()); err != nil {
+	if err := rasql.CreateTable(ctx, db, events); err != nil {
 		fmt.Printf("failed to create events table: %s\n", err)
 		return
 	}
@@ -516,7 +516,7 @@ func Example_schema_decimal_column() {
 	// SQLite has no exact decimal storage class, so the dialect declares this
 	// column TEXT rather than NUMERIC(19,4), which would round through REAL.
 	// SQL: CREATE TABLE invoices (id INTEGER NOT NULL, amount TEXT NOT NULL, PRIMARY KEY (id))
-	if err := rasql.CreateTable(ctx, db, invoices.Ref()); err != nil {
+	if err := rasql.CreateTable(ctx, db, invoices); err != nil {
 		fmt.Printf("failed to create invoices table: %s\n", err)
 		return
 	}

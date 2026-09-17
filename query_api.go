@@ -281,7 +281,6 @@ func Optional[R any](source RowSource[R]) OptionalRelation[R] {
 }
 func (r OptionalRelation[R]) relationSource() Source { return r.source }
 func (r OptionalRelation[R]) relationRow() R         { var zero R; return zero }
-func (r OptionalRelation[R]) Source() Source         { return r.source }
 
 type QueryPlan struct {
 	sources             []Source

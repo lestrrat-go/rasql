@@ -154,13 +154,7 @@ const (
 	LockWaitSkipLocked = query.LockWaitSkipLocked
 )
 
-type RelationRef = query.RelationRef
-type RelationSource = query.RelationSource
 type ResultColumn = query.ResultColumn
-type ResultQuery = query.ResultQuery
-type QueryBody = query.QueryBody
-type CTE = query.CTE
-type Compound = query.Compound
 type CompoundOperator = query.CompoundOperator
 
 const (
@@ -169,22 +163,6 @@ const (
 	Intersect = query.Intersect
 	Except    = query.Except
 )
-
-func Derived(result query.ResultQuery, alias string) (query.RelationRef, error) {
-	return query.Derived(result, alias)
-}
-
-func ResultOf(body query.QueryBody, columns ...query.ResultColumn) (query.ResultQuery, error) {
-	return query.ResultOf(body, columns...)
-}
-
-func CompoundQuery(left query.ResultQuery, operator query.CompoundOperator, right query.ResultQuery) (query.Compound, error) {
-	return query.CompoundQuery(left, operator, right)
-}
-
-func CommonTable(name string, result query.ResultQuery) (query.CTE, error) {
-	return query.CommonTable(name, result)
-}
 
 // Equal compares left and right for equality. It is query.Equal under a name
 // generated code can reach without importing query.
@@ -224,19 +202,35 @@ func TrustedSQL(sql string, parts ...query.FragmentPart) query.TrustedFragment {
 }
 func RowLock(strength query.LockStrength) query.Lock { return query.RowLock(strength) }
 
+// CatalogObject names one object a server holds, and hands back the
+// query.TableRef describing it. rasql.Table[T] is one, and so is a generated
+// table wrapper, which promotes Ref from the handle it holds.
+//
+// The name says what the thing is: a table or a view the catalog already
+// carries, which a server can be asked to create and a statement can read. A
+// derived query and a CTE reference are Relations and not CatalogObjects,
+// because each names a result the statement computes rather than an object the
+// catalog holds; neither has a descriptor to create.
+//
+// Only this package implements it, through the unexported method Relation
+// carries.
+type CatalogObject interface {
+	Relation
+	Ref() query.TableRef
+}
+
 // CreateTable renders and executes table's definition followed by its indexes.
 // Callers that require atomic DDL pass a DB from Begin.
 //
-// It takes the ref rather than a Table[T] because no row type is read, bound or
-// returned along the way. A generated store reaches it as
-// rasql.CreateTable(ctx, db, store.Tasks().Ref()) without exposing its handle,
-// and a descriptor that does not permit schema.OperationDDL is refused here
-// whichever of the two a caller started from.
-func CreateTable(ctx context.Context, db DB, table query.TableRef) error {
-	if err := table.Validate(); err != nil {
+// It takes the object itself, so rasql.CreateTable(ctx, db, store.Users())
+// compiles and no caller reaches for the ref. A descriptor that does not permit
+// schema.OperationDDL is refused here, and that check is the only guard.
+func CreateTable(ctx context.Context, db DB, table CatalogObject) error {
+	ref := table.Ref()
+	if err := ref.Validate(); err != nil {
 		return fmt.Errorf("rasql: create table: %w", err)
 	}
-	return createTableDef(ctx, db, table.Definition())
+	return createTableDef(ctx, db, ref.Definition())
 }
 
 func createTableDef(ctx context.Context, db DB, table schema.TableDef) error {

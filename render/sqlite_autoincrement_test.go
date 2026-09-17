@@ -25,7 +25,7 @@ func TestSQLiteAutoincrementCreateTableAndNoReuse(t *testing.T) {
 		PrimaryKey: []string{"id"}, PrimaryKeyAutoincrement: true,
 	})
 	require.NoError(t, err)
-	require.NoError(t, rasql.CreateTable(t.Context(), db, table.Ref()))
+	require.NoError(t, rasql.CreateTable(t.Context(), db, table))
 	_, err = database.ExecContext(t.Context(), "INSERT INTO items DEFAULT VALUES")
 	require.NoError(t, err)
 	_, err = database.ExecContext(t.Context(), "INSERT INTO items DEFAULT VALUES")

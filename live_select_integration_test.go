@@ -121,7 +121,7 @@ func testAggregateOrdering(t *testing.T, database *sql.DB, test aggregateOrderin
 		_, err := database.ExecContext(t.Context(), "DROP TABLE IF EXISTS "+tableName)
 		require.NoError(t, err)
 	}()
-	require.NoError(t, rasql.CreateTable(t.Context(), db, records.Ref()))
+	require.NoError(t, rasql.CreateTable(t.Context(), db, records))
 
 	recordID := query.TypedColumnOf[record, int64](records.Column("id"))
 	recordEmail := query.TypedColumnOf[record, string](records.Column("email"))
@@ -301,7 +301,7 @@ func testDistinctOrder(t *testing.T, database *sql.DB, test distinctOrderCase) {
 		_, err := database.ExecContext(t.Context(), "DROP TABLE IF EXISTS "+tableName)
 		require.NoError(t, err)
 	}()
-	require.NoError(t, rasql.CreateTable(t.Context(), db, records.Ref()))
+	require.NoError(t, rasql.CreateTable(t.Context(), db, records))
 
 	recordID := query.TypedColumnOf[record, int64](records.Column("id"))
 	recordCity := query.TypedColumnOf[record, string](records.Column("city"))
@@ -440,7 +440,7 @@ func testOrderResultAlias(t *testing.T, database *sql.DB, test orderResultAliasC
 		_, err := database.ExecContext(t.Context(), "DROP TABLE IF EXISTS "+tableName)
 		require.NoError(t, err)
 	}()
-	require.NoError(t, rasql.CreateTable(t.Context(), db, records.Ref()))
+	require.NoError(t, rasql.CreateTable(t.Context(), db, records))
 
 	recordID := query.TypedColumnOf[record, int64](records.Column("id"))
 	recordCity := query.TypedColumnOf[record, string](records.Column("city"))

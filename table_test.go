@@ -269,6 +269,29 @@ func TestTableIsARelation(t *testing.T) {
 		require.NoError(t, rasql.Select(wrapper, projection).Validate())
 	})
 
+	t.Run("CreateTable takes the object, not its ref", func(t *testing.T) {
+		// A rasql.Table and a generated wrapper are both CatalogObjects, so
+		// neither caller writes Ref at the call. A descriptor permitting no
+		// DDL is still refused, by the one check that always decided it.
+		database, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		t.Cleanup(func() { mock.ExpectClose(); require.NoError(t, database.Close()) })
+		mock.MatchExpectationsInOrder(false)
+		mock.ExpectExec("CREATE TABLE").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec("CREATE TABLE").WillReturnResult(sqlmock.NewResult(0, 0))
+		db, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
+		require.NoError(t, err)
+
+		require.NoError(t, rasql.CreateTable(t.Context(), db, staff(t).Table))
+		require.NoError(t, rasql.CreateTable(t.Context(), db, staff(t)))
+
+		view := rasql.TableFrom[staffRow](schema.TableDef{
+			Name: "active_staff", Kind: schema.ObjectView,
+			Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+		})
+		require.ErrorContains(t, rasql.CreateTable(t.Context(), db, view), "does not support DDL")
+	})
+
 	t.Run("a derived query and a CTE reference are relations too", func(t *testing.T) {
 		base := staffSelect(t, staff(t).Table)
 		derived, err := rasql.Derive(base, "recent_staff")
@@ -369,7 +392,7 @@ func zeroTableEntryPoints() map[string]func(t *testing.T, table rasql.Table[staf
 			return err
 		},
 		"CreateTable": func(t *testing.T, table rasql.Table[staffRow]) error {
-			return rasql.CreateTable(t.Context(), dbForBuild(t), table.Ref())
+			return rasql.CreateTable(t.Context(), dbForBuild(t), table)
 		},
 	}
 }
@@ -496,7 +519,7 @@ func capabilityCalls(t *testing.T, table rasql.Table[viewCapabilityRow]) map[str
 			_, err := rasql.NewDeletePlan(table, query.EqualValue(id, int64(1)))
 			return err
 		},
-		"ddl": func() error { return rasql.CreateTable(t.Context(), db, table.Ref()) },
+		"ddl": func() error { return rasql.CreateTable(t.Context(), db, table) },
 	}
 }
 
@@ -525,7 +548,7 @@ func requireCapabilities(t *testing.T, table rasql.Table[viewCapabilityRow], per
 // requireWritableDefinition. A handle is built for a descriptor whatever it
 // permits, and each of the five operations checks its own bit where the
 // statement is assembled: insert in NewCreatePlan, update in NewPatchPlan,
-// delete in NewDeletePlan, DDL in CreateTable, and read in Table.Source.
+// delete in NewDeletePlan, DDL in CreateTable, and read in the statement.
 func TestTableOperations(t *testing.T) {
 	viewDefinition := schema.TableDef{
 		Name:    "active_users",

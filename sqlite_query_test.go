@@ -281,8 +281,8 @@ func TestSQLiteCorrelatedProjectionConstructorsDecode(t *testing.T) {
 		}, PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	require.NoError(t, rasql.CreateTable(t.Context(), executor, users.Ref()))
-	require.NoError(t, rasql.CreateTable(t.Context(), executor, orders.Ref()))
+	require.NoError(t, rasql.CreateTable(t.Context(), executor, users))
+	require.NoError(t, rasql.CreateTable(t.Context(), executor, orders))
 
 	usersSource := users
 	ordersSource := orders

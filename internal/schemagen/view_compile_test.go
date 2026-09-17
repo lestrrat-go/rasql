@@ -49,10 +49,15 @@ func runViewScratchModule(t *testing.T, directory string) ([]byte, error) {
 }
 
 // TestGeneratedViewRejectsEachMutationIndependently proves that a generated
-// view's table type cannot be handed to any entry point that writes rows or
-// issues DDL, and that a generated ordinary table's type can. The wrapper is a
-// struct of its own, so it is not a rasql.Table[T] and the call does not
-// compile; the same call written against the table's handle does.
+// view's table type cannot be handed to any entry point that writes rows, and
+// that a generated ordinary table's handle can. The wrapper is a struct of its
+// own, so it is not a rasql.Table[T] and the call does not compile; the same
+// call written against the table's handle does.
+//
+// CreateTable is not among them. It takes a rasql.CatalogObject, which both
+// wrappers satisfy, so a view reaches it and is refused when the descriptor's
+// OperationDDL bit is read. TestGeneratedViewHandleIsRefusedWhenThePlanIsBuilt
+// pins that refusal.
 //
 // The legacy version of this test used the root package's Insert, Update and
 // DeleteFrom convenience functions, all removed since (commit "remove
@@ -72,10 +77,6 @@ func TestGeneratedViewRejectsEachMutationIndependently(t *testing.T) {
 		"delete": {
 			view:  `_, _ = rasql.NewDeletePlan(generated.ActiveUsers(), query.Predicate{})`,
 			table: `_, _ = rasql.NewDeletePlan(generated.Users().Table, query.Predicate{})`,
-		},
-		"ddl": {
-			view:  `_ = rasql.CreateTable(ctx, db, generated.ActiveUsers())`,
-			table: `_ = rasql.CreateTable(ctx, db, generated.Users().Ref())`,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -99,9 +100,10 @@ func TestGeneratedViewRejectsEachMutationIndependently(t *testing.T) {
 // TestGeneratedViewHandleIsRefusedWhenThePlanIsBuilt covers what the compile
 // error above does not. The generated wrapper still holds its handle in an
 // exported embedded field, so a caller can write generated.ActiveUsers().Table
-// and reach every mutation constructor; each one reads OperationInsert,
-// OperationUpdate, OperationDelete or OperationDDL off the descriptor and
-// refuses, naming the object and the operation.
+// and reach every mutation constructor, and CreateTable takes the wrapper
+// itself; each entry point reads OperationInsert, OperationUpdate,
+// OperationDelete or OperationDDL off the descriptor and refuses, naming the
+// object and the operation.
 //
 // Making that field unexported is the emitter PR's work, because it moves the
 // bytes of every checked-in generated store. Until then this is the check that
@@ -120,7 +122,7 @@ func TestGeneratedViewHandleIsRefusedWhenThePlanIsBuilt(t *testing.T) {
 		"\t\t\"insert\": func() error { _, err := rasql.NewCreatePlan(view); return err },\n" +
 		"\t\t\"update\": func() error { _, err := rasql.NewPatchPlan(view, rasql.Predicate{}); return err },\n" +
 		"\t\t\"delete\": func() error { _, err := rasql.NewDeletePlan(view, query.Predicate{}); return err },\n" +
-		"\t\t\"ddl\":    func() error { return rasql.CreateTable(ctx, db, view.Ref()) },\n" +
+		"\t\t\"ddl\":    func() error { return rasql.CreateTable(ctx, db, generated.ActiveUsers()) },\n" +
 		"\t} {\n" +
 		"\t\terr := call()\n" +
 		"\t\tif err == nil {\n\t\t\tt.Fatalf(\"%s was accepted\", name)\n\t\t}\n" +

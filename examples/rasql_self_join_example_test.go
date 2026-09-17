@@ -48,7 +48,7 @@ func Example_rasql_self_join() {
 		return
 	}
 	employees := store.Employees()
-	if err := rasql.CreateTable(ctx, db, employees.Ref()); err != nil {
+	if err := rasql.CreateTable(ctx, db, employees); err != nil {
 		fmt.Printf("failed to create employees table: %s\n", err)
 		return
 	}

@@ -60,7 +60,7 @@ func Example_rasqlgen_embedded_row() {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
 	}
-	if err := rasql.CreateTable(ctx, db, store.Users().Ref()); err != nil {
+	if err := rasql.CreateTable(ctx, db, store.Users()); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}

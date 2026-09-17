@@ -41,7 +41,7 @@ func Example_rasql_lifecycle_observer() {
 		return
 	}
 	users := store.Users()
-	if err := rasql.CreateTable(ctx, db, users.Ref()); err != nil {
+	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Println("table error")
 		return
 	}

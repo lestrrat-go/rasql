@@ -75,7 +75,7 @@ func Example_schema_qualified_table() {
 	))}
 
 	// SQL: CREATE TABLE audit.events (id INTEGER NOT NULL, action TEXT NOT NULL, PRIMARY KEY (id))
-	if err := rasql.CreateTable(ctx, db, events.Ref()); err != nil {
+	if err := rasql.CreateTable(ctx, db, events); err != nil {
 		fmt.Printf("failed to create events table: %s\n", err)
 		return
 	}

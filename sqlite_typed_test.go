@@ -48,7 +48,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 			PrimaryKey: []string{"id"},
 		})
 		require.NoError(t, err)
-		require.NoError(t, rasql.CreateTable(t.Context(), executor, events.Ref()))
+		require.NoError(t, rasql.CreateTable(t.Context(), executor, events))
 
 		relation := events
 		eventID, err := rasql.BindColumn[roundtripEvent, int64](relation, "id", "")
@@ -114,7 +114,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 			PrimaryKey: []string{"id"},
 		})
 		require.NoError(t, err)
-		require.NoError(t, rasql.CreateTable(t.Context(), executor, records.Ref()))
+		require.NoError(t, rasql.CreateTable(t.Context(), executor, records))
 		_, err = database.ExecContext(t.Context(), `INSERT INTO records (id, note) VALUES (1, NULL)`)
 		require.NoError(t, err)
 
@@ -160,7 +160,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 			PrimaryKey: []string{"id"},
 		})
 		require.NoError(t, err)
-		require.NoError(t, rasql.CreateTable(t.Context(), executor, users.Ref()))
+		require.NoError(t, rasql.CreateTable(t.Context(), executor, users))
 
 		relation := users
 		userID, err := rasql.BindColumn[roundtripUser, int64](relation, "id", "")
@@ -221,7 +221,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 			PrimaryKey: []string{"id"},
 		})
 		require.NoError(t, err)
-		require.NoError(t, rasql.CreateTable(t.Context(), executor, users.Ref()))
+		require.NoError(t, rasql.CreateTable(t.Context(), executor, users))
 
 		usersRelation := users
 		userID, err := rasql.BindColumn[roundtripUser, int64](usersRelation, "id", "")
@@ -244,7 +244,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 			PrimaryKey: []string{"id"},
 		})
 		require.NoError(t, err)
-		require.NoError(t, rasql.CreateTable(t.Context(), executor, orders.Ref()))
+		require.NoError(t, rasql.CreateTable(t.Context(), executor, orders))
 		ordersRelation := orders
 		orderID, err := rasql.BindColumn[roundtripOrder, int64](ordersRelation, "id", "")
 		require.NoError(t, err)
@@ -321,7 +321,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 			PrimaryKey: []string{"id"},
 		})
 		require.NoError(t, err)
-		require.NoError(t, rasql.CreateTable(t.Context(), executor, users.Ref()))
+		require.NoError(t, rasql.CreateTable(t.Context(), executor, users))
 
 		relation := users
 		userID, err := rasql.BindColumn[roundtripScoredUser, int64](relation, "id", "")
@@ -389,7 +389,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 			PrimaryKey: []string{"id"},
 		})
 		require.NoError(t, err)
-		require.NoError(t, rasql.CreateTable(t.Context(), executor, events.Ref()))
+		require.NoError(t, rasql.CreateTable(t.Context(), executor, events))
 
 		relation := events
 		eventID, err := rasql.BindColumn[roundtripCountedEvent, int64](relation, "id", "")
@@ -545,7 +545,7 @@ func TestSQLiteRoundTrip(t *testing.T) {
 			PrimaryKey: []string{"id"},
 		})
 		require.NoError(t, err)
-		require.NoError(t, rasql.CreateTable(t.Context(), executor, invoices.Ref()))
+		require.NoError(t, rasql.CreateTable(t.Context(), executor, invoices))
 
 		relation := invoices
 		invoiceID, err := rasql.BindColumn[roundtripInvoice, int64](relation, "id", "")
@@ -600,7 +600,7 @@ func TestSQLiteRoundTrip(t *testing.T) {
 			PrimaryKey: []string{"id"},
 		})
 		require.NoError(t, err)
-		require.NoError(t, rasql.CreateTable(t.Context(), executor, events.Ref()))
+		require.NoError(t, rasql.CreateTable(t.Context(), executor, events))
 		queryEvents := events.Ref()
 		id := queryEvents.Column("id")
 		userIDColumn := queryEvents.Column("user_id")
@@ -753,7 +753,7 @@ func TestSQLiteRoundTrip(t *testing.T) {
 		id := queryUsers.Column("id")
 		email := queryUsers.Column("email")
 		status := queryUsers.Column("status")
-		require.NoError(t, rasql.CreateTable(t.Context(), executor, users.Ref()))
+		require.NoError(t, rasql.CreateTable(t.Context(), executor, users))
 
 		relation := users
 		userID, err := rasql.BindColumn[roundtripReturningUser, int64](relation, "id", "")

@@ -98,8 +98,8 @@ func requireMovedTableReachesNamespace(t *testing.T, database *sql.DB, d dialect
 
 	// Both tables are created through rasql's own DDL, so the qualified
 	// CREATE TABLE is exercised by the server too rather than assumed.
-	require.NoError(t, rasql.CreateTable(ctx, db, home.Ref()), "create the table where the connection already is")
-	require.NoError(t, rasql.CreateTable(ctx, db, moved.Ref()), "create the same table in the second namespace")
+	require.NoError(t, rasql.CreateTable(ctx, db, home), "create the table where the connection already is")
+	require.NoError(t, rasql.CreateTable(ctx, db, moved), "create the same table in the second namespace")
 
 	id := query.TypedColumnOf[tenantRow, int64](moved.Column("id"))
 	email := query.TypedColumnOf[tenantRow, string](moved.Column("email"))

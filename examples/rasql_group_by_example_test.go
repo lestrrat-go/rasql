@@ -49,7 +49,7 @@ func Example_rasql_group_by() {
 		return
 	}
 	tasks := store.Tasks()
-	if err := rasql.CreateTable(ctx, db, tasks.Ref()); err != nil {
+	if err := rasql.CreateTable(ctx, db, tasks); err != nil {
 		fmt.Printf("failed to create tasks table: %s\n", err)
 		return
 	}
