@@ -141,6 +141,24 @@ func TestPhysicalRoundTripPreservesCompositeConstraintsAndDefaults(t *testing.T)
 	}
 }
 
+func TestPhysicalRoundTripPreservesPartialOperations(t *testing.T) {
+	table := schema.TableDef{Schema: "public", Name: "audit_log", Operations: schema.OperationRead | schema.OperationInsert, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}}
+	catalog, diagnostics := compilerir.PhysicalFromTableDefs(compilerir.EngineIdentity{Dialect: "postgresql"}, []schema.TableDef{table})
+	if len(diagnostics) != 0 {
+		t.Fatal(diagnostics)
+	}
+	if catalog.Objects[0].Operations != uint16(schema.OperationRead|schema.OperationInsert) {
+		t.Fatalf("operations lost in PhysicalFromTableDefs: %#v", catalog.Objects[0])
+	}
+	back, diagnostics := compilerir.TableDefsFromPhysical(catalog)
+	if len(diagnostics) != 0 {
+		t.Fatal(diagnostics)
+	}
+	if len(back) != 1 || back[0].Operations != schema.OperationRead|schema.OperationInsert {
+		t.Fatalf("operations lost in TableDefsFromPhysical: %#v", back)
+	}
+}
+
 func TestPhysicalCloneDeepCopiesFactPointersAndExclusions(t *testing.T) {
 	catalog := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "sqlite"}, Objects: []compilerir.PhysicalObject{{ID: "id", Kind: "table", Name: "t", VirtualTableModuleArguments: []string{"x"}, Columns: []compilerir.PhysicalColumn{{Name: "n", Ordinal: 0, LogicalKind: "integer", Integer: &compilerir.IntegerTypeFacts{DisplayWidth: compilerir.OptionalInt{Value: 0, Set: true}}, Native: &compilerir.NativeType{Arguments: []string{}}}}, ExclusionConstraints: []compilerir.PhysicalExclusionConstraint{{Elements: []compilerir.ExclusionElement{{ExpressionSQL: "x"}}}}}}}
 	clone := catalog.Clone()
