@@ -70,11 +70,7 @@ func Example_rasql_self_join() {
 		}
 	}
 
-	employeesSource, err := rasql.SourceOf(employees, "")
-	if err != nil {
-		fmt.Printf("failed to bind employees source: %s\n", err)
-		return
-	}
+	employeesSource := employees
 	employeeID, err := rasql.BindColumn[store.EmployeesRow, int64](employeesSource, employees.IDRef().Name(), "")
 	if err != nil {
 		fmt.Printf("failed to bind employees id column: %s\n", err)
@@ -96,7 +92,7 @@ func Example_rasql_self_join() {
 		fmt.Printf("failed to alias employees: %s\n", err)
 		return
 	}
-	managerSource, err := rasql.SourceOf(manager, "manager")
+	managerSource, err := manager.As("manager")
 	if err != nil {
 		fmt.Printf("failed to bind manager source: %s\n", err)
 		return
@@ -130,8 +126,8 @@ func Example_rasql_self_join() {
 	}
 
 	// SQL: SELECT employees.name, manager.name FROM employees INNER JOIN employees AS manager ON employees.manager_id = manager.id ORDER BY employees.id ASC
-	q := rasql.Select(employeesSource.Source(), projection).
-		Join(managerSource.Source(), rasql.EqualOptional(managerID.Expr(), employeeManagerID.NullExpr())).
+	q := rasql.Select(employeesSource, projection).
+		Join(managerSource, rasql.EqualOptional(managerID.Expr(), employeeManagerID.NullExpr())).
 		OrderBy(rasql.AscExpr(employeeID.Expr()))
 	rows, err := rasql.All(ctx, db, q)
 	if err != nil {

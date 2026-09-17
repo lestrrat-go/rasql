@@ -40,11 +40,8 @@ type debugQueryUsersColumns struct {
 func debugQueryUsersQuery() (rasql.Query[store.UsersRow], debugQueryUsersColumns, error) {
 	users := store.Users()
 	def := store.UsersDef()
-	source, err := rasql.SourceOf(users, "")
-	if err != nil {
-		return rasql.Query[store.UsersRow]{}, debugQueryUsersColumns{}, err
-	}
 	var cols debugQueryUsersColumns
+	var err error
 	if cols.ID, err = rasql.BindTypedColumn(users.ID()); err != nil {
 		return rasql.Query[store.UsersRow]{}, debugQueryUsersColumns{}, err
 	}
@@ -85,7 +82,7 @@ func debugQueryUsersQuery() (rasql.Query[store.UsersRow], debugQueryUsersColumns
 	if err != nil {
 		return rasql.Query[store.UsersRow]{}, debugQueryUsersColumns{}, err
 	}
-	return rasql.Select(source.Source(), projection), cols, nil
+	return rasql.Select(users, projection), cols, nil
 }
 
 // Example_rasql_debug_query renders a typed query's SQL with rasql.Render, which

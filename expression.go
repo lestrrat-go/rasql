@@ -51,12 +51,12 @@ func (c NullColumn[Row, T]) mutationColumnCodec() string        { return c.codec
 
 // BindResultColumn binds a non-null column exposed by a typed derived source.
 func BindResultColumn[R, T any](source TypedSource[R], name string) (Column[R, T], error) {
-	for _, column := range source.source.ref.Columns() {
+	for _, column := range source.relationSource().ref.Columns() {
 		if column.Name == name {
 			if column.Nullable {
 				return Column[R, T]{}, planError("invalid_source", "column", "nullability does not match handle")
 			}
-			return bindColumn[R, T](source.source, name, column.Codec, false)
+			return bindColumn[R, T](source.relationSource(), name, column.Codec, false)
 		}
 	}
 	return Column[R, T]{}, planError("invalid_source", "column", "column is not a member of source")
@@ -64,45 +64,57 @@ func BindResultColumn[R, T any](source TypedSource[R], name string) (Column[R, T
 
 // BindNullResultColumn binds a nullable column exposed by a typed derived source.
 func BindNullResultColumn[R, T any](source TypedSource[R], name string) (NullColumn[R, T], error) {
-	if err := validateBoundColumn(source.source, name, ""); err != nil {
+	if err := validateBoundColumn(source.relationSource(), name, ""); err != nil {
 		return NullColumn[R, T]{}, err
 	}
-	for _, column := range source.source.ref.Columns() {
+	for _, column := range source.relationSource().ref.Columns() {
 		if column.Name == name {
 			if !column.Nullable {
 				return NullColumn[R, T]{}, planError("invalid_source", "column", "nullability does not match handle")
 			}
-			return NullColumn[R, T]{ref: source.source.ref.Column(name), codec: column.Codec}, nil
+			return NullColumn[R, T]{ref: source.relationSource().ref.Column(name), codec: column.Codec}, nil
 		}
 	}
 	return NullColumn[R, T]{}, planError("invalid_source", "column", "column is not a member of source")
 }
 
-func BindColumn[Row, T any](relation TypedRelation[Row], name, codec string) (Column[Row, T], error) {
-	return bindColumn[Row, T](relation.source, name, codec, false)
+// BindColumn binds a non-null column of relation, which is any RowSource whose
+// rows decode into Row: a table, a generated table wrapper holding one, a
+// derived query's relation, or a CTE reference.
+//
+// S is inferred from the argument and is never written at a call site. It is a
+// type parameter rather than a plain RowSource[Row] parameter so that a
+// generated store can pass rasql.BindColumn[Row, T] as a function value and let
+// the compiler finish instantiating it.
+func BindColumn[Row, T any, S RowSource[Row]](relation S, name, codec string) (Column[Row, T], error) {
+	return bindColumn[Row, T](relation.relationSource(), name, codec, false)
 }
-func BindNullColumn[Row, T any](relation TypedRelation[Row], name, codec string) (NullColumn[Row, T], error) {
-	if err := validateBoundColumn(relation.source, name, codec); err != nil {
+
+// BindNullColumn is BindColumn for a column the descriptor declares nullable.
+// It reports an error for a column that is not.
+func BindNullColumn[Row, T any, S RowSource[Row]](relation S, name, codec string) (NullColumn[Row, T], error) {
+	source := relation.relationSource()
+	if err := validateBoundColumn(source, name, codec); err != nil {
 		return NullColumn[Row, T]{}, err
 	}
-	for _, column := range relation.source.ref.Columns() {
+	for _, column := range source.ref.Columns() {
 		if column.Name == name {
 			if !column.Nullable {
 				return NullColumn[Row, T]{}, planError("invalid_source", "column", "nullability does not match handle")
 			}
-			return NullColumn[Row, T]{ref: relation.source.ref.Column(name), codec: codec}, nil
+			return NullColumn[Row, T]{ref: source.ref.Column(name), codec: codec}, nil
 		}
 	}
 	return NullColumn[Row, T]{}, planError("invalid_source", "column", "column is not a member of source")
 }
 func BindOptionalColumn[Row, T any](relation OptionalRelation[Row], name, codec string) (NullColumn[Row, T], error) {
-	if relation.source.ref.QualifiedName() == "" {
+	if relation.relationSource().ref.QualifiedName() == "" {
 		return NullColumn[Row, T]{}, planError("invalid_source", "relation", "source is zero")
 	}
-	if err := validateBoundColumn(relation.source, name, codec); err != nil {
+	if err := validateBoundColumn(relation.relationSource(), name, codec); err != nil {
 		return NullColumn[Row, T]{}, err
 	}
-	return NullColumn[Row, T]{ref: relation.source.ref.Column(name), codec: codec}, nil
+	return NullColumn[Row, T]{ref: relation.relationSource().ref.Column(name), codec: codec}, nil
 }
 func bindColumn[Row, T any](relation Source, name, codec string, nullable bool) (Column[Row, T], error) {
 	if err := validateBoundColumn(relation, name, codec); err != nil {

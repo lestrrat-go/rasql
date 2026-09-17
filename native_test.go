@@ -95,7 +95,7 @@ func TestNativeQuery(t *testing.T) {
 		require.NoError(t, err)
 		outer, err := rasql.Scalar("value", value.Expr(), schema.IntegerType{}, "")
 		require.NoError(t, err)
-		query := rasql.Select(source.Source(), outer)
+		query := rasql.Select(source, outer)
 		raw := &runtimeFakeExecutor{dialect: dialect.PostgreSQL()}
 		profile := rasql.PostgreSQL17()
 		executor, err := rasql.WithEngineProfile(raw, profile)
@@ -169,10 +169,10 @@ func TestNativeQuery(t *testing.T) {
 		q := nativeRuntimeQuery(t, rasql.Many)
 		derived, err := rasql.Derive(q, "derived_values")
 		require.NoError(t, err)
-		require.Equal(t, q.Schema().Columns(), rasql.Q1SourceColumns(derived.Source()))
+		require.Equal(t, q.Schema().Columns(), rasql.Q1SourceColumns(derived))
 		cte, err := rasql.CTEOf("native_values", q)
 		require.NoError(t, err)
-		_, err = cte.Source("native_alias")
+		_, err = cte.As("native_alias")
 		require.NoError(t, err)
 
 		dml, err := rasql.Native(rasql.NativeStatement{Engine: "sqlite", SQL: "UPDATE values SET value = ? RETURNING value", Args: []rasql.NativeArgument{{Value: int64(1)}}}, q.Projection(), rasql.Many)
@@ -349,7 +349,7 @@ func TestNativeProjection(t *testing.T) {
 		expressions := rasql.Q1ProjectionExpressions(projection)
 		require.Empty(t, expressions[0])
 		require.Empty(t, expressions[1])
-		ordinary := rasql.Select(rasql.Q1PlanSources(runtimeQuery(t).Plan())[0], projection)
+		ordinary := rasql.Select(rasql.Q1RowSource[int64](rasql.Q1PlanSources(runtimeQuery(t).Plan())[0]), projection)
 		var planErr *rasql.PlanError
 		require.ErrorAs(t, ordinary.Validate(), &planErr)
 		require.Equal(t, "unsupported_feature", planErr.Code)

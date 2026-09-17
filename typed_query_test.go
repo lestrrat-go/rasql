@@ -72,21 +72,21 @@ func (d acceptanceTotalDecoder) DecodeRow(src rasql.ScanSource, row *acceptanceT
 func acceptanceQuery(t *testing.T) rasql.Query[acceptanceTotalRow] {
 	t.Helper()
 
-	orders, err := rasql.ReadTableOf[acceptanceOrderRow](schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{
+	orders, err := rasql.TableOf[acceptanceOrderRow](schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "customer", Type: schema.TextType{}},
 		{Name: "amount", Type: schema.IntegerType{}},
 	}})
 	require.NoError(t, err)
-	refunds, err := rasql.ReadTableOf[acceptanceRefundRow](schema.TableDef{Name: "refunds", Columns: []schema.ColumnDef{
+	refunds, err := rasql.TableOf[acceptanceRefundRow](schema.TableDef{Name: "refunds", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "order_id", Type: schema.IntegerType{}},
 	}})
 	require.NoError(t, err)
 
-	o, err := rasql.SourceOf(orders, "o")
+	o, err := orders.As("o")
 	require.NoError(t, err)
-	r, err := rasql.SourceOf(refunds, "r")
+	r, err := refunds.As("r")
 	require.NoError(t, err)
 
 	orderID, err := rasql.BindColumn[acceptanceOrderRow, int64](o, "id", "")
@@ -102,7 +102,7 @@ func acceptanceQuery(t *testing.T) rasql.Query[acceptanceTotalRow] {
 	// its element type against the left-hand side at compile time.
 	refunded, err := rasql.Scalar("order_id", refundOrder.Expr(), schema.IntegerType{}, "")
 	require.NoError(t, err)
-	refundQuery := rasql.Select(r.Source(), refunded)
+	refundQuery := rasql.Select(r, refunded)
 
 	result, err := rasql.NewResultSchema(
 		rasql.ResultColumn{Name: "customer", Type: schema.TextType{}},
@@ -130,13 +130,13 @@ func acceptanceQuery(t *testing.T) rasql.Query[acceptanceTotalRow] {
 	// it correlated. It is redundant with refundedOrder on purpose: an EXISTS
 	// that changed which rows survive would not prove the two forms agree.
 	correlated, err := rasql.ExistsQuery(
-		rasql.Select(r.Source(), refunded).
-			Correlated(o.Source()).
+		rasql.Select(r, refunded).
+			Correlated(o).
 			Where(rasql.EqualExpr(refundOrder.Expr(), orderID.Expr())),
 	)
 	require.NoError(t, err)
 
-	return rasql.Select(o.Source(), projection).
+	return rasql.Select(o, projection).
 		Where(rasql.And(
 			rasql.GreaterValue(amount.Expr(), int64(100)),
 			rasql.LikeValue(rasql.LowerExpr(customer.Expr()), "a%"),
@@ -210,21 +210,21 @@ func runAcceptance(t *testing.T, database *sql.DB, executor rasql.Executor, text
 func correlationQuery(t *testing.T) rasql.Query[acceptanceTotalRow] {
 	t.Helper()
 
-	orders, err := rasql.ReadTableOf[acceptanceOrderRow](schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{
+	orders, err := rasql.TableOf[acceptanceOrderRow](schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "customer", Type: schema.TextType{}},
 		{Name: "amount", Type: schema.IntegerType{}},
 	}})
 	require.NoError(t, err)
-	refunds, err := rasql.ReadTableOf[acceptanceRefundRow](schema.TableDef{Name: "refunds", Columns: []schema.ColumnDef{
+	refunds, err := rasql.TableOf[acceptanceRefundRow](schema.TableDef{Name: "refunds", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "order_id", Type: schema.IntegerType{}},
 	}})
 	require.NoError(t, err)
 
-	o, err := rasql.SourceOf(orders, "o")
+	o, err := orders.As("o")
 	require.NoError(t, err)
-	r, err := rasql.SourceOf(refunds, "r")
+	r, err := refunds.As("r")
 	require.NoError(t, err)
 
 	orderID, err := rasql.BindColumn[acceptanceOrderRow, int64](o, "id", "")
@@ -253,13 +253,13 @@ func correlationQuery(t *testing.T) rasql.Query[acceptanceTotalRow] {
 	require.NoError(t, err)
 
 	correlated, err := rasql.ExistsQuery(
-		rasql.Select(r.Source(), refunded).
-			Correlated(o.Source()).
+		rasql.Select(r, refunded).
+			Correlated(o).
 			Where(rasql.EqualExpr(refundOrder.Expr(), orderID.Expr())),
 	)
 	require.NoError(t, err)
 
-	return rasql.Select(o.Source(), projection).
+	return rasql.Select(o, projection).
 		Where(correlated).
 		GroupBy(rasql.Group(customer.Expr())).
 		OrderBy(rasql.AscExpr(customer.Expr()))
@@ -420,14 +420,13 @@ func (d coalesceGapDecoder) DecodeRow(src rasql.ScanSource, row *coalesceGapAcco
 func coalesceGapQuery(t *testing.T) rasql.Query[coalesceGapAccountRow] {
 	t.Helper()
 
-	accounts, err := rasql.ReadTableOf[coalesceGapAccountRow](schema.TableDef{Name: "accounts", Columns: []schema.ColumnDef{
+	accounts, err := rasql.TableOf[coalesceGapAccountRow](schema.TableDef{Name: "accounts", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "name", Type: schema.TextType{}},
 		{Name: "credit_limit", Type: schema.IntegerType{}, Nullable: true},
 	}})
 	require.NoError(t, err)
-	a, err := rasql.SourceOf(accounts, "")
-	require.NoError(t, err)
+	a := accounts
 
 	name, err := rasql.BindColumn[coalesceGapAccountRow, string](a, "name", "")
 	require.NoError(t, err)
@@ -443,7 +442,7 @@ func coalesceGapQuery(t *testing.T) rasql.Query[coalesceGapAccountRow] {
 	}, coalesceGapDecoder{result: result})
 	require.NoError(t, err)
 
-	return rasql.Select(a.Source(), projection).
+	return rasql.Select(a, projection).
 		Where(rasql.GreaterValue(limit, int64(40))).
 		OrderBy(rasql.AscExpr(name.Expr()))
 }
@@ -528,23 +527,23 @@ func (d subqueryGapDecoder) DecodeRow(src rasql.ScanSource, row *subqueryGapRow)
 func subqueryGapQuery(t *testing.T) rasql.Query[subqueryGapRow] {
 	t.Helper()
 
-	customers, err := rasql.ReadTableOf[subqueryGapCustomerRow](schema.TableDef{Name: "customers", Columns: []schema.ColumnDef{
+	customers, err := rasql.TableOf[subqueryGapCustomerRow](schema.TableDef{Name: "customers", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "name", Type: schema.TextType{}},
 	}})
 	require.NoError(t, err)
-	orders, err := rasql.ReadTableOf[subqueryGapOrderRow](schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{
+	orders, err := rasql.TableOf[subqueryGapOrderRow](schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "customer_id", Type: schema.IntegerType{}},
 		{Name: "amount", Type: schema.IntegerType{}},
 	}})
 	require.NoError(t, err)
 
-	c, err := rasql.SourceOf(customers, "c")
+	c, err := customers.As("c")
 	require.NoError(t, err)
-	o, err := rasql.SourceOf(orders, "o")
+	o, err := orders.As("o")
 	require.NoError(t, err)
-	baseline, err := rasql.SourceOf(orders, "baseline")
+	baseline, err := orders.As("baseline")
 	require.NoError(t, err)
 
 	customerID, err := rasql.BindColumn[subqueryGapCustomerRow, int64](c, "id", "")
@@ -568,14 +567,14 @@ func subqueryGapQuery(t *testing.T) rasql.Query[subqueryGapRow] {
 	// the baseline order seeded with id 1 always exists.
 	baselineProjection, err := rasql.Scalar("amount", baselineAmount.Expr(), schema.IntegerType{}, "")
 	require.NoError(t, err)
-	baselineQuery := rasql.Select(baseline.Source(), baselineProjection).
+	baselineQuery := rasql.Select(baseline, baselineProjection).
 		Where(rasql.EqualValue(baselineID.Expr(), int64(1)))
 	baselineSubquery, err := rasql.SubqueryExpr(baselineQuery)
 	require.NoError(t, err)
 	baselineExpr := rasql.CoalesceExpr(baselineSubquery, rasql.Value(int64(0)))
 
 	// Level one: how many of this customer's orders beat the baseline.
-	// Correlated(c.Source()) is what makes "this customer's" true instead of
+	// Correlated(c) is what makes "this customer's" true instead of
 	// "every customer's" — WithCorrelation states the same rule.
 	// bigOrderCountQuery is an aggregate without GROUP BY, so it too always
 	// returns exactly one row; CoalesceExpr turns SubqueryExpr's NullExpr
@@ -583,8 +582,8 @@ func subqueryGapQuery(t *testing.T) rasql.Query[subqueryGapRow] {
 	// read for the same reason.
 	bigOrderCountProjection, err := rasql.Scalar("big_order_count", rasql.CountRows(), schema.IntegerType{}, "")
 	require.NoError(t, err)
-	bigOrderCountQuery := rasql.Select(o.Source(), bigOrderCountProjection).
-		Correlated(c.Source()).
+	bigOrderCountQuery := rasql.Select(o, bigOrderCountProjection).
+		Correlated(c).
 		Where(rasql.And(
 			rasql.EqualExpr(orderCustomerID.Expr(), customerID.Expr()),
 			rasql.GreaterExpr(orderAmount.Expr(), baselineExpr),
@@ -604,7 +603,7 @@ func subqueryGapQuery(t *testing.T) rasql.Query[subqueryGapRow] {
 	}, subqueryGapDecoder{result: result})
 	require.NoError(t, err)
 
-	return rasql.Select(c.Source(), projection).OrderBy(rasql.AscExpr(customerName.Expr()))
+	return rasql.Select(c, projection).OrderBy(rasql.AscExpr(customerName.Expr()))
 }
 
 // subqueryGapSeed seeds two customers and five orders. Order 1 is the
@@ -690,20 +689,20 @@ func (d subqueryNullDecoder) DecodeRow(src rasql.ScanSource, row *subqueryNullRe
 func subqueryNullQuery(t *testing.T) rasql.Query[subqueryNullResultRow] {
 	t.Helper()
 
-	customers, err := rasql.ReadTableOf[subqueryNullCustomerRow](schema.TableDef{Name: "customers", Columns: []schema.ColumnDef{
+	customers, err := rasql.TableOf[subqueryNullCustomerRow](schema.TableDef{Name: "customers", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 	}})
 	require.NoError(t, err)
-	orders, err := rasql.ReadTableOf[subqueryNullOrderRow](schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{
+	orders, err := rasql.TableOf[subqueryNullOrderRow](schema.TableDef{Name: "orders", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "customer_id", Type: schema.IntegerType{}},
 		{Name: "amount", Type: schema.IntegerType{}},
 	}})
 	require.NoError(t, err)
 
-	c, err := rasql.SourceOf(customers, "c")
+	c, err := customers.As("c")
 	require.NoError(t, err)
-	o, err := rasql.SourceOf(orders, "o")
+	o, err := orders.As("o")
 	require.NoError(t, err)
 
 	customerID, err := rasql.BindColumn[subqueryNullCustomerRow, int64](c, "id", "")
@@ -715,8 +714,8 @@ func subqueryNullQuery(t *testing.T) rasql.Query[subqueryNullResultRow] {
 
 	amountProjection, err := rasql.Scalar("amount", orderAmount.Expr(), schema.IntegerType{}, "")
 	require.NoError(t, err)
-	totalQuery := rasql.Select(o.Source(), amountProjection).
-		Correlated(c.Source()).
+	totalQuery := rasql.Select(o, amountProjection).
+		Correlated(c).
 		Where(rasql.EqualExpr(orderCustomerID.Expr(), customerID.Expr()))
 	totalExpr, err := rasql.SubqueryExpr(totalQuery)
 	require.NoError(t, err)
@@ -730,7 +729,7 @@ func subqueryNullQuery(t *testing.T) rasql.Query[subqueryNullResultRow] {
 	}, subqueryNullDecoder{result: result})
 	require.NoError(t, err)
 
-	return rasql.Select(c.Source(), projection)
+	return rasql.Select(c, projection)
 }
 
 func subqueryNullSeed(t *testing.T, database *sql.DB) {
@@ -779,13 +778,13 @@ type bindTypedColumnGapTable struct {
 }
 
 func (t bindTypedColumnGapTable) ID() query.TypedColumn[bindTypedColumnGapRow, int64] {
-	return query.TypedColumnOf[bindTypedColumnGapRow, int64](rasql.ColumnOf(t.Table, "id"))
+	return query.TypedColumnOf[bindTypedColumnGapRow, int64](t.Column("id"))
 }
 func (t bindTypedColumnGapTable) Name() query.TypedColumn[bindTypedColumnGapRow, string] {
-	return query.TypedColumnOf[bindTypedColumnGapRow, string](rasql.ColumnOf(t.Table, "name"))
+	return query.TypedColumnOf[bindTypedColumnGapRow, string](t.Column("name"))
 }
 func (t bindTypedColumnGapTable) Nickname() query.NullableColumn[bindTypedColumnGapRow, string] {
-	return query.NullableColumnOf[bindTypedColumnGapRow, string](rasql.ColumnOf(t.Table, "nickname"))
+	return query.NullableColumnOf[bindTypedColumnGapRow, string](t.Column("nickname"))
 }
 
 func bindTypedColumnGapUsers(t *testing.T) bindTypedColumnGapTable {
@@ -824,8 +823,7 @@ func bindTypedColumnGapQuery(t *testing.T) rasql.Query[bindTypedColumnGapResultR
 	t.Helper()
 
 	users := bindTypedColumnGapUsers(t)
-	u, err := rasql.SourceOf(users, "")
-	require.NoError(t, err)
+	u := users
 
 	id, err := rasql.BindTypedColumn(users.ID())
 	require.NoError(t, err)
@@ -845,7 +843,7 @@ func bindTypedColumnGapQuery(t *testing.T) rasql.Query[bindTypedColumnGapResultR
 	}, bindTypedColumnGapDecoder{result: result})
 	require.NoError(t, err)
 
-	return rasql.Select(u.Source(), projection).
+	return rasql.Select(u, projection).
 		Where(rasql.GreaterValue(id.Expr(), int64(0))).
 		OrderBy(rasql.AscExpr(name.Expr()))
 }
@@ -925,13 +923,12 @@ func (d renderGapDecoder) DecodeRow(src rasql.ScanSource, row *renderGapRow) err
 func renderGapQuery(t *testing.T) rasql.Query[renderGapRow] {
 	t.Helper()
 
-	widgets, err := rasql.ReadTableOf[renderGapRow](schema.TableDef{Name: "widgets", Columns: []schema.ColumnDef{
+	widgets, err := rasql.TableOf[renderGapRow](schema.TableDef{Name: "widgets", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "name", Type: schema.TextType{}},
 	}})
 	require.NoError(t, err)
-	w, err := rasql.SourceOf(widgets, "")
-	require.NoError(t, err)
+	w := widgets
 
 	id, err := rasql.BindColumn[renderGapRow, int64](w, "id", "")
 	require.NoError(t, err)
@@ -949,7 +946,7 @@ func renderGapQuery(t *testing.T) rasql.Query[renderGapRow] {
 	}, renderGapDecoder{result: result})
 	require.NoError(t, err)
 
-	return rasql.Select(w.Source(), projection).
+	return rasql.Select(w, projection).
 		Where(rasql.GreaterValue(id.Expr(), int64(5))).
 		OrderBy(rasql.AscExpr(name.Expr()))
 }

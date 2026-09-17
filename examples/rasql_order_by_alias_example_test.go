@@ -65,11 +65,6 @@ func Example_rasql_order_by_alias() {
 		return
 	}
 
-	source, err := rasql.SourceOf(users, "")
-	if err != nil {
-		fmt.Printf("failed to bind users source: %s\n", err)
-		return
-	}
 	id, err := rasql.BindTypedColumn(users.ID())
 	if err != nil {
 		fmt.Printf("failed to bind id column: %s\n", err)
@@ -81,12 +76,12 @@ func Example_rasql_order_by_alias() {
 	// always mirrors the row's own field type, string for email and *string
 	// for the nullable nickname. Binding both explicitly as string is what
 	// gives CoalesceExpr a matching pair; no accessor bridges that gap.
-	email, err := rasql.BindColumn[store.UsersRow, string](source, "email", "")
+	email, err := rasql.BindColumn[store.UsersRow, string](users, "email", "")
 	if err != nil {
 		fmt.Printf("failed to bind email column: %s\n", err)
 		return
 	}
-	nickname, err := rasql.BindNullColumn[store.UsersRow, string](source, "nickname", "")
+	nickname, err := rasql.BindNullColumn[store.UsersRow, string](users, "nickname", "")
 	if err != nil {
 		fmt.Printf("failed to bind nickname column: %s\n", err)
 		return
@@ -115,7 +110,7 @@ func Example_rasql_order_by_alias() {
 	}
 
 	statement, err := rasql.Render(
-		rasql.Select(source.Source(), projection).OrderBy(rasql.DescResult(displayName)),
+		rasql.Select(users, projection).OrderBy(rasql.DescResult(displayName)),
 		dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to render statement: %s\n", err)
@@ -124,7 +119,7 @@ func Example_rasql_order_by_alias() {
 	fmt.Println(statement.SQL())
 
 	rows, err := rasql.All(ctx, db,
-		rasql.Select(source.Source(), projection).OrderBy(rasql.DescResult(displayName)))
+		rasql.Select(users, projection).OrderBy(rasql.DescResult(displayName)))
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return

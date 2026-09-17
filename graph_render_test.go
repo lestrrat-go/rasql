@@ -53,8 +53,8 @@ func (e *graphRenderExecutor) childStatement(t *testing.T) stmt.Statement {
 
 func TestGraphPartitionRendering(t *testing.T) {
 	_, parentSource, childSource, _, parentQuery, childQuery := graphAcceptanceFixture(t, 1)
-	parents := rasql.Q1TypedRelation[graphParentRow](parentSource)
-	children := rasql.Q1TypedRelation[graphChildRow](childSource)
+	parents := parentSource
+	children := childSource
 	parentID, err := rasql.BindColumn[graphParentRow, int64](parents, "id", "")
 	require.NoError(t, err)
 	parentTenant, err := rasql.BindNullColumn[graphParentRow, int64](parents, "tenant", "")

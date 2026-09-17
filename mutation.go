@@ -31,12 +31,13 @@ type mutationBatchPlan interface {
 }
 
 func requireTableOperation[T any](table Table[T], operation schema.Operation) error {
-	if table == nil {
-		return fmt.Errorf("rasql: table must not be nil")
+	ref := table.Ref()
+	if err := ref.Validate(); err != nil {
+		return fmt.Errorf("rasql: %w", err)
 	}
-	if !table.Ref().Definition().Supports(operation) {
+	if !ref.Supports(operation) {
 		return fmt.Errorf("rasql: object %q does not support operation %d",
-			table.Ref().Definition().QualifiedName(), operation)
+			ref.Definition().QualifiedName(), operation)
 	}
 	return nil
 }
@@ -80,8 +81,8 @@ func NewDeletePlan[T any](table Table[T], where query.Predicate) (DeletePlan[T],
 }
 
 func (p DeletePlan[T]) mutationPlan() (query.WriteStatement, error) {
-	if p.table == nil {
-		return nil, fmt.Errorf("rasql: delete plan table must not be nil")
+	if err := p.table.Ref().Validate(); err != nil {
+		return nil, fmt.Errorf("rasql: delete plan: %w", err)
 	}
 	statement, err := query.NewDelete(p.table.Ref())
 	if err != nil {

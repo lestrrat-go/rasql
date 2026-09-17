@@ -40,11 +40,8 @@ type nestedPredUsersColumns struct {
 func nestedPredUsersQuery() (rasql.Query[store.UsersRow], nestedPredUsersColumns, error) {
 	users := store.Users()
 	def := store.UsersDef()
-	source, err := rasql.SourceOf(users, "")
-	if err != nil {
-		return rasql.Query[store.UsersRow]{}, nestedPredUsersColumns{}, err
-	}
 	var cols nestedPredUsersColumns
+	var err error
 	if cols.ID, err = rasql.BindTypedColumn(users.ID()); err != nil {
 		return rasql.Query[store.UsersRow]{}, nestedPredUsersColumns{}, err
 	}
@@ -85,7 +82,7 @@ func nestedPredUsersQuery() (rasql.Query[store.UsersRow], nestedPredUsersColumns
 	if err != nil {
 		return rasql.Query[store.UsersRow]{}, nestedPredUsersColumns{}, err
 	}
-	return rasql.Select(source.Source(), projection), cols, nil
+	return rasql.Select(users, projection), cols, nil
 }
 
 // Example_rasql_nested_predicates builds a predicate tree several levels deep

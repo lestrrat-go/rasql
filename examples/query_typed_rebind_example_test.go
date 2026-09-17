@@ -49,11 +49,6 @@ func Example_rebindTypedResult() {
 		}
 	}
 
-	source, err := rasql.SourceOf(users, "")
-	if err != nil {
-		fmt.Printf("failed to bind users source: %s\n", err)
-		return
-	}
 	id, err := rasql.BindTypedColumn(users.ID())
 	if err != nil {
 		fmt.Printf("failed to bind id column: %s\n", err)
@@ -72,7 +67,7 @@ func Example_rebindTypedResult() {
 	// base projects id and filters to one row. A caller who only needed the
 	// filter, not this particular projected shape, still built it this way to
 	// reuse the WHERE.
-	base := rasql.Select(source.Source(), idProjection).Where(rasql.EqualValue(id.Expr(), int64(7)))
+	base := rasql.Select(users, idProjection).Where(rasql.EqualValue(id.Expr(), int64(7)))
 
 	emailProjection, err := rasql.Scalar("email", email.Expr(), schema.TextType{}, "")
 	if err != nil {

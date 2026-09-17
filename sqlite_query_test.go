@@ -284,10 +284,8 @@ func TestSQLiteCorrelatedProjectionConstructorsDecode(t *testing.T) {
 	require.NoError(t, rasql.CreateTable(t.Context(), executor, users))
 	require.NoError(t, rasql.CreateTable(t.Context(), executor, orders))
 
-	usersSource, err := rasql.SourceOf(users, "")
-	require.NoError(t, err)
-	ordersSource, err := rasql.SourceOf(orders, "")
-	require.NoError(t, err)
+	usersSource := users
+	ordersSource := orders
 	usersID, err := rasql.BindColumn[apiQ7User, int64](usersSource, "id", "")
 	require.NoError(t, err)
 	ordersID, err := rasql.BindColumn[apiQ7Order, int64](ordersSource, "id", "")
@@ -327,14 +325,14 @@ func TestSQLiteCorrelatedProjectionConstructorsDecode(t *testing.T) {
 	// never actually read, since every seeded user has exactly one order.
 	amountProjection, err := rasql.Scalar("amount", ordersAmount.Expr(), schema.IntegerType{}, "")
 	require.NoError(t, err)
-	leafQuery := rasql.Select(ordersSource.Source(), amountProjection).
-		Correlated(usersSource.Source()).
+	leafQuery := rasql.Select(ordersSource, amountProjection).
+		Correlated(usersSource).
 		Where(rasql.EqualExpr(ordersUserID.Expr(), usersID.Expr()))
 	leafSubquery, err := rasql.SubqueryExpr(leafQuery)
 	require.NoError(t, err)
 	leafExpr := rasql.CoalesceExpr(leafSubquery, usersID.Expr())
 
-	oneLevel := rasql.Select(usersSource.Source(), apiQ7ResultProjection(t, usersID.Expr(), leafExpr)).
+	oneLevel := rasql.Select(usersSource, apiQ7ResultProjection(t, usersID.Expr(), leafExpr)).
 		OrderBy(rasql.AscExpr(usersID.Expr()))
 	rows, err := rasql.All(t.Context(), executor, oneLevel)
 	require.NoError(t, err)
@@ -352,14 +350,14 @@ func TestSQLiteCorrelatedProjectionConstructorsDecode(t *testing.T) {
 	// Item wants a plain Expr, and the fallback is never actually read.
 	middleProjection, err := rasql.Scalar("value", leafExpr, schema.IntegerType{}, "")
 	require.NoError(t, err)
-	middleQuery := rasql.Select(ordersSource.Source(), middleProjection).
-		Correlated(usersSource.Source()).
+	middleQuery := rasql.Select(ordersSource, middleProjection).
+		Correlated(usersSource).
 		Where(rasql.EqualExpr(ordersUserID.Expr(), usersID.Expr()))
 	middleSubquery, err := rasql.SubqueryExpr(middleQuery)
 	require.NoError(t, err)
 	middleExpr := rasql.CoalesceExpr(middleSubquery, usersID.Expr())
 
-	twoLevel := rasql.Select(usersSource.Source(), apiQ7ResultProjection(t, usersID.Expr(), middleExpr)).
+	twoLevel := rasql.Select(usersSource, apiQ7ResultProjection(t, usersID.Expr(), middleExpr)).
 		OrderBy(rasql.AscExpr(usersID.Expr()))
 	rows, err = rasql.All(t.Context(), executor, twoLevel)
 	require.NoError(t, err)
@@ -399,13 +397,13 @@ func countUsersQuery(t *testing.T) (rasql.Query[countUser], rasql.Executor) {
 	require.NoError(t, err)
 	executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 	require.NoError(t, err)
-	table, err := rasql.ReadTableOf[countUser](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{
+	table, err := rasql.TableOf[countUser](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},
 		{Name: "tenant", Type: schema.IntegerType{}},
 		{Name: "category", Type: schema.TextType{}, Nullable: true},
 	}})
 	require.NoError(t, err)
-	relation, err := rasql.SourceOf(table, "users")
+	relation, err := table.As("users")
 	require.NoError(t, err)
 	id, err := rasql.BindColumn[countUser, int64](relation, "id", "")
 	require.NoError(t, err)
@@ -425,7 +423,7 @@ func countUsersQuery(t *testing.T) (rasql.Query[countUser], rasql.Executor) {
 		rasql.NullItem("category", category.NullExpr(), schema.TextType{}, ""),
 	}, countUserDecoder{schema: resultSchema})
 	require.NoError(t, err)
-	query := rasql.Select(relation.Source(), projection).Where(rasql.EqualExpr(tenant.Expr(), rasql.Value(int64(1)))).OrderBy(rasql.AscExpr(id.Expr()))
+	query := rasql.Select(relation, projection).Where(rasql.EqualExpr(tenant.Expr(), rasql.Value(int64(1)))).OrderBy(rasql.AscExpr(id.Expr()))
 	return query, executor
 }
 

@@ -23,15 +23,15 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	table, err := rasql.ReadTableOf[user](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
+	table, err := rasql.TableOf[user](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
 	if err != nil {
 		panic(err)
 	}
-	relation, err := rasql.SourceOf(table, "u")
+	relation, err := table.As("u")
 	if err != nil {
 		panic(err)
 	}
-	query := rasql.Select(relation.Source(), projection).Where(rasql.EqualValue(rasql.Value(int64(1)), int64(1)))
+	query := rasql.Select(relation, projection).Where(rasql.EqualValue(rasql.Value(int64(1)), int64(1)))
 	if err := query.Validate(); err != nil {
 		panic(err)
 	}

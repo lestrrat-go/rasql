@@ -27,7 +27,7 @@ func Example_rasql_render_mutation() {
 		return
 	}
 
-	plan, err := rasql.NewPatchPlan(users,
+	plan, err := rasql.NewPatchPlan(users.Table,
 		rasql.EqualValue(id.Expr(), int64(1)),
 		rasql.SetField(email, "ada@example.com"),
 	)

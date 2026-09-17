@@ -41,27 +41,24 @@ type noRowsUsersColumns struct {
 func noRowsUsersQuery() (rasql.Query[store.UsersRow], noRowsUsersColumns, error) {
 	users := store.Users()
 	def := store.UsersDef()
-	source, err := rasql.SourceOf(users, "")
-	if err != nil {
-		return rasql.Query[store.UsersRow]{}, noRowsUsersColumns{}, err
-	}
 	var cols noRowsUsersColumns
-	if cols.ID, err = rasql.BindColumn[store.UsersRow, int64](source, users.IDRef().Name(), ""); err != nil {
+	var err error
+	if cols.ID, err = rasql.BindColumn[store.UsersRow, int64](users, users.IDRef().Name(), ""); err != nil {
 		return rasql.Query[store.UsersRow]{}, noRowsUsersColumns{}, err
 	}
-	if cols.Email, err = rasql.BindColumn[store.UsersRow, string](source, users.EmailRef().Name(), ""); err != nil {
+	if cols.Email, err = rasql.BindColumn[store.UsersRow, string](users, users.EmailRef().Name(), ""); err != nil {
 		return rasql.Query[store.UsersRow]{}, noRowsUsersColumns{}, err
 	}
-	if cols.Nickname, err = rasql.BindNullColumn[store.UsersRow, string](source, users.NicknameRef().Name(), ""); err != nil {
+	if cols.Nickname, err = rasql.BindNullColumn[store.UsersRow, string](users, users.NicknameRef().Name(), ""); err != nil {
 		return rasql.Query[store.UsersRow]{}, noRowsUsersColumns{}, err
 	}
-	if cols.Status, err = rasql.BindColumn[store.UsersRow, string](source, users.StatusRef().Name(), ""); err != nil {
+	if cols.Status, err = rasql.BindColumn[store.UsersRow, string](users, users.StatusRef().Name(), ""); err != nil {
 		return rasql.Query[store.UsersRow]{}, noRowsUsersColumns{}, err
 	}
-	if cols.FirstName, err = rasql.BindColumn[store.UsersRow, string](source, users.FirstNameRef().Name(), ""); err != nil {
+	if cols.FirstName, err = rasql.BindColumn[store.UsersRow, string](users, users.FirstNameRef().Name(), ""); err != nil {
 		return rasql.Query[store.UsersRow]{}, noRowsUsersColumns{}, err
 	}
-	if cols.LastName, err = rasql.BindColumn[store.UsersRow, string](source, users.LastNameRef().Name(), ""); err != nil {
+	if cols.LastName, err = rasql.BindColumn[store.UsersRow, string](users, users.LastNameRef().Name(), ""); err != nil {
 		return rasql.Query[store.UsersRow]{}, noRowsUsersColumns{}, err
 	}
 	result, err := rasql.NewResultSchema(
@@ -86,7 +83,7 @@ func noRowsUsersQuery() (rasql.Query[store.UsersRow], noRowsUsersColumns, error)
 	if err != nil {
 		return rasql.Query[store.UsersRow]{}, noRowsUsersColumns{}, err
 	}
-	return rasql.Select(source.Source(), projection), cols, nil
+	return rasql.Select(users, projection), cols, nil
 }
 
 func Example_rasql_no_rows() {

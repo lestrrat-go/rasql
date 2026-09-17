@@ -85,11 +85,7 @@ func Example_rasql_subquery() {
 		}
 	}
 
-	usersSource, err := rasql.SourceOf(users, "")
-	if err != nil {
-		fmt.Printf("failed to bind users source: %s\n", err)
-		return
-	}
+	usersSource := users
 	usersID, err := rasql.BindTypedColumn(users.ID())
 	if err != nil {
 		fmt.Printf("failed to bind users id column: %s\n", err)
@@ -100,11 +96,7 @@ func Example_rasql_subquery() {
 		fmt.Printf("failed to bind users email column: %s\n", err)
 		return
 	}
-	ordersSource, err := rasql.SourceOf(orders, "")
-	if err != nil {
-		fmt.Printf("failed to bind orders source: %s\n", err)
-		return
-	}
+	ordersSource := orders
 	ordersUserID, err := rasql.BindTypedColumn(orders.UserID())
 	if err != nil {
 		fmt.Printf("failed to bind orders user_id column: %s\n", err)
@@ -137,11 +129,7 @@ func Example_rasql_subquery() {
 		fmt.Printf("failed to alias orders: %s\n", err)
 		return
 	}
-	allOrdersSource, err := rasql.SourceOf(allOrders, "")
-	if err != nil {
-		fmt.Printf("failed to bind all_orders source: %s\n", err)
-		return
-	}
+	allOrdersSource := allOrders
 	allOrdersTotal, err := rasql.BindTypedColumn(allOrders.Total())
 	if err != nil {
 		fmt.Printf("failed to bind all_orders total column: %s\n", err)
@@ -156,7 +144,7 @@ func Example_rasql_subquery() {
 		fmt.Printf("failed to build average projection: %s\n", err)
 		return
 	}
-	averageQuery := rasql.Select(allOrdersSource.Source(), averageProjection)
+	averageQuery := rasql.Select(allOrdersSource, averageProjection)
 	averageSubquery, err := rasql.SubqueryExpr(averageQuery)
 	if err != nil {
 		fmt.Printf("failed to build the average subquery expression: %s\n", err)
@@ -177,7 +165,7 @@ func Example_rasql_subquery() {
 		fmt.Printf("failed to build domain-users projection: %s\n", err)
 		return
 	}
-	domainUsers := rasql.Select(usersSource.Source(), domainUsersProjection).
+	domainUsers := rasql.Select(usersSource, domainUsersProjection).
 		Where(rasql.LikeValue(usersEmail.Expr(), "%@example.com"))
 	inDomain, err := rasql.InQuery(ordersUserID.Expr(), domainUsers)
 	if err != nil {
@@ -206,7 +194,7 @@ func Example_rasql_subquery() {
 	// argument per candidate id, and SubqueryExpr compares the total against
 	// the average of every order, both nested inside the one statement that
 	// runs below.
-	selected := rasql.Select(ordersSource.Source(), projection).
+	selected := rasql.Select(ordersSource, projection).
 		Where(rasql.And(inDomain, rasql.GreaterOrEqualExpr(ordersTotalAsFloat.Expr(), averageExpr))).
 		OrderBy(rasql.AscExpr(ordersTotal.Expr()))
 

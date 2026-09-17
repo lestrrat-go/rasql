@@ -44,7 +44,7 @@ func benchmarkConformanceDatabase(b *testing.B) (*sql.DB, rasql.Executor, rasql.
 	if err != nil {
 		b.Fatal(err)
 	}
-	source, err := rasql.SourceOf(table, "m")
+	source, err := table.As("m")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func benchmarkConformanceDatabase(b *testing.B) (*sql.DB, rasql.Executor, rasql.
 	if err != nil {
 		b.Fatal(err)
 	}
-	query := rasql.Select(source.Source(), projection).Where(rasql.EqualValue(id.Expr(), int64(1))).OrderBy(rasql.AscExpr(id.Expr()))
+	query := rasql.Select(source, projection).Where(rasql.EqualValue(id.Expr(), int64(1))).OrderBy(rasql.AscExpr(id.Expr()))
 	return database, executor, query
 }
 
@@ -180,7 +180,7 @@ func benchmarkProjectQuery() rasql.Query[benchmarkProject] {
 	if err != nil {
 		panic(err)
 	}
-	source, err := rasql.SourceOf(table, "p")
+	source, err := table.As("p")
 	if err != nil {
 		panic(err)
 	}
@@ -200,5 +200,5 @@ func benchmarkProjectQuery() rasql.Query[benchmarkProject] {
 	if err != nil {
 		panic(err)
 	}
-	return rasql.Select(source.Source(), projection).Where(rasql.EqualValue(id.Expr(), int64(1))).OrderBy(rasql.AscExpr(id.Expr()))
+	return rasql.Select(source, projection).Where(rasql.EqualValue(id.Expr(), int64(1))).OrderBy(rasql.AscExpr(id.Expr()))
 }

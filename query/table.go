@@ -287,6 +287,31 @@ func (t TableRef) Definition() schema.TableDef {
 	return t.def().Clone()
 }
 
+// Validate reports ErrNilTable for the zero TableRef and nil for every other
+// value. NewTableRef and MustTableRef already validate the descriptor they are
+// given, and TableRefFrom trusts the one it is given, so carrying a table at
+// all is the only thing left to check.
+//
+// It is what a caller holding a TableRef it did not construct itself checks,
+// the same way ColumnRef.Validate reports the column it could not find.
+func (t TableRef) Validate() error {
+	return t.validate()
+}
+
+// Supports reports whether the descriptor behind t permits operation. The zero
+// TableRef permits nothing, because it describes no object to permit it on.
+//
+// It reads the descriptor in place rather than through Definition, so a caller
+// testing one operation per statement does not copy the whole descriptor to do
+// it. Read schema.TableDef.Supports for how an unset Operations is expanded
+// from the object's Kind.
+func (t TableRef) Supports(operation schema.Operation) bool {
+	if t.descriptor == nil {
+		return false
+	}
+	return t.descriptor.definition.Supports(operation)
+}
+
 // Column returns a reference to a named column in t.
 //
 // It reports no error. Every statement validates the columns it carries against

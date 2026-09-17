@@ -50,8 +50,7 @@ func correlatedUserColumns(t *testing.T, users rasql.Table[correlatedUser]) (
 ) {
 	t.Helper()
 
-	relation, err := rasql.SourceOf(users, "")
-	require.NoError(t, err)
+	relation := users
 	id, err := rasql.BindColumn[correlatedUser, int64](relation, "id", "")
 	require.NoError(t, err)
 	email, err := rasql.BindColumn[correlatedUser, string](relation, "email", "")
@@ -66,8 +65,7 @@ func correlatedOrderColumns(t *testing.T, orders rasql.Table[correlatedOrder]) (
 ) {
 	t.Helper()
 
-	relation, err := rasql.SourceOf(orders, "")
-	require.NoError(t, err)
+	relation := orders
 	id, err := rasql.BindColumn[correlatedOrder, int64](relation, "id", "")
 	require.NoError(t, err)
 	userID, err := rasql.BindColumn[correlatedOrder, int64](relation, "user_id", "")
@@ -105,7 +103,7 @@ func correlatedAllUsers(
 ) []correlatedUser {
 	t.Helper()
 
-	rows, err := rasql.All(t.Context(), executor, rasql.Select(relation.Source(), projection).OrderBy(rasql.AscExpr(id.Expr())))
+	rows, err := rasql.All(t.Context(), executor, rasql.Select(relation, projection).OrderBy(rasql.AscExpr(id.Expr())))
 	require.NoError(t, err)
 	return rows
 }
@@ -181,14 +179,14 @@ func testCorrelatedSubquery(t *testing.T, engine correlatedEngine) {
 	// portable choice, for the reason the bound-value subtest below measures.
 	ordersIDProjection, err := rasql.Scalar("id", ordersID.Expr(), schema.IntegerType{}, "")
 	require.NoError(t, err)
-	hasOrder := rasql.Select(ordersRelation.Source(), ordersIDProjection).
-		Correlated(usersRelation.Source()).
+	hasOrder := rasql.Select(ordersRelation, ordersIDProjection).
+		Correlated(usersRelation).
 		Where(rasql.EqualExpr(ordersUserID.Expr(), usersID.Expr()))
 
 	t.Run("exists keeps the users that have an order", func(t *testing.T) {
 		exists, err := rasql.ExistsQuery(hasOrder)
 		require.NoError(t, err)
-		got, err := rasql.All(t.Context(), db, rasql.Select(usersRelation.Source(), userProjection).
+		got, err := rasql.All(t.Context(), db, rasql.Select(usersRelation, userProjection).
 			Where(exists).
 			OrderBy(rasql.AscExpr(usersID.Expr())))
 		require.NoError(t, err)
@@ -201,7 +199,7 @@ func testCorrelatedSubquery(t *testing.T, engine correlatedEngine) {
 	t.Run("not exists keeps the user that has none", func(t *testing.T) {
 		notExists, err := rasql.NotExistsQuery(hasOrder)
 		require.NoError(t, err)
-		got, err := rasql.All(t.Context(), db, rasql.Select(usersRelation.Source(), userProjection).
+		got, err := rasql.All(t.Context(), db, rasql.Select(usersRelation, userProjection).
 			Where(notExists).
 			OrderBy(rasql.AscExpr(usersID.Expr())))
 		require.NoError(t, err)
@@ -235,13 +233,13 @@ func testCorrelatedSubquery(t *testing.T, engine correlatedEngine) {
 		// rather than refusing a projected parameter outright.
 		boundBody, err := rasql.Scalar("value", rasql.Value(1), schema.IntegerType{}, "")
 		require.NoError(t, err)
-		bound := rasql.Select(ordersRelation.Source(), boundBody).
-			Correlated(usersRelation.Source()).
+		bound := rasql.Select(ordersRelation, boundBody).
+			Correlated(usersRelation).
 			Where(rasql.EqualExpr(ordersUserID.Expr(), usersID.Expr()))
 		boundExists, err := rasql.ExistsQuery(bound)
 		require.NoError(t, err)
 
-		got, err := rasql.All(t.Context(), db, rasql.Select(usersRelation.Source(), userProjection).
+		got, err := rasql.All(t.Context(), db, rasql.Select(usersRelation, userProjection).
 			Where(boundExists).
 			OrderBy(rasql.AscExpr(usersID.Expr())))
 		if engine.refusesBoundIntegerBody {
@@ -257,13 +255,13 @@ func testCorrelatedSubquery(t *testing.T, engine correlatedEngine) {
 
 		textBody, err := rasql.Scalar("value", rasql.Value("1"), schema.TextType{}, "")
 		require.NoError(t, err)
-		text := rasql.Select(ordersRelation.Source(), textBody).
-			Correlated(usersRelation.Source()).
+		text := rasql.Select(ordersRelation, textBody).
+			Correlated(usersRelation).
 			Where(rasql.EqualExpr(ordersUserID.Expr(), usersID.Expr()))
 		textExists, err := rasql.ExistsQuery(text)
 		require.NoError(t, err)
 
-		got, err = rasql.All(t.Context(), db, rasql.Select(usersRelation.Source(), userProjection).
+		got, err = rasql.All(t.Context(), db, rasql.Select(usersRelation, userProjection).
 			Where(textExists).
 			OrderBy(rasql.AscExpr(usersID.Expr())))
 		require.NoError(t, err,
@@ -283,7 +281,7 @@ func testCorrelatedSubquery(t *testing.T, engine correlatedEngine) {
 		require.NoError(t, err)
 		limitedExists, err := rasql.ExistsQuery(limited)
 		require.NoError(t, err)
-		got, err := rasql.All(t.Context(), db, rasql.Select(usersRelation.Source(), userProjection).
+		got, err := rasql.All(t.Context(), db, rasql.Select(usersRelation, userProjection).
 			Where(limitedExists).
 			OrderBy(rasql.AscExpr(usersID.Expr())))
 		require.NoError(t, err)

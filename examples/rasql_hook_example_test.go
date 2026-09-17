@@ -77,7 +77,7 @@ func Example_rasql_hook() {
 	}
 
 	// A delete carrying a predicate renders different SQL, so the hook lets it through.
-	filtered, err := rasql.NewDeletePlan(users, query.EqualValue(users.ID(), int64(1)))
+	filtered, err := rasql.NewDeletePlan(users.Table, query.EqualValue(users.ID(), int64(1)))
 	if err != nil {
 		fmt.Printf("failed to build delete: %s\n", err)
 		return

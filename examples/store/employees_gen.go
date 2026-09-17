@@ -62,21 +62,21 @@ type EmployeesTable struct {
 
 // ID returns a reference to the "id" column.
 func (t EmployeesTable) ID() query.TypedColumn[EmployeesRow, int64] {
-	return query.TypedColumnOf[EmployeesRow, int64](rasql.ColumnOf(t.Table, "id"))
+	return query.TypedColumnOf[EmployeesRow, int64](t.Column("id"))
 }
-func (t EmployeesTable) IDRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "id") }
+func (t EmployeesTable) IDRef() rasql.ColumnRef { return t.Column("id") }
 
 // Name returns a reference to the "name" column.
 func (t EmployeesTable) Name() query.TypedColumn[EmployeesRow, string] {
-	return query.TypedColumnOf[EmployeesRow, string](rasql.ColumnOf(t.Table, "name"))
+	return query.TypedColumnOf[EmployeesRow, string](t.Column("name"))
 }
-func (t EmployeesTable) NameRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "name") }
+func (t EmployeesTable) NameRef() rasql.ColumnRef { return t.Column("name") }
 
 // ManagerID returns a reference to the "manager_id" column.
 func (t EmployeesTable) ManagerID() query.NullableColumn[EmployeesRow, *int64] {
-	return query.NullableColumnOf[EmployeesRow, *int64](rasql.ColumnOf(t.Table, "manager_id"))
+	return query.NullableColumnOf[EmployeesRow, *int64](t.Column("manager_id"))
 }
-func (t EmployeesTable) ManagerIDRef() rasql.ColumnRef { return rasql.ColumnOf(t.Table, "manager_id") }
+func (t EmployeesTable) ManagerIDRef() rasql.ColumnRef { return t.Column("manager_id") }
 
 // Employees returns the descriptor for the "employees" table.
 func Employees() EmployeesTable {
@@ -85,7 +85,7 @@ func Employees() EmployeesTable {
 
 // As returns the table under alias.
 func (t EmployeesTable) As(alias string) (EmployeesTable, error) {
-	aliased, err := rasql.As(t.Table, alias)
+	aliased, err := t.Table.As(alias)
 	if err != nil {
 		return EmployeesTable{}, err
 	}
@@ -119,7 +119,7 @@ func (p EmployeesCreate) ClearManagerID() EmployeesCreate {
 	return EmployeesCreate{fields: fields}
 }
 func (p EmployeesCreate) Plan() rasql.CreatePlan[EmployeesRow] {
-	plan, _ := rasql.NewCreatePlan[EmployeesRow](Employees(), p.fields...)
+	plan, _ := rasql.NewCreatePlan[EmployeesRow](Employees().Table, p.fields...)
 	return plan
 }
 
@@ -145,5 +145,5 @@ func (p EmployeesPatch) ClearManagerID() EmployeesPatch {
 	return EmployeesPatch{fields: fields}
 }
 func (p EmployeesPatch) Where(predicate query.Predicate) (rasql.PatchPlan[EmployeesRow], error) {
-	return rasql.NewPatchPlan[EmployeesRow](Employees(), predicate, p.fields...)
+	return rasql.NewPatchPlan[EmployeesRow](Employees().Table, predicate, p.fields...)
 }

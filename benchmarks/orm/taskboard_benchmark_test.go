@@ -124,18 +124,9 @@ type taskboardProjectsTable struct{ rasql.Table[taskboardProject] }
 type taskboardTasksTable struct{ rasql.Table[taskboardTask] }
 type taskboardMembersTable struct{ rasql.Table[taskboardMember] }
 
-func (t taskboardProjectsTable) Source(alias string) (rasql.TypedRelation[taskboardProject], error) {
-	return rasql.SourceOf(t.Table, alias)
-}
-func (t taskboardProjectsTable) Column(name string) query.ColumnRef { return t.Table.Column(name) }
-func (t taskboardTasksTable) Source(alias string) (rasql.TypedRelation[taskboardTask], error) {
-	return rasql.SourceOf(t.Table, alias)
-}
-func (t taskboardTasksTable) Column(name string) query.ColumnRef { return t.Table.Column(name) }
-func (t taskboardMembersTable) Source(alias string) (rasql.TypedRelation[taskboardMember], error) {
-	return rasql.SourceOf(t.Table, alias)
-}
-func (t taskboardMembersTable) Column(name string) query.ColumnRef { return t.Table.Column(name) }
+// Each wrapper holds a rasql.Table and declares no Source or Column method of
+// its own: both are promoted from the handle, and a wrapper is a
+// rasql.RowSource already, so a benchmark selects from it directly.
 
 var taskboardProjectTable = rasql.MustTableOf[taskboardProject](schema.TableDef{
 	Name: "projects", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{
@@ -181,7 +172,7 @@ type taskboardMemberColumns struct {
 	Name rasql.Column[taskboardMember, string]
 }
 
-func (taskboardProjectColumns) Bind(source rasql.TypedRelation[taskboardProject]) (taskboardProjectColumns, error) {
+func (taskboardProjectColumns) Bind(source rasql.RowSource[taskboardProject]) (taskboardProjectColumns, error) {
 	id, err := rasql.BindColumn[taskboardProject, int64](source, "id", "")
 	if err != nil {
 		return taskboardProjectColumns{}, err
@@ -189,7 +180,7 @@ func (taskboardProjectColumns) Bind(source rasql.TypedRelation[taskboardProject]
 	name, err := rasql.BindColumn[taskboardProject, string](source, "name", "")
 	return taskboardProjectColumns{ID: id, Name: name}, err
 }
-func (taskboardTaskColumns) Bind(source rasql.TypedRelation[taskboardTask]) (taskboardTaskColumns, error) {
+func (taskboardTaskColumns) Bind(source rasql.RowSource[taskboardTask]) (taskboardTaskColumns, error) {
 	id, err := rasql.BindColumn[taskboardTask, int64](source, "id", "")
 	if err != nil {
 		return taskboardTaskColumns{}, err
@@ -217,7 +208,7 @@ func (taskboardTaskColumns) Bind(source rasql.TypedRelation[taskboardTask]) (tas
 	dueOn, err := rasql.BindNullColumn[taskboardTask, time.Time](source, "due_on", "")
 	return taskboardTaskColumns{ID: id, ProjectID: projectID, AssigneeID: assigneeID, Title: title, IsOpen: isOpen, DueOn: dueOn, CreatedAt: createdAt}, err
 }
-func (taskboardMemberColumns) Bind(source rasql.TypedRelation[taskboardMember]) (taskboardMemberColumns, error) {
+func (taskboardMemberColumns) Bind(source rasql.RowSource[taskboardMember]) (taskboardMemberColumns, error) {
 	id, err := rasql.BindColumn[taskboardMember, int64](source, "id", "")
 	if err != nil {
 		return taskboardMemberColumns{}, err
@@ -300,7 +291,7 @@ func taskboardMemberProjection(value taskboardMemberColumns) (rasql.Projection[t
 }
 
 func taskboardTaskAssigneeEdge(
-	parent rasql.TypedRelation[taskboardTask], child rasql.TypedRelation[taskboardMember],
+	parent rasql.RowSource[taskboardTask], child rasql.RowSource[taskboardMember],
 	plan rasql.GraphPlan[taskboardMember, taskboardMember], options rasql.EdgeOptions,
 	attach func(*taskboardGraphTask, rasql.LoadedOne[taskboardMember]),
 ) (rasql.GraphEdge[taskboardTask, taskboardGraphTask], error) {
@@ -323,7 +314,7 @@ func taskboardTaskAssigneeEdge(
 	return rasql.HasOne("Assignee", parentKey, childKey, plan, options, attach)
 }
 func taskboardProjectTasksEdge(
-	parent rasql.TypedRelation[taskboardProject], child rasql.TypedRelation[taskboardTask],
+	parent rasql.RowSource[taskboardProject], child rasql.RowSource[taskboardTask],
 	plan rasql.GraphPlan[taskboardTask, taskboardGraphTask], options rasql.EdgeOptions,
 	attach func(*taskboardGraphProject, rasql.LoadedMany[taskboardGraphTask]),
 ) (rasql.GraphEdge[taskboardProject, taskboardGraphProject], error) {
@@ -345,7 +336,7 @@ func taskboardProjectTasksEdge(
 	}
 	return rasql.HasMany("Tasks", parentKey, childKey, plan, options, attach)
 }
-func taskboardProjectPageKey(source rasql.TypedRelation[taskboardProject]) (rasql.PageKey[taskboardProject], error) {
+func taskboardProjectPageKey(source rasql.RowSource[taskboardProject]) (rasql.PageKey[taskboardProject], error) {
 	value, err := taskboardProjectColumns{}.Bind(source)
 	if err != nil {
 		return nil, err
@@ -388,7 +379,7 @@ func taskboardObserved(t testing.TB, database *taskboardDatabase, recorder *conf
 }
 
 func taskboardProjectQuery() rasql.Query[taskboardProject] {
-	source, err := taskboardProjects().Source("p")
+	source, err := taskboardProjects().As("p")
 	if err != nil {
 		panic(err)
 	}
@@ -400,13 +391,13 @@ func taskboardProjectQuery() rasql.Query[taskboardProject] {
 	if err != nil {
 		panic(err)
 	}
-	return rasql.Select(source.Source(), projection).
+	return rasql.Select(source, projection).
 		Where(rasql.EqualValue(expressions.ID.Expr(), int64(1))).
 		OrderBy(rasql.AscExpr(expressions.ID.Expr()))
 }
 
 func taskboardTaskReadQuery(idValue int64) rasql.Query[taskboardTask] {
-	source, err := taskboardTasks().Source("t")
+	source, err := taskboardTasks().As("t")
 	if err != nil {
 		panic(err)
 	}
@@ -418,7 +409,7 @@ func taskboardTaskReadQuery(idValue int64) rasql.Query[taskboardTask] {
 	if err != nil {
 		panic(err)
 	}
-	return rasql.Select(source.Source(), projection).
+	return rasql.Select(source, projection).
 		Where(rasql.EqualValue(columns.ID.Expr(), idValue)).
 		OrderBy(rasql.AscExpr(columns.ID.Expr()))
 }
@@ -443,15 +434,15 @@ func (taskboardReportDecoder) DecodeRow(source rasql.ScanSource, row *taskboardR
 }
 
 func taskboardReportQuery() rasql.Query[taskboardReportRow] {
-	projectSource, err := taskboardProjects().Source("p")
+	projectSource, err := taskboardProjects().As("p")
 	if err != nil {
 		panic(err)
 	}
-	taskSource, err := taskboardTasks().Source("t")
+	taskSource, err := taskboardTasks().As("t")
 	if err != nil {
 		panic(err)
 	}
-	memberSource, err := taskboardMembers().Source("m")
+	memberSource, err := taskboardMembers().As("m")
 	if err != nil {
 		panic(err)
 	}
@@ -479,23 +470,23 @@ func taskboardReportQuery() rasql.Query[taskboardReportRow] {
 	if err != nil {
 		panic(err)
 	}
-	return rasql.Select(projectSource.Source(), projection).
-		Join(taskSource.Source(), rasql.EqualExpr(projects.ID.Expr(), tasks.ProjectID.Expr())).
-		LeftJoin(memberSource.Source(), rasql.EqualOptional(members.ID.Expr(), tasks.AssigneeID.NullExpr())).
+	return rasql.Select(projectSource, projection).
+		Join(taskSource, rasql.EqualExpr(projects.ID.Expr(), tasks.ProjectID.Expr())).
+		LeftJoin(memberSource, rasql.EqualOptional(members.ID.Expr(), tasks.AssigneeID.NullExpr())).
 		Where(rasql.EqualValue(projects.ID.Expr(), int64(2))).
 		OrderBy(rasql.AscExpr(tasks.ID.Expr()))
 }
 
 func taskboardGraphPlan() (rasql.GraphPlan[taskboardProject, taskboardGraphProject], rasql.PageSpec[taskboardProject]) {
-	projectSource, err := taskboardProjects().Source("p")
+	projectSource, err := taskboardProjects().As("p")
 	if err != nil {
 		panic(err)
 	}
-	taskSource, err := taskboardTasks().Source("t")
+	taskSource, err := taskboardTasks().As("t")
 	if err != nil {
 		panic(err)
 	}
-	memberSource, err := taskboardMembers().Source("m")
+	memberSource, err := taskboardMembers().As("m")
 	if err != nil {
 		panic(err)
 	}
@@ -523,11 +514,11 @@ func taskboardGraphPlan() (rasql.GraphPlan[taskboardProject, taskboardGraphProje
 	if err != nil {
 		panic(err)
 	}
-	projectQuery := rasql.Select(projectSource.Source(), projectProjection).OrderBy(rasql.AscExpr(projectExpressions.ID.Expr()))
-	taskQuery := rasql.Select(taskSource.Source(), taskProjection).
+	projectQuery := rasql.Select(projectSource, projectProjection).OrderBy(rasql.AscExpr(projectExpressions.ID.Expr()))
+	taskQuery := rasql.Select(taskSource, taskProjection).
 		Where(rasql.EqualValue(taskExpressions.IsOpen.Expr(), true)).
 		OrderBy(rasql.AscExpr(taskExpressions.ID.Expr()))
-	memberQuery := rasql.Select(memberSource.Source(), memberProjection).OrderBy(rasql.AscExpr(memberExpressions.ID.Expr()))
+	memberQuery := rasql.Select(memberSource, memberProjection).OrderBy(rasql.AscExpr(memberExpressions.ID.Expr()))
 	memberPlan, err := rasql.NewGraphPlan(memberQuery, func(row taskboardMember) taskboardMember { return row })
 	if err != nil {
 		panic(err)
@@ -823,10 +814,7 @@ var errTaskboardRollback = errors.New("taskboard benchmark rollback")
 func taskboardCanonicalMutation(ctx context.Context, executor rasql.Executor) (taskboardMutationResult, error) {
 	var result taskboardMutationResult
 	err := rasql.Within(ctx, executor, nil, func(ctx context.Context, tx rasql.Executor) error {
-		source, err := taskboardTasks().Source("")
-		if err != nil {
-			return err
-		}
+		source := taskboardTasks()
 		columns, err := taskboardTaskColumns{}.Bind(source)
 		if err != nil {
 			return err
@@ -923,10 +911,7 @@ func taskboardSQLMutation(ctx context.Context, database *sql.DB) (taskboardMutat
 }
 
 func taskboardBatchPlans() []rasql.MutationPlan {
-	source, err := taskboardMembers().Source("")
-	if err != nil {
-		panic(err)
-	}
+	source := taskboardMembers()
 	columns, err := taskboardMemberColumns{}.Bind(source)
 	if err != nil {
 		panic(err)

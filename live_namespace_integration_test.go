@@ -93,7 +93,7 @@ func requireMovedTableReachesNamespace(t *testing.T, database *sql.DB, d dialect
 	})
 	require.NoError(t, err, "build the typed table the store would have generated")
 
-	moved, err := rasql.InSchema(home, namespace)
+	moved, err := home.InSchema(namespace)
 	require.NoError(t, err, "move the table into the second namespace")
 
 	// Both tables are created through rasql's own DDL, so the qualified

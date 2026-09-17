@@ -67,12 +67,7 @@ func Example_rasql_group_by() {
 		}
 	}
 
-	source, err := rasql.SourceOf(tasks, "")
-	if err != nil {
-		fmt.Printf("failed to bind tasks source: %s\n", err)
-		return
-	}
-	status, err := rasql.BindColumn[store.TasksRow, string](source, tasks.StatusRef().Name(), "")
+	status, err := rasql.BindColumn[store.TasksRow, string](tasks, tasks.StatusRef().Name(), "")
 	if err != nil {
 		fmt.Printf("failed to bind status column: %s\n", err)
 		return
@@ -98,7 +93,7 @@ func Example_rasql_group_by() {
 	// column beside COUNT(*) is refused without one. Having filters groups
 	// after aggregation, so it may call an aggregate a WHERE clause could not.
 	// SQL: SELECT tasks.status, COUNT(*) AS total FROM tasks GROUP BY tasks.status HAVING COUNT(*) > ? ORDER BY tasks.status (argument: 1)
-	q := rasql.Select(source.Source(), projection).
+	q := rasql.Select(tasks, projection).
 		GroupBy(rasql.Group(status.Expr())).
 		Having(rasql.GreaterValue(rasql.CountRows(), int64(1))).
 		OrderBy(rasql.AscExpr(status.Expr()))

@@ -127,7 +127,7 @@ func TestGraphManyThrough(t *testing.T) {
 		executor, counter, parentQuery, parentKey, junctionParent, junctionChild, childKey, junction, childPlan := mtFixture(t)
 		baseChild := rasql.Q1GraphChildQuery[mtChildRow, mtChildGraph, mtChildRow, mtChildGraph](childPlan)
 		childSource := rasql.Q1PlanSources(baseChild.Plan())[0]
-		active, err := rasql.BindColumn[mtChildRow, int64](rasql.Q1TypedRelation[mtChildRow](childSource), "active", "")
+		active, err := rasql.BindColumn[mtChildRow, int64](rasql.Q1RowSource[mtChildRow](childSource), "active", "")
 		require.NoError(t, err)
 		inactiveQuery := baseChild.Where(rasql.EqualValue(active.Expr(), int64(0)))
 		inactivePlan, err := rasql.NewGraphPlan(inactiveQuery, func(row mtChildRow) mtChildGraph { return mtChildGraph{ID: row.ID} })
@@ -297,7 +297,7 @@ func (r *mtCountingRows) Next() bool {
 	return true
 }
 
-func mtFixture(t *testing.T) (rasql.Executor, *mtCountingExecutor, rasql.Query[mtParentRow], rasql.GraphKey[mtParentRow], rasql.GraphKey[mtJunctionRow], rasql.GraphKey[mtJunctionRow], rasql.GraphKey[mtChildRow], rasql.Source, rasql.GraphPlan[mtChildRow, mtChildGraph]) {
+func mtFixture(t *testing.T) (rasql.Executor, *mtCountingExecutor, rasql.Query[mtParentRow], rasql.GraphKey[mtParentRow], rasql.GraphKey[mtJunctionRow], rasql.GraphKey[mtJunctionRow], rasql.GraphKey[mtChildRow], rasql.Table[mtJunctionRow], rasql.GraphPlan[mtChildRow, mtChildGraph]) {
 	t.Helper()
 	database, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
@@ -313,14 +313,14 @@ func mtFixture(t *testing.T) (rasql.Executor, *mtCountingExecutor, rasql.Query[m
 	// WithEngineProfile re-attaches the compiler the decorator does not carry.
 	executor, err := rasql.WithEngineProfile(counter, rasql.SQLite335())
 	require.NoError(t, err)
-	parents := rasql.MustReadTableOf[mtParentRow](schema.TableDef{Name: "mt_parents", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}})
-	children := rasql.MustReadTableOf[mtChildRow](schema.TableDef{Name: "mt_children", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "active", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}})
-	junctions := rasql.MustReadTableOf[mtJunctionRow](schema.TableDef{Name: "mt_junctions", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "parent", Type: schema.IntegerType{}}, {Name: "target", Type: schema.IntegerType{}}, {Name: "rank", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}})
-	parentSource, err := rasql.SourceOf(parents, "p")
+	parents := rasql.MustTableOf[mtParentRow](schema.TableDef{Name: "mt_parents", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}})
+	children := rasql.MustTableOf[mtChildRow](schema.TableDef{Name: "mt_children", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "active", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}})
+	junctions := rasql.MustTableOf[mtJunctionRow](schema.TableDef{Name: "mt_junctions", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "parent", Type: schema.IntegerType{}}, {Name: "target", Type: schema.IntegerType{}}, {Name: "rank", Type: schema.IntegerType{}}}, PrimaryKey: []string{"id"}})
+	parentSource, err := parents.As("p")
 	require.NoError(t, err)
-	childSource, err := rasql.SourceOf(children, "c")
+	childSource, err := children.As("c")
 	require.NoError(t, err)
-	junctionSource, err := rasql.SourceOf(junctions, "j")
+	junctionSource, err := junctions.As("j")
 	require.NoError(t, err)
 	pid, err := rasql.BindColumn[mtParentRow, int64](parentSource, "id", "")
 	require.NoError(t, err)
@@ -344,8 +344,8 @@ func mtFixture(t *testing.T) (rasql.Executor, *mtCountingExecutor, rasql.Query[m
 	require.NoError(t, err)
 	cp, err := rasql.NewProjection([]rasql.ProjectionItem{rasql.Item("id", cid.Expr(), schema.IntegerType{}, ""), rasql.Item("active", active.Expr(), schema.IntegerType{}, "")}, mtChildDecoder{schema: cs})
 	require.NoError(t, err)
-	parentQuery := rasql.Select(parentSource.Source(), pp)
-	childQuery := rasql.Select(childSource.Source(), cp).Where(rasql.EqualValue(active.Expr(), int64(1)))
+	parentQuery := rasql.Select(parentSource, pp)
+	childQuery := rasql.Select(childSource, cp).Where(rasql.EqualValue(active.Expr(), int64(1)))
 	childPlan, err := rasql.NewGraphPlan(childQuery, func(row mtChildRow) mtChildGraph { return mtChildGraph{ID: row.ID} })
 	require.NoError(t, err)
 	parentKey, err := rasql.NewGraphKey(rasql.KeyPart(pid, func(row mtParentRow) int64 { return row.ID }))
@@ -358,13 +358,12 @@ func mtFixture(t *testing.T) (rasql.Executor, *mtCountingExecutor, rasql.Query[m
 	require.NoError(t, err)
 	_ = jid
 	_ = jrank
-	return executor, counter, parentQuery, parentKey, junctionParent, junctionChild, childKey, junctionSource.Source(), childPlan
+	return executor, counter, parentQuery, parentKey, junctionParent, junctionChild, childKey, junctionSource, childPlan
 }
 
-func mtJunctionOrder(source rasql.Source) []rasql.OrderTerm {
-	relation := rasql.Q1TypedRelation[mtJunctionRow](source)
-	rank, _ := rasql.BindColumn[mtJunctionRow, int64](relation, "rank", "")
-	id, _ := rasql.BindColumn[mtJunctionRow, int64](relation, "id", "")
+func mtJunctionOrder(source rasql.Table[mtJunctionRow]) []rasql.OrderTerm {
+	rank, _ := rasql.BindColumn[mtJunctionRow, int64](source, "rank", "")
+	id, _ := rasql.BindColumn[mtJunctionRow, int64](source, "id", "")
 	return []rasql.OrderTerm{rasql.AscExpr(rank.Expr()), rasql.AscExpr(id.Expr())}
 }
 
@@ -424,9 +423,9 @@ type graphWidthFixture struct {
 	// decorator wrapped so it carries a compiler.
 	counter                                *graphWidthExecutor
 	executor                               rasql.Executor
-	parents                                rasql.Source
-	children                               rasql.Source
-	junction                               rasql.Source
+	parents                                rasql.Table[graphWidthParentRow]
+	children                               rasql.Table[graphWidthChildRow]
+	junction                               rasql.Table[graphWidthJunctionRow]
 	parentQuery                            rasql.Query[graphWidthParentRow]
 	childQuery                             rasql.Query[graphWidthChildRow]
 	parentID, parentTenant                 rasql.Column[graphWidthParentRow, int64]
@@ -470,27 +469,30 @@ CREATE TABLE r4_width_junctions (parent_id INTEGER NOT NULL, parent_tenant INTEG
 	counter := &graphWidthExecutor{Executor: base}
 	executor, err := rasql.WithEngineProfile(counter, rasql.SQLite335())
 	require.NoError(t, err)
-	parents, err := rasql.SourceOf(rasql.MustReadTableOf[graphWidthParentRow](schema.TableDef{
+	parents, err := rasql.MustTableOf[graphWidthParentRow](schema.TableDef{
 		Name: "r4_width_parents", PrimaryKey: []string{"id"},
 		Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}}},
-	}), "wp")
+	}).As("wp")
+
 	require.NoError(t, err)
-	children, err := rasql.SourceOf(rasql.MustReadTableOf[graphWidthChildRow](schema.TableDef{
+	children, err := rasql.MustTableOf[graphWidthChildRow](schema.TableDef{
 		Name: "r4_width_children", PrimaryKey: []string{"id"},
 		Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "tenant", Type: schema.IntegerType{}}},
-	}), "wc")
+	}).As("wc")
+
 	require.NoError(t, err)
-	junction, err := rasql.SourceOf(rasql.MustReadTableOf[graphWidthJunctionRow](schema.TableDef{
+	junction, err := rasql.MustTableOf[graphWidthJunctionRow](schema.TableDef{
 		Name: "r4_width_junctions", Columns: []schema.ColumnDef{
 			{Name: "parent_id", Type: schema.IntegerType{}}, {Name: "parent_tenant", Type: schema.IntegerType{}},
 			{Name: "child_id", Type: schema.IntegerType{}}, {Name: "child_tenant", Type: schema.IntegerType{}},
 			{Name: "kind", Type: schema.IntegerType{}},
 		},
-	}), "wj")
+	}).As("wj")
+
 	require.NoError(t, err)
-	parentRelation := rasql.Q1TypedRelation[graphWidthParentRow](parents.Source())
-	childRelation := rasql.Q1TypedRelation[graphWidthChildRow](children.Source())
-	junctionRelation := rasql.Q1TypedRelation[graphWidthJunctionRow](junction.Source())
+	parentRelation := parents
+	childRelation := children
+	junctionRelation := junction
 	parentID, err := rasql.BindColumn[graphWidthParentRow, int64](parentRelation, "id", "")
 	require.NoError(t, err)
 	parentTenant, err := rasql.BindColumn[graphWidthParentRow, int64](parentRelation, "tenant", "")
@@ -518,9 +520,9 @@ CREATE TABLE r4_width_junctions (parent_id INTEGER NOT NULL, parent_tenant INTEG
 	childProjection, err := rasql.NewProjection([]rasql.ProjectionItem{rasql.Item("id", childID.Expr(), schema.IntegerType{}, ""), rasql.Item("tenant", childTenant.Expr(), schema.IntegerType{}, "")}, graphWidthChildDecoder{schema: childSchema})
 	require.NoError(t, err)
 	return graphWidthFixture{
-		counter: counter, executor: executor, parents: parents.Source(), children: children.Source(), junction: junction.Source(),
-		parentQuery: rasql.Select(parents.Source(), parentProjection).OrderBy(rasql.AscExpr(parentID.Expr())),
-		childQuery:  rasql.Select(children.Source(), childProjection).OrderBy(rasql.AscExpr(childID.Expr())),
+		counter: counter, executor: executor, parents: parents, children: children, junction: junction,
+		parentQuery: rasql.Select(parents, parentProjection).OrderBy(rasql.AscExpr(parentID.Expr())),
+		childQuery:  rasql.Select(children, childProjection).OrderBy(rasql.AscExpr(childID.Expr())),
 		parentID:    parentID, parentTenant: parentTenant, childID: childID, childTenant: childTenant,
 		junctionParentID: junctionParentID, junctionParentTenant: junctionParentTenant,
 		junctionChildID: junctionChildID, junctionChildTenant: junctionChildTenant, kind: kind,

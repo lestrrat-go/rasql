@@ -66,11 +66,6 @@ func Example_rasql_scalar_function() {
 		return
 	}
 
-	source, err := rasql.SourceOf(users, "")
-	if err != nil {
-		fmt.Printf("failed to bind users source: %s\n", err)
-		return
-	}
 	id, err := rasql.BindTypedColumn(users.ID())
 	if err != nil {
 		fmt.Printf("failed to bind id column: %s\n", err)
@@ -82,12 +77,12 @@ func Example_rasql_scalar_function() {
 	// always mirrors the row's own field type, string for email and *string
 	// for the nullable nickname. Binding both explicitly as string is what
 	// gives CoalesceExpr a matching pair; no accessor bridges that gap.
-	email, err := rasql.BindColumn[store.UsersRow, string](source, "email", "")
+	email, err := rasql.BindColumn[store.UsersRow, string](users, "email", "")
 	if err != nil {
 		fmt.Printf("failed to bind email column: %s\n", err)
 		return
 	}
-	nickname, err := rasql.BindNullColumn[store.UsersRow, string](source, "nickname", "")
+	nickname, err := rasql.BindNullColumn[store.UsersRow, string](users, "nickname", "")
 	if err != nil {
 		fmt.Printf("failed to bind nickname column: %s\n", err)
 		return
@@ -112,7 +107,7 @@ func Example_rasql_scalar_function() {
 		fmt.Printf("failed to build projection: %s\n", err)
 		return
 	}
-	base := rasql.Select(source.Source(), projection)
+	base := rasql.Select(users, projection)
 
 	// LowerExpr matches "Ada@Example.com" against the lower-case literal a
 	// caller would type, regardless of how the stored value was cased.

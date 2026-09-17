@@ -9,77 +9,35 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 )
 
-// ReadTable associates a queryable SQL object with the Go type of one of its rows.
-type ReadTable[T any] interface {
-	Ref() query.TableRef
-	Column(name string) ColumnRef
-	tableRow() T
-}
-
-// Table associates a writable SQL table with the Go type of one of its rows.
-// Only this package implements it; generated table types embed it.
+// Table names one catalog object and the Go type of one of its rows. A view is
+// a Table whose descriptor states Kind view, the same way schema.TableDef and
+// query.TableRef describe a view; which operations the object permits is a
+// run-time property of the descriptor, and every entry point that performs one
+// checks its own bit.
 //
-// Every function taking a Table[T] reports "table must not be nil" for the nil
-// interface. A wrapper whose embedded Table[T] is nil, such as the zero wrapper
-// a failed generated As returns beside its error, is not the nil interface:
-// passing that wrapper to one of those functions dereferences the nil embedded
-// field and panics, and the panic names the caller that built it.
-type Table[T any] interface {
-	ReadTable[T]
-	writableTable()
+// Nothing outside this package can build a Table that carries a table: the
+// descriptor lives in an unexported field, and TableOf, MustTableOf and
+// TableFrom are the only ways to fill it.
+//
+// The zero Table carries no descriptor. Every method and every entry point
+// taking one reports an error wrapping query.ErrNilTable for it, so a generated
+// wrapper holding a zero Table -- the wrapper a failed generated As returns
+// beside its error -- reports that error rather than panicking.
+type Table[T any] struct {
+	ref query.TableRef
 }
 
-// typedTable is the only implementation of Table.
-type typedTable[T any] struct {
-	source query.TableRef
-}
-
-type readTable[T any] struct {
-	source query.TableRef
-}
-
-func (readTable[T]) tableRow() T                    { var zero T; return zero }
-func (t readTable[T]) Ref() query.TableRef          { return t.source }
-func (t readTable[T]) Column(name string) ColumnRef { return t.source.Column(name) }
-func (typedTable[T]) writableTable()                {}
-
-// ReadTableOf creates a queryable typed object from a validated schema definition.
-func ReadTableOf[T any](definition schema.TableDef) (ReadTable[T], error) {
-	source, err := query.NewTableRef(definition)
-	if err != nil {
-		return nil, fmt.Errorf("rasql: table definition: %w", err)
-	}
-	return readTable[T]{source: source}, nil
-}
-
-// MustReadTableOf creates a queryable typed object or panics when definition is invalid.
-func MustReadTableOf[T any](definition schema.TableDef) ReadTable[T] {
-	table, err := ReadTableOf[T](definition)
-	if err != nil {
-		panic(err)
-	}
-	return table
-}
-
-// TableOf creates a typed table from a validated schema definition.
+// TableOf creates a typed table from a validated schema definition. It reports
+// an error when definition is not a valid descriptor, and checks nothing about
+// which operations the descriptor permits: NewCreatePlan, NewPatchPlan,
+// NewDeletePlan, CreateTable and Table.Source each check the one bit they need
+// when the statement is built.
 func TableOf[T any](definition schema.TableDef) (Table[T], error) {
-	if err := requireWritableDefinition(definition); err != nil {
-		return nil, err
-	}
 	source, err := query.NewTableRef(definition)
 	if err != nil {
-		return nil, fmt.Errorf("rasql: table definition: %w", err)
+		return Table[T]{}, fmt.Errorf("rasql: table definition: %w", err)
 	}
-	return typedTable[T]{source: source}, nil
-}
-
-func requireWritableDefinition(definition schema.TableDef) error {
-	for _, operation := range []schema.Operation{schema.OperationInsert, schema.OperationUpdate, schema.OperationDelete} {
-		if !definition.Supports(operation) {
-			return fmt.Errorf("rasql: object %q does not support operation %d", definition.QualifiedName(), operation)
-		}
-	}
-	return nil
+	return Table[T]{ref: source}, nil
 }
 
 // MustTableOf creates a typed table or panics when definition is invalid.
@@ -93,11 +51,10 @@ func MustTableOf[T any](definition schema.TableDef) Table[T] {
 }
 
 // TableFrom creates a typed table from a descriptor that is already known to be
-// valid, without validating or copying it. It is the entry point generated code
-// uses: rasqlgen validates every descriptor it emits, so validating again at
-// package initialization would re-derive a result that cannot change, and would
-// cost one identifier check per column plus a copy of every slice in the
-// descriptor.
+// valid, without validating or copying it. rasqlgen validates every descriptor
+// it emits, so a store that validated again at package initialization would
+// re-derive a result that cannot change, and would pay one identifier check per
+// column plus a copy of every slice in the descriptor to do it.
 //
 // It is not free. Every entry point indexes the descriptor's column names once,
 // which costs one map allocation and one pass over the columns per table, and
@@ -109,78 +66,53 @@ func MustTableOf[T any](definition schema.TableDef) Table[T] {
 // descriptor assembled at runtime; TableOf and MustTableOf are the validating
 // entry points.
 func TableFrom[T any](definition schema.TableDef) Table[T] {
-	return typedTable[T]{source: query.TableRefFrom(definition)}
+	return Table[T]{ref: query.TableRefFrom(definition)}
 }
 
-// ReadTableFrom creates a queryable typed object from a descriptor known to be valid.
-func ReadTableFrom[T any](definition schema.TableDef) ReadTable[T] {
-	return readTable[T]{source: query.TableRefFrom(definition)}
-}
+// Ref returns the dialect-neutral table behind t. It is the one exported way
+// out of a generated wrapper that holds its Table in an unexported field, and
+// it reaches query.TableRef's own descriptor accessors, CreateTable and the
+// dynamic builders.
+func (t Table[T]) Ref() query.TableRef { return t.ref }
 
-// As returns table under alias. Generated table types have their own As with
-// the same fixed body; this one serves dynamic code and the generated
-// implementation.
+// Column returns a reference to the named column of t.
 //
-// `table` must not be nil.
-func As[T any](table Table[T], alias string) (Table[T], error) {
-	if table == nil {
-		return nil, fmt.Errorf("rasql: table alias: %w", fmt.Errorf("table must not be nil"))
-	}
-	aliased, err := table.Ref().As(alias)
-	if err != nil {
-		return nil, fmt.Errorf("rasql: table alias: %w", err)
-	}
-	return typedTable[T]{source: aliased}, nil
-}
-
-// AsRead returns a queryable typed object under alias.
+// It reports no error, because a generated accessor returns a ColumnRef alone.
+// A zero Table gives back a ColumnRef over a source that carries no table, and
+// the statement carrying it reports query.ErrNilTable at Build rather than
+// failing at the accessor call; that is the path a generated accessor on a zero
+// wrapper takes.
 //
-// `table` must not be nil.
-func AsRead[T any](table ReadTable[T], alias string) (ReadTable[T], error) {
-	if table == nil {
-		return nil, fmt.Errorf("rasql: table alias: table must not be nil")
-	}
-	aliased, err := table.Ref().As(alias)
+// A name the table does not hold is a different case: the returned ColumnRef
+// keeps its source and its name, and the statement carrying it reports the name
+// it could not find.
+func (t Table[T]) Column(name string) ColumnRef { return t.ref.Column(name) }
+
+// As returns t under alias. Generated table types have their own As returning
+// the generated wrapper; this one is what that method calls and what dynamic
+// code calls directly.
+func (t Table[T]) As(alias string) (Table[T], error) {
+	aliased, err := t.ref.As(alias)
 	if err != nil {
-		return nil, fmt.Errorf("rasql: table alias: %w", err)
+		return Table[T]{}, fmt.Errorf("rasql: table alias: %w", err)
 	}
-	return readTable[T]{source: aliased}, nil
+	return Table[T]{ref: aliased}, nil
 }
 
-// InSchema returns table in namespace: a PostgreSQL schema, a MySQL database,
-// or a SQLite attached-database name. It is what a caller reaches for when the
+// InSchema returns t in namespace: a PostgreSQL schema, a MySQL database, or a
+// SQLite attached-database name. It is what a caller reaches for when the
 // namespace a store was generated against is not the one the application runs
 // against, such as a MySQL deployment giving each tenant its own database.
 //
 // It carries query.TableRef.InSchema's contract, including that an empty
 // namespace is an error and that no foreign key's ReferencedSchema moves with
 // the table.
-//
-// `table` must not be nil.
-func InSchema[T any](table Table[T], namespace string) (Table[T], error) {
-	if table == nil {
-		return nil, fmt.Errorf("rasql: table schema: table must not be nil")
-	}
-	moved, err := table.Ref().InSchema(namespace)
+func (t Table[T]) InSchema(namespace string) (Table[T], error) {
+	moved, err := t.ref.InSchema(namespace)
 	if err != nil {
-		return nil, fmt.Errorf("rasql: table schema: %w", err)
+		return Table[T]{}, fmt.Errorf("rasql: table schema: %w", err)
 	}
-	return typedTable[T]{source: moved}, nil
-}
-
-// ReadInSchema returns a queryable typed object in namespace. It is InSchema
-// for a table that is read but never written.
-//
-// `table` must not be nil.
-func ReadInSchema[T any](table ReadTable[T], namespace string) (ReadTable[T], error) {
-	if table == nil {
-		return nil, fmt.Errorf("rasql: table schema: table must not be nil")
-	}
-	moved, err := table.Ref().InSchema(namespace)
-	if err != nil {
-		return nil, fmt.Errorf("rasql: table schema: %w", err)
-	}
-	return readTable[T]{source: moved}, nil
+	return Table[T]{ref: moved}, nil
 }
 
 // ColumnRef is a reference to one column of one table. It is query.ColumnRef
@@ -222,13 +154,7 @@ const (
 	LockWaitSkipLocked = query.LockWaitSkipLocked
 )
 
-type RelationRef = query.RelationRef
-type RelationSource = query.RelationSource
 type ResultColumn = query.ResultColumn
-type ResultQuery = query.ResultQuery
-type QueryBody = query.QueryBody
-type CTE = query.CTE
-type Compound = query.Compound
 type CompoundOperator = query.CompoundOperator
 
 const (
@@ -237,24 +163,6 @@ const (
 	Intersect = query.Intersect
 	Except    = query.Except
 )
-
-func Relation(table query.TableRef) query.RelationRef { return query.Relation(table) }
-
-func Derived(result query.ResultQuery, alias string) (query.RelationRef, error) {
-	return query.Derived(result, alias)
-}
-
-func ResultOf(body query.QueryBody, columns ...query.ResultColumn) (query.ResultQuery, error) {
-	return query.ResultOf(body, columns...)
-}
-
-func CompoundQuery(left query.ResultQuery, operator query.CompoundOperator, right query.ResultQuery) (query.Compound, error) {
-	return query.CompoundQuery(left, operator, right)
-}
-
-func CommonTable(name string, result query.ResultQuery) (query.CTE, error) {
-	return query.CommonTable(name, result)
-}
 
 // Equal compares left and right for equality. It is query.Equal under a name
 // generated code can reach without importing query.
@@ -294,47 +202,35 @@ func TrustedSQL(sql string, parts ...query.FragmentPart) query.TrustedFragment {
 }
 func RowLock(strength query.LockStrength) query.Lock { return query.RowLock(strength) }
 
-// ColumnOf returns the named column of table. `table` must not be nil.
+// CatalogObject names one object a server holds, and hands back the
+// query.TableRef describing it. rasql.Table[T] is one, and so is a generated
+// table wrapper, which promotes Ref from the handle it holds.
 //
-// A nil table returns the zero ColumnRef instead of an error, because a
-// generated accessor on a zero wrapper passes that wrapper's nil embedded
-// Table[T] here. The statement carrying the zero ColumnRef then reports
-// query.ErrNilTable at Build rather than failing at the accessor call.
+// The name says what the thing is: a table or a view the catalog already
+// carries, which a server can be asked to create and a statement can read. A
+// derived query and a CTE reference are Relations and not CatalogObjects,
+// because each names a result the statement computes rather than an object the
+// catalog holds; neither has a descriptor to create.
 //
-// A name the table does not hold is not that case: the returned ColumnRef keeps
-// its source and its name, and the statement carrying it reports the name it
-// could not find.
-func ColumnOf[T any](table Table[T], name string) ColumnRef {
-	if table == nil {
-		return ColumnRef{}
-	}
-	return table.Column(name)
-}
-
-// Ref returns the dialect-neutral table backing the descriptor.
-func (t typedTable[T]) Ref() query.TableRef {
-	return t.source
-}
-
-// Column returns a reference to a named column of the table.
-func (t typedTable[T]) Column(name string) ColumnRef {
-	return t.source.Column(name)
-}
-
-func (t typedTable[T]) tableRow() T {
-	var zero T
-	return zero
+// Only this package implements it, through the unexported method Relation
+// carries.
+type CatalogObject interface {
+	Relation
+	Ref() query.TableRef
 }
 
 // CreateTable renders and executes table's definition followed by its indexes.
 // Callers that require atomic DDL pass a DB from Begin.
 //
-// `table` must not be nil.
-func CreateTable[T any](ctx context.Context, db DB, table Table[T]) error {
-	if table == nil {
-		return fmt.Errorf("rasql: table must not be nil")
+// It takes the object itself, so rasql.CreateTable(ctx, db, store.Users())
+// compiles and no caller reaches for the ref. A descriptor that does not permit
+// schema.OperationDDL is refused here, and that check is the only guard.
+func CreateTable(ctx context.Context, db DB, table CatalogObject) error {
+	ref := table.Ref()
+	if err := ref.Validate(); err != nil {
+		return fmt.Errorf("rasql: create table: %w", err)
 	}
-	return createTableDef(ctx, db, table.Ref().Definition())
+	return createTableDef(ctx, db, ref.Definition())
 }
 
 func createTableDef(ctx context.Context, db DB, table schema.TableDef) error {
@@ -362,4 +258,3 @@ func createTableDef(ctx context.Context, db DB, table schema.TableDef) error {
 	}
 	return nil
 }
-

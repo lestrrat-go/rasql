@@ -181,13 +181,11 @@ func g5MutationTableWithFlag(t *testing.T) (rasql.Table[g5MutationRow], rasql.Co
 		{Name: "count", Type: schema.IntegerType{}, Default: "2"}, {Name: "flag", Type: schema.IntegerType{}, Default: "0"},
 	}})
 	require.NoError(t, err)
-	relation, err := rasql.SourceOf(table, "")
+	id, err := rasql.BindColumn[g5MutationRow, int64](table, "id", "")
 	require.NoError(t, err)
-	id, err := rasql.BindColumn[g5MutationRow, int64](relation, "id", "")
+	name, err := rasql.BindColumn[g5MutationRow, int64](table, "name", "")
 	require.NoError(t, err)
-	name, err := rasql.BindColumn[g5MutationRow, int64](relation, "name", "")
-	require.NoError(t, err)
-	flag, err := rasql.BindColumn[g5MutationRow, g5FailingBind](relation, "flag", "")
+	flag, err := rasql.BindColumn[g5MutationRow, g5FailingBind](table, "flag", "")
 	require.NoError(t, err)
 	return table, flag, id, name
 }

@@ -104,13 +104,13 @@ func TestQueryAPI(t *testing.T) {
 	})
 
 	t.Run("query operations are immutable", func(t *testing.T) {
-		table, err := rasql.ReadTableOf[int64](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
+		table, err := rasql.TableOf[int64](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
 		require.NoError(t, err)
-		relation, err := rasql.SourceOf(table, "u")
+		relation, err := table.As("u")
 		require.NoError(t, err)
 		projection, err := rasql.Scalar("value", rasql.Value(int64(1)), schema.IntegerType{}, "")
 		require.NoError(t, err)
-		base := rasql.Select(relation.Source(), projection)
+		base := rasql.Select(relation, projection)
 		filtered := base.Where(rasql.EqualValue(rasql.Value(int64(1)), int64(1)))
 		require.NoError(t, base.Validate())
 		require.NoError(t, filtered.Validate())
@@ -121,12 +121,12 @@ func TestQueryAPI(t *testing.T) {
 	})
 
 	t.Run("source-bound columns validate nullability and membership", func(t *testing.T) {
-		table, err := rasql.ReadTableOf[int64](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{
+		table, err := rasql.TableOf[int64](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{
 			{Name: "id", Type: schema.IntegerType{}},
 			{Name: "nickname", Type: schema.TextType{}, Nullable: true},
 		}})
 		require.NoError(t, err)
-		relation, err := rasql.SourceOf(table, "u")
+		relation, err := table.As("u")
 		require.NoError(t, err)
 		column, err := rasql.BindColumn[int64, int64](relation, "id", "")
 		require.NoError(t, err)
@@ -158,13 +158,13 @@ func compositionQuery(t *testing.T) rasql.Query[compositionRow] {
 		rasql.Item("id", rasql.Value(int64(1)), schema.IntegerType{}, ""),
 	}, compositionDecoder{schema: s})
 	require.NoError(t, err)
-	table, err := rasql.ReadTableOf[compositionRow](schema.TableDef{
+	table, err := rasql.TableOf[compositionRow](schema.TableDef{
 		Name: "users", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
 	})
 	require.NoError(t, err)
-	relation, err := rasql.SourceOf(table, "u")
+	relation, err := table.As("u")
 	require.NoError(t, err)
-	return rasql.Select(relation.Source(), p)
+	return rasql.Select(relation, p)
 }
 
 func TestComposition(t *testing.T) {
@@ -172,15 +172,15 @@ func TestComposition(t *testing.T) {
 		base := compositionQuery(t)
 		derived, err := rasql.Derive(base, "d")
 		require.NoError(t, err)
-		require.NotEqual(t, rasql.Source{}, derived.Source())
+		require.NotEqual(t, rasql.Source{}, derived)
 		bound, err := rasql.BindResultColumn[compositionRow, int64](derived, "id")
 		require.NoError(t, err)
 		_ = bound
 		cte, err := rasql.CTEOf("items", base)
 		require.NoError(t, err)
-		cteSource, err := cte.Source("i")
+		cteSource, err := cte.As("i")
 		require.NoError(t, err)
-		require.NotEqual(t, rasql.Source{}, cteSource.Source())
+		require.NotEqual(t, rasql.Source{}, cteSource)
 		combined, err := rasql.Combine(base, rasql.UnionAll, base)
 		require.NoError(t, err)
 		require.NoError(t, combined.Validate())

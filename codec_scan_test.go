@@ -48,12 +48,10 @@ func (*codecScanRejectingNull) Scan(any) error { return errCodecScannerNull }
 func codecScanQuery[R any](t *testing.T, values [][]any, codec rasql.ValueCodec, nullable bool,
 	decode func(rasql.ScanSource, *R) error) ([]R, error) {
 	t.Helper()
-	table, err := rasql.ReadTableOf[R](schema.TableDef{
+	table, err := rasql.TableOf[R](schema.TableDef{
 		Name:    "codec_rows",
 		Columns: []schema.ColumnDef{{Name: "value", Type: schema.TextType{}, Nullable: nullable}},
 	})
-	require.NoError(t, err)
-	relation, err := rasql.SourceOf(table, "")
 	require.NoError(t, err)
 	result, err := rasql.NewResultSchema(rasql.ResultColumn{
 		Name: "value", Type: schema.TextType{}, Nullable: nullable, Codec: "text",
@@ -62,11 +60,11 @@ func codecScanQuery[R any](t *testing.T, values [][]any, codec rasql.ValueCodec,
 
 	var item rasql.ProjectionItem
 	if nullable {
-		column, bindErr := rasql.BindNullColumn[R, string](relation, "value", "text")
+		column, bindErr := rasql.BindNullColumn[R, string](table, "value", "text")
 		require.NoError(t, bindErr)
 		item = rasql.NullItem("value", column.NullExpr(), schema.TextType{}, "text")
 	} else {
-		column, bindErr := rasql.BindColumn[R, string](relation, "value", "text")
+		column, bindErr := rasql.BindColumn[R, string](table, "value", "text")
 		require.NoError(t, bindErr)
 		item = rasql.Item("value", column.Expr(), schema.TextType{}, "text")
 	}
@@ -81,7 +79,7 @@ func codecScanQuery[R any](t *testing.T, values [][]any, codec rasql.ValueCodec,
 	executor, err = rasql.WithCodecs(executor, registry)
 	require.NoError(t, err)
 
-	return rasql.All(t.Context(), executor, rasql.Select(relation.Source(), projection))
+	return rasql.All(t.Context(), executor, rasql.Select(table, projection))
 }
 
 func TestCodecScanSource(t *testing.T) {

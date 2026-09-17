@@ -17,8 +17,13 @@ import (
 	"github.com/lestrrat-go/rasql/stmt"
 )
 
-// TypedSource is a typed relation produced from a query result.
+// TypedSource is one appearance of a derived query or a CTE reference, and is
+// what Derive and TypedCTE.As give back. It is a RowSource, so a statement
+// selects from it the same way it selects from a table.
 type TypedSource[R any] struct{ source Source }
+
+func (d TypedSource[R]) relationSource() Source { return d.source }
+func (d TypedSource[R]) relationRow() R         { var zero R; return zero }
 
 func Derive[R any](q Query[R], alias string) (TypedSource[R], error) {
 	if err := q.Validate(); err != nil {
@@ -37,8 +42,6 @@ func Derive[R any](q Query[R], alias string) (TypedSource[R], error) {
 	}
 	return TypedSource[R]{source: Source{ref: ref}}, nil
 }
-
-func (d TypedSource[R]) Source() Source { return d.source }
 
 type TypedCTE[R any] struct {
 	name  string
@@ -68,7 +71,10 @@ func CTEOf[R any](name string, q Query[R]) (TypedCTE[R], error) {
 
 func (c TypedCTE[R]) ctePlan() query.CTE { return c.cte }
 
-func (c TypedCTE[R]) Source(alias string) (TypedSource[R], error) {
+// As returns one appearance of c under alias. A CTE is named once and read
+// under an alias at each appearance, so unlike a table there is no unaliased
+// form to fall back on and an empty alias is an error.
+func (c TypedCTE[R]) As(alias string) (TypedSource[R], error) {
 	if alias == "" {
 		return TypedSource[R]{}, planError("invalid_source", "alias", "must not be empty")
 	}

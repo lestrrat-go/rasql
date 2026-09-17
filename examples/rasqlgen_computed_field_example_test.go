@@ -63,22 +63,17 @@ func Example_rasqlgen_computed_field() {
 		return
 	}
 
-	source, err := rasql.SourceOf(users, "")
-	if err != nil {
-		fmt.Printf("failed to bind users source: %s\n", err)
-		return
-	}
-	email, err := rasql.BindColumn[store.UsersRow, string](source, users.EmailRef().Name(), "")
+	email, err := rasql.BindColumn[store.UsersRow, string](users, users.EmailRef().Name(), "")
 	if err != nil {
 		fmt.Printf("failed to bind email column: %s\n", err)
 		return
 	}
-	firstName, err := rasql.BindColumn[store.UsersRow, string](source, users.FirstNameRef().Name(), "")
+	firstName, err := rasql.BindColumn[store.UsersRow, string](users, users.FirstNameRef().Name(), "")
 	if err != nil {
 		fmt.Printf("failed to bind first_name column: %s\n", err)
 		return
 	}
-	lastName, err := rasql.BindColumn[store.UsersRow, string](source, users.LastNameRef().Name(), "")
+	lastName, err := rasql.BindColumn[store.UsersRow, string](users, users.LastNameRef().Name(), "")
 	if err != nil {
 		fmt.Printf("failed to bind last_name column: %s\n", err)
 		return
@@ -104,7 +99,7 @@ func Example_rasqlgen_computed_field() {
 		return
 	}
 
-	report, err := rasql.One(ctx, db, rasql.Select(source.Source(), projection))
+	report, err := rasql.One(ctx, db, rasql.Select(users, projection))
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return

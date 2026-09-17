@@ -52,8 +52,7 @@ func TestMutation(t *testing.T) {
 	t.Run("an optimistic version", func(t *testing.T) {
 		executor, table, id := mutationFixture(t)
 		value := query.TypedColumnOf[mutationRow, string](table.Column("value"))
-		relation, err := rasql.SourceOf[mutationRow](table, "")
-		require.NoError(t, err)
+		relation := table
 		version, err := rasql.BindColumn[mutationRow, int64](relation, "version", "")
 		require.NoError(t, err)
 		create, err := rasql.NewCreatePlan(table, rasql.SetField(id, int64(10)), rasql.SetField(value, "before"))
@@ -205,8 +204,7 @@ func mutationProjection(t *testing.T, table rasql.Table[mutationRow]) rasql.Proj
 	schemaValue, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}})
 	require.NoError(t, err)
 	returnValue := mutationDecoder{schema: schemaValue}
-	relation, err := rasql.SourceOf[mutationRow](table, "")
-	require.NoError(t, err)
+	relation := table
 	id, err := rasql.BindColumn[mutationRow, int64](relation, "id", "")
 	require.NoError(t, err)
 	projection, err := rasql.NewProjection([]rasql.ProjectionItem{rasql.Item("id", id.Expr(), schema.IntegerType{}, "")}, returnValue)
@@ -444,8 +442,7 @@ func newMutationAcceptanceFixture(t *testing.T) mutationAcceptanceFixture {
 
 func mutationAcceptanceProjection(t *testing.T, table rasql.Table[mutationAcceptanceItem]) rasql.Projection[mutationAcceptanceItem] {
 	t.Helper()
-	relation, err := rasql.SourceOf[mutationAcceptanceItem](table, "")
-	require.NoError(t, err)
+	relation := table
 	id, err := rasql.BindColumn[mutationAcceptanceItem, int64](relation, "id", "")
 	require.NoError(t, err)
 	required, err := rasql.BindColumn[mutationAcceptanceItem, string](relation, "required_text", "")
@@ -594,8 +591,7 @@ func TestMutationCodec(t *testing.T) {
 			Name: "codec_items", PrimaryKey: []string{"id"},
 			Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "value", Type: schema.TextType{}}, {Name: "nullable", Type: schema.TextType{}, Nullable: true}},
 		})
-		relation, err := rasql.SourceOf[mutationCodecRow](table, "")
-		require.NoError(t, err)
+		relation := table
 		id, err := rasql.BindColumn[mutationCodecRow, int64](relation, "id", "")
 		require.NoError(t, err)
 		value, err := rasql.BindColumn[mutationCodecRow, string](relation, "value", "prefix")
@@ -620,8 +616,7 @@ func TestMutationCodec(t *testing.T) {
 
 	t.Run("a missing codec fails before execution", func(t *testing.T) {
 		executor, table, id := mutationFixture(t)
-		relation, err := rasql.SourceOf[mutationRow](table, "")
-		require.NoError(t, err)
+		relation := table
 		value, err := rasql.BindColumn[mutationRow, string](relation, "value", "missing")
 		require.NoError(t, err)
 		plan, err := rasql.NewCreatePlan(table, rasql.SetField(id, int64(40)), rasql.SetField(value, "value"))
@@ -726,7 +721,7 @@ func TestMutationVersioned(t *testing.T) {
 	t.Run("a patch canonicalizes an aliased version column", func(t *testing.T) {
 		executor, table, id := mutationFixture(t)
 		value := query.TypedColumnOf[mutationRow, string](table.Column("value"))
-		relation, err := rasql.SourceOf[mutationRow](table, "vsrc")
+		relation, err := table.As("vsrc")
 		require.NoError(t, err)
 		version, err := rasql.BindColumn[mutationRow, int64](relation, "version", "")
 		require.NoError(t, err)
@@ -748,8 +743,7 @@ func newVersionedReturningAcceptance(t *testing.T, rows int) (rasql.Executor, ra
 	t.Helper()
 	executor, table, id := mutationFixture(t)
 	value := query.TypedColumnOf[mutationRow, string](table.Column("value"))
-	relation, err := rasql.SourceOf[mutationRow](table, "")
-	require.NoError(t, err)
+	relation := table
 	version, err := rasql.BindColumn[mutationRow, int64](relation, "version", "")
 	require.NoError(t, err)
 	for i := int64(1); i <= 2; i++ {

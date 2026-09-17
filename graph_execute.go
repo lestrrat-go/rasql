@@ -354,7 +354,7 @@ func graphJunctionQuery(source Source, parent, child *graphKeySpec) (Query[graph
 	if err != nil {
 		return Query[graphJunctionRow]{}, err
 	}
-	return Select(source, projection), nil
+	return selectFrom(source, projection), nil
 }
 
 func graphTupleValues(parts []*graphKeyPartSpec, values []any, codecs CodecRegistry) (keyTuple, bool, error) {

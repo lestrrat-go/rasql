@@ -47,12 +47,12 @@ func cursorFixtureFor(t *testing.T) cursorFixture {
 	executor, err := rasql.WithEngineProfile(counter, rasql.SQLite335())
 	require.NoError(t, err)
 
-	table, err := rasql.ReadTableOf[cursorRow](schema.TableDef{
+	table, err := rasql.TableOf[cursorRow](schema.TableDef{
 		Name:    "cursor_rows",
 		Columns: []schema.ColumnDef{{Name: "value", Type: schema.FloatType{}}},
 	})
 	require.NoError(t, err)
-	relation, err := rasql.SourceOf(table, "p")
+	relation, err := table.As("p")
 	require.NoError(t, err)
 	value, err := rasql.BindColumn[cursorRow, float64](relation, "value", "")
 	require.NoError(t, err)
@@ -68,7 +68,7 @@ func cursorFixtureFor(t *testing.T) cursorFixture {
 	require.NoError(t, err)
 
 	return cursorFixture{
-		query:    rasql.Select(relation.Source(), projection),
+		query:    rasql.Select(relation, projection),
 		spec:     spec,
 		executor: executor,
 		counter:  counter,

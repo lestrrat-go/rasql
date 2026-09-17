@@ -56,9 +56,9 @@ func (nilCodecFinalizer) Rollback(context.Context) error { return nil }
 // the nil instead, and whether it did depended on whether the executor opened
 // a scope, because only the scoped wrapper passed the nil along.
 func TestNilCodecRegistryIsAnError(t *testing.T) {
-	table, err := rasql.ReadTableOf[int64](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
+	table, err := rasql.TableOf[int64](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
 	require.NoError(t, err)
-	relation, err := rasql.SourceOf(table, "i")
+	relation, err := table.As("i")
 	require.NoError(t, err)
 	id, err := rasql.BindColumn[int64, int64](relation, "id", "")
 	require.NoError(t, err)
@@ -66,7 +66,7 @@ func TestNilCodecRegistryIsAnError(t *testing.T) {
 	require.NoError(t, err)
 	projection, err := rasql.NewProjection([]rasql.ProjectionItem{rasql.Item("value", id.Expr(), schema.IntegerType{}, "")}, runtimeDecoder{schema: resultSchema})
 	require.NoError(t, err)
-	baseQuery := rasql.Select(relation.Source(), projection)
+	baseQuery := rasql.Select(relation, projection)
 	orderExpr, err := rasql.ValueWithCodec(int64(7), "count.page")
 	require.NoError(t, err)
 	orderKey := rasql.AscKey[int64](orderExpr, func(int64) int64 { return 7 })

@@ -89,8 +89,7 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	tableName := dbtest.UniqueName(t, "rasql_integration_records")
 	records, err := rasql.TableOf[integrationRecord](integrationTable(tableName))
 	require.NoError(t, err)
-	relation, err := rasql.SourceOf(records, "")
-	require.NoError(t, err)
+	relation := records
 	recordID, err := rasql.BindColumn[integrationRecord, int64](relation, "id", "")
 	require.NoError(t, err)
 	recordActive, err := rasql.BindColumn[integrationRecord, bool](relation, "active", "")
@@ -163,7 +162,7 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	secondStored := second
 	secondStored.Amount = "5.0000"
 
-	selectRecords := rasql.Select(relation.Source(), recordProjection)
+	selectRecords := rasql.Select(relation, recordProjection)
 	actual, err := rasql.One(t.Context(), db, selectRecords.Where(rasql.EqualValue(recordID.Expr(), first.ID)))
 	require.NoError(t, err)
 	require.Equal(t, firstStored, actual)
@@ -403,8 +402,7 @@ func testQualifiedDDLPostgreSQL(t *testing.T) {
 		PrimaryKey: []string{"id"},
 	})
 	require.NoError(t, err)
-	customersSource, err := rasql.SourceOf(customers, "")
-	require.NoError(t, err)
+	customersSource := customers
 	customersID, err := rasql.BindColumn[customerRow, int64](customersSource, "id", "")
 	require.NoError(t, err)
 	customersNameColumn, err := rasql.BindColumn[customerRow, string](customersSource, "name", "")
@@ -453,8 +451,7 @@ func testQualifiedDDLPostgreSQL(t *testing.T) {
 		}},
 	})
 	require.NoError(t, err)
-	ordersSource, err := rasql.SourceOf(orders, "")
-	require.NoError(t, err)
+	ordersSource := orders
 	ordersID, err := rasql.BindColumn[orderRow, int64](ordersSource, "id", "")
 	require.NoError(t, err)
 	ordersCustomerID, err := rasql.BindColumn[orderRow, int64](ordersSource, "customer_id", "")
@@ -484,7 +481,7 @@ func testQualifiedDDLPostgreSQL(t *testing.T) {
 		rasql.Item("customer_id", ordersCustomerID.Expr(), schema.IntegerType{}, ""),
 	}, orderDecoder.Decoder())
 	require.NoError(t, err)
-	orderQuery := rasql.Select(ordersSource.Source(), orderProjection).
+	orderQuery := rasql.Select(ordersSource, orderProjection).
 		Where(rasql.EqualValue(ordersID.Expr(), int64(1)))
 	order, err := rasql.One(t.Context(), db, orderQuery)
 	require.NoError(t, err)
@@ -538,8 +535,7 @@ func testQualifiedDDLMySQL(t *testing.T) {
 		}},
 	})
 	require.NoError(t, err)
-	eventsSource, err := rasql.SourceOf(events, "")
-	require.NoError(t, err)
+	eventsSource := events
 	eventID, err := rasql.BindColumn[eventRow, int64](eventsSource, "id", "")
 	require.NoError(t, err)
 	eventActorID, err := rasql.BindColumn[eventRow, int64](eventsSource, "actor_id", "")
@@ -582,7 +578,7 @@ func testQualifiedDDLMySQL(t *testing.T) {
 		rasql.Item("action", eventAction.Expr(), schema.TextType{}, ""),
 	}, eventDecoder.Decoder())
 	require.NoError(t, err)
-	eventQuery := rasql.Select(eventsSource.Source(), eventProjection).
+	eventQuery := rasql.Select(eventsSource, eventProjection).
 		Where(rasql.EqualValue(eventID.Expr(), int64(1)))
 	event, err := rasql.One(t.Context(), db, eventQuery)
 	require.NoError(t, err)

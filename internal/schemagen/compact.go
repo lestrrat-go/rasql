@@ -96,31 +96,16 @@ func CompactObjectSource(packageName string, object CompactObject) ([]byte, erro
 	b.WriteString(" = ")
 	b.WriteString(definition)
 	b.WriteString("\n\n")
-	if object.Catalog.Kind == "view" {
-		b.WriteString("var ")
-		b.WriteString(tableName)
-		b.WriteString(" = rasql.MustReadTableOf[")
-		b.WriteString(row)
-		b.WriteString("](")
-		b.WriteString(definitionName)
-		b.WriteString(")\n\n")
-	} else {
-		b.WriteString("var ")
-		b.WriteString(tableName)
-		b.WriteString(" = rasql.MustTableOf[")
-		b.WriteString(row)
-		b.WriteString("](")
-		b.WriteString(definitionName)
-		b.WriteString(")\n\n")
-	}
+	b.WriteString("var ")
+	b.WriteString(tableName)
+	b.WriteString(" = rasql.MustTableOf[")
+	b.WriteString(row)
+	b.WriteString("](")
+	b.WriteString(definitionName)
+	b.WriteString(")\n\n")
 	b.WriteString("type ")
 	b.WriteString(accessor)
-	b.WriteString("Table struct { rasql.")
-	if object.Catalog.Kind == "view" {
-		b.WriteString("ReadTable[")
-	} else {
-		b.WriteString("Table[")
-	}
+	b.WriteString("Table struct { rasql.Table[")
 	b.WriteString(row)
 	b.WriteString("] }\n\nfunc ")
 	b.WriteString(accessor)
@@ -128,11 +113,7 @@ func CompactObjectSource(packageName string, object CompactObject) ([]byte, erro
 	b.WriteString(accessor)
 	b.WriteString("Table { return ")
 	b.WriteString(accessor)
-	if object.Catalog.Kind == "view" {
-		b.WriteString("Table{ReadTable: ")
-	} else {
-		b.WriteString("Table{Table: ")
-	}
+	b.WriteString("Table{Table: ")
 	b.WriteString(tableName)
 	b.WriteString("} }\n\n")
 	b.WriteString("func (t ")
@@ -141,11 +122,7 @@ func CompactObjectSource(packageName string, object CompactObject) ([]byte, erro
 	b.WriteString(row)
 	b.WriteString("], error) { return rasql.SourceOf[")
 	b.WriteString(row)
-	if object.Catalog.Kind == "view" {
-		b.WriteString("](t.ReadTable, alias) }\n\n")
-	} else {
-		b.WriteString("](t.Table, alias) }\n\n")
-	}
+	b.WriteString("](t.Table, alias) }\n\n")
 
 	writeCompactColumns(&b, object, accessor, row)
 	writeCompactDecoder(&b, object, accessor, row, false)
@@ -156,9 +133,7 @@ func CompactObjectSource(packageName string, object CompactObject) ([]byte, erro
 	writeCompactProjections(&b, object, accessor, row, len(marker) > 0)
 	writeCompactKeys(&b, object, accessor, row, marker)
 	writeCompactRelations(&b, object, accessor, row)
-	if object.Catalog.Kind != "view" {
-		writeCompactMutations(&b, object, accessor, row)
-	}
+	writeCompactMutations(&b, object, accessor, row)
 	formatted, err := format.Source(b.Bytes())
 	if err != nil {
 		return nil, fmt.Errorf("compact %s: format source: %w", object.Catalog.ID, err)
@@ -214,10 +189,12 @@ func validateCompactSymbols(object CompactObject, accessor, row string) error {
 		}
 		return nil
 	}
-	if object.Catalog.Kind != "view" {
+	if object.Table.Supports(schema.OperationInsert) {
 		if err := checkMethods(object.Go.Create, "create", "Plan"); err != nil {
 			return err
 		}
+	}
+	if object.Table.Supports(schema.OperationUpdate) {
 		if err := checkMethods(object.Go.Patch, "patch", "Where"); err != nil {
 			return err
 		}
@@ -833,7 +810,7 @@ func writeCompactRelations(b *bytes.Buffer, object CompactObject, accessor, row 
 			b.WriteString(")\n\tif err != nil { return nil, err }\n")
 			b.WriteString("\treturn rasql.ManyThrough(\"")
 			b.WriteString(relation.Name)
-			b.WriteString("\", parent, junctionParent, junctionChild, child, junctionSource.Source(), children, options, attach)\n}\n\n")
+			b.WriteString("\", parent, junctionParent, junctionChild, child, junctionSource, children, options, attach)\n}\n\n")
 			continue
 		}
 		b.WriteString("\tchild, err := rasql.NewGraphKey[")
@@ -852,7 +829,20 @@ func writeCompactRelations(b *bytes.Buffer, object CompactObject, accessor, row 
 	}
 }
 
+// writeCompactMutations writes the mutation builder for each row write the
+// descriptor permits: a create builder for schema.OperationInsert and a patch
+// builder for schema.OperationUpdate. A view permits neither and gets neither,
+// which is what the Kind test this replaced already produced, and a descriptor
+// naming only some of the writes now gets only the builders for those.
+//
+// An object permitting no row write at all skips the shared mutation-columns
+// variable too, since nothing left in the file reads it.
 func writeCompactMutations(b *bytes.Buffer, object CompactObject, accessor, row string) {
+	insert := object.Table.Supports(schema.OperationInsert)
+	update := object.Table.Supports(schema.OperationUpdate)
+	if !insert && !update {
+		return
+	}
 	create := object.Generation.Create
 	patch := object.Generation.Patch
 	if create == "" {
@@ -871,10 +861,10 @@ func writeCompactMutations(b *bytes.Buffer, object CompactObject, accessor, row 
 	b.WriteString("().Source(\"\"); if err != nil { panic(err) }; value, err := (")
 	b.WriteString(accessor)
 	b.WriteString("Columns{}).Bind(source); if err != nil { panic(err) }; return value }()\n\n")
-	if create != "" {
+	if insert {
 		writeMutationType(b, object, accessor, row, create, false, mutationColumns)
 	}
-	if patch != "" {
+	if update {
 		writeMutationType(b, object, accessor, row, patch, true, mutationColumns)
 	}
 }

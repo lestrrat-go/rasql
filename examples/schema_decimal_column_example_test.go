@@ -30,8 +30,8 @@ type InvoicesTable struct {
 	rasql.Table[InvoiceRow]
 }
 
-func (t InvoicesTable) ID() query.ColumnRef     { return rasql.ColumnOf(t.Table, "id") }
-func (t InvoicesTable) Amount() query.ColumnRef { return rasql.ColumnOf(t.Table, "amount") }
+func (t InvoicesTable) ID() query.ColumnRef     { return t.Column("id") }
+func (t InvoicesTable) Amount() query.ColumnRef { return t.Column("amount") }
 
 // invoiceDecoder decodes an InvoiceRow from its two columns, in projection order.
 type invoiceDecoder struct{ result rasql.ResultSchema }
@@ -79,24 +79,19 @@ func Example_schema_decimal_column() {
 		return
 	}
 
-	source, err := rasql.SourceOf(invoices, "")
-	if err != nil {
-		fmt.Printf("failed to bind invoices source: %s\n", err)
-		return
-	}
-	id, err := rasql.BindColumn[InvoiceRow, int64](source, "id", "")
+	id, err := rasql.BindColumn[InvoiceRow, int64](invoices, "id", "")
 	if err != nil {
 		fmt.Printf("failed to bind id column: %s\n", err)
 		return
 	}
-	amount, err := rasql.BindColumn[InvoiceRow, string](source, "amount", "")
+	amount, err := rasql.BindColumn[InvoiceRow, string](invoices, "amount", "")
 	if err != nil {
 		fmt.Printf("failed to bind amount column: %s\n", err)
 		return
 	}
 
 	// SQL: INSERT INTO invoices (id, amount) VALUES (?, ?) (arguments: 1, "19.99")
-	createPlan, err := rasql.NewCreatePlan[InvoiceRow](invoices,
+	createPlan, err := rasql.NewCreatePlan[InvoiceRow](invoices.Table,
 		rasql.SetField[InvoiceRow](id, int64(1)),
 		rasql.SetField[InvoiceRow](amount, "19.99"),
 	)
@@ -128,7 +123,7 @@ func Example_schema_decimal_column() {
 
 	// SQL: SELECT invoices.id, invoices.amount FROM invoices WHERE invoices.id = ? (argument: 1)
 	invoice, err := rasql.One(ctx, db,
-		rasql.Select(source.Source(), projection).Where(rasql.EqualValue(id.Expr(), int64(1))))
+		rasql.Select(invoices, projection).Where(rasql.EqualValue(id.Expr(), int64(1))))
 	if err != nil {
 		fmt.Printf("failed to query invoices: %s\n", err)
 		return

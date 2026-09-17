@@ -63,17 +63,12 @@ func Example_schema_bind_row_type() {
 		return
 	}
 
-	source, err := rasql.SourceOf(users, "")
-	if err != nil {
-		fmt.Printf("failed to bind users source: %s\n", err)
-		return
-	}
-	id, err := rasql.BindColumn[UserRow, int64](source, "id", "")
+	id, err := rasql.BindColumn[UserRow, int64](users, "id", "")
 	if err != nil {
 		fmt.Printf("failed to bind id column: %s\n", err)
 		return
 	}
-	email, err := rasql.BindColumn[UserRow, string](source, "email", "")
+	email, err := rasql.BindColumn[UserRow, string](users, "email", "")
 	if err != nil {
 		fmt.Printf("failed to bind email column: %s\n", err)
 		return
@@ -111,7 +106,7 @@ func Example_schema_bind_row_type() {
 
 	// The bound table is what the typed API takes, so a select from it
 	// already knows it returns a UserRow.
-	user, err := rasql.One(ctx, db, rasql.Select(source.Source(), projection))
+	user, err := rasql.One(ctx, db, rasql.Select(users, projection))
 	if err != nil {
 		fmt.Printf("failed to query user: %s\n", err)
 		return
