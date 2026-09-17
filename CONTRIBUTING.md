@@ -103,7 +103,7 @@ This is exactly what CI's `integration` job does, as a workflow step before the 
 
 ### Reading the integration job's log
 
-The `integration` job runs [`./scripts/test.sh live`](scripts/test.sh). The script asks `go list` which packages hold a test importing `internal/dbtest`, drops `internal/conformance` (the D4 matrix runs in a step of its own, through `./scripts/conformance.sh live`), and passes the rest to `go test -p 1 -count=1 -v`. Run the same command yourself to see the list it derives: it prints the `go test` line before running it. A discovery that comes back empty exits 1 rather than running `go test` with no package operand, which would test the current directory and exit 0. Without `-v`, a skipped live test and an executed one both leave the same `ok  github.com/lestrrat-go/rasql/inspect  0.336s` package line, so the log cannot tell you which happened. With `-v` naming every test in those packages, a passing live test shows as `--- PASS: TestPostgreSQLInspectorReadsTableNamesAgainstLiveDatabase`, and a live test that skipped because a DSN was unset shows as `--- SKIP:` with the same name -- search the log for the specific test name to confirm it ran rather than skipped. The `check` job runs `./scripts/test.sh check`, which is `go test -p 1 -count=1 -v ./...` over the whole module, so its performance evidence remains visible and uncached.
+The `integration` job runs [`./scripts/test.sh live`](scripts/test.sh). The script asks `go list` which packages hold a test importing `internal/dbtest`, drops `internal/conformance` (the D4 matrix runs in a step of its own, through `./scripts/conformance.sh live`), and passes the rest to `go test -p 1 -count=1 -v`. Run the same command yourself to see the list it derives: it prints the `go test` line before running it. A discovery that comes back empty exits 1 rather than running `go test` with no package operand, which would test the current directory and exit 0. Without `-v`, a skipped live test and an executed one both leave the same `ok  github.com/lestrrat-go/rasql/inspect  0.336s` package line, so the log cannot tell you which happened. With `-v` naming every test in those packages, a passing live test shows as `--- PASS: TestPostgreSQLInspectorReadsTableNamesAgainstLiveDatabase`, and a live test that skipped because a DSN was unset shows as `--- SKIP:` with the same name -- search the log for the specific test name to confirm it ran rather than skipped. The `check` job runs `./scripts/test.sh check`, which is `go test -p 1 -count=1 -v ./...` over the whole module. It publishes no conformance evidence: `internal/conformance` writes its JSON record only when `RASQL_CONFORMANCE_OUTPUT` is set, and that job sets neither that variable nor `RASQL_CONFORMANCE_COMMIT`.
 
 Both jobs reach a live test only by expanding package patterns, so a test file in a directory the go tool passes over runs in neither of them. `go help packages` names the directories no pattern reaches at all: any whose name begins with `.` or `_`, plus `testdata`. `./scripts/test.sh live` cannot rescue a file in one of those either, since it asks `go list ./...` which packages to run and that pattern does not reach one.
 
@@ -156,3 +156,15 @@ A DSN variable left unset is treated as an environment fact, not a rasql defect,
 Run the platform-neutral conformance workload with `./scripts/conformance.sh sqlite`. The command unsets live DSNs and runs the SQLite matrix once. Run the required live matrix with `RASQL_TEST_POSTGRES_DSN` and `RASQL_TEST_MYSQL_DSN` set, then use `./scripts/conformance.sh live`; the script fails when a required test is missing or skipped. Set `RASQL_CONFORMANCE_OUTPUT` and `RASQL_CONFORMANCE_LOG` to retain the deterministic JSON record and raw log.
 
 Use `./scripts/bench.sh` for the ten-sample conformance and existing benchmark series. A semantic mismatch produces no performance comparison, and the recorder keeps each raw sample instead of averaging it.
+
+### Re-blessing a conformance fixture
+
+`internal/conformance/testdata/<engine>` holds a generated store and its `rasql.sum` for each engine. `TestConformanceFixturesAreCurrent` runs `codegen check` against a live server and fails when a change to the generator moves that output. Regenerate all three with:
+
+```sh
+go test ./internal/conformance/ -run TestConformanceFixturesAreCurrent -update-fixtures
+```
+
+SQLite regenerates over a throwaway database the command builds itself. PostgreSQL and MySQL skip unless `RASQL_TEST_POSTGRES_DSN` and `RASQL_TEST_MYSQL_DSN` are set, so bring up `compose.yaml` first to re-bless those two.
+
+A change to rendered SQL also moves the statement tables `compileRenderStatements` holds in `internal/conformance/profile_test.go`. No flag rewrites those: read what `TestCompileRenderProfiles` reports, and edit the SQL strings to match.

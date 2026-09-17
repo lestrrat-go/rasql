@@ -5,14 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/lestrrat-go/rasql"
@@ -44,16 +41,8 @@ type profileStatement struct {
 	Args      []profileArgument `json:"args"`
 }
 
-type profileCompileRender struct {
-	Digest     string             `json:"digest"`
+type profileRecords struct {
 	Statements []profileStatement `json:"statements"`
-}
-
-type profileManifest struct {
-	Engine                  string                          `json:"engine"`
-	Profile                 string                          `json:"profile"`
-	PortableSignatureDigest string                          `json:"portable_signature_digest"`
-	CompileRender           map[string]profileCompileRender `json:"compile_render"`
 }
 
 func TestCompileRenderProfiles(t *testing.T) {
@@ -65,13 +54,8 @@ func TestCompileRenderProfiles(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.id, func(t *testing.T) {
-			manifest := readProfileManifest(t, tc.engine)
-			reviewed, ok := manifest.CompileRender[tc.id]
+			reviewed, ok := compileRenderStatements(tc.id)
 			require.True(t, ok, tc.id)
-			require.Equal(t, strings.SplitN(tc.id, "-", 2)[0], manifest.Engine)
-			digest, err := PortableSignatureDigestChecked()
-			require.NoError(t, err)
-			require.Equal(t, digest, manifest.PortableSignatureDigest)
 			profile, err := builtinProfileByID(tc.id)
 			require.NoError(t, err)
 			require.Equal(t, tc.id, profile.ID())
@@ -85,18 +69,22 @@ func TestCompileRenderProfiles(t *testing.T) {
 			runGeneratedCardinalityProfile(t, tc)
 			data, err := os.ReadFile(records)
 			require.NoError(t, err)
-			var actual profileCompileRender
+			var actual profileRecords
 			require.NoError(t, json.Unmarshal(data, &actual))
-			require.NoError(t, validateCompileRender(actual, reviewed))
-			if tc.engine == "postgresql" {
-				postgres16, ok := manifest.CompileRender["postgresql-16"]
-				require.True(t, ok)
-				postgres17, ok := manifest.CompileRender["postgresql-17"]
-				require.True(t, ok)
-				require.Equal(t, postgres16, postgres17)
-			}
+			require.Equal(t, reviewed, actual.Statements)
 		})
 	}
+}
+
+// TestPostgreSQLProfilesRenderTheSameSQL pins that rasql renders one statement list for both
+// supported PostgreSQL majors. compileRenderStatements hands both IDs the same slice, so this
+// fails only once someone gives 16 and 17 lists of their own.
+func TestPostgreSQLProfilesRenderTheSameSQL(t *testing.T) {
+	sixteen, ok := compileRenderStatements("postgresql-16")
+	require.True(t, ok)
+	seventeen, ok := compileRenderStatements("postgresql-17")
+	require.True(t, ok)
+	require.Equal(t, sixteen, seventeen)
 }
 
 func runGeneratedCardinalityProfile(t *testing.T, tc profileCase) {
@@ -233,96 +221,6 @@ func assertProfileRow(t *testing.T, row any, id int64) {
 	if value.FieldByName("CreatedAt").Interface() != time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC) { t.Fatalf("row created = %%#v", row) }
 }
 `, modulePath, querySQL, dialectName, profileFuncName, querySQL)
-}
-
-func readProfileManifest(t *testing.T, engine string) profileManifest {
-	t.Helper()
-	data, err := os.ReadFile(filepath.Join("testdata", engine, "d4-manifest.json"))
-	require.NoError(t, err)
-	var envelope struct {
-		Engine                  string          `json:"engine"`
-		Profile                 string          `json:"profile"`
-		PortableSignatureDigest string          `json:"portable_signature_digest"`
-		CompileRender           json.RawMessage `json:"compile_render"`
-	}
-	require.NoError(t, json.Unmarshal(data, &envelope))
-	manifest := profileManifest{Engine: envelope.Engine, Profile: envelope.Profile, PortableSignatureDigest: envelope.PortableSignatureDigest}
-	if len(envelope.CompileRender) > 0 && envelope.CompileRender[0] == '[' {
-		var legacy []struct {
-			Kind string `json:"kind"`
-			SQL  string `json:"sql"`
-			Args []struct {
-				Type  string `json:"type"`
-				Value any    `json:"value"`
-			} `json:"args"`
-		}
-		require.NoError(t, json.Unmarshal(envelope.CompileRender, &legacy))
-		statements := make([]profileStatement, len(legacy))
-		for index, value := range legacy {
-			args := make([]profileArgument, len(value.Args))
-			for argIndex, arg := range value.Args {
-				args[argIndex] = profileArgument{Type: arg.Type, Value: fmt.Sprint(arg.Value)}
-			}
-			statements[index] = profileStatement{Kind: value.Kind, SQL: value.SQL, Args: args}
-		}
-		manifest.CompileRender = map[string]profileCompileRender{envelope.Profile: {Statements: statements}}
-		return manifest
-	}
-	require.NoError(t, json.Unmarshal(envelope.CompileRender, &manifest.CompileRender))
-	return manifest
-}
-
-func validateCompileRender(actual, expected profileCompileRender) error {
-	if !reflect.DeepEqual(actual.Statements, expected.Statements) {
-		return errors.New("compile_render statements differ")
-	}
-	if actual.Digest != expected.Digest {
-		return errors.New("compile_render digest differs")
-	}
-	if profileInvocationDigest(actual.Statements) != actual.Digest {
-		return errors.New("compile_render digest is invalid")
-	}
-	return nil
-}
-
-func profileInvocationDigest(records []profileStatement) string {
-	parts := make([]string, 0, len(records)*4)
-	for _, record := range records {
-		parts = append(parts, record.Operation, record.Kind, record.SQL, fmt.Sprint(len(record.Args)))
-		for _, arg := range record.Args {
-			parts = append(parts, arg.Type, arg.Value)
-		}
-	}
-	return DigestParts(parts...)
-}
-
-func TestCompileRenderManifestMutations(t *testing.T) {
-	valid := profileCompileRender{Statements: []profileStatement{
-		{Operation: "single_row_read", Kind: "query", SQL: "SELECT 1", Args: []profileArgument{{Type: "int64", Value: "1"}}},
-		{Operation: "graph_root", Kind: "query", SQL: "SELECT 2", Args: []profileArgument{{Type: "int64", Value: "2"}}},
-	}}
-	valid.Digest = profileInvocationDigest(valid.Statements)
-	cases := []struct {
-		name   string
-		mutate func(*profileCompileRender)
-	}{
-		{name: "sql byte", mutate: func(value *profileCompileRender) { value.Statements[0].SQL = "SELECT 2" }},
-		{name: "statement order", mutate: func(value *profileCompileRender) {
-			value.Statements[0], value.Statements[1] = value.Statements[1], value.Statements[0]
-		}},
-		{name: "argument", mutate: func(value *profileCompileRender) { value.Statements[0].Args[0].Value = "2" }},
-		{name: "digest", mutate: func(value *profileCompileRender) { value.Digest = strings.Repeat("0", 64) }},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			mutated := valid
-			mutated.Statements = append([]profileStatement(nil), valid.Statements...)
-			mutated.Statements[0].Args = append([]profileArgument(nil), valid.Statements[0].Args...)
-			mutated.Statements[1].Args = append([]profileArgument(nil), valid.Statements[1].Args...)
-			tc.mutate(&mutated)
-			require.Error(t, validateCompileRender(mutated, valid))
-		})
-	}
 }
 
 // fixtureConfig is the subset of a fixture's rasql.json TestGeneratedQueryProvenance reads
@@ -507,21 +405,6 @@ func mutateFixtureConfig(t *testing.T, path, queryID, mutation string) {
 	require.NoError(t, os.WriteFile(path, append(updated, '\n'), 0o600))
 }
 
-func buildRasqlCLI(t *testing.T) string {
-	t.Helper()
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	require.NoError(t, err)
-	binary := filepath.Join(t.TempDir(), "rasql")
-	cache := filepath.Join(repoRoot, ".tmp", "a6-cli-build-cache")
-	require.NoError(t, os.MkdirAll(cache, 0o755))
-	command := exec.Command("go", "build", "-o", binary, "./cmd/rasql")
-	command.Dir = repoRoot
-	command.Env = offlineBuildEnv(cache)
-	output, err := command.CombinedOutput()
-	require.NoError(t, err, string(output))
-	return binary
-}
-
 // runProvenanceMutationCheck runs codegen check in-process against root's rasql.json, exactly as
 // rasqlgen.RunContext lets any caller in this module do, and requires the returned error's message
 // to equal diagnostic and its mapped exit code to be 1 -- the same contract cmd/rasql applies to
@@ -600,10 +483,7 @@ func generatedProfileTest(tc profileCase, modulePath string) string {
 	return fmt.Sprintf(`package conformance
 
 import (
-	"crypto/sha256"
 	"database/sql/driver"
-	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -620,7 +500,7 @@ type profileGraph struct { ID int64; Name string; Tasks rasql.LoadedMany[profile
 type profileTask struct { ID int64; Title string; Assignee rasql.LoadedOne[store.MembersRow] }
 type profileArgument struct { Type string `+"`json:\"type\"`"+`; Value string `+"`json:\"value\"`"+` }
 type profileStatement struct { Operation string `+"`json:\"operation\"`"+`; Kind string `+"`json:\"kind\"`"+`; SQL string `+"`json:\"sql\"`"+`; Args []profileArgument `+"`json:\"args\"`"+` }
-type profileOutput struct { Digest string `+"`json:\"digest\"`"+`; Statements []profileStatement `+"`json:\"statements\"`"+` }
+type profileOutput struct { Statements []profileStatement `+"`json:\"statements\"`"+` }
 
 func profileArg(value any) profileArgument {
 	if typed, ok := value.(time.Time); ok {
@@ -751,19 +631,6 @@ func TestGeneratedProfile(t *testing.T) {
 		statements[index] = profileStatement{Operation: operations[index], Kind: call.kind, SQL: call.sql, Args: args}
 	}
 	result := profileOutput{Statements: statements}
-	parts := make([]string, 0, len(statements)*4)
-	for _, statement := range statements {
-		parts = append(parts, statement.Operation, statement.Kind, statement.SQL, fmt.Sprint(len(statement.Args)))
-		for _, arg := range statement.Args { parts = append(parts, arg.Type, arg.Value) }
-	}
-	hash := sha256.New()
-	for _, part := range parts {
-		var length [8]byte
-		binary.BigEndian.PutUint64(length[:], uint64(len(part)))
-		_, _ = hash.Write(length[:])
-		_, _ = hash.Write([]byte(part))
-	}
-	result.Digest = hex.EncodeToString(hash.Sum(nil))
 	data, err := json.MarshalIndent(result, "", "  ")
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(os.Getenv("RASQL_PROFILE_RECORDS"), append(data, '\n'), 0o600))
@@ -776,4 +643,213 @@ func TestUnsupportedVersionBeforeSQL(t *testing.T) {
 		_, err := engineprofile.Builtin(id, engineprofile.Version{Known: true, Major: 99})
 		require.Error(t, err, id)
 	}
+}
+
+// compileRenderStatements gives back the SQL a fixture's generated store renders under profileID,
+// with the arguments it binds, in the order TestGeneratedProfile executes the seven operations.
+// A rendering change fails TestCompileRenderProfiles and shows up here as the statement that
+// moved, so re-blessing this table means reading the diff and accepting the new SQL.
+//
+// PostgreSQL 16 and 17 share one slice, and TestPostgreSQLProfilesRenderTheSameSQL states that
+// rather than leaving a reader to infer it from this function's shape.
+func compileRenderStatements(profileID string) ([]profileStatement, bool) {
+	postgresql := []profileStatement{
+		{
+			Operation: "single_row_read",
+			Kind:      "query",
+			SQL:       "SELECT \"p\".\"id\" AS \"id\", \"p\".\"name\" AS \"name\" FROM \"projects\" AS \"p\" WHERE (\"p\".\"id\" = $1) ORDER BY \"p\".\"id\"",
+			Args: []profileArgument{
+				{Type: "int64", Value: "1"},
+			},
+		},
+		{
+			Operation: "overdue_read",
+			Kind:      "query",
+			SQL:       "SELECT id, project_id, assignee_id, title, is_open, due_on, created_at\nFROM tasks\nWHERE project_id = $1\n  AND is_open = $2\n  AND due_on IS NOT NULL\n  AND due_on < $3\nORDER BY id\n",
+			Args: []profileArgument{
+				{Type: "int64", Value: "1"},
+				{Type: "bool", Value: "true"},
+				{Type: "time.Time", Value: "2024-01-04T00:00:00Z"},
+			},
+		},
+		{
+			Operation: "graph_root",
+			Kind:      "query",
+			SQL:       "SELECT \"p\".\"id\" AS \"id\", \"p\".\"name\" AS \"name\" FROM \"projects\" AS \"p\" WHERE (\"p\".\"id\" = $1) ORDER BY \"p\".\"id\"",
+			Args: []profileArgument{
+				{Type: "int64", Value: "1"},
+			},
+		},
+		{
+			Operation: "graph_tasks",
+			Kind:      "query",
+			SQL:       "SELECT \"partition_source\".\"id\" AS \"id\", \"partition_source\".\"project_id\" AS \"project_id\", \"partition_source\".\"assignee_id\" AS \"assignee_id\", \"partition_source\".\"title\" AS \"title\", \"partition_source\".\"is_open\" AS \"is_open\", \"partition_source\".\"due_on\" AS \"due_on\", \"partition_source\".\"created_at\" AS \"created_at\" FROM (SELECT \"t\".\"id\" AS \"id\", \"t\".\"project_id\" AS \"project_id\", \"t\".\"assignee_id\" AS \"assignee_id\", \"t\".\"title\" AS \"title\", \"t\".\"is_open\" AS \"is_open\", \"t\".\"due_on\" AS \"due_on\", \"t\".\"created_at\" AS \"created_at\", row_number() OVER (PARTITION BY \"t\".\"project_id\" ORDER BY \"t\".\"id\") AS \"__rasql_partition_row\" FROM \"tasks\" AS \"t\" WHERE (\"t\".\"project_id\" = $1) ORDER BY \"t\".\"id\", \"t\".\"id\") AS \"partition_source\" WHERE (\"partition_source\".\"__rasql_partition_row\" <= $2)",
+			Args: []profileArgument{
+				{Type: "int64", Value: "1"},
+				{Type: "int64", Value: "5"},
+			},
+		},
+		{
+			Operation: "graph_assignees",
+			Kind:      "query",
+			SQL:       "SELECT \"partition_source\".\"id\" AS \"id\", \"partition_source\".\"name\" AS \"name\" FROM (SELECT \"m\".\"id\" AS \"id\", \"m\".\"name\" AS \"name\", row_number() OVER (PARTITION BY \"m\".\"id\" ORDER BY \"m\".\"id\") AS \"__rasql_partition_row\" FROM \"members\" AS \"m\" WHERE (\"m\".\"id\" = $1) ORDER BY \"m\".\"id\", \"m\".\"id\") AS \"partition_source\" WHERE (\"partition_source\".\"__rasql_partition_row\" <= $2)",
+			Args: []profileArgument{
+				{Type: "int64", Value: "20"},
+				{Type: "int64", Value: "2"},
+			},
+		},
+		{
+			Operation: "create",
+			Kind:      "query",
+			SQL:       "INSERT INTO \"members\" (\"id\", \"name\") VALUES ($1, $2) RETURNING \"id\" AS \"id\", \"name\" AS \"name\"",
+			Args: []profileArgument{
+				{Type: "int64", Value: "4001"},
+				{Type: "string", Value: "created"},
+			},
+		},
+		{
+			Operation: "patch",
+			Kind:      "query",
+			SQL:       "UPDATE \"members\" SET \"name\" = $1 WHERE (\"members\".\"id\" = $2) RETURNING \"id\" AS \"id\", \"name\" AS \"name\"",
+			Args: []profileArgument{
+				{Type: "string", Value: "patched"},
+				{Type: "int64", Value: "4001"},
+			},
+		},
+	}
+	switch profileID {
+	case "postgresql-16", "postgresql-17":
+		return postgresql, true
+	case "mysql-8.4":
+		return []profileStatement{
+			{
+				Operation: "single_row_read",
+				Kind:      "query",
+				SQL:       "SELECT `p`.`id` AS `id`, `p`.`name` AS `name` FROM `projects` AS `p` WHERE (`p`.`id` = ?) ORDER BY `p`.`id`",
+				Args: []profileArgument{
+					{Type: "int64", Value: "1"},
+				},
+			},
+			{
+				Operation: "overdue_read",
+				Kind:      "query",
+				SQL:       "SELECT id, project_id, assignee_id, title, is_open, due_on, created_at\nFROM tasks\nWHERE project_id = ?\n  AND is_open = ?\n  AND due_on IS NOT NULL\n  AND due_on < ?\nORDER BY id\n",
+				Args: []profileArgument{
+					{Type: "int64", Value: "1"},
+					{Type: "bool", Value: "true"},
+					{Type: "time.Time", Value: "2024-01-04T00:00:00Z"},
+				},
+			},
+			{
+				Operation: "graph_root",
+				Kind:      "query",
+				SQL:       "SELECT `p`.`id` AS `id`, `p`.`name` AS `name` FROM `projects` AS `p` WHERE (`p`.`id` = ?) ORDER BY `p`.`id`",
+				Args: []profileArgument{
+					{Type: "int64", Value: "1"},
+				},
+			},
+			{
+				Operation: "graph_tasks",
+				Kind:      "query",
+				SQL:       "SELECT `partition_source`.`id` AS `id`, `partition_source`.`project_id` AS `project_id`, `partition_source`.`assignee_id` AS `assignee_id`, `partition_source`.`title` AS `title`, `partition_source`.`is_open` AS `is_open`, `partition_source`.`due_on` AS `due_on`, `partition_source`.`created_at` AS `created_at` FROM (SELECT `t`.`id` AS `id`, `t`.`project_id` AS `project_id`, `t`.`assignee_id` AS `assignee_id`, `t`.`title` AS `title`, `t`.`is_open` AS `is_open`, `t`.`due_on` AS `due_on`, `t`.`created_at` AS `created_at`, row_number() OVER (PARTITION BY `t`.`project_id` ORDER BY `t`.`id`) AS `__rasql_partition_row` FROM `tasks` AS `t` WHERE (`t`.`project_id` = ?) ORDER BY `t`.`id`, `t`.`id`) AS `partition_source` WHERE (`partition_source`.`__rasql_partition_row` <= ?)",
+				Args: []profileArgument{
+					{Type: "int64", Value: "1"},
+					{Type: "int64", Value: "5"},
+				},
+			},
+			{
+				Operation: "graph_assignees",
+				Kind:      "query",
+				SQL:       "SELECT `partition_source`.`id` AS `id`, `partition_source`.`name` AS `name` FROM (SELECT `m`.`id` AS `id`, `m`.`name` AS `name`, row_number() OVER (PARTITION BY `m`.`id` ORDER BY `m`.`id`) AS `__rasql_partition_row` FROM `members` AS `m` WHERE (`m`.`id` = ?) ORDER BY `m`.`id`, `m`.`id`) AS `partition_source` WHERE (`partition_source`.`__rasql_partition_row` <= ?)",
+				Args: []profileArgument{
+					{Type: "int64", Value: "20"},
+					{Type: "int64", Value: "2"},
+				},
+			},
+			{
+				Operation: "create",
+				Kind:      "exec",
+				SQL:       "INSERT INTO `members` (`id`, `name`) VALUES (?, ?)",
+				Args: []profileArgument{
+					{Type: "int64", Value: "4001"},
+					{Type: "string", Value: "created"},
+				},
+			},
+			{
+				Operation: "patch",
+				Kind:      "exec",
+				SQL:       "UPDATE `members` SET `name` = ? WHERE (`members`.`id` = ?)",
+				Args: []profileArgument{
+					{Type: "string", Value: "patched"},
+					{Type: "int64", Value: "4001"},
+				},
+			},
+		}, true
+	case "sqlite-3.35":
+		return []profileStatement{
+			{
+				Operation: "single_row_read",
+				Kind:      "query",
+				SQL:       "SELECT \"p\".\"id\" AS \"id\", \"p\".\"name\" AS \"name\" FROM \"main\".\"projects\" AS \"p\" WHERE (\"p\".\"id\" = ?) ORDER BY \"p\".\"id\"",
+				Args: []profileArgument{
+					{Type: "int64", Value: "1"},
+				},
+			},
+			{
+				Operation: "overdue_read",
+				Kind:      "query",
+				SQL:       "SELECT id, project_id, assignee_id, title, is_open, due_on, created_at\nFROM tasks\nWHERE project_id = ?\n  AND is_open = ?\n  AND due_on IS NOT NULL\n  AND due_on < ?\nORDER BY id\n",
+				Args: []profileArgument{
+					{Type: "int64", Value: "1"},
+					{Type: "bool", Value: "true"},
+					{Type: "time.Time", Value: "2024-01-04T00:00:00Z"},
+				},
+			},
+			{
+				Operation: "graph_root",
+				Kind:      "query",
+				SQL:       "SELECT \"p\".\"id\" AS \"id\", \"p\".\"name\" AS \"name\" FROM \"main\".\"projects\" AS \"p\" WHERE (\"p\".\"id\" = ?) ORDER BY \"p\".\"id\"",
+				Args: []profileArgument{
+					{Type: "int64", Value: "1"},
+				},
+			},
+			{
+				Operation: "graph_tasks",
+				Kind:      "query",
+				SQL:       "SELECT \"partition_source\".\"id\" AS \"id\", \"partition_source\".\"project_id\" AS \"project_id\", \"partition_source\".\"assignee_id\" AS \"assignee_id\", \"partition_source\".\"title\" AS \"title\", \"partition_source\".\"is_open\" AS \"is_open\", \"partition_source\".\"due_on\" AS \"due_on\", \"partition_source\".\"created_at\" AS \"created_at\" FROM (SELECT \"t\".\"id\" AS \"id\", \"t\".\"project_id\" AS \"project_id\", \"t\".\"assignee_id\" AS \"assignee_id\", \"t\".\"title\" AS \"title\", \"t\".\"is_open\" AS \"is_open\", \"t\".\"due_on\" AS \"due_on\", \"t\".\"created_at\" AS \"created_at\", row_number() OVER (PARTITION BY \"t\".\"project_id\" ORDER BY \"t\".\"id\") AS \"__rasql_partition_row\" FROM \"main\".\"tasks\" AS \"t\" WHERE (\"t\".\"project_id\" = ?) ORDER BY \"t\".\"id\", \"t\".\"id\") AS \"partition_source\" WHERE (\"partition_source\".\"__rasql_partition_row\" <= ?)",
+				Args: []profileArgument{
+					{Type: "int64", Value: "1"},
+					{Type: "int64", Value: "5"},
+				},
+			},
+			{
+				Operation: "graph_assignees",
+				Kind:      "query",
+				SQL:       "SELECT \"partition_source\".\"id\" AS \"id\", \"partition_source\".\"name\" AS \"name\" FROM (SELECT \"m\".\"id\" AS \"id\", \"m\".\"name\" AS \"name\", row_number() OVER (PARTITION BY \"m\".\"id\" ORDER BY \"m\".\"id\") AS \"__rasql_partition_row\" FROM \"main\".\"members\" AS \"m\" WHERE (\"m\".\"id\" = ?) ORDER BY \"m\".\"id\", \"m\".\"id\") AS \"partition_source\" WHERE (\"partition_source\".\"__rasql_partition_row\" <= ?)",
+				Args: []profileArgument{
+					{Type: "int64", Value: "20"},
+					{Type: "int64", Value: "2"},
+				},
+			},
+			{
+				Operation: "create",
+				Kind:      "query",
+				SQL:       "INSERT INTO \"main\".\"members\" (\"id\", \"name\") VALUES (?, ?) RETURNING \"id\" AS \"id\", \"name\" AS \"name\"",
+				Args: []profileArgument{
+					{Type: "int64", Value: "4001"},
+					{Type: "string", Value: "created"},
+				},
+			},
+			{
+				Operation: "patch",
+				Kind:      "query",
+				SQL:       "UPDATE \"main\".\"members\" SET \"name\" = ? WHERE (\"main\".\"members\".\"id\" = ?) RETURNING \"id\" AS \"id\", \"name\" AS \"name\"",
+				Args: []profileArgument{
+					{Type: "string", Value: "patched"},
+					{Type: "int64", Value: "4001"},
+				},
+			},
+		}, true
+	}
+	return nil, false
 }

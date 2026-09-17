@@ -34,16 +34,14 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: '1.26.x'
+      # This job publishes no conformance evidence, so it sets no
+      # RASQL_CONFORMANCE_COMMIT: nothing it runs needs a commit to attribute
+      # a measurement to. Leaving it unset also lets
+      # TestConformanceEnvironmentRequiresObservedBuildData run here rather
+      # than skip, which is what pins that `go test` stamps no vcs.* setting
+      # into a test binary. The "integration" job's conformance step gets its
+      # commit from scripts/conformance.sh, which reads `git rev-parse HEAD`.
       - name: Run the full suite
-        # internal/conformance's TestGeneratedFootprintBuild attributes the
-        # performance evidence it writes to the commit that produced it, so
-        # it requires RASQL_CONFORMANCE_COMMIT rather than treating a blank
-        # value as something to skip past; GitHub already knows the commit
-        # this run is testing, so hand it over instead of leaving the test
-        # to guess at one through build-info stamping that a sandboxed
-        # runner can silently fail to produce.
-        env:
-          RASQL_CONFORMANCE_COMMIT: ${{ github.sha }}
         run: ./scripts/test.sh check
       - run: go vet ./...
       # The sample runs on PostgreSQL, so its tests need a live server and run

@@ -249,6 +249,11 @@ func LoadPortableSignature() (SignatureDocument, error) {
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return SignatureDocument{}, fmt.Errorf("portable signature: trailing data")
 	}
+	// The file states the seed's cardinalities and leaves its rows to canonicalSeedRows, which
+	// builds them from the same loops SeedDatabaseForEngine writes to a database. Validate then
+	// checks those rows against the schema, the cardinalities, and portableSeedSHA256 exactly as
+	// it checked the rows the file used to carry.
+	document.Seed.Rows = canonicalSeedRows()
 	if err := document.Validate(); err != nil {
 		return SignatureDocument{}, err
 	}
@@ -318,18 +323,18 @@ func validateSignatureJSONShape(data []byte) error {
 	if err := json.Unmarshal(root["seed"], &seed); err != nil || seed == nil {
 		return fmt.Errorf("portable signature: seed must be an object")
 	}
-	if err := requireJSONFields("seed", seed, "cardinalities", "rows"); err != nil {
+	// The seed node carries cardinalities only. canonicalSeedRows supplies the rows themselves,
+	// so a "rows" key here is stale content rather than an extra field to tolerate.
+	if err := requireJSONFields("seed", seed, "cardinalities"); err != nil {
 		return err
 	}
-	for field, names := range map[string][]string{"cardinalities": {"name", "count"}, "rows": {"table", "values"}} {
-		var entries []map[string]json.RawMessage
-		if err := json.Unmarshal(seed[field], &entries); err != nil || entries == nil {
-			return fmt.Errorf("portable signature: seed %s must be an array", field)
-		}
-		for index, entry := range entries {
-			if err := requireJSONFields(fmt.Sprintf("seed %s %d", field, index), entry, names...); err != nil {
-				return err
-			}
+	var cardinalities []map[string]json.RawMessage
+	if err := json.Unmarshal(seed["cardinalities"], &cardinalities); err != nil || cardinalities == nil {
+		return fmt.Errorf("portable signature: seed cardinalities must be an array")
+	}
+	for index, entry := range cardinalities {
+		if err := requireJSONFields(fmt.Sprintf("seed cardinalities %d", index), entry, "name", "count"); err != nil {
+			return err
 		}
 	}
 	var workloads []map[string]json.RawMessage
