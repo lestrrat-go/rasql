@@ -203,6 +203,119 @@ func TestEventObserver(t *testing.T) {
 		require.ErrorIs(t, terminal.Err, callbackErr)
 		require.ErrorIs(t, terminal.Err, rollbackErr)
 	})
+
+	// Begin, unlike BeginScope, is not part of Executor: WithEventObservers
+	// given a DB hands the observers back as fields on that same DB, so a
+	// caller that type-asserts back to rasql.DB can call Begin directly, and
+	// the pair it reports has to come from Begin's own identity rather than
+	// from a wrapper Begin was never reachable through before.
+	t.Run("Begin reports one EventScope pair, closed by Commit", func(t *testing.T) {
+		executor := sqliteExecutor(t)
+		var mu sync.Mutex
+		var events []rasql.Event
+		type contextKey struct{}
+		var marker contextKey
+		terminalDerived := false
+		wrapped, err := rasql.WithEventObservers(executor, rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), rasql.EventObserverFunc(func(ctx context.Context, event rasql.Event) (context.Context, rasql.EventCompletion) {
+			mu.Lock()
+			events = append(events, event)
+			mu.Unlock()
+			return context.WithValue(ctx, marker, true), rasql.EventCompletionFunc(func(completionCtx context.Context, terminal rasql.Event) error {
+				if completionCtx.Value(marker) == true {
+					terminalDerived = true
+				}
+				mu.Lock()
+				events = append(events, terminal)
+				mu.Unlock()
+				return nil
+			})
+		}))
+		require.NoError(t, err)
+		db, ok := wrapped.(rasql.DB)
+		require.True(t, ok)
+
+		tx, err := db.Begin(t.Context(), nil)
+		require.NoError(t, err)
+		require.NoError(t, tx.Commit())
+
+		mu.Lock()
+		defer mu.Unlock()
+		require.Len(t, events, 2)
+		require.Equal(t, rasql.EventScope, events[0].Kind)
+		require.Equal(t, rasql.EventStart, events[0].Phase)
+		require.Equal(t, rasql.EventScope, events[1].Kind)
+		require.Equal(t, rasql.EventTerminal, events[1].Phase)
+		require.Equal(t, events[0].LogicalID, events[1].LogicalID, "the terminal must carry the LogicalID Begin's start reported")
+		require.Equal(t, events[0].ParentID, events[1].ParentID, "the terminal must carry the ParentID Begin's start reported")
+		require.NoError(t, events[1].Err)
+		require.True(t, terminalDerived, "Commit must report the terminal under the ctx Begin derived, not the ctx passed to Commit")
+	})
+
+	t.Run("Begin reports one EventScope pair, closed by Rollback with the rollback error", func(t *testing.T) {
+		database, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, database.Close()); require.NoError(t, mock.ExpectationsWereMet()) })
+		opened, err := rasql.Open(t.Context(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
+		require.NoError(t, err)
+		var mu sync.Mutex
+		var events []rasql.Event
+		type contextKey struct{}
+		var marker contextKey
+		terminalDerived := false
+		wrapped, err := rasql.WithEventObservers(opened, rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), rasql.EventObserverFunc(func(ctx context.Context, event rasql.Event) (context.Context, rasql.EventCompletion) {
+			mu.Lock()
+			events = append(events, event)
+			mu.Unlock()
+			return context.WithValue(ctx, marker, true), rasql.EventCompletionFunc(func(completionCtx context.Context, terminal rasql.Event) error {
+				if completionCtx.Value(marker) == true {
+					terminalDerived = true
+				}
+				mu.Lock()
+				events = append(events, terminal)
+				mu.Unlock()
+				return nil
+			})
+		}))
+		require.NoError(t, err)
+		db, ok := wrapped.(rasql.DB)
+		require.True(t, ok)
+
+		rollbackErr := errors.New("rollback failure")
+		mock.ExpectBegin()
+		mock.ExpectRollback().WillReturnError(rollbackErr)
+		mock.ExpectClose()
+
+		tx, err := db.Begin(t.Context(), nil)
+		require.NoError(t, err)
+		err = tx.Rollback()
+		require.ErrorIs(t, err, rollbackErr)
+
+		mu.Lock()
+		defer mu.Unlock()
+		require.Len(t, events, 2)
+		require.Equal(t, rasql.EventScope, events[0].Kind)
+		require.Equal(t, rasql.EventStart, events[0].Phase)
+		require.Equal(t, rasql.EventScope, events[1].Kind)
+		require.Equal(t, rasql.EventTerminal, events[1].Phase)
+		require.Equal(t, events[0].LogicalID, events[1].LogicalID, "the terminal must carry the LogicalID Begin's start reported")
+		require.Equal(t, events[0].ParentID, events[1].ParentID, "the terminal must carry the ParentID Begin's start reported")
+		require.ErrorIs(t, events[1].Err, rollbackErr, "the terminal must carry the error the transaction ended with")
+		require.True(t, terminalDerived, "Rollback must report the terminal under the ctx Begin derived, not the ctx passed to Rollback")
+	})
+
+	t.Run("Begin with no event observers stays silent through Commit and Rollback", func(t *testing.T) {
+		executor := sqliteExecutor(t)
+		db, ok := executor.(rasql.DB)
+		require.True(t, ok)
+
+		committed, err := db.Begin(t.Context(), nil)
+		require.NoError(t, err)
+		require.NoError(t, committed.Commit())
+
+		rolledBack, err := db.Begin(t.Context(), nil)
+		require.NoError(t, err)
+		require.NoError(t, rolledBack.Rollback())
+	})
 }
 
 func sqliteExecutor(t *testing.T) rasql.Executor {
