@@ -50,12 +50,10 @@ func TestReadClearsThePostgreSQLConnectedSchemaAndKeepsAnother(t *testing.T) {
 		"a foreign key pointing back into the connected schema names no schema either")
 }
 
-// TestReadClearsTheMySQLConnectedDatabaseAndKeepsAnother is the MySQL half. A MySQL namespace is a
-// database, so the namespace the connection is using is whatever DATABASE() answers. The first
-// read runs on a connection inside the per-run database, and the second reads the same table from
-// a connection that selected no database at all, where DATABASE() answers NULL and the database
-// name stays in the descriptor.
-func TestReadClearsTheMySQLConnectedDatabaseAndKeepsAnother(t *testing.T) {
+// TestReadClearsTheMySQLConnectedDatabase is the MySQL half. A MySQL namespace is a database, so
+// the namespace the connection is using is whatever DATABASE() answers, and a table read from the
+// database the connection selected generates unqualified.
+func TestReadClearsTheMySQLConnectedDatabase(t *testing.T) {
 	cfg := dbtest.MySQLConfig(t)
 	setup := openMySQL(t, cfg)
 	t.Cleanup(func() { require.NoError(t, setup.Close()) })
@@ -63,12 +61,44 @@ func TestReadClearsTheMySQLConnectedDatabaseAndKeepsAnother(t *testing.T) {
 	_, err := setup.ExecContext(t.Context(), "CREATE TABLE probe_default (id BIGINT NOT NULL PRIMARY KEY)")
 	require.NoError(t, err)
 
-	unselected := cfg.Clone()
-	unselected.DBName = ""
 	require.Equal(t, "", objectOf(t, "mysql", openMySQL(t, cfg), cfg.DBName, "probe_default").Schema,
 		"a table in the database the connection selected generates unqualified")
-	require.Equal(t, cfg.DBName, objectOf(t, "mysql", openMySQL(t, unselected), cfg.DBName, "probe_default").Schema,
-		"the same table read from a connection that selected no database keeps its database name")
+}
+
+// TestReadKeepsTheNamespaceWhenTheServerReportsNoCurrentOne covers the answer neither engine gives
+// on an ordinary connection: no namespace at all. Nothing is cleared then, because nothing is
+// known to be reachable unqualified, so the descriptor keeps the namespace it was read from.
+//
+// PostgreSQL answers NULL from current_schema() when search_path names only schemas that do not
+// exist, which the connection asks for as a startup parameter here. MySQL answers NULL from
+// DATABASE() on a connection that selected no database, which a DSN with no database name gives.
+// Both reads are scoped by namespace, so the catalog still finds the table without either.
+func TestReadKeepsTheNamespaceWhenTheServerReportsNoCurrentOne(t *testing.T) {
+	t.Run("postgresql", func(t *testing.T) {
+		cfg := dbtest.PostgreSQLConfig(t)
+		setup := stdlib.OpenDB(*cfg)
+		t.Cleanup(func() { require.NoError(t, setup.Close()) })
+		_, err := setup.ExecContext(t.Context(), `CREATE TABLE probe_default (id bigint PRIMARY KEY)`)
+		require.NoError(t, err)
+
+		emptyPath := cfg.Copy()
+		emptyPath.RuntimeParams["search_path"] = "rasql_no_such_schema"
+		require.Equal(t, "public", objectOf(t, "postgresql", stdlib.OpenDB(*emptyPath), "public", "probe_default").Schema,
+			"a connection whose search_path names nothing that exists clears no namespace")
+	})
+
+	t.Run("mysql", func(t *testing.T) {
+		cfg := dbtest.MySQLConfig(t)
+		setup := openMySQL(t, cfg)
+		t.Cleanup(func() { require.NoError(t, setup.Close()) })
+		_, err := setup.ExecContext(t.Context(), "CREATE TABLE probe_default (id BIGINT NOT NULL PRIMARY KEY)")
+		require.NoError(t, err)
+
+		unselected := cfg.Clone()
+		unselected.DBName = ""
+		require.Equal(t, cfg.DBName, objectOf(t, "mysql", openMySQL(t, unselected), cfg.DBName, "probe_default").Schema,
+			"a connection that selected no database clears no namespace")
+	})
 }
 
 // objectOf reads one namespace through the whole generate path and returns the descriptor it

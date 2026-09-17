@@ -86,7 +86,16 @@ migration's checksum. Leave it out for a project that points `-dsn` at
 whatever database it already has, migrated or not.
 
 `tables.namespaces` selects PostgreSQL schemas, MySQL databases, or attached
-SQLite databases. `tables.include_objects` and `tables.exclude_objects` use
+SQLite databases to read. It chooses which objects the generator reads, and it
+does not choose which namespace each generated table records. A table read from
+the namespace the generating connection is using records none, because an
+unqualified name already reaches it, and a table read from any other namespace
+records that namespace, because nothing else says which table a statement means.
+Listing the schema a PostgreSQL connection is already in, or the database a
+MySQL connection selected, therefore narrows what is read and leaves every
+generated statement spelled the same.
+
+`tables.include_objects` and `tables.exclude_objects` use
 exact `{schema, name}` identities, which lets one package include same-named
 tables from multiple namespaces. `tables.include` names the only
 tables to generate, and `tables.exclude` names tables to skip. A sweep

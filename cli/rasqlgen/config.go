@@ -86,13 +86,44 @@ func (c config) mappings() (compilerir.MappingConfig, error) {
 // configTables is the table selection and the Go-side names no database can
 // state.
 type configTables struct {
+	// Namespaces reads only the PostgreSQL schemas, MySQL databases, or
+	// attached SQLite databases it lists, instead of every object the
+	// connection can see. It is read only when Include and IncludeObjects
+	// are both empty, which are the two settings that name objects
+	// themselves.
+	//
+	// It chooses what the generator reads, and it does not choose what the
+	// generated store records. A table read from the namespace the
+	// generating connection is using generates unqualified whether or not
+	// this list named that namespace, because an unqualified name already
+	// reaches it; a table read from any other namespace generates qualified,
+	// because nothing else says which table the statement means. A store
+	// that has to carry a namespace of its own states that namespace at run
+	// time rather than here.
+	//
+	// Listing a namespace here while IncludeObjects carries a
+	// schema-qualified entry fails the run with "namespaces and a
+	// schema-qualified include must not be combined".
 	Namespaces []string `json:"namespaces"`
 
+	// IncludeObjects names the only objects to generate, each as an exact
+	// {"schema": ..., "name": ...} pair, so that one package can hold two
+	// same-named tables from different namespaces. Its entries and
+	// Include's are the same list to everything downstream. A named object
+	// the catalog does not hold fails the run.
 	IncludeObjects []schema.ObjectName `json:"include_objects"`
 
+	// ExcludeObjects names objects to skip, in IncludeObjects' exact-pair
+	// form. Its entries and Exclude's are the same list to everything
+	// downstream. Naming one object twice across the include and exclude
+	// lists fails the run with "duplicate object <name>".
 	ExcludeObjects []schema.ObjectName `json:"exclude_objects"`
 
+	// IncludeViews also generates from every view the read reaches. The
+	// default, false, generates from base tables alone and passes over a
+	// view even when Include or IncludeObjects names it.
 	IncludeViews bool `json:"include_views"`
+
 	// Include names the only tables to generate. Empty sweeps every base
 	// table. It is not accepted together with Exclude.
 	Include []string `json:"include"`
@@ -110,6 +141,16 @@ type configTables struct {
 	// row name and another table's generated names, which refuses the run.
 	RowNames map[string]string `json:"row_names"`
 
+	// Names states Go-side names for one object, keyed either "table" or
+	// "namespace.table"; any other shape of key fails the run. Both
+	// spellings reach the same table when the namespace is the one the
+	// generating connection is using, since the descriptor read from there
+	// carries no namespace, and stating both spellings for one table fails
+	// the run rather than letting one of them win.
+	//
+	// The generator reads row_type today, and RowNames states the same thing
+	// keyed by bare table name. It parses accessor, table_type, file_base
+	// and columns and generates from none of them.
 	Names map[string]configObjectNames `json:"names"`
 }
 

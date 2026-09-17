@@ -47,6 +47,15 @@ type ReadResult struct {
 	Queries    []compilerir.QueryAnalysis
 	Unresolved []catalogread.UnresolvedFact
 	Snapshots  []sourcefile.SourceFileSnapshot
+
+	// Namespace is what the server answered when asked which namespace the connection is
+	// using, and the one unqualifyDefaultNamespace therefore cleared from every descriptor in
+	// Catalog. It is empty when the server answered NULL, and for an engine this package has
+	// no such question for, and then nothing was cleared.
+	//
+	// A caller that matches configuration against a descriptor's namespace reads it, so that
+	// a setting written as "main.users" still reaches the table Catalog now calls "users".
+	Namespace string
 }
 
 func (r ReadResult) Clone() ReadResult {
@@ -197,7 +206,7 @@ func Read(ctx context.Context, req ReadRequest, deps Dependencies) (ReadResult, 
 		allSnapshots := append([]sourcefile.SourceFileSnapshot(nil), migrationSnaps...)
 		allSnapshots = append(allSnapshots, querySnapshots...)
 
-		returnResult = ReadResult{Catalog: catalog, Profile: profile, Migrations: migrations, Queries: queries, Unresolved: read.Unresolved, Snapshots: allSnapshots}
+		returnResult = ReadResult{Catalog: catalog, Profile: profile, Migrations: migrations, Queries: queries, Unresolved: read.Unresolved, Snapshots: allSnapshots, Namespace: namespace}
 		return nil
 	}
 
