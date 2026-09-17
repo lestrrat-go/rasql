@@ -18,8 +18,16 @@ func Example_mutationBatch() {
 		WillReturnResult(sqlmock.NewResult(1, 2))
 	executor, _ := rasql.Open(context.Background(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
 	// BEGIN(mutationBatch)
-	first := store.NewUsersCreate().Email("ada@example.com").FirstName("Ada").LastName("Lovelace").Plan()
-	second := store.NewUsersCreate().Email("grace@example.com").FirstName("Grace").LastName("Hopper").Plan()
+	first, err := store.NewUsersCreate().Email("ada@example.com").FirstName("Ada").LastName("Lovelace").Plan()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	second, err := store.NewUsersCreate().Email("grace@example.com").FirstName("Grace").LastName("Hopper").Plan()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 	outcome, err := rasql.ExecMutationBatch(context.Background(), executor,
 		[]rasql.MutationPlan{first, second}, rasql.BulkOptions{MaxRows: 100})
 	if err != nil {

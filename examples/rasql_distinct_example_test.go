@@ -56,16 +56,20 @@ func Example_rasql_distinct() {
 		{ID: 2, UserID: 2},
 		{ID: 3, UserID: 1},
 	} {
-		plan := store.NewOrdersCreate().ID(order.ID).UserID(order.UserID).Total(order.Total).Plan()
+		plan, err := store.NewOrdersCreate().ID(order.ID).UserID(order.UserID).Total(order.Total).Plan()
+		if err != nil {
+			fmt.Printf("failed to build insert: %s\n", err)
+			return
+		}
 		if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
 			fmt.Printf("failed to insert order: %s\n", err)
 			return
 		}
 	}
 
-	userID, err := rasql.BindColumn[store.OrdersRow, int64](orders, orders.UserIDRef().Name(), "")
+	ordersColumns, err := (store.OrdersColumns{}).Bind(orders.Table)
 	if err != nil {
-		fmt.Printf("failed to bind user_id column: %s\n", err)
+		fmt.Printf("failed to bind orders columns: %s\n", err)
 		return
 	}
 	result, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "user_id", Type: schema.IntegerType{}})
@@ -74,7 +78,7 @@ func Example_rasql_distinct() {
 		return
 	}
 	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
-		rasql.Item("user_id", userID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("user_id", ordersColumns.UserID.Expr(), schema.IntegerType{}, ""),
 	}, orderingUserDecoder{result: result})
 	if err != nil {
 		fmt.Printf("failed to build projection: %s\n", err)
@@ -85,7 +89,7 @@ func Example_rasql_distinct() {
 	// user_id alone; a full-row select would already select the orders
 	// primary key, which makes every row unique before DISTINCT runs.
 	// SQL: SELECT DISTINCT orders.user_id FROM orders ORDER BY orders.user_id
-	q := rasql.Select(orders, projection).Distinct().OrderBy(rasql.AscExpr(userID.Expr()))
+	q := rasql.Select(orders, projection).Distinct().OrderBy(rasql.AscExpr(ordersColumns.UserID.Expr()))
 	rows, err := rasql.All(ctx, db, q)
 	if err != nil {
 		fmt.Printf("failed to query ordering users: %s\n", err)

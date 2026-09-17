@@ -39,17 +39,26 @@ func Example_rasql_delete() {
 		return
 	}
 	for id, email := range map[int64]string{1: "ada@example.com", 2: "grace@example.com", 3: "edsger@example.com"} {
-		plan := store.NewUsersCreate().ID(id).Email(email).FirstName("First").LastName("Last").Plan()
+		plan, err := store.NewUsersCreate().ID(id).Email(email).FirstName("First").LastName("Last").Plan()
+		if err != nil {
+			fmt.Printf("failed to build insert: %s\n", err)
+			return
+		}
 		if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
 	}
 
+	// rasqlgen emits no delete builder, so a delete names the table's handle
+	// and builds its predicate through the query package. TypedColumnOf pairs
+	// the column with the row type the predicate is checked against.
+	id := query.TypedColumnOf[store.UsersRow, int64](users.Column("id"))
+
 	// NewDeletePlan takes a table and a typed predicate built through the
 	// query package.
 	// SQL: DELETE FROM users WHERE users.id = ? (argument: 1)
-	byID, err := rasql.NewDeletePlan(users.Table, query.EqualValue(users.ID(), int64(1)))
+	byID, err := rasql.NewDeletePlan(users.Table, query.EqualValue(id, int64(1)))
 	if err != nil {
 		fmt.Printf("failed to build delete: %s\n", err)
 		return
@@ -63,7 +72,7 @@ func Example_rasql_delete() {
 
 	// Where takes any predicate the query package can build.
 	// SQL: DELETE FROM users WHERE users.id > ? (argument: 2)
-	byPredicate, err := rasql.NewDeletePlan(users.Table, query.GreaterValue(users.ID(), int64(2)))
+	byPredicate, err := rasql.NewDeletePlan(users.Table, query.GreaterValue(id, int64(2)))
 	if err != nil {
 		fmt.Printf("failed to build delete: %s\n", err)
 		return

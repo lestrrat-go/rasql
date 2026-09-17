@@ -3,80 +3,69 @@
 package store
 
 import (
+	"fmt"
+
 	"github.com/lestrrat-go/rasql"
-	"github.com/lestrrat-go/rasql/schema"
 )
 
-var employeesDef = schema.TableDef{
-	Name: "employees",
-	Columns: []schema.ColumnDef{
-		{Name: "id", Type: schema.IntegerType{}},
-		{Name: "name", Type: schema.TextType{}},
-		{Name: "manager_id", Type: schema.IntegerType{}, Nullable: true},
-	},
-	PrimaryKey: []string{"id"},
+func rasqlgenBind[S, C any](sticky *error, source S, name, codec string, bind func(S, string, string) (C, error)) C {
+	if *sticky != nil {
+		var zero C
+		return zero
+	}
+	value, err := bind(source, name, codec)
+	if err != nil {
+		*sticky = err
+	}
+	return value
 }
 
-var employeesTable = EmployeesTable{rasql.TableFrom[EmployeesRow](employeesDef)}
-
-// EmployeesDef returns a copy of the descriptor for the "employees" table.
-func EmployeesDef() schema.TableDef { return employeesDef.Clone() }
-
-var ordersDef = schema.TableDef{
-	Name: "orders",
-	Columns: []schema.ColumnDef{
-		{Name: "id", Type: schema.IntegerType{}},
-		{Name: "user_id", Type: schema.IntegerType{}},
-		{Name: "total", Type: schema.IntegerType{}},
-	},
-	PrimaryKey: []string{"id"},
+func rasqlgenAppendMutationField[R any](fields []rasql.MutationField[R], field rasql.MutationField[R]) []rasql.MutationField[R] {
+	return append(append([]rasql.MutationField[R](nil), fields...), field)
 }
 
-var ordersTable = OrdersTable{rasql.TableFrom[OrdersRow](ordersDef)}
-
-// OrdersDef returns a copy of the descriptor for the "orders" table.
-func OrdersDef() schema.TableDef { return ordersDef.Clone() }
-
-var tasksDef = schema.TableDef{
-	Name: "tasks",
-	Columns: []schema.ColumnDef{
-		{Name: "id", Type: schema.IntegerType{}},
-		{Name: "status", Type: schema.TextType{}},
-	},
-	PrimaryKey: []string{"id"},
+func rasqlgenResultSchema(columns []rasql.ResultColumn) rasql.ResultSchema {
+	value, err := rasql.NewResultSchema(columns...)
+	if err != nil {
+		panic(err)
+	}
+	return value
 }
 
-var tasksTable = TasksTable{rasql.TableFrom[TasksRow](tasksDef)}
-
-// TasksDef returns a copy of the descriptor for the "tasks" table.
-func TasksDef() schema.TableDef { return tasksDef.Clone() }
-
-var usersDef = schema.TableDef{
-	Name: "users",
-	Columns: []schema.ColumnDef{
-		{Name: "id", Type: schema.IntegerType{}},
-		{Name: "email", Type: schema.TextType{}},
-		{Name: "nickname", Type: schema.TextType{}, Nullable: true},
-		{Name: "status", Type: schema.TextType{}, Default: "'pending'"},
-		{Name: "first_name", Type: schema.TextType{}},
-		{Name: "last_name", Type: schema.TextType{}},
-	},
-	PrimaryKey:              []string{"id"},
-	PrimaryKeyAutoincrement: true,
+func rasqlgenOptionalResultSchema(columns []rasql.ResultColumn) rasql.ResultSchema {
+	for i := range columns {
+		columns[i].Nullable = true
+	}
+	return rasqlgenResultSchema(columns)
 }
 
-var usersTable = UsersTable{rasql.TableFrom[UsersRow](usersDef)}
+func rasqlgenAssignNullable[T any](source rasql.Nullable[T], target *T) {
+	if source.Valid {
+		*target = source.Value
+	}
+}
 
-// UsersDef returns a copy of the descriptor for the "users" table.
-func UsersDef() schema.TableDef { return usersDef.Clone() }
+func rasqlgenPageKey[R, T comparable](direction rasql.PageDirection, value rasql.Expr[T], extract func(R) T) (rasql.PageKey[R], error) {
+	switch direction {
+	case rasql.PageAscending:
+		return rasql.AscKey(value, extract), nil
+	case rasql.PageDescending:
+		return rasql.DescKey(value, extract), nil
+	default:
+		return nil, fmt.Errorf("invalid page direction %d", direction)
+	}
+}
 
-// Tables returns a clone of every table's descriptor, in the order this
-// file declares them.
-func Tables() []schema.TableDef {
-	return []schema.TableDef{
-		employeesDef.Clone(),
-		ordersDef.Clone(),
-		tasksDef.Clone(),
-		usersDef.Clone(),
+func rasqlgenNullablePageKey[R, T comparable](direction rasql.PageDirection, value rasql.NullExpr[T], extract func(R) rasql.Nullable[T], nulls rasql.NullOrder) (rasql.PageKey[R], error) {
+	if nulls == rasql.NullOrderDefault {
+		return nil, fmt.Errorf("nullable page keys require explicit NULL order")
+	}
+	switch direction {
+	case rasql.PageAscending:
+		return rasql.AscNullKey(value, extract, nulls), nil
+	case rasql.PageDescending:
+		return rasql.DescNullKey(value, extract, nulls), nil
+	default:
+		return nil, fmt.Errorf("invalid page direction %d", direction)
 	}
 }

@@ -16,28 +16,20 @@ import (
 // is the case this example exists to show: the embedded row keeps its own
 // ScanRow method, promoted onto userWithRole, and Role rides along beside it.
 type userWithRole struct {
-	store.UsersRow // promotes ScanRow and ScanDestinations
+	store.UsersRow // promotes ScanRow
 	Role           string
 }
 
-// userWithRoleDecoder decodes through userWithRole's promoted
-// ScanDestinations, which only the embedded UsersRow's own fields feed: Role
-// keeps its zero value. ScanDestinations maps by column name, so a decoder
-// projecting fewer columns than the whole table still resolves each one to
-// the field it belongs to.
-type userWithRoleDecoder struct {
-	result  rasql.ResultSchema
-	columns []string
-}
+// userWithRoleDecoder decodes through userWithRole's promoted ScanRow, which
+// fills the embedded UsersRow's own fields and nothing else: Role keeps its
+// zero value. ScanRow reads the result columns in the order the generated row
+// declares them, so the projection below names all six in that order.
+type userWithRoleDecoder struct{ result rasql.ResultSchema }
 
 func (d userWithRoleDecoder) ResultSchema() rasql.ResultSchema { return d.result }
 func (d userWithRoleDecoder) Presence() []rasql.Presence       { return nil }
 func (d userWithRoleDecoder) DecodeRow(src rasql.ScanSource, row *userWithRole) error {
-	destinations, err := row.ScanDestinations(d.columns)
-	if err != nil {
-		return err
-	}
-	return src.Scan(destinations...)
+	return row.ScanRow(src)
 }
 
 // Example_rasqlgen_embedded_row shows what embedding a generated row type
@@ -60,38 +52,49 @@ func Example_rasqlgen_embedded_row() {
 		fmt.Printf("failed to create executor: %s\n", err)
 		return
 	}
-	if err := rasql.CreateTable(ctx, db, store.Users()); err != nil {
+	users := store.Users()
+	if err := rasql.CreateTable(ctx, db, users); err != nil {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	if _, err := rasql.ExecMutation(ctx, db, store.NewUsersCreate().ID(1).Email("ada@example.com").FirstName("First").LastName("Last").Plan()); err != nil {
+	plan, err := store.NewUsersCreate().ID(1).Email("ada@example.com").FirstName("First").LastName("Last").Plan()
+	if err != nil {
+		fmt.Printf("failed to build insert: %s\n", err)
+		return
+	}
+	if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
 
-	users := store.Users()
-	id, err := rasql.BindColumn[store.UsersRow, int64](users, users.IDRef().Name(), "")
+	// The generated columns are reused, but not the generated projection:
+	// store.UsersProjection decodes into store.UsersRow, and this query
+	// decodes into the wrapper instead, so it states its own decoder.
+	columns, err := (store.UsersColumns{}).Bind(users.Table)
 	if err != nil {
-		fmt.Printf("failed to bind id column: %s\n", err)
-		return
-	}
-	email, err := rasql.BindColumn[store.UsersRow, string](users, users.EmailRef().Name(), "")
-	if err != nil {
-		fmt.Printf("failed to bind email column: %s\n", err)
+		fmt.Printf("failed to bind users columns: %s\n", err)
 		return
 	}
 	result, err := rasql.NewResultSchema(
 		rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}},
 		rasql.ResultColumn{Name: "email", Type: schema.TextType{}},
+		rasql.ResultColumn{Name: "nickname", Type: schema.TextType{}, Nullable: true},
+		rasql.ResultColumn{Name: "status", Type: schema.TextType{}},
+		rasql.ResultColumn{Name: "first_name", Type: schema.TextType{}},
+		rasql.ResultColumn{Name: "last_name", Type: schema.TextType{}},
 	)
 	if err != nil {
 		fmt.Printf("failed to build result schema: %s\n", err)
 		return
 	}
 	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
-		rasql.Item("id", id.Expr(), schema.IntegerType{}, ""),
-		rasql.Item("email", email.Expr(), schema.TextType{}, ""),
-	}, userWithRoleDecoder{result: result, columns: []string{"id", "email"}})
+		rasql.Item("id", columns.ID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("email", columns.Email.Expr(), schema.TextType{}, ""),
+		rasql.NullItem("nickname", columns.Nickname.NullExpr(), schema.TextType{}, ""),
+		rasql.Item("status", columns.Status.Expr(), schema.TextType{}, ""),
+		rasql.Item("first_name", columns.FirstName.Expr(), schema.TextType{}, ""),
+		rasql.Item("last_name", columns.LastName.Expr(), schema.TextType{}, ""),
+	}, userWithRoleDecoder{result: result})
 	if err != nil {
 		fmt.Printf("failed to build projection: %s\n", err)
 		return

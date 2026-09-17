@@ -757,8 +757,8 @@ Each field's `rasql` tag names the column it holds.
 A `rasql.Table[T]` is not yet the table value your code calls through.
 Wrap it in a type that exposes one accessor method per column.
 Generated accessors return `query.TypedColumn` or `query.NullableColumn`, preserving the row and Go value types for typed predicates and writes.
-That is the shape [`rasqlgen`](../orm/01-codegen.md) emits, the shape every generated store uses, and the shape a hand-written table should have too.
-[Getting started](../01-getting-started.md#the-table-used-throughout-the-documentation) shows the full wrapper for the `users` table, and [What the column accessors catch](../orm/02-generated-store.md#what-the-column-accessors-catch) shows the mistakes they turn into build failures.
+That is the shape a hand-written table should have.
+[`rasqlgen`](../orm/01-codegen.md) buys the same compiler check a different way: it emits a columns struct whose `Bind` returns one `rasql.Column` field per column, and [What the bound columns catch](../orm/02-generated-store.md#what-the-bound-columns-catch) shows the mistakes those fields turn into build failures.
 
 Call a generated accessor's `Ref()` when your code needs the dynamic `query.ColumnRef` that the lower-level query package accepts, such as a projection or a dynamic predicate.
 Two methods take a column name your code only learns while it runs.

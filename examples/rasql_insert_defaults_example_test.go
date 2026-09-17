@@ -43,7 +43,11 @@ func Example_rasql_insert_defaults() {
 	// ClearNickname() writes SQL NULL explicitly rather than omitting the
 	// column, and every other column is written from the value given.
 	// SQL: INSERT INTO users (email, nickname, first_name, last_name) VALUES (?, ?, ?, ?) (arguments: "", NULL, "", "")
-	plan := store.NewUsersCreate().Email("").ClearNickname().DefaultStatus().FirstName("").LastName("").Plan()
+	plan, err := store.NewUsersCreate().Email("").ClearNickname().DefaultStatus().FirstName("").LastName("").Plan()
+	if err != nil {
+		fmt.Printf("failed to build insert: %s\n", err)
+		return
+	}
 	if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
@@ -51,12 +55,14 @@ func Example_rasql_insert_defaults() {
 
 	// A dynamic SELECT reads back what the database actually assigned,
 	// through the same query and render packages the typed layer builds on.
-	statement, err := query.NewSelect(users.Ref(), users.ID().Ref(), users.Email().Ref(), users.Status().Ref())
+	// query.NewSelect takes a query.ColumnRef, and Column is the generated
+	// table's only way to produce one.
+	statement, err := query.NewSelect(users.Ref(), users.Column("id"), users.Column("email"), users.Column("status"))
 	if err != nil {
 		fmt.Printf("failed to build select: %s\n", err)
 		return
 	}
-	statement, err = statement.WithWhere(query.Equal(users.ID().Ref(), 1))
+	statement, err = statement.WithWhere(query.Equal(users.Column("id"), 1))
 	if err != nil {
 		fmt.Printf("failed to filter select: %s\n", err)
 		return

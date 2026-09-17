@@ -2,8 +2,57 @@
 
 package store
 
-import "github.com/lestrrat-go/rasql/stmt"
+import (
+	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/schema"
+)
 
-func UserByEmail(email any) stmt.Statement {
-	return stmt.New("SELECT id, email FROM users WHERE email = $1\n", email)
+type user_by_emailResult struct {
+	ID    int64
+	Email string
+}
+
+type UserByEmailBindings struct{}
+type UserByEmailExpressions struct {
+	ID    rasql.Column[user_by_emailResult, int64]
+	Email rasql.Column[user_by_emailResult, string]
+}
+
+func (UserByEmailBindings) Bind(source rasql.TypedSource[user_by_emailResult]) (UserByEmailExpressions, error) {
+	valueID, err := rasql.BindResultColumn[user_by_emailResult, int64](source, "id")
+	if err != nil {
+		return UserByEmailExpressions{}, err
+	}
+	valueEmail, err := rasql.BindResultColumn[user_by_emailResult, string](source, "email")
+	if err != nil {
+		return UserByEmailExpressions{}, err
+	}
+	return UserByEmailExpressions{ID: valueID, Email: valueEmail}, nil
+}
+
+type user_by_emailDecoder struct{}
+
+func (user_by_emailDecoder) ResultSchema() rasql.ResultSchema { return user_by_emailDecoderSchema() }
+func (user_by_emailDecoder) Presence() []rasql.Presence       { return nil }
+func (user_by_emailDecoder) DecodeRow(s rasql.ScanSource, r *user_by_emailResult) error {
+	if err := s.Scan(&r.ID, &r.Email); err != nil {
+		return err
+	}
+	return nil
+}
+
+func user_by_emailDecoderSchema() rasql.ResultSchema {
+	s, _ := rasql.NewResultSchema(
+		rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}, Nullable: false, Codec: ""},
+		rasql.ResultColumn{Name: "email", Type: schema.TextType{}, Nullable: false, Codec: ""},
+	)
+	return s
+}
+
+func UserByEmail(email string) (rasql.Query[user_by_emailResult], error) {
+	projection, err := rasql.NativeProjection[user_by_emailResult](user_by_emailDecoder{})
+	if err != nil {
+		return rasql.Query[user_by_emailResult]{}, err
+	}
+	return rasql.Native[user_by_emailResult](rasql.NativeStatement{Engine: "sqlite", SQL: "SELECT id, email FROM users WHERE email = ?\n", Args: []rasql.NativeArgument{{Value: email, Codec: ""}}}, projection, rasql.AtMostOne)
 }

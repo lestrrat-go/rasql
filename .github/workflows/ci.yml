@@ -44,6 +44,12 @@ jobs:
       - name: Run the full suite
         run: ./scripts/test.sh check
       - run: go vet ./...
+      # examples/store is generated from examples/db/migrations through a
+      # throwaway SQLite database, so this check needs no server: -scratch
+      # builds that database, applies the migrations, regenerates in memory,
+      # and compares against the checked-in files.
+      - name: Check the examples' generated store
+        run: go run ./cmd/rasql codegen check -config examples/rasql.json -scratch
       # The sample runs on PostgreSQL, so its tests need a live server and run
       # in the "integration" job. This job has no database, and builds the
       # module and checks its generated store against its checked-in inputs,

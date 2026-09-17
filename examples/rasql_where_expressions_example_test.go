@@ -11,80 +11,6 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
-// whereExprUsersDecoder decodes every column of the users table into a
-// store.UsersRow, reusing the generated ScanRow method rather than restating
-// the column order.
-type whereExprUsersDecoder struct{ result rasql.ResultSchema }
-
-func (d whereExprUsersDecoder) ResultSchema() rasql.ResultSchema { return d.result }
-func (d whereExprUsersDecoder) Presence() []rasql.Presence       { return nil }
-func (d whereExprUsersDecoder) DecodeRow(src rasql.ScanSource, row *store.UsersRow) error {
-	return row.ScanRow(src)
-}
-
-// whereExprUsersColumns is every users column bound to one rasql.Source, so a
-// caller can add a Where or OrderBy against the same columns whereExprUsersQuery
-// projects.
-type whereExprUsersColumns struct {
-	ID        rasql.Column[store.UsersRow, int64]
-	Email     rasql.Column[store.UsersRow, string]
-	Nickname  rasql.NullColumn[store.UsersRow, string]
-	Status    rasql.Column[store.UsersRow, string]
-	FirstName rasql.Column[store.UsersRow, string]
-	LastName  rasql.Column[store.UsersRow, string]
-}
-
-// whereExprUsersQuery builds the canonical Query[store.UsersRow] that projects
-// every users column, in the order the generated row type scans them, and
-// returns the bound columns so a caller can filter or order by them.
-func whereExprUsersQuery() (rasql.Query[store.UsersRow], whereExprUsersColumns, error) {
-	users := store.Users()
-	def := store.UsersDef()
-	var cols whereExprUsersColumns
-	var err error
-	if cols.ID, err = rasql.BindColumn[store.UsersRow, int64](users, users.IDRef().Name(), ""); err != nil {
-		return rasql.Query[store.UsersRow]{}, whereExprUsersColumns{}, err
-	}
-	if cols.Email, err = rasql.BindColumn[store.UsersRow, string](users, users.EmailRef().Name(), ""); err != nil {
-		return rasql.Query[store.UsersRow]{}, whereExprUsersColumns{}, err
-	}
-	if cols.Nickname, err = rasql.BindNullColumn[store.UsersRow, string](users, users.NicknameRef().Name(), ""); err != nil {
-		return rasql.Query[store.UsersRow]{}, whereExprUsersColumns{}, err
-	}
-	if cols.Status, err = rasql.BindColumn[store.UsersRow, string](users, users.StatusRef().Name(), ""); err != nil {
-		return rasql.Query[store.UsersRow]{}, whereExprUsersColumns{}, err
-	}
-	if cols.FirstName, err = rasql.BindColumn[store.UsersRow, string](users, users.FirstNameRef().Name(), ""); err != nil {
-		return rasql.Query[store.UsersRow]{}, whereExprUsersColumns{}, err
-	}
-	if cols.LastName, err = rasql.BindColumn[store.UsersRow, string](users, users.LastNameRef().Name(), ""); err != nil {
-		return rasql.Query[store.UsersRow]{}, whereExprUsersColumns{}, err
-	}
-	result, err := rasql.NewResultSchema(
-		rasql.ResultColumn{Name: users.IDRef().Name(), Type: def.Columns[0].Type},
-		rasql.ResultColumn{Name: users.EmailRef().Name(), Type: def.Columns[1].Type},
-		rasql.ResultColumn{Name: users.NicknameRef().Name(), Type: def.Columns[2].Type, Nullable: true},
-		rasql.ResultColumn{Name: users.StatusRef().Name(), Type: def.Columns[3].Type},
-		rasql.ResultColumn{Name: users.FirstNameRef().Name(), Type: def.Columns[4].Type},
-		rasql.ResultColumn{Name: users.LastNameRef().Name(), Type: def.Columns[5].Type},
-	)
-	if err != nil {
-		return rasql.Query[store.UsersRow]{}, whereExprUsersColumns{}, err
-	}
-	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
-		rasql.Item(users.IDRef().Name(), cols.ID.Expr(), def.Columns[0].Type, ""),
-		rasql.Item(users.EmailRef().Name(), cols.Email.Expr(), def.Columns[1].Type, ""),
-		rasql.NullItem(users.NicknameRef().Name(), cols.Nickname.NullExpr(), def.Columns[2].Type, ""),
-		rasql.Item(users.StatusRef().Name(), cols.Status.Expr(), def.Columns[3].Type, ""),
-		rasql.Item(users.FirstNameRef().Name(), cols.FirstName.Expr(), def.Columns[4].Type, ""),
-		rasql.Item(users.LastNameRef().Name(), cols.LastName.Expr(), def.Columns[5].Type, ""),
-	}, whereExprUsersDecoder{result: result})
-	if err != nil {
-		return rasql.Query[store.UsersRow]{}, whereExprUsersColumns{}, err
-	}
-	return rasql.Select(users, projection), cols, nil
-}
-
 // Example_rasql_where_expressions combines a comparison and a null check with
 // And, which is what a predicate richer than one comparison needs. Every
 // plain value still travels as a bound argument: Value binds it automatically,
@@ -110,37 +36,49 @@ func Example_rasql_where_expressions() {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	grace, ed := "Grace", "Ed"
 	for _, user := range []store.UsersRow{
 		{ID: 5, Email: "ada@example.com"},
-		{ID: 15, Email: "grace@example.com", Nickname: &grace},
+		{ID: 15, Email: "grace@example.com", Nickname: rasql.Nullable[string]{Value: "Grace", Valid: true}},
 		{ID: 17, Email: "nia@example.com"},
-		{ID: 20, Email: "edsger@example.com", Nickname: &ed},
+		{ID: 20, Email: "edsger@example.com", Nickname: rasql.Nullable[string]{Value: "Ed", Valid: true}},
 	} {
-		plan := store.NewUsersCreate().ID(user.ID).Email(user.Email).FirstName("First").LastName("Last")
-		if user.Nickname != nil {
-			plan = plan.Nickname(user.Nickname)
+		create := store.NewUsersCreate().ID(user.ID).Email(user.Email).FirstName("First").LastName("Last")
+		if user.Nickname.Valid {
+			create = create.Nickname(user.Nickname.Value)
 		}
-		if _, err := rasql.ExecMutation(ctx, db, plan.Plan()); err != nil {
+		plan, err := create.Plan()
+		if err != nil {
+			fmt.Printf("failed to build insert: %s\n", err)
+			return
+		}
+		if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
 	}
 
-	base, cols, err := whereExprUsersQuery()
+	// The generated columns struct binds every users column to the table, and
+	// the generated projection selects them in the order the row type scans.
+	columns, err := (store.UsersColumns{}).Bind(users.Table)
 	if err != nil {
-		fmt.Printf("failed to build users query: %s\n", err)
+		fmt.Printf("failed to bind users columns: %s\n", err)
 		return
 	}
+	projection, err := store.UsersProjection(columns)
+	if err != nil {
+		fmt.Printf("failed to build users projection: %s\n", err)
+		return
+	}
+	base := rasql.Select(users, projection)
 
 	// id=17 has id > 10 but no nickname, so it shows the And's second
 	// condition is doing real work rather than repeating the first.
 	// SQL: SELECT users.id, users.email, users.nickname, users.status, users.first_name, users.last_name FROM users WHERE (users.id > ? AND users.nickname IS NOT NULL) ORDER BY users.id DESC (argument: 10)
 	rows, err := rasql.All(ctx, db,
 		base.Where(rasql.And(
-			rasql.GreaterValue(cols.ID.Expr(), int64(10)),
-			rasql.IsNotNull(cols.Nickname.NullExpr()),
-		)).OrderBy(rasql.DescExpr(cols.ID.Expr())))
+			rasql.GreaterValue(columns.ID.Expr(), int64(10)),
+			rasql.IsNotNull(columns.Nickname.NullExpr()),
+		)).OrderBy(rasql.DescExpr(columns.ID.Expr())))
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return

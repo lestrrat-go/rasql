@@ -42,24 +42,23 @@ func Example_rebindTypedResult() {
 		{ID: 3, Email: "wrong@example.com"},
 		{ID: 7, Email: "rebind@example.com"},
 	} {
-		plan := store.NewUsersCreate().ID(user.ID).Email(user.Email).FirstName("First").LastName("Last").Plan()
+		plan, err := store.NewUsersCreate().ID(user.ID).Email(user.Email).FirstName("First").LastName("Last").Plan()
+		if err != nil {
+			fmt.Printf("failed to build insert: %s\n", err)
+			return
+		}
 		if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
 	}
 
-	id, err := rasql.BindTypedColumn(users.ID())
+	columns, err := (store.UsersColumns{}).Bind(users.Table)
 	if err != nil {
-		fmt.Printf("failed to bind id column: %s\n", err)
+		fmt.Printf("failed to bind users columns: %s\n", err)
 		return
 	}
-	email, err := rasql.BindTypedColumn(users.Email())
-	if err != nil {
-		fmt.Printf("failed to bind email column: %s\n", err)
-		return
-	}
-	idProjection, err := rasql.Scalar("id", id.Expr(), schema.IntegerType{}, "")
+	idProjection, err := rasql.Scalar("id", columns.ID.Expr(), schema.IntegerType{}, "")
 	if err != nil {
 		fmt.Printf("failed to build id projection: %s\n", err)
 		return
@@ -67,9 +66,9 @@ func Example_rebindTypedResult() {
 	// base projects id and filters to one row. A caller who only needed the
 	// filter, not this particular projected shape, still built it this way to
 	// reuse the WHERE.
-	base := rasql.Select(users, idProjection).Where(rasql.EqualValue(id.Expr(), int64(7)))
+	base := rasql.Select(users, idProjection).Where(rasql.EqualValue(columns.ID.Expr(), int64(7)))
 
-	emailProjection, err := rasql.Scalar("email", email.Expr(), schema.TextType{}, "")
+	emailProjection, err := rasql.Scalar("email", columns.Email.Expr(), schema.TextType{}, "")
 	if err != nil {
 		fmt.Printf("failed to build email projection: %s\n", err)
 		return

@@ -26,7 +26,7 @@ func (usersIDDecoder) DecodeRow(source rasql.ScanSource, result *store.UsersRow)
 
 func usersQuery() rasql.Query[store.UsersRow] {
 	relation := store.Users()
-	id, err := rasql.BindColumn[store.UsersRow, int64](relation, "id", "")
+	columns, err := (store.UsersColumns{}).Bind(relation.Table)
 	if err != nil {
 		panic(err)
 	}
@@ -35,12 +35,28 @@ func usersQuery() rasql.Query[store.UsersRow] {
 		panic(err)
 	}
 	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
-		rasql.Item("id", id.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("id", columns.ID.Expr(), schema.IntegerType{}, ""),
 	}, usersIDDecoder{schema: resultSchema})
 	if err != nil {
 		panic(err)
 	}
 	return rasql.Select(relation, projection)
+}
+
+// usersTypedColumns rebuilds the query-layer typed columns the removed legacy
+// emitter wrote as accessor methods. The compact emitter binds columns into
+// rasql.Column values instead, and the query package's typed predicates take
+// query.TypedColumn, so these fixtures name the two columns they exercise.
+func usersTypedID() query.TypedColumn[store.UsersRow, int64] {
+	return query.TypedColumnOf[store.UsersRow, int64](store.Users().Column("id"))
+}
+
+func usersTypedNickname() query.NullableColumn[store.UsersRow, *string] {
+	return query.NullableColumnOf[store.UsersRow, *string](store.Users().Column("nickname"))
+}
+
+func usersTypedEmail() query.TypedColumn[store.UsersRow, string] {
+	return query.TypedColumnOf[store.UsersRow, string](store.Users().Column("email"))
 }
 `
 
@@ -50,13 +66,13 @@ func TestTypedQueryCompileFailures(t *testing.T) {
 		body string
 		want string
 	}{
-		{name: "wrong comparison", body: `_ = query.EqualValue(store.Users().ID(), "wrong")`, want: "cannot use"},
-		{name: "wrong assignment", body: `_ = query.AssignValue(store.Users().ID(), "wrong")`, want: "cannot use"},
+		{name: "wrong comparison", body: `_ = query.EqualValue(usersTypedID(), "wrong")`, want: "cannot use"},
+		{name: "wrong assignment", body: `_ = query.AssignValue(usersTypedID(), "wrong")`, want: "cannot use"},
 		{name: "bare where", body: `_ = usersQuery().Where(query.Bind(1))`, want: "cannot use"},
 		{name: "dynamic null bypass", body: `_ = usersQuery().Where(query.IsNull(query.Bind(1)))`, want: "cannot use"},
-		{name: "mismatched join", body: `_ = query.EqualColumns(store.Users().ID(), store.Users().Email())`, want: "does not match inferred"},
-		{name: "null on non-null", body: `_ = query.TypedIsNull(store.Users().ID())`, want: "does not match inferred"},
-		{name: "not null on non-null", body: `_ = query.TypedIsNotNull(store.Users().ID())`, want: "does not match inferred"},
+		{name: "mismatched join", body: `_ = query.EqualColumns(usersTypedID(), usersTypedEmail())`, want: "does not match inferred"},
+		{name: "null on non-null", body: `_ = query.TypedIsNull(usersTypedID())`, want: "does not match inferred"},
+		{name: "not null on non-null", body: `_ = query.TypedIsNotNull(usersTypedID())`, want: "does not match inferred"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -92,8 +108,8 @@ import (
 ` + usersQueryHelperSource + `
 func compile() {
     users := store.Users()
-    id := users.ID()
-    email := users.Nickname()
+    id := usersTypedID()
+    email := usersTypedNickname()
     _ = query.EqualValue(id, int64(1))
     _ = query.EqualNullableValue(email, (*string)(nil))
     _ = query.LessValue(id, int64(2))
@@ -109,8 +125,9 @@ func compile() {
     _ = query.AssignValue(id, int64(3))
     _ = query.AssignNullableValue(email, (*string)(nil))
     other, _ := users.As("other")
-    _ = query.TypedInnerJoin(other.Ref(), query.EqualColumns(id, other.ID()))
-    _ = query.TypedLeftJoin(other.Ref(), query.EqualColumns(id, other.ID()))
+    otherID := query.TypedColumnOf[store.UsersRow, int64](other.Column("id"))
+    _ = query.TypedInnerJoin(other.Ref(), query.EqualColumns(id, otherID))
+    _ = query.TypedLeftJoin(other.Ref(), query.EqualColumns(id, otherID))
 
     relation := store.Users()
     relationID, err := rasql.BindColumn[store.UsersRow, int64](relation, "id", "")

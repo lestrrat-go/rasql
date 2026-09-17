@@ -767,11 +767,11 @@ func fenceLanguage(file string) string {
 	return "go"
 }
 
-// accessorSectionHeading names the section that explains what the generated
-// column accessors catch. The two checks below are scoped to it, so renaming
-// the heading fails this test on purpose: a rename has to move the checks with
-// it rather than silently switch them off.
-const accessorSectionHeading = "### What the column accessors catch"
+// boundColumnSectionHeading names the section that explains what the generated
+// bound columns catch. The two checks below are scoped to it, so renaming the
+// heading fails this test on purpose: a rename has to move the checks with it
+// rather than silently switch them off.
+const boundColumnSectionHeading = "### What the bound columns catch"
 
 // inlineCode matches an inline code span. A span quotes an identifier or a
 // compiler message verbatim, so it is not the page's own claim about what kind
@@ -781,51 +781,53 @@ var inlineCode = regexp.MustCompile("`[^`]*`")
 // compileOutcome matches prose stating whether something reaches a build.
 var compileOutcome = regexp.MustCompile(`(?i)\bcompiles?\b|\bcompiling\b|\bcompile-time\b`)
 
-// structField matches the word this documentation uses for a member of the row
-// struct, which is the wrong word for the member a builder call names.
+// structField matches the word this documentation uses for a member of the
+// generated columns struct and of the row struct, which is the member kind the
+// compact emitter produces for a column.
 var structField = regexp.MustCompile(`(?i)\bfields?\b`)
 
-// accessorMethodClaim matches the wording that attributes a collision to the
-// generated accessor method rather than to a struct member.
-var accessorMethodClaim = regexp.MustCompile(`(?i)accessor method`)
+// accessorClaim matches the wording that makes a column a method of its own.
+// The removed legacy emitter wrote one such method per column; the compact
+// emitter writes none, so this wording describes generated code that no longer
+// exists.
+var accessorClaim = regexp.MustCompile(`(?i)\baccessors?\b`)
 
-// accessorCompileProblem reports why a sentence misnames the member the
+// boundColumnCompileProblem reports why a sentence misnames the member the
 // compiler checks, or the empty string when it does not. A column reaches a
-// builder as an accessor METHOD on the table type, so a sentence about what
-// does or does not compile must not call that member a field. The section also
-// describes genuine row struct fields, in sentences that state no compile
-// outcome, and those are not governed.
-func accessorCompileProblem(sentence string) string {
+// builder as a FIELD of the generated columns struct, so a sentence about what
+// does or does not compile must not call that member an accessor. The section
+// also names the package accessor the generator writes per table, in sentences
+// that state no compile outcome, and those are not governed.
+func boundColumnCompileProblem(sentence string) string {
 	prose := inlineCode.ReplaceAllString(sentence, "")
 	if !compileOutcome.MatchString(prose) {
 		return ""
 	}
-	if structField.MatchString(prose) {
-		return "calls the member a build checks a field, where a column reaches a builder as an accessor method on the table type"
+	if accessorClaim.MatchString(prose) {
+		return "calls the member a build checks an accessor, where a column reaches a builder as a field of the generated columns struct"
 	}
 	return ""
 }
 
-// tableSideReserved lists the reserved generated names that collide as an
-// accessor METHOD on the table type: the embedded rasql.Table's own field name
-// and the methods reached through it.
-var tableSideReserved = []string{"Table", "As", "Ref", "Column", "tableRow"}
-
 // rowSideReserved lists the reserved generated names that collide as a FIELD on
-// the row type, which declares each of them as a method of its own. The table
-// type has no member by any of these names.
-var rowSideReserved = []string{"ScanRow", "ScanDestinations"}
+// the row type, which declares each of them as a method of its own.
+var rowSideReserved = []string{"ScanRow"}
+
+// builderSideReserved lists the reserved generated names that collide as a
+// METHOD on a generated mutation builder, each of which is that builder's own
+// terminal method.
+var builderSideReserved = []string{"Plan", "Where"}
 
 // reservedNamesProblem reports why a passage misstates the reserved generated
 // name rule, or the empty string when it states it correctly. One derived
 // identifier names two different generated members, so the passage has to name
-// all seven reserved names, blame the table-side group on the accessor method,
-// and blame the row-side group on the row type field. A passage that calls the
-// whole set one kind of member is wrong about one group whichever kind it
-// picks.
+// all three reserved names, blame the row-side group on the row type field, and
+// blame the builder-side group on the builder's own method. A passage that
+// calls the whole set one kind of member is wrong about one group whichever
+// kind it picks.
 func reservedNamesProblem(passage string) string {
-	spans := make(map[string][2]int, len(tableSideReserved)+len(rowSideReserved))
-	for _, name := range append(append([]string{}, tableSideReserved...), rowSideReserved...) {
+	spans := make(map[string][2]int, len(rowSideReserved)+len(builderSideReserved))
+	for _, name := range append(append([]string{}, rowSideReserved...), builderSideReserved...) {
 		token := "`" + name + "`"
 		start := strings.Index(passage, token)
 		if start < 0 {
@@ -834,26 +836,27 @@ func reservedNamesProblem(passage string) string {
 		spans[name] = [2]int{start, strings.LastIndex(passage, token) + len(token)}
 	}
 
-	tableStart, tableEnd := groupBounds(spans, tableSideReserved)
 	rowStart, rowEnd := groupBounds(spans, rowSideReserved)
-	if tableStart > rowStart {
-		return "names the row-side reserved names before the table-side ones, so neither reason can be read against its group"
+	builderStart, builderEnd := groupBounds(spans, builderSideReserved)
+	if rowStart > builderStart {
+		return "names the builder-side reserved names before the row-side one, so neither reason can be read against its group"
 	}
-	if structField.MatchString(inlineCode.ReplaceAllString(passage[:tableStart], "")) {
-		return "calls the generated name a field before listing any reserved name, which is wrong for the table-side group"
+	if accessorClaim.MatchString(inlineCode.ReplaceAllString(passage[:rowStart], "")) {
+		return "calls the generated name an accessor before listing any reserved name, which the compact emitter never writes"
 	}
-	tableReason := inlineCode.ReplaceAllString(passage[tableEnd:rowStart], "")
-	if structField.MatchString(tableReason) {
-		return "blames the table-side reserved names on a field, where the collision is with the column accessor method"
+	rowReason := inlineCode.ReplaceAllString(passage[rowEnd:builderStart], "")
+	if !structField.MatchString(rowReason) {
+		return "does not say the row-side reserved name collides as a field on the row type"
 	}
-	if !accessorMethodClaim.MatchString(tableReason) {
-		return "does not say the table-side reserved names collide with the column accessor method"
-	}
-	if !structField.MatchString(inlineCode.ReplaceAllString(passage[rowEnd:], "")) {
-		return "does not say the row-side reserved names collide as a field on the row type"
+	if !generatedMethodClaim.MatchString(inlineCode.ReplaceAllString(passage[builderEnd:], "")) {
+		return "does not say the builder-side reserved names collide with the builder's own method"
 	}
 	return ""
 }
+
+// generatedMethodClaim matches the wording that attributes a collision to a
+// method the generator already writes on the receiver.
+var generatedMethodClaim = regexp.MustCompile(`(?i)method`)
 
 // groupBounds reports where a group of reserved names starts and where its last
 // mention ends, so the reason stated for that group can be read on its own.
@@ -870,48 +873,48 @@ func groupBounds(spans map[string][2]int, group []string) (int, int) {
 	return start, end
 }
 
-// accessorCompileFixtures pin accessorCompileProblem to concrete prose. The
-// entries marked historical are wording this pull request replaced, quoted so
-// the guard is proven against the exact text it exists to reject; every other
-// entry is invented for this table and appears nowhere in the tree.
-var accessorCompileFixtures = []struct {
+// boundColumnCompileFixtures pin boundColumnCompileProblem to concrete prose.
+// The entries marked historical are wording this pull request replaced, quoted
+// so the guard is proven against the exact text it exists to reject; every
+// other entry is invented for this table and appears nowhere in the tree.
+var boundColumnCompileFixtures = []struct {
 	name     string
 	sentence string
 	reject   bool
 }{
 	{
-		name:     "historical contrast with a passed name calls the accessor a field",
-		sentence: "Passing a name instead of a field does not compile either:",
-		reject:   true,
-	},
-	{
-		name:     "historical migration payoff calls the accessor a field",
-		sentence: "Drop or rename a column, regenerate, and every use of the old field stops compiling, instead of failing one query at a time in production.",
-		reject:   true,
-	},
-	{
-		name:     "invented sentence renames a column and keeps the field wording",
-		sentence: "Regenerate after a rename and the old field no longer compiles.",
-		reject:   true,
-	},
-	{
-		name:     "invented contrast names the accessor call",
+		name:     "historical contrast with a passed name names an accessor call",
 		sentence: "Passing a name instead of an accessor call does not compile either:",
+		reject:   true,
+	},
+	{
+		name:     "historical migration payoff names the accessor method",
+		sentence: "Drop or rename a column, regenerate, and every call to the old accessor method stops compiling.",
+		reject:   true,
+	},
+	{
+		name:     "invented sentence renames a column and keeps the accessor wording",
+		sentence: "Regenerate after a rename and the old accessor no longer compiles.",
+		reject:   true,
+	},
+	{
+		name:     "invented contrast names the bound column",
+		sentence: "Passing a name instead of a bound column does not compile either:",
 		reject:   false,
 	},
 	{
-		name:     "invented migration payoff names the accessor method",
-		sentence: "Drop or rename a column, regenerate, and every call to the old accessor method stops compiling.",
+		name:     "invented migration payoff names the columns struct field",
+		sentence: "Drop or rename a column, regenerate, and every reference to the old field stops compiling.",
 		reject:   false,
 	},
 	{
 		name:     "invented sentence quotes the compiler naming a field",
-		sentence: "A misspelled accessor does not compile: `users.Emial undefined (type UsersTable has no field or method Emial)`.",
+		sentence: "A misspelled column does not compile: `columns.Emial undefined (type store.UsersExpressions has no field or method Emial)`.",
 		reject:   false,
 	},
 	{
-		name:     "invented sentence describes a row field without a build claim",
-		sentence: "A nullable column becomes a pointer field on the row type.",
+		name:     "invented sentence names the package accessor without a build claim",
+		sentence: "The generator writes one package accessor per table, so `store.Users()` returns the table value.",
 		reject:   false,
 	},
 }
@@ -924,55 +927,55 @@ var reservedNamesFixtures = []struct {
 	reject  bool
 }{
 	{
-		name:    "historical passage calls every reserved name a field name",
-		passage: "A column also fails when its field name would be `Table`, `As`, `Ref`, `Column`, or `tableRow`, because those names belong to the embedded `rasql.Table` and its methods, or `ScanRow` or `ScanDestinations`, because those belong to the row type's own scan methods.",
+		name:    "historical passage names the removed legacy emitter's reserved set",
+		passage: "A column also fails when its generated name would be `Table`, `As`, `Ref`, `Column`, or `tableRow`, because its column accessor method would collide with the embedded `rasql.Table` and its methods, or `ScanRow` or `ScanDestinations`, because its row type field would collide with the row type's own scan methods.",
 		reject:  true,
 	},
 	{
-		name:    "invented passage calls every reserved name an accessor method name",
-		passage: "A column also fails when its accessor method name would be `Table`, `As`, `Ref`, `Column`, or `tableRow`, because those names belong to the embedded `rasql.Table` and its methods, or `ScanRow` or `ScanDestinations`, because those belong to the row type's own scan methods.",
+		name:    "invented passage calls every reserved name an accessor",
+		passage: "A column also fails when its accessor would be named `ScanRow`, because its row type field would collide with the row type's own scan method, or `Plan` or `Where`, because each builder's terminal method already carries that name.",
 		reject:  true,
 	},
 	{
-		name:    "invented passage blames the table-side group on a field",
-		passage: "A column also fails when its generated name would be `Table`, `As`, `Ref`, `Column`, or `tableRow`, because its row type field would collide with the embedded `rasql.Table`, or `ScanRow` or `ScanDestinations`, because its row type field would collide with the row type's own scan methods.",
+		name:    "invented passage blames the row-side name on a method",
+		passage: "A column also fails when its generated name would be `ScanRow`, because its generated method would collide with the row type's own scan method, or `Plan` or `Where`.",
 		reject:  true,
 	},
 	{
 		name:    "invented passage drops a reserved name",
-		passage: "A column also fails when its generated name would be `Table`, `As`, `Ref`, or `Column`, because its column accessor method would collide with the embedded `rasql.Table` and its methods, or `ScanRow` or `ScanDestinations`, because its row type field would collide with the row type's own scan methods.",
+		passage: "A column also fails when its generated name would be `ScanRow`, because its row type field would collide with the row type's own scan method, or `Where`, because the patch builder's terminal method already carries that name.",
 		reject:  true,
 	},
 	{
 		name:    "invented passage splits the two groups by member kind",
-		passage: "A column also fails when its generated name would be `Table`, `As`, `Ref`, `Column`, or `tableRow`, because its column accessor method would collide with the embedded `rasql.Table` and its methods, or `ScanRow` or `ScanDestinations`, because its row type field would collide with the row type's own scan methods.",
+		passage: "A column also fails when its generated name would be `ScanRow`, because its row type field would collide with the row type's own scan method, or when a create builder's setter would be named `Plan` or a patch builder's setter would be named `Where`, because each builder's terminal method already carries that name.",
 		reject:  false,
 	},
 }
 
 // TestDocsNameGeneratedColumnMembers holds the documentation to what the
-// generator actually emits for a column: an accessor METHOD on the table type
-// and a FIELD on the row type. One derived identifier names both, which is why
-// the reserved generated names split into two groups with a different reason
-// each.
+// generator actually emits for a column: a FIELD on the generated columns
+// struct, a FIELD on the row type, and a setter METHOD on each mutation
+// builder. One derived identifier names all three, which is why the reserved
+// generated names split into two groups with a different reason each.
 func TestDocsNameGeneratedColumnMembers(t *testing.T) {
-	t.Run("accessor section fixtures", func(t *testing.T) {
-		for _, fixture := range accessorCompileFixtures {
+	t.Run("bound column section fixtures", func(t *testing.T) {
+		for _, fixture := range boundColumnCompileFixtures {
 			t.Run(fixture.name, func(t *testing.T) {
-				problem := accessorCompileProblem(fixture.sentence)
+				problem := boundColumnCompileProblem(fixture.sentence)
 				if fixture.reject {
-					require.NotEmpty(t, problem, "the rule accepts a sentence calling the compiler-checked member a field:\n%s", fixture.sentence)
+					require.NotEmpty(t, problem, "the rule accepts a sentence calling the compiler-checked member an accessor:\n%s", fixture.sentence)
 					return
 				}
-				require.Empty(t, problem, "the rule rejects a sentence that already names the accessor: %s", problem)
+				require.Empty(t, problem, "the rule rejects a sentence that already names the bound column: %s", problem)
 			})
 		}
 	})
 
-	t.Run("accessor section", func(t *testing.T) {
-		section := accessorSection(t)
+	t.Run("bound column section", func(t *testing.T) {
+		section := boundColumnSection(t)
 		for _, sentence := range passageUnit.Split(section, -1) {
-			problem := accessorCompileProblem(sentence)
+			problem := boundColumnCompileProblem(sentence)
 			require.Empty(t, problem,
 				"docs/orm/02-generated-store.md %s:\n%s",
 				problem, strings.TrimSpace(sentence))
@@ -1000,7 +1003,7 @@ func TestDocsNameGeneratedColumnMembers(t *testing.T) {
 
 			prose := fencedBlock.ReplaceAllString(string(contents), "")
 			for _, paragraph := range strings.Split(prose, "\n\n") {
-				if !strings.Contains(paragraph, "`tableRow`") {
+				if !strings.Contains(paragraph, "`ScanRow`") || !strings.Contains(paragraph, "`Plan`") {
 					continue
 				}
 				owners++
@@ -1040,16 +1043,16 @@ func TestRasqlgenDocumentationAnchors(t *testing.T) {
 	}
 }
 
-// accessorSection returns the prose of the section named by
-// accessorSectionHeading, with its fenced examples removed.
-func accessorSection(t *testing.T) string {
+// boundColumnSection returns the prose of the section named by
+// boundColumnSectionHeading, with its fenced examples removed.
+func boundColumnSection(t *testing.T) string {
 	t.Helper()
 
 	contents, err := os.ReadFile(filepath.Join(repositoryRoot, "docs", "orm", "02-generated-store.md"))
 	require.NoError(t, err)
 
-	_, after, found := strings.Cut(string(contents), accessorSectionHeading+"\n")
-	require.True(t, found, "docs/orm/02-generated-store.md no longer has the %q section; move these checks to its new heading", accessorSectionHeading)
+	_, after, found := strings.Cut(string(contents), boundColumnSectionHeading+"\n")
+	require.True(t, found, "docs/orm/02-generated-store.md no longer has the %q section; move these checks to its new heading", boundColumnSectionHeading)
 
 	body := after
 	for _, line := range strings.Split(after, "\n") {

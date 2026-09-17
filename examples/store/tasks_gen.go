@@ -3,101 +3,173 @@
 package store
 
 import (
-	"fmt"
-
 	"github.com/lestrrat-go/rasql"
-	"github.com/lestrrat-go/rasql/query"
+	"github.com/lestrrat-go/rasql/schema"
 )
 
-// TasksRow is one row of the "tasks" table.
 type TasksRow struct {
 	ID     int64
 	Status string
 }
 
-// ScanRow scans each result column directly into its field.
-func (r *TasksRow) ScanRow(src rasql.ScanSource) error {
-	return src.Scan(&r.ID, &r.Status)
+var tasksDefinition = schema.TableDef{
+	Kind: schema.ObjectKind("table"),
+	Name: "tasks",
+	Columns: []schema.ColumnDef{
+		{Name: "id", Type: schema.IntegerType{}},
+		{Name: "status", Type: schema.TextType{}},
+	},
+	PrimaryKey: []string{"id"},
 }
 
-// ScanDestinations maps result-column names to fields on r.
-func (r *TasksRow) ScanDestinations(columns []string) ([]any, error) {
-	const (
-		scanIndexID = iota
-		scanIndexStatus
-	)
-	destinations := make([]any, len(columns))
-	scanned := rasql.NewScanMask(2)
-	var discard any
-	for index, column := range columns {
-		switch column {
-		case "id":
-			if !scanned.Mark(scanIndexID) {
-				return nil, fmt.Errorf("duplicate result column %q", column)
-			}
-			destinations[index] = &r.ID
-		case "status":
-			if !scanned.Mark(scanIndexStatus) {
-				return nil, fmt.Errorf("duplicate result column %q", column)
-			}
-			destinations[index] = &r.Status
-		default:
-			destinations[index] = &discard
-		}
+var tasksTable = rasql.MustTableOf[TasksRow](tasksDefinition)
+
+type TasksTable struct{ rasql.Table[TasksRow] }
+
+func Tasks() TasksTable { return TasksTable{Table: tasksTable} }
+
+func (t TasksTable) Source(alias string) (rasql.TypedRelation[TasksRow], error) {
+	return rasql.SourceOf[TasksRow](t.Table, alias)
+}
+
+type TasksColumns struct{}
+
+type TasksExpressions struct {
+	ID     rasql.Column[TasksRow, int64]
+	Status rasql.Column[TasksRow, string]
+}
+
+type OptionalTasksExpressions struct {
+	ID     rasql.NullColumn[TasksRow, int64]
+	Status rasql.NullColumn[TasksRow, string]
+}
+
+func (TasksColumns) Bind(source rasql.TypedRelation[TasksRow]) (TasksExpressions, error) {
+	var err error
+	result := TasksExpressions{
+		ID:     rasqlgenBind(&err, source, "id", "", rasql.BindColumn[TasksRow, int64]),
+		Status: rasqlgenBind(&err, source, "status", "", rasql.BindColumn[TasksRow, string]),
 	}
-	return destinations, nil
+	return result, err
 }
 
-// TasksTable is the generated table type for the "tasks" table.
-type TasksTable struct {
-	rasql.Table[TasksRow]
+func (TasksColumns) BindOptional(source rasql.OptionalRelation[TasksRow]) (OptionalTasksExpressions, error) {
+	var err error
+	result := OptionalTasksExpressions{
+		ID:     rasqlgenBind(&err, source, "id", "", rasql.BindOptionalColumn[TasksRow, int64]),
+		Status: rasqlgenBind(&err, source, "status", "", rasql.BindOptionalColumn[TasksRow, string]),
+	}
+	return result, err
 }
 
-// ID returns a reference to the "id" column.
-func (t TasksTable) ID() query.TypedColumn[TasksRow, int64] {
-	return query.TypedColumnOf[TasksRow, int64](t.Column("id"))
+var tasksResultColumns = []rasql.ResultColumn{
+	{Name: "id", Type: schema.IntegerType{}, Codec: ""},
+	{Name: "status", Type: schema.TextType{}, Codec: ""},
 }
-func (t TasksTable) IDRef() rasql.ColumnRef { return t.Column("id") }
+var tasksResultSchema = rasqlgenResultSchema(tasksResultColumns)
 
-// Status returns a reference to the "status" column.
-func (t TasksTable) Status() query.TypedColumn[TasksRow, string] {
-	return query.TypedColumnOf[TasksRow, string](t.Column("status"))
-}
-func (t TasksTable) StatusRef() rasql.ColumnRef { return t.Column("status") }
+type tasksDecoder struct{}
 
-// Tasks returns the descriptor for the "tasks" table.
-func Tasks() TasksTable {
-	return tasksTable
+func (tasksDecoder) ResultSchema() rasql.ResultSchema { return tasksResultSchema }
+func (tasksDecoder) Presence() []rasql.Presence       { return nil }
+func (tasksDecoder) DecodeRow(source rasql.ScanSource, row *TasksRow) error {
+	return source.Scan(&row.ID, &row.Status)
 }
 
-// As returns the table under alias.
-func (t TasksTable) As(alias string) (TasksTable, error) {
-	aliased, err := t.Table.As(alias)
+func (row *TasksRow) ScanRow(source rasql.ScanSource) error {
+	return tasksDecoder{}.DecodeRow(source, row)
+}
+
+var tasksOptionalResultSchema = rasqlgenOptionalResultSchema(tasksResultColumns)
+
+type tasksOptionalDecoder struct{}
+
+func (tasksOptionalDecoder) ResultSchema() rasql.ResultSchema { return tasksOptionalResultSchema }
+func (tasksOptionalDecoder) Presence() []rasql.Presence {
+	p, err := rasql.NewPresence("Tasks", "id")
 	if err != nil {
-		return TasksTable{}, err
+		panic(err)
 	}
-	return TasksTable{Table: aliased}, nil
+	return []rasql.Presence{p}
 }
+func (tasksOptionalDecoder) DecodeRow(source rasql.ScanSource, row *TasksRow) error {
+	var IDValue rasql.Nullable[int64]
+	var StatusValue rasql.Nullable[string]
+	if err := source.Scan(&IDValue, &StatusValue); err != nil {
+		return err
+	}
+	rasqlgenAssignNullable(IDValue, &row.ID)
+	rasqlgenAssignNullable(StatusValue, &row.Status)
+	return nil
+}
+
+func TasksProjection(expressions TasksExpressions) (rasql.Projection[TasksRow], error) {
+	items := []rasql.ProjectionItem{
+		rasql.Item("id", expressions.ID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("status", expressions.Status.Expr(), schema.TextType{}, ""),
+	}
+	return rasql.NewProjection(items, tasksDecoder{})
+}
+
+func OptionalTasksProjection(expressions OptionalTasksExpressions) (rasql.Projection[TasksRow], error) {
+	items := []rasql.ProjectionItem{
+		rasql.NullItem("id", expressions.ID.NullExpr(), schema.IntegerType{}, ""),
+		rasql.NullItem("status", expressions.Status.NullExpr(), schema.TextType{}, ""),
+	}
+	return rasql.NewProjection(items, tasksOptionalDecoder{})
+}
+
+func TasksGraphKey(source rasql.TypedRelation[TasksRow]) (rasql.GraphKey[TasksRow], error) {
+	expressions, err := (TasksColumns{}).Bind(source)
+	if err != nil {
+		return rasql.GraphKey[TasksRow]{}, err
+	}
+	return rasql.NewGraphKey[TasksRow](rasql.KeyPart[TasksRow, int64](expressions.ID, func(row TasksRow) int64 { return row.ID }))
+}
+
+func TasksIDPageKey(source rasql.TypedRelation[TasksRow], direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
+	expressions, err := (TasksColumns{}).Bind(source)
+	if err != nil {
+		return nil, err
+	}
+	return rasqlgenPageKey(direction, expressions.ID.Expr(), func(row TasksRow) int64 { return row.ID })
+}
+
+func TasksStatusPageKey(source rasql.TypedRelation[TasksRow], direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
+	expressions, err := (TasksColumns{}).Bind(source)
+	if err != nil {
+		return nil, err
+	}
+	return rasqlgenPageKey(direction, expressions.Status.Expr(), func(row TasksRow) string { return row.Status })
+}
+
+var tasksMutationColumns = func() TasksExpressions {
+	source, err := Tasks().Source("")
+	if err != nil {
+		panic(err)
+	}
+	value, err := (TasksColumns{}).Bind(source)
+	if err != nil {
+		panic(err)
+	}
+	return value
+}()
 
 type TasksCreate struct {
 	fields []rasql.MutationField[TasksRow]
 }
 
 func NewTasksCreate() TasksCreate { return TasksCreate{} }
-
-func (p TasksCreate) ID(value int64) TasksCreate {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[TasksRow](Tasks().ID(), value))
-	return TasksCreate{fields: fields}
+func (v TasksCreate) ID(value int64) TasksCreate {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(tasksMutationColumns.ID, value))
+	return v
 }
-func (p TasksCreate) Status(value string) TasksCreate {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[TasksRow](Tasks().Status(), value))
-	return TasksCreate{fields: fields}
+func (v TasksCreate) Status(value string) TasksCreate {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(tasksMutationColumns.Status, value))
+	return v
 }
-func (p TasksCreate) Plan() rasql.CreatePlan[TasksRow] {
-	plan, _ := rasql.NewCreatePlan[TasksRow](Tasks().Table, p.fields...)
-	return plan
+func (v TasksCreate) Plan() (rasql.CreatePlan[TasksRow], error) {
+	return rasql.NewCreatePlan(Tasks().Table, v.fields...)
 }
 
 type TasksPatch struct {
@@ -105,12 +177,14 @@ type TasksPatch struct {
 }
 
 func NewTasksPatch() TasksPatch { return TasksPatch{} }
-
-func (p TasksPatch) Status(value string) TasksPatch {
-	fields := append([]rasql.MutationField[TasksRow](nil), p.fields...)
-	fields = append(fields, rasql.SetField[TasksRow](Tasks().Status(), value))
-	return TasksPatch{fields: fields}
+func (v TasksPatch) ID(value int64) TasksPatch {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(tasksMutationColumns.ID, value))
+	return v
 }
-func (p TasksPatch) Where(predicate query.Predicate) (rasql.PatchPlan[TasksRow], error) {
-	return rasql.NewPatchPlan[TasksRow](Tasks().Table, predicate, p.fields...)
+func (v TasksPatch) Status(value string) TasksPatch {
+	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(tasksMutationColumns.Status, value))
+	return v
+}
+func (v TasksPatch) Where(value rasql.Predicate) (rasql.PatchPlan[TasksRow], error) {
+	return rasql.NewPatchPlan(Tasks().Table, value, v.fields...)
 }
