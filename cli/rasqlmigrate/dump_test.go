@@ -210,7 +210,7 @@ func TestDumpSQLiteMainTableWritesUnqualifiedFile(t *testing.T) {
 
 // TestDumpSQLiteAttachedDatabaseTableStaysQualified pins the other half: a table in a database
 // attached under another name is not the namespace the connection is using, so
-// dbnamespace.UnqualifyDefaultNamespace leaves it alone and its file keeps the
+// namespace.Unqualify leaves it alone and its file keeps the
 // "<database>__<table>.sql" name a statement needs to reach it.
 func TestDumpSQLiteAttachedDatabaseTableStaysQualified(t *testing.T) {
 	dir := t.TempDir()

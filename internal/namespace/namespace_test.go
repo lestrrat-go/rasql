@@ -1,4 +1,4 @@
-package dbnamespace_test
+package namespace_test
 
 import (
 	"database/sql"
@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
-	"github.com/lestrrat-go/rasql/internal/dbnamespace"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
+	"github.com/lestrrat-go/rasql/internal/namespace"
 	"github.com/lestrrat-go/rasql/schema"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
@@ -30,48 +30,48 @@ func TestEngineID(t *testing.T) {
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.dialect, func(t *testing.T) {
-			require.Equal(t, testCase.want, dbnamespace.EngineID(testCase.dialect))
+			require.Equal(t, testCase.want, namespace.EngineID(testCase.dialect))
 		})
 	}
 }
 
-func TestDefaultNamespaceQuery(t *testing.T) {
-	query, ok := dbnamespace.DefaultNamespaceQuery(engineprofile.PostgreSQL)
+func TestDefaultQuery(t *testing.T) {
+	query, ok := namespace.DefaultQuery(engineprofile.PostgreSQL)
 	require.True(t, ok)
 	require.Equal(t, "SELECT current_schema()", query)
 
-	query, ok = dbnamespace.DefaultNamespaceQuery(engineprofile.MySQL)
+	query, ok = namespace.DefaultQuery(engineprofile.MySQL)
 	require.True(t, ok)
 	require.Equal(t, "SELECT DATABASE()", query)
 
-	query, ok = dbnamespace.DefaultNamespaceQuery(engineprofile.SQLite)
+	query, ok = namespace.DefaultQuery(engineprofile.SQLite)
 	require.True(t, ok)
 	require.Equal(t, "SELECT name FROM pragma_database_list WHERE seq = 0", query)
 
-	_, ok = dbnamespace.DefaultNamespaceQuery(engineprofile.Custom)
+	_, ok = namespace.DefaultQuery(engineprofile.Custom)
 	require.False(t, ok, "an engine with no statement of its own reports false")
 }
 
-// TestDefaultNamespaceReadsThroughDBAndThroughTx pins that DefaultNamespace accepts either
-// connection shape internal/schemasource and cli/rasqlmigrate's dump command hold: DefaultNamespace
-// takes engineprofile.Queryer, which both *sql.DB and *sql.Tx satisfy.
-func TestDefaultNamespaceReadsThroughDBAndThroughTx(t *testing.T) {
+// TestDefaultReadsThroughDBAndThroughTx pins that Default accepts either connection shape
+// internal/schemasource and cli/rasqlmigrate's dump command hold: Default takes
+// engineprofile.Queryer, which both *sql.DB and *sql.Tx satisfy.
+func TestDefaultReadsThroughDBAndThroughTx(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 
 	mock.ExpectQuery("SELECT current_schema\\(\\)").WillReturnRows(sqlmock.NewRows([]string{"current_schema"}).AddRow("public"))
-	namespace, err := dbnamespace.DefaultNamespace(t.Context(), db, engineprofile.PostgreSQL)
+	connected, err := namespace.Default(t.Context(), db, engineprofile.PostgreSQL)
 	require.NoError(t, err)
-	require.Equal(t, "public", namespace)
+	require.Equal(t, "public", connected)
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT DATABASE\\(\\)").WillReturnRows(sqlmock.NewRows([]string{"database"}).AddRow("app"))
 	mock.ExpectCommit()
 	tx, err := db.Begin()
 	require.NoError(t, err)
-	namespace, err = dbnamespace.DefaultNamespace(t.Context(), tx, engineprofile.MySQL)
+	connected, err = namespace.Default(t.Context(), tx, engineprofile.MySQL)
 	require.NoError(t, err)
-	require.Equal(t, "app", namespace)
+	require.Equal(t, "app", connected)
 	require.NoError(t, tx.Commit())
 
 	mock.ExpectClose()
@@ -79,40 +79,40 @@ func TestDefaultNamespaceReadsThroughDBAndThroughTx(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestDefaultNamespaceReturnsEmptyForANullAnswer covers the answer neither PostgreSQL nor MySQL
-// gives on an ordinary connection: current_schema() or DATABASE() can themselves answer NULL, and
-// DefaultNamespace reports that as the empty string rather than an error.
-func TestDefaultNamespaceReturnsEmptyForANullAnswer(t *testing.T) {
+// TestDefaultReturnsEmptyForANullAnswer covers the answer neither PostgreSQL nor MySQL gives on an
+// ordinary connection: current_schema() or DATABASE() can themselves answer NULL, and Default
+// reports that as the empty string rather than an error.
+func TestDefaultReturnsEmptyForANullAnswer(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 
 	mock.ExpectQuery("SELECT DATABASE\\(\\)").WillReturnRows(sqlmock.NewRows([]string{"database"}).AddRow(nil))
-	namespace, err := dbnamespace.DefaultNamespace(t.Context(), db, engineprofile.MySQL)
+	connected, err := namespace.Default(t.Context(), db, engineprofile.MySQL)
 	require.NoError(t, err)
-	require.Equal(t, "", namespace)
+	require.Equal(t, "", connected)
 
 	mock.ExpectClose()
 	require.NoError(t, db.Close())
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestDefaultNamespaceRunsNoQueryForAnUnknownEngine covers engineprofile.Custom, which
-// DefaultNamespaceQuery has no statement for: DefaultNamespace must return the empty namespace and
-// no error without issuing any query at all.
-func TestDefaultNamespaceRunsNoQueryForAnUnknownEngine(t *testing.T) {
+// TestDefaultRunsNoQueryForAnUnknownEngine covers engineprofile.Custom, which DefaultQuery has no
+// statement for: Default must return the empty namespace and no error without issuing any query at
+// all.
+func TestDefaultRunsNoQueryForAnUnknownEngine(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 
-	namespace, err := dbnamespace.DefaultNamespace(t.Context(), db, engineprofile.Custom)
+	connected, err := namespace.Default(t.Context(), db, engineprofile.Custom)
 	require.NoError(t, err)
-	require.Equal(t, "", namespace)
+	require.Equal(t, "", connected)
 
 	mock.ExpectClose()
 	require.NoError(t, db.Close())
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestUnqualifyDefaultNamespaceClearsSchemaAndReferencedSchema(t *testing.T) {
+func TestUnqualifyClearsSchemaAndReferencedSchema(t *testing.T) {
 	tables := []schema.TableDef{
 		{Schema: "public", Name: "teams"},
 		{
@@ -125,7 +125,7 @@ func TestUnqualifyDefaultNamespaceClearsSchemaAndReferencedSchema(t *testing.T) 
 		},
 		{Schema: "audit", Name: "events"},
 	}
-	cleared := dbnamespace.UnqualifyDefaultNamespace(tables, "public")
+	cleared := namespace.Unqualify(tables, "public")
 	require.Equal(t, "", cleared[0].Schema)
 	require.Equal(t, "", cleared[1].Schema)
 	require.Equal(t, "", cleared[1].ForeignKeys[0].ReferencedSchema, "a foreign key naming the cleared namespace is cleared too")
@@ -133,22 +133,20 @@ func TestUnqualifyDefaultNamespaceClearsSchemaAndReferencedSchema(t *testing.T) 
 	require.Equal(t, "audit", cleared[2].Schema, "a table in another namespace survives")
 }
 
-// TestUnqualifyDefaultNamespaceClearsNothingForAnEmptyNamespace pins the case an unknown engine,
-// or a server that answered NULL, leaves DefaultNamespace's caller holding: an empty namespace
-// clears nothing.
-func TestUnqualifyDefaultNamespaceClearsNothingForAnEmptyNamespace(t *testing.T) {
+// TestUnqualifyClearsNothingForAnEmptyNamespace pins the case an unknown engine, or a server that
+// answered NULL, leaves Default's caller holding: an empty namespace clears nothing.
+func TestUnqualifyClearsNothingForAnEmptyNamespace(t *testing.T) {
 	tables := []schema.TableDef{{Schema: "public", Name: "teams"}}
-	cleared := dbnamespace.UnqualifyDefaultNamespace(tables, "")
+	cleared := namespace.Unqualify(tables, "")
 	require.Equal(t, "public", cleared[0].Schema)
 }
 
-// TestDefaultNamespaceAndUnqualifyAgainstARealSQLiteAttachedDatabase reads a real SQLite
-// connection that has a second database attached under the name "audit", and pins both exported
-// functions working together: DefaultNamespace reports "main", the database an unqualified CREATE
-// TABLE writes into even with another database attached, and UnqualifyDefaultNamespace then clears
-// only the descriptor naming it, leaving the one in "audit" alone. ATTACH binds to one connection,
-// which is why the pool is capped at one.
-func TestDefaultNamespaceAndUnqualifyAgainstARealSQLiteAttachedDatabase(t *testing.T) {
+// TestDefaultAndUnqualifyAgainstARealSQLiteAttachedDatabase reads a real SQLite connection that has
+// a second database attached under the name "audit", and pins both exported functions working
+// together: Default reports "main", the database an unqualified CREATE TABLE writes into even with
+// another database attached, and Unqualify then clears only the descriptor naming it, leaving the
+// one in "audit" alone. ATTACH binds to one connection, which is why the pool is capped at one.
+func TestDefaultAndUnqualifyAgainstARealSQLiteAttachedDatabase(t *testing.T) {
 	dir := t.TempDir()
 	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?mode=rwc", filepath.Join(dir, "main.db")))
 	require.NoError(t, err)
@@ -162,9 +160,9 @@ func TestDefaultNamespaceAndUnqualifyAgainstARealSQLiteAttachedDatabase(t *testi
 	_, err = db.ExecContext(t.Context(), "CREATE TABLE audit.events (id INTEGER NOT NULL PRIMARY KEY, owner_id INTEGER NOT NULL)")
 	require.NoError(t, err)
 
-	namespace, err := dbnamespace.DefaultNamespace(t.Context(), db, dbnamespace.EngineID("sqlite"))
+	connected, err := namespace.Default(t.Context(), db, namespace.EngineID("sqlite"))
 	require.NoError(t, err)
-	require.Equal(t, "main", namespace)
+	require.Equal(t, "main", connected)
 
 	tables := []schema.TableDef{
 		{Schema: "main", Name: "users"},
@@ -176,7 +174,7 @@ func TestDefaultNamespaceAndUnqualifyAgainstARealSQLiteAttachedDatabase(t *testi
 			},
 		},
 	}
-	cleared := dbnamespace.UnqualifyDefaultNamespace(tables, namespace)
+	cleared := namespace.Unqualify(tables, connected)
 	require.Equal(t, "", cleared[0].Schema, "the table in \"main\" comes back unqualified")
 	require.Equal(t, "audit", cleared[1].Schema, "the table in \"audit\" keeps its namespace")
 	require.Equal(t, "", cleared[1].ForeignKeys[0].ReferencedSchema, "a foreign key pointing back into \"main\" names no schema either")

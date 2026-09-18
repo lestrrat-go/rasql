@@ -13,7 +13,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/internal/catalogread"
 	"github.com/lestrrat-go/rasql/internal/compilerir"
-	"github.com/lestrrat-go/rasql/internal/dbnamespace"
+	"github.com/lestrrat-go/rasql/internal/namespace"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/internal/migrationdir"
 	"github.com/lestrrat-go/rasql/internal/sourcefile"
@@ -50,9 +50,9 @@ type ReadResult struct {
 	Snapshots  []sourcefile.SourceFileSnapshot
 
 	// Namespace is what the server answered when asked which namespace the connection is
-	// using, and the one dbnamespace.UnqualifyDefaultNamespace therefore cleared from every
-	// descriptor in Catalog. It is empty when the server answered NULL, and for an engine this
-	// package has no such question for, and then nothing was cleared.
+	// using, and the one namespace.Unqualify therefore cleared from every descriptor in
+	// Catalog. It is empty when the server answered NULL, and for an engine this package has
+	// no such question for, and then nothing was cleared.
 	//
 	// A caller that matches configuration against a descriptor's namespace reads it, so that
 	// a setting written as "main.users" still reaches the table Catalog now calls "users".
@@ -77,9 +77,8 @@ func (r ReadResult) Clone() ReadResult {
 // applies or checks any configured migration directory, reads the catalog under req.Scope, asks
 // the server which namespace the connection is using and clears that one from every descriptor
 // it read, and runs the query analyzer against the same connection.
-// internal/dbnamespace.UnqualifyDefaultNamespace states what that clearing does and what it
-// leaves alone. ReadResult carries no lock record: there is nothing here to compare against a
-// checked-in file.
+// internal/namespace.Unqualify states what that clearing does and what it leaves alone.
+// ReadResult carries no lock record: there is nothing here to compare against a checked-in file.
 //
 // When MigrationsDir is set and Scratch is false, Read first asks the catalog whether the
 // migration history table exists, and refuses - naming "rasql migrate apply -dir <dir>" as the
@@ -182,11 +181,11 @@ func Read(ctx context.Context, req ReadRequest, deps Dependencies) (ReadResult, 
 		if e != nil {
 			return e
 		}
-		namespace, e := dbnamespace.DefaultNamespace(ctx, db, profile.Engine)
+		connected, e := namespace.Default(ctx, db, profile.Engine)
 		if e != nil {
 			return e
 		}
-		tables := dbnamespace.UnqualifyDefaultNamespace(read.Tables, namespace)
+		tables := namespace.Unqualify(read.Tables, connected)
 		catalog, diagnostics := compilerir.PhysicalFromTableDefs(readEngineIdentity(req.Dialect, profile), tables)
 		if len(diagnostics) > 0 {
 			return fmt.Errorf("schema source: catalog conversion: %s", diagnostics[0].Message)
@@ -208,7 +207,7 @@ func Read(ctx context.Context, req ReadRequest, deps Dependencies) (ReadResult, 
 		allSnapshots := append([]sourcefile.SourceFileSnapshot(nil), migrationSnaps...)
 		allSnapshots = append(allSnapshots, querySnapshots...)
 
-		returnResult = ReadResult{Catalog: catalog, Profile: profile, Migrations: migrations, Queries: queries, Unresolved: read.Unresolved, Snapshots: allSnapshots, Namespace: namespace}
+		returnResult = ReadResult{Catalog: catalog, Profile: profile, Migrations: migrations, Queries: queries, Unresolved: read.Unresolved, Snapshots: allSnapshots, Namespace: connected}
 		return nil
 	}
 

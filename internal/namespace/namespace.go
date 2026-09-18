@@ -1,10 +1,10 @@
-// Package dbnamespace holds the one rule that a descriptor should not record the namespace the
+// Package namespace holds the one rule that a descriptor should not record the namespace the
 // connection already resolves an unqualified name against, and should record every other
 // namespace. internal/schemasource's generate path and the public catalog package's dump path
 // both need this rule, so it lives here rather than in either of them: schemasource reads through
 // an *sql.DB and dump reads through an *sql.Tx it already opened, and neither package can import
 // the other.
-package dbnamespace
+package namespace
 
 import (
 	"context"
@@ -19,7 +19,7 @@ import (
 // EngineID maps a dialect name to the engine it names: "postgresql"/"postgres" to
 // engineprofile.PostgreSQL, "mysql" to engineprofile.MySQL, and anything else, including
 // "sqlite"/"sqlite3", to engineprofile.SQLite. A caller holding only a dialect name, rather than a
-// full engineprofile.Profile, uses this to reach DefaultNamespaceQuery and DefaultNamespace.
+// full engineprofile.Profile, uses this to reach DefaultQuery and Default.
 func EngineID(dialectName string) engineprofile.EngineID {
 	switch strings.ToLower(dialectName) {
 	case "postgresql", "postgres":
@@ -31,13 +31,13 @@ func EngineID(dialectName string) engineprofile.EngineID {
 	}
 }
 
-// DefaultNamespaceQuery reports the statement that asks a server which namespace it is connected
-// to, and false for an engine this package has no such statement for.
+// DefaultQuery reports the statement that asks a server which namespace it is connected to, and
+// false for an engine this package has no such statement for.
 //
 // PostgreSQL answers with current_schema(), MySQL with DATABASE(), and SQLite with the name at
 // sequence 0 of PRAGMA database_list, which is the database a CREATE TABLE carrying no qualifier
 // writes into. Each statement returns exactly one row of one column.
-func DefaultNamespaceQuery(engine engineprofile.EngineID) (string, bool) {
+func DefaultQuery(engine engineprofile.EngineID) (string, bool) {
 	switch engine {
 	case engineprofile.PostgreSQL:
 		return "SELECT current_schema()", true
@@ -50,18 +50,18 @@ func DefaultNamespaceQuery(engine engineprofile.EngineID) (string, bool) {
 	}
 }
 
-// DefaultNamespace runs DefaultNamespaceQuery against q and returns what the server answered. It
-// returns the empty string, and no error, for an engine with no such statement and for a server
-// that answers NULL: MySQL's DATABASE() is NULL on a connection that has selected no database,
-// and PostgreSQL's current_schema() is NULL when search_path names no schema that exists.
+// Default runs DefaultQuery against q and returns what the server answered. It returns the empty
+// string, and no error, for an engine with no such statement and for a server that answers NULL:
+// MySQL's DATABASE() is NULL on a connection that has selected no database, and PostgreSQL's
+// current_schema() is NULL when search_path names no schema that exists.
 //
 // q is engineprofile.Queryer, which both *sql.DB and *sql.Tx implement, so a caller holding
 // either can run this: internal/schemasource holds a *sql.DB and cli/rasqlmigrate's dump command
 // holds the *sql.Tx it reads the rest of the dump through.
 //
 // `q` must not be nil.
-func DefaultNamespace(ctx context.Context, q engineprofile.Queryer, engine engineprofile.EngineID) (string, error) {
-	query, ok := DefaultNamespaceQuery(engine)
+func Default(ctx context.Context, q engineprofile.Queryer, engine engineprofile.EngineID) (string, error) {
+	query, ok := DefaultQuery(engine)
 	if !ok {
 		return "", nil
 	}
@@ -86,8 +86,8 @@ func DefaultNamespace(ctx context.Context, q engineprofile.Queryer, engine engin
 	return name.String, nil
 }
 
-// UnqualifyDefaultNamespace clears Schema on every descriptor that names namespace, and clears
-// ReferencedSchema on every foreign key that names it, editing tables in place and returning it.
+// Unqualify clears Schema on every descriptor that names connected, and clears ReferencedSchema
+// on every foreign key that names it, editing tables in place and returning it.
 //
 // A generated store renders the namespace it was read with into every statement built from the
 // descriptor, so a table read out of the namespace the connection is already using would render
@@ -102,16 +102,16 @@ func DefaultNamespace(ctx context.Context, q engineprofile.Queryer, engine engin
 // built from that descriptor has to name them to reach the table.
 //
 // An empty namespace clears nothing, which is what a server that answered NULL leaves.
-func UnqualifyDefaultNamespace(tables []schema.TableDef, namespace string) []schema.TableDef {
-	if namespace == "" {
+func Unqualify(tables []schema.TableDef, connected string) []schema.TableDef {
+	if connected == "" {
 		return tables
 	}
 	for i := range tables {
-		if tables[i].Schema == namespace {
+		if tables[i].Schema == connected {
 			tables[i].Schema = ""
 		}
 		for j := range tables[i].ForeignKeys {
-			if tables[i].ForeignKeys[j].ReferencedSchema == namespace {
+			if tables[i].ForeignKeys[j].ReferencedSchema == connected {
 				tables[i].ForeignKeys[j].ReferencedSchema = ""
 			}
 		}

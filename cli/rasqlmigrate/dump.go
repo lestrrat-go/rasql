@@ -17,7 +17,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/catalog"
 	"github.com/lestrrat-go/rasql/dialect"
-	"github.com/lestrrat-go/rasql/internal/dbnamespace"
+	"github.com/lestrrat-go/rasql/internal/namespace"
 	"github.com/lestrrat-go/rasql/internal/dsnredact"
 	"github.com/lestrrat-go/rasql/internal/migrationorder"
 	"github.com/lestrrat-go/rasql/migrate/diff"
@@ -133,7 +133,7 @@ type dumpOptions struct {
 // dumpFilesFromDatabase reads database inside one read-only transaction,
 // applies the fidelity guards from CLAUDE.md design section 4, asks the
 // server which namespace the connection is using and clears that one from
-// every table (see internal/dbnamespace.UnqualifyDefaultNamespace), orders
+// every table (see internal/namespace.Unqualify), orders
 // the result per design section 5, and renders it into the files runDump
 // would preview or write. It is runDump's own implementation with the -dsn
 // open and the output step factored out, so both runDump and a live test
@@ -187,13 +187,13 @@ func dumpFilesFromDatabase(ctx context.Context, d dialect.Dialect, database *sql
 		return nil, err
 	}
 
-	namespace, err := runWithHardDeadline(ctx, func() (string, error) {
-		return dbnamespace.DefaultNamespace(ctx, transaction, dbnamespace.EngineID(d.Name()))
+	connected, err := runWithHardDeadline(ctx, func() (string, error) {
+		return namespace.Default(ctx, transaction, namespace.EngineID(d.Name()))
 	})
 	if err != nil {
 		return nil, fmt.Errorf("dump: read default namespace: %w", err)
 	}
-	tables = dbnamespace.UnqualifyDefaultNamespace(tables, namespace)
+	tables = namespace.Unqualify(tables, connected)
 
 	ordered, err := orderTablesByDependency(tables)
 	if err != nil {
