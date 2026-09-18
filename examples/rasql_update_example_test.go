@@ -38,7 +38,7 @@ func Example_rasql_update() {
 		return
 	}
 	// Insert one row so the update has a persistent target.
-	createPlan, err := store.NewUsersCreate().ID(42).Email("ada@example.com").FirstName("First").LastName("Last").Plan()
+	createPlan, err := store.Users().Create().ID(42).Email("ada@example.com").FirstName("First").LastName("Last").Plan()
 	if err != nil {
 		fmt.Printf("failed to build insert: %s\n", err)
 		return
@@ -48,7 +48,7 @@ func Example_rasql_update() {
 		return
 	}
 
-	columns, err := (store.UsersColumns{}).Bind(users.Table)
+	columns, err := (store.UsersColumns{}).Bind(users)
 	if err != nil {
 		fmt.Printf("failed to bind users columns: %s\n", err)
 		return
@@ -57,7 +57,7 @@ func Example_rasql_update() {
 	// The generated patch builder writes only the fields named, and its
 	// Where takes the typed predicate that matches the target row.
 	// SQL: UPDATE users SET email = ? WHERE users.id = ? (arguments: "grace@example.com", 42)
-	patchPlan, err := store.NewUsersPatch().Email("grace@example.com").Where(rasql.EqualValue(columns.ID.Expr(), int64(42)))
+	patchPlan, err := store.Users().Patch().Email("grace@example.com").Where(rasql.EqualValue(columns.ID.Expr(), int64(42)))
 	if err != nil {
 		fmt.Printf("failed to build patch: %s\n", err)
 		return

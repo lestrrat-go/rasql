@@ -580,10 +580,10 @@ func TestGeneratedProfile(t *testing.T) {
 	require.True(t, graphs[0].Tasks.Values[0].Assignee.Loaded)
 	require.True(t, graphs[0].Tasks.Values[0].Assignee.Present)
 	require.Equal(t, int64(20), graphs[0].Tasks.Values[0].Assignee.Value.ID)
-	createPlan, err := store.NewMembersCreate().ID(4001).Name("created").Plan()
+	createPlan, err := store.Members().Create().ID(4001).Name("created").Plan()
 	require.NoError(t, err)
 	if %t {
-		createSource := store.Members().Table
+		createSource := store.Members()
 		createColumns, bindErr := (store.MembersColumns{}).Bind(createSource)
 		require.NoError(t, bindErr)
 		createProjection, projectionErr := store.MembersProjection(createColumns)
@@ -598,10 +598,10 @@ func TestGeneratedProfile(t *testing.T) {
 		require.NoError(t, execErr)
 		require.Equal(t, int64(1), outcome.Affected)
 	}
-	patchSource := store.Members().Table
+	patchSource := store.Members()
 	patchColumns, err := (store.MembersColumns{}).Bind(patchSource)
 	require.NoError(t, err)
-	patchPlan, err := store.NewMembersPatch().Name("patched").Where(rasql.EqualValue(patchColumns.ID.Expr(), int64(4001)))
+	patchPlan, err := store.Members().Patch().Name("patched").Where(rasql.EqualValue(patchColumns.ID.Expr(), int64(4001)))
 	require.NoError(t, err)
 	if %t {
 		patchProjection, projectionErr := store.MembersProjection(patchColumns)

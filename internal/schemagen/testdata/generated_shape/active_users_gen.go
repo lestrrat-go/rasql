@@ -4,6 +4,7 @@ package generated
 
 import (
 	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 )
 
@@ -24,12 +25,32 @@ var activeUsersDefinition = schema.TableDef{
 
 var activeUsersTable = rasql.MustTableOf[ActiveUsersRow](activeUsersDefinition)
 
-type ActiveUsersTable struct{ rasql.Table[ActiveUsersRow] }
+type activeUsersTableHandle = rasql.Table[ActiveUsersRow]
 
-func ActiveUsers() ActiveUsersTable { return ActiveUsersTable{Table: activeUsersTable} }
+type ActiveUsersTable struct {
+	activeUsersTableHandle
+}
 
-func (t ActiveUsersTable) Source(alias string) (rasql.TypedRelation[ActiveUsersRow], error) {
-	return rasql.SourceOf[ActiveUsersRow](t.Table, alias)
+func ActiveUsers() ActiveUsersTable {
+	return ActiveUsersTable{activeUsersTableHandle: activeUsersTable}
+}
+
+func (t ActiveUsersTable) Ref() query.TableRef { return t.activeUsersTableHandle.Ref() }
+
+func (t ActiveUsersTable) As(alias string) (ActiveUsersTable, error) {
+	aliased, err := t.activeUsersTableHandle.As(alias)
+	if err != nil {
+		return ActiveUsersTable{}, err
+	}
+	return ActiveUsersTable{activeUsersTableHandle: aliased}, nil
+}
+
+func (t ActiveUsersTable) InSchema(namespace string) (ActiveUsersTable, error) {
+	moved, err := t.activeUsersTableHandle.InSchema(namespace)
+	if err != nil {
+		return ActiveUsersTable{}, err
+	}
+	return ActiveUsersTable{activeUsersTableHandle: moved}, nil
 }
 
 type ActiveUsersColumns struct{}
@@ -44,7 +65,7 @@ type OptionalActiveUsersExpressions struct {
 	Email rasql.NullColumn[ActiveUsersRow, string]
 }
 
-func (ActiveUsersColumns) Bind(source rasql.TypedRelation[ActiveUsersRow]) (ActiveUsersExpressions, error) {
+func (ActiveUsersColumns) Bind(source ActiveUsersTable) (ActiveUsersExpressions, error) {
 	var err error
 	result := ActiveUsersExpressions{
 		ID:    rasqlgenBind(&err, source, "id", "", rasql.BindColumn[ActiveUsersRow, int64]),
@@ -88,7 +109,7 @@ func ActiveUsersProjection(expressions ActiveUsersExpressions) (rasql.Projection
 	return rasql.NewProjection(items, activeUsersDecoder{})
 }
 
-func ActiveUsersIDPageKey(source rasql.TypedRelation[ActiveUsersRow], direction rasql.PageDirection) (rasql.PageKey[ActiveUsersRow], error) {
+func ActiveUsersIDPageKey(source ActiveUsersTable, direction rasql.PageDirection) (rasql.PageKey[ActiveUsersRow], error) {
 	expressions, err := (ActiveUsersColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -96,7 +117,7 @@ func ActiveUsersIDPageKey(source rasql.TypedRelation[ActiveUsersRow], direction 
 	return rasqlgenPageKey(direction, expressions.ID.Expr(), func(row ActiveUsersRow) int64 { return row.ID })
 }
 
-func ActiveUsersEmailPageKey(source rasql.TypedRelation[ActiveUsersRow], direction rasql.PageDirection) (rasql.PageKey[ActiveUsersRow], error) {
+func ActiveUsersEmailPageKey(source ActiveUsersTable, direction rasql.PageDirection) (rasql.PageKey[ActiveUsersRow], error) {
 	expressions, err := (ActiveUsersColumns{}).Bind(source)
 	if err != nil {
 		return nil, err

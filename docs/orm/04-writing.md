@@ -10,7 +10,7 @@ nullable column, and database default. Its `Plan` method returns a `CreatePlan[R
 
 <!-- INCLUDE(sample/taskboard/internal/store/docs_examples_test.go#canonical_create) -->
 ```go
-plan, err := NewTasksCreate().
+plan, err := Tasks().Create().
 	ProjectID(projectID).
 	ClearAssigneeID().
 	Title("document canonical mutations").
@@ -35,15 +35,11 @@ caller. Build and execute it through the same mutation terminal:
 
 <!-- INCLUDE(sample/taskboard/internal/store/docs_examples_test.go#canonical_patch) -->
 ```go
-source, err := Tasks().Source("")
+expressions, err := (TasksColumns{}).Bind(Tasks())
 if err != nil {
 	return err
 }
-expressions, err := (TasksColumns{}).Bind(source)
-if err != nil {
-	return err
-}
-plan, err := NewTasksPatch().IsOpen(false).
+plan, err := Tasks().Patch().IsOpen(false).
 	Where(rasql.EqualValue(expressions.ID.Expr(), taskID))
 if err != nil {
 	return err

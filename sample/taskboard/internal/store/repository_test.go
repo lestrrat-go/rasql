@@ -40,7 +40,7 @@ func openTx(t *testing.T) (store.Repository, rasql.Executor) {
 
 func seed(ctx context.Context, t *testing.T, repository store.Repository, executor rasql.Executor) (int64, int64) {
 	t.Helper()
-	memberPlan, err := store.NewMembersCreate().Name("D3 test member").Plan()
+	memberPlan, err := store.Members().Create().Name("D3 test member").Plan()
 	if err != nil {
 		t.Fatalf("plan member: %s", err)
 	}
@@ -51,7 +51,7 @@ func seed(ctx context.Context, t *testing.T, repository store.Repository, execut
 	if err != nil || len(members) == 0 {
 		t.Fatalf("read created member: rows=%d err=%v", len(members), err)
 	}
-	projectPlan, err := store.NewProjectsCreate().Name("D3 test project").Plan()
+	projectPlan, err := store.Projects().Create().Name("D3 test project").Plan()
 	if err != nil {
 		t.Fatalf("plan project: %s", err)
 	}
@@ -67,7 +67,7 @@ func seed(ctx context.Context, t *testing.T, repository store.Repository, execut
 
 func addTaskDueOn(ctx context.Context, t *testing.T, executor rasql.Executor, projectID, assigneeID int64, title string, dueOn time.Time) {
 	t.Helper()
-	create := store.NewTasksCreate().ProjectID(projectID).
+	create := store.Tasks().Create().ProjectID(projectID).
 		AssigneeID(assigneeID).
 		Title(title).
 		DueOn(dueOn).
@@ -151,7 +151,7 @@ func TestAddTaskAndCloseTask(t *testing.T) {
 	if !owned.Row.IsOpen || owned.Row.CreatedAt.IsZero() || !unowned.Row.IsOpen || unowned.Row.CreatedAt.IsZero() {
 		t.Fatalf("new task defaults were not stored: owned=%#v unowned=%#v", owned.Row, unowned.Row)
 	}
-	closedCreate := store.NewTasksCreate().ProjectID(projectID).Title("Explicitly closed").IsOpen(false).DefaultCreatedAt()
+	closedCreate := store.Tasks().Create().ProjectID(projectID).Title("Explicitly closed").IsOpen(false).DefaultCreatedAt()
 	closedPlan, err := closedCreate.Plan()
 	if err != nil {
 		t.Fatalf("plan explicitly closed task: %s", err)
@@ -181,7 +181,7 @@ func TestAddTaskAndCloseTask(t *testing.T) {
 
 func readTaskByTitle(ctx context.Context, t *testing.T, executor rasql.Executor, title string) store.TasksRow {
 	t.Helper()
-	source, err := store.Tasks().Source("tasks")
+	source, err := store.Tasks().As("tasks")
 	if err != nil {
 		t.Fatalf("create task source: %s", err)
 	}
@@ -193,7 +193,7 @@ func readTaskByTitle(ctx context.Context, t *testing.T, executor rasql.Executor,
 	if err != nil {
 		t.Fatalf("build task projection: %s", err)
 	}
-	row, err := rasql.One(ctx, executor, rasql.Select(source.Source(), projection).Where(rasql.EqualValue(expressions.Title.Expr(), title)))
+	row, err := rasql.One(ctx, executor, rasql.Select(source, projection).Where(rasql.EqualValue(expressions.Title.Expr(), title)))
 	if err != nil {
 		t.Fatalf("read task %q: %s", title, err)
 	}

@@ -261,7 +261,7 @@ func q2AcceptanceQuery(t *testing.T) rasql.Query[q2AcceptanceRow] {
 // q2AcceptanceQueryRelation returns the same query alongside the relation it
 // selects from, so a caller that needs to bind another column of the same
 // source does not have to dig one back out of the built query.
-func q2AcceptanceQueryRelation(t *testing.T) (rasql.Query[q2AcceptanceRow], rasql.TypedRelation[q2AcceptanceRow]) {
+func q2AcceptanceQueryRelation(t *testing.T) (rasql.Query[q2AcceptanceRow], rasql.Table[q2AcceptanceRow]) {
 	t.Helper()
 	table, err := rasql.TableOf[q2AcceptanceRow](schema.TableDef{
 		Name: "q2_items",

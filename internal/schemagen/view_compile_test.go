@@ -49,10 +49,12 @@ func runViewScratchModule(t *testing.T, directory string) ([]byte, error) {
 }
 
 // TestGeneratedViewRejectsEachMutationIndependently proves that a generated
-// view's table type cannot be handed to any entry point that writes rows, and
-// that a generated ordinary table's handle can. The wrapper is a struct of its
-// own, so it is not a rasql.Table[T] and the call does not compile; the same
-// call written against the table's handle does.
+// view's wrapper has no Create, Patch or Delete method, while a generated
+// ordinary table's wrapper has all three. There is no longer any way to reach
+// a raw rasql.Table[T] from outside the generated package -- the wrapper's own
+// Table method is gone -- so this compile failure is now the only way a
+// caller could try one of the three against a view; nothing at runtime
+// remains to refuse.
 //
 // CreateTable is not among them. It takes a rasql.CatalogObject, which both
 // wrappers satisfy, so a view reaches it and is refused when the descriptor's
@@ -62,25 +64,25 @@ func runViewScratchModule(t *testing.T, directory string) ([]byte, error) {
 // The legacy version of this test used the root package's Insert, Update and
 // DeleteFrom convenience functions, all removed since (commit "remove
 // superseded ORM facades") as part of an unrelated, still in-flight API
-// cleanup. NewCreatePlan, NewPatchPlan, NewDeletePlan and CreateTable are
+// cleanup. The generated wrapper's own Create, Patch and Delete methods are
 // their current replacements and prove the same rejection.
 func TestGeneratedViewRejectsEachMutationIndependently(t *testing.T) {
 	for name, proof := range map[string]struct{ view, table string }{
 		"insert": {
-			view:  `_, _ = rasql.NewCreatePlan(generated.ActiveUsers())`,
-			table: `_, _ = rasql.NewCreatePlan(generated.Users().Table)`,
+			view:  `_, _ = generated.ActiveUsers().Create().Plan()`,
+			table: `_, _ = generated.Users().Create().Plan()`,
 		},
 		"update": {
-			view:  `_, _ = rasql.NewPatchPlan(generated.ActiveUsers(), rasql.Predicate{})`,
-			table: `_, _ = rasql.NewPatchPlan(generated.Users().Table, rasql.Predicate{})`,
+			view:  `_, _ = generated.ActiveUsers().Patch().Where(rasql.Predicate{})`,
+			table: `_, _ = generated.Users().Patch().Where(rasql.Predicate{})`,
 		},
 		"delete": {
-			view:  `_, _ = rasql.NewDeletePlan(generated.ActiveUsers(), query.Predicate{})`,
-			table: `_, _ = rasql.NewDeletePlan(generated.Users().Table, query.Predicate{})`,
+			view:  `_, _ = generated.ActiveUsers().Delete(rasql.Predicate{})`,
+			table: `_, _ = generated.Users().Delete(rasql.Predicate{})`,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			header := "package generated_test\n\nimport (\n\t\"context\"\n\t\"github.com/lestrrat-go/rasql\"\n\t\"github.com/lestrrat-go/rasql/query\"\n\t\"example.com/generated/generated\"\n)\n\nvar ctx = context.Background()\nvar db rasql.DB\nvar _ = query.Predicate{}\n"
+			header := "package generated_test\n\nimport (\n\t\"github.com/lestrrat-go/rasql\"\n\t\"example.com/generated/generated\"\n)\n\nvar _ rasql.Predicate\n\n"
 
 			t.Run("the table compiles", func(t *testing.T) {
 				directory := writeViewScratchModule(t, header+"func proof() {\n"+proof.table+"\n}\n")
@@ -98,36 +100,27 @@ func TestGeneratedViewRejectsEachMutationIndependently(t *testing.T) {
 }
 
 // TestGeneratedViewHandleIsRefusedWhenThePlanIsBuilt covers what the compile
-// error above does not. The generated wrapper still holds its handle in an
-// exported embedded field, so a caller can write generated.ActiveUsers().Table
-// and reach every mutation constructor, and CreateTable takes the wrapper
-// itself; each entry point reads OperationInsert, OperationUpdate,
-// OperationDelete or OperationDDL off the descriptor and refuses, naming the
-// object and the operation.
-//
-// Making that field unexported is the emitter PR's work, because it moves the
-// bytes of every checked-in generated store. Until then this is the check that
-// stops a write to a view.
+// failures above do not: DDL. There is no longer any way to reach
+// NewCreatePlan, NewPatchPlan or NewDeletePlan for a view from outside the
+// generated package at all, since the wrapper's Table method is gone and
+// those three take a plain rasql.Table[T] no exported call now produces --
+// TestGeneratedViewRejectsEachMutationIndependently is the whole story for
+// insert, update and delete. CreateTable is different: it takes the wrapper
+// itself, so a view reaches it and is refused at runtime when
+// OperationDDL is read off the descriptor, naming the object and the
+// operation.
 func TestGeneratedViewHandleIsRefusedWhenThePlanIsBuilt(t *testing.T) {
 	body := "package generated_test\n\n" +
 		"import (\n" +
 		"\t\"context\"\n\t\"strings\"\n\t\"testing\"\n\n" +
-		"\t\"github.com/lestrrat-go/rasql\"\n\t\"github.com/lestrrat-go/rasql/query\"\n\t\"example.com/generated/generated\"\n" +
+		"\t\"github.com/lestrrat-go/rasql\"\n\t\"example.com/generated/generated\"\n" +
 		")\n\n" +
 		"func TestRefused(t *testing.T) {\n" +
 		"\tctx := context.Background()\n" +
 		"\tvar db rasql.DB\n" +
-		"\tview := generated.ActiveUsers().Table\n" +
-		"\tfor name, call := range map[string]func() error{\n" +
-		"\t\t\"insert\": func() error { _, err := rasql.NewCreatePlan(view); return err },\n" +
-		"\t\t\"update\": func() error { _, err := rasql.NewPatchPlan(view, rasql.Predicate{}); return err },\n" +
-		"\t\t\"delete\": func() error { _, err := rasql.NewDeletePlan(view, query.Predicate{}); return err },\n" +
-		"\t\t\"ddl\":    func() error { return rasql.CreateTable(ctx, db, generated.ActiveUsers()) },\n" +
-		"\t} {\n" +
-		"\t\terr := call()\n" +
-		"\t\tif err == nil {\n\t\t\tt.Fatalf(\"%s was accepted\", name)\n\t\t}\n" +
-		"\t\tif !strings.Contains(err.Error(), `\"active_users\"`) {\n\t\t\tt.Fatalf(\"%s did not name the object: %s\", name, err)\n\t\t}\n" +
-		"\t}\n" +
+		"\terr := rasql.CreateTable(ctx, db, generated.ActiveUsers())\n" +
+		"\tif err == nil {\n\t\tt.Fatal(\"ddl was accepted\")\n\t}\n" +
+		"\tif !strings.Contains(err.Error(), `\"active_users\"`) {\n\t\tt.Fatalf(\"ddl did not name the object: %s\", err)\n\t}\n" +
 		"}\n"
 	directory := writeViewScratchModule(t, body)
 	output, err := runViewScratchModule(t, directory)

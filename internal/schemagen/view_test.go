@@ -9,8 +9,9 @@ import (
 
 // TestPackageSourceGeneratesReadOnlyViewSurface pins the declarations a view
 // gets. It holds one rasql.Table like every other object, because a view is a
-// table whose descriptor permits only reading, and it gets no mutation builder
-// because that descriptor permits neither insert nor update.
+// table whose descriptor permits only reading, and it gets no Create, Patch or
+// Delete method because that descriptor permits none of insert, update or
+// delete.
 func TestPackageSourceGeneratesReadOnlyViewSurface(t *testing.T) {
 	text := compactRenderedSource(t, schema.TableDef{
 		Name:       "active_users",
@@ -26,6 +27,9 @@ func TestPackageSourceGeneratesReadOnlyViewSurface(t *testing.T) {
 	require.NotContains(t, text, "ActiveUsersCreate")
 	require.NotContains(t, text, "ActiveUsersPatch")
 	require.NotContains(t, text, "activeUsersMutationColumns")
+	require.NotContains(t, text, ") Create() ")
+	require.NotContains(t, text, ") Patch() ")
+	require.NotContains(t, text, ") Delete(where rasql.Predicate)")
 }
 
 // TestPackageSourceSelectsMutationsPerOperation pins that the mutation
@@ -54,4 +58,13 @@ func TestPackageSourceSelectsMutationsPerOperation(t *testing.T) {
 	require.NotContains(t, text, "type AuditLogCreate struct")
 	require.Contains(t, text, "type AuditLogPatch struct")
 	require.Contains(t, text, "func (v AuditLogPatch) Where(value rasql.Predicate) (rasql.PatchPlan[AuditLogRow], error)")
+	require.NotContains(t, text, ") Delete(where rasql.Predicate)")
+
+	deleteOnly := appendOnly
+	deleteOnly.Operations = schema.OperationRead | schema.OperationDelete
+	text = compactRenderedSource(t, deleteOnly)
+	require.NotContains(t, text, "type AuditLogCreate struct")
+	require.NotContains(t, text, "type AuditLogPatch struct")
+	require.NotContains(t, text, "auditLogMutationColumns")
+	require.Contains(t, text, "func (t AuditLogTable) Delete(where rasql.Predicate) (rasql.DeletePlan[AuditLogRow], error)")
 }

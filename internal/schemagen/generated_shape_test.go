@@ -26,21 +26,16 @@ var updateGeneratedShape = flag.Bool("update-golden", false, "rewrite testdata/g
 // The three are the cases that differ from each other: a base table permitting
 // every operation, a view permitting only reads, and a table whose descriptor
 // names read and insert and nothing else. The method set follows the
-// descriptor's Operations -- a create builder for schema.OperationInsert, a
-// patch builder for schema.OperationUpdate -- so the second gets neither
-// builder and the third gets only the create one.
+// descriptor's Operations -- a Create method for schema.OperationInsert, a
+// Patch method for schema.OperationUpdate, a Delete method for
+// schema.OperationDelete -- so the second gets none of the three and the third
+// gets only Create.
 //
-// Two declarations in these files are already narrower than they read.
-// rasql.TypedRelation[TasksRow] is an alias for rasql.Table[TasksRow], so the
-// emitted Bind takes the table itself, and the emitted Source method is the
-// deprecated widening that rasql.SourceOf performs: an alias and a read check,
-// and nothing else.
-//
-// What these files do not yet show is the wrapper holding its rasql.Table in
-// an unexported field, with Ref and Delete methods over it and no Source method
-// at all. That change moves the bytes of every checked-in generated store, so
-// it lands in the PR that regenerates sample/taskboard and
-// internal/conformance/testdata and rebuilds the walkthrough bundle.
+// The wrapper holds its rasql.Table in an unexported field, promoted through a
+// package-private alias so As, Column and the CatalogObject methods stay
+// reachable without exporting the field itself. Ref, As and InSchema forward
+// to that field explicitly; there is no Table or Source method, so a caller
+// hands the wrapper itself to Bind, GraphKey, PageKey and the edge functions.
 func TestGeneratedShape(t *testing.T) {
 	for _, testcase := range []struct {
 		file  string
@@ -81,12 +76,15 @@ func TestGeneratedShapeCompiles(t *testing.T) {
 	usage := "package generated_test\n\n" +
 		"import (\n\t\"testing\"\n\n\t\"github.com/lestrrat-go/rasql\"\n\t\"example.com/generated/generated\"\n)\n\n" +
 		"func TestShape(t *testing.T) {\n" +
-		"\tif _, err := generated.Tasks().Source(\"\"); err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
-		"\tif _, err := generated.NewTasksCreate().ID(1).Title(\"write it down\").Plan(); err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
-		"\tif _, err := generated.NewTasksPatch().Title(\"write it down\").Where(rasql.Predicate{}); err == nil {\n\t\tt.Fatal(\"a patch with no predicate was accepted\")\n\t}\n" +
-		"\tif _, err := generated.ActiveUsers().Source(\"\"); err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
-		"\tif _, err := generated.AuditLog().Source(\"\"); err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
-		"\tif _, err := generated.NewAuditLogCreate().ID(1).Action(\"login\").Plan(); err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
+		"\tif _, err := generated.Tasks().As(\"t\"); err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
+		"\tif _, err := generated.Tasks().Create().ID(1).Title(\"write it down\").Plan(); err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
+		"\tif _, err := generated.Tasks().Patch().Title(\"write it down\").Where(rasql.Predicate{}); err == nil {\n\t\tt.Fatal(\"a patch with no predicate was accepted\")\n\t}\n" +
+		"\tif _, err := generated.Tasks().Delete(rasql.Predicate{}); err == nil {\n\t\tt.Fatal(\"a delete with no predicate was accepted\")\n\t}\n" +
+		"\tmoved, err := generated.Tasks().InSchema(\"tenant\")\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
+		"\tif moved.Ref().Definition().Name != \"tasks\" {\n\t\tt.Fatal(\"InSchema changed the table name\")\n\t}\n" +
+		"\tif _, err := generated.ActiveUsers().As(\"v\"); err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
+		"\tif _, err := generated.AuditLog().As(\"a\"); err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
+		"\tif _, err := generated.AuditLog().Create().ID(1).Action(\"login\").Plan(); err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
 		"}\n"
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "usage_test.go"), []byte(usage), 0o600))
 	require.NoError(t, scratchmod.Write(directory, repository, "example.com/generated"))

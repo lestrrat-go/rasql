@@ -4,6 +4,7 @@ package store
 
 import (
 	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 	"time"
 )
@@ -42,12 +43,30 @@ var tasksDefinition = schema.TableDef{
 
 var tasksTable = rasql.MustTableOf[TasksRow](tasksDefinition)
 
-type TasksTable struct{ rasql.Table[TasksRow] }
+type tasksTableHandle = rasql.Table[TasksRow]
 
-func Tasks() TasksTable { return TasksTable{Table: tasksTable} }
+type TasksTable struct {
+	tasksTableHandle
+}
 
-func (t TasksTable) Source(alias string) (rasql.TypedRelation[TasksRow], error) {
-	return rasql.SourceOf[TasksRow](t.Table, alias)
+func Tasks() TasksTable { return TasksTable{tasksTableHandle: tasksTable} }
+
+func (t TasksTable) Ref() query.TableRef { return t.tasksTableHandle.Ref() }
+
+func (t TasksTable) As(alias string) (TasksTable, error) {
+	aliased, err := t.tasksTableHandle.As(alias)
+	if err != nil {
+		return TasksTable{}, err
+	}
+	return TasksTable{tasksTableHandle: aliased}, nil
+}
+
+func (t TasksTable) InSchema(namespace string) (TasksTable, error) {
+	moved, err := t.tasksTableHandle.InSchema(namespace)
+	if err != nil {
+		return TasksTable{}, err
+	}
+	return TasksTable{tasksTableHandle: moved}, nil
 }
 
 type TasksColumns struct{}
@@ -68,7 +87,7 @@ type OptionalTasksExpressions struct {
 	DueOn, CreatedAt          rasql.NullColumn[TasksRow, time.Time]
 }
 
-func (TasksColumns) Bind(source rasql.TypedRelation[TasksRow]) (TasksExpressions, error) {
+func (TasksColumns) Bind(source TasksTable) (TasksExpressions, error) {
 	var err error
 	result := TasksExpressions{
 		ID:         rasqlgenBind(&err, source, "id", "", rasql.BindColumn[TasksRow, int64]),
@@ -173,7 +192,7 @@ func OptionalTasksProjection(expressions OptionalTasksExpressions) (rasql.Projec
 	return rasql.NewProjection(items, tasksOptionalDecoder{})
 }
 
-func TasksGraphKey(source rasql.TypedRelation[TasksRow]) (rasql.GraphKey[TasksRow], error) {
+func TasksGraphKey(source TasksTable) (rasql.GraphKey[TasksRow], error) {
 	expressions, err := (TasksColumns{}).Bind(source)
 	if err != nil {
 		return rasql.GraphKey[TasksRow]{}, err
@@ -181,7 +200,7 @@ func TasksGraphKey(source rasql.TypedRelation[TasksRow]) (rasql.GraphKey[TasksRo
 	return rasql.NewGraphKey[TasksRow](rasql.KeyPart[TasksRow, int64](expressions.ID, func(row TasksRow) int64 { return row.ID }))
 }
 
-func TasksIDPageKey(source rasql.TypedRelation[TasksRow], direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
+func TasksIDPageKey(source TasksTable, direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
 	expressions, err := (TasksColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -189,7 +208,7 @@ func TasksIDPageKey(source rasql.TypedRelation[TasksRow], direction rasql.PageDi
 	return rasqlgenPageKey(direction, expressions.ID.Expr(), func(row TasksRow) int64 { return row.ID })
 }
 
-func TasksProjectIDPageKey(source rasql.TypedRelation[TasksRow], direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
+func TasksProjectIDPageKey(source TasksTable, direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
 	expressions, err := (TasksColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -197,7 +216,7 @@ func TasksProjectIDPageKey(source rasql.TypedRelation[TasksRow], direction rasql
 	return rasqlgenPageKey(direction, expressions.ProjectID.Expr(), func(row TasksRow) int64 { return row.ProjectID })
 }
 
-func TasksAssigneeIDPageKey(source rasql.TypedRelation[TasksRow], direction rasql.PageDirection, nulls rasql.NullOrder) (rasql.PageKey[TasksRow], error) {
+func TasksAssigneeIDPageKey(source TasksTable, direction rasql.PageDirection, nulls rasql.NullOrder) (rasql.PageKey[TasksRow], error) {
 	expressions, err := (TasksColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -205,7 +224,7 @@ func TasksAssigneeIDPageKey(source rasql.TypedRelation[TasksRow], direction rasq
 	return rasqlgenNullablePageKey(direction, expressions.AssigneeID.NullExpr(), func(row TasksRow) rasql.Nullable[int64] { return row.AssigneeID }, nulls)
 }
 
-func TasksTitlePageKey(source rasql.TypedRelation[TasksRow], direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
+func TasksTitlePageKey(source TasksTable, direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
 	expressions, err := (TasksColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -213,7 +232,7 @@ func TasksTitlePageKey(source rasql.TypedRelation[TasksRow], direction rasql.Pag
 	return rasqlgenPageKey(direction, expressions.Title.Expr(), func(row TasksRow) string { return row.Title })
 }
 
-func TasksIsOpenPageKey(source rasql.TypedRelation[TasksRow], direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
+func TasksIsOpenPageKey(source TasksTable, direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
 	expressions, err := (TasksColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -221,7 +240,7 @@ func TasksIsOpenPageKey(source rasql.TypedRelation[TasksRow], direction rasql.Pa
 	return rasqlgenPageKey(direction, expressions.IsOpen.Expr(), func(row TasksRow) bool { return row.IsOpen })
 }
 
-func TasksDueOnPageKey(source rasql.TypedRelation[TasksRow], direction rasql.PageDirection, nulls rasql.NullOrder) (rasql.PageKey[TasksRow], error) {
+func TasksDueOnPageKey(source TasksTable, direction rasql.PageDirection, nulls rasql.NullOrder) (rasql.PageKey[TasksRow], error) {
 	expressions, err := (TasksColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -229,7 +248,7 @@ func TasksDueOnPageKey(source rasql.TypedRelation[TasksRow], direction rasql.Pag
 	return rasqlgenNullablePageKey(direction, expressions.DueOn.NullExpr(), func(row TasksRow) rasql.Nullable[time.Time] { return row.DueOn }, nulls)
 }
 
-func TasksCreatedAtPageKey(source rasql.TypedRelation[TasksRow], direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
+func TasksCreatedAtPageKey(source TasksTable, direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
 	expressions, err := (TasksColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -237,7 +256,7 @@ func TasksCreatedAtPageKey(source rasql.TypedRelation[TasksRow], direction rasql
 	return rasqlgenPageKey(direction, expressions.CreatedAt.Expr(), func(row TasksRow) time.Time { return row.CreatedAt })
 }
 
-func TasksAssigneeEdge[G, CG any](parentSource rasql.TypedRelation[TasksRow], childSource rasql.TypedRelation[MembersRow], children rasql.GraphPlan[MembersRow, CG], options rasql.EdgeOptions, attach func(*G, rasql.LoadedOne[CG])) (rasql.GraphEdge[TasksRow, G], error) {
+func TasksAssigneeEdge[G, CG any](parentSource TasksTable, childSource MembersTable, children rasql.GraphPlan[MembersRow, CG], options rasql.EdgeOptions, attach func(*G, rasql.LoadedOne[CG])) (rasql.GraphEdge[TasksRow, G], error) {
 	parentExpressions, err := (TasksColumns{}).Bind(parentSource)
 	if err != nil {
 		return nil, err
@@ -257,7 +276,7 @@ func TasksAssigneeEdge[G, CG any](parentSource rasql.TypedRelation[TasksRow], ch
 	return rasql.HasOne("Assignee", parent, child, children, options, attach)
 }
 
-func TasksProjectEdge[G, CG any](parentSource rasql.TypedRelation[TasksRow], childSource rasql.TypedRelation[ProjectsRow], children rasql.GraphPlan[ProjectsRow, CG], options rasql.EdgeOptions, attach func(*G, rasql.LoadedOne[CG])) (rasql.GraphEdge[TasksRow, G], error) {
+func TasksProjectEdge[G, CG any](parentSource TasksTable, childSource ProjectsTable, children rasql.GraphPlan[ProjectsRow, CG], options rasql.EdgeOptions, attach func(*G, rasql.LoadedOne[CG])) (rasql.GraphEdge[TasksRow, G], error) {
 	parentExpressions, err := (TasksColumns{}).Bind(parentSource)
 	if err != nil {
 		return nil, err
@@ -277,7 +296,7 @@ func TasksProjectEdge[G, CG any](parentSource rasql.TypedRelation[TasksRow], chi
 	return rasql.HasOne("Project", parent, child, children, options, attach)
 }
 
-func TasksTaskLabelsEdge[G, CG any](parentSource rasql.TypedRelation[TasksRow], childSource rasql.TypedRelation[Task_labelsRow], children rasql.GraphPlan[Task_labelsRow, CG], options rasql.EdgeOptions, attach func(*G, rasql.LoadedMany[CG])) (rasql.GraphEdge[TasksRow, G], error) {
+func TasksTaskLabelsEdge[G, CG any](parentSource TasksTable, childSource Task_labelsTable, children rasql.GraphPlan[Task_labelsRow, CG], options rasql.EdgeOptions, attach func(*G, rasql.LoadedMany[CG])) (rasql.GraphEdge[TasksRow, G], error) {
 	parentExpressions, err := (TasksColumns{}).Bind(parentSource)
 	if err != nil {
 		return nil, err
@@ -298,11 +317,7 @@ func TasksTaskLabelsEdge[G, CG any](parentSource rasql.TypedRelation[TasksRow], 
 }
 
 var tasksMutationColumns = func() TasksExpressions {
-	source, err := Tasks().Source("")
-	if err != nil {
-		panic(err)
-	}
-	value, err := (TasksColumns{}).Bind(source)
+	value, err := (TasksColumns{}).Bind(Tasks())
 	if err != nil {
 		panic(err)
 	}
@@ -310,10 +325,10 @@ var tasksMutationColumns = func() TasksExpressions {
 }()
 
 type TasksCreate struct {
+	table  rasql.Table[TasksRow]
 	fields []rasql.MutationField[TasksRow]
 }
 
-func NewTasksCreate() TasksCreate { return TasksCreate{} }
 func (v TasksCreate) ID(value int64) TasksCreate {
 	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(tasksMutationColumns.ID, value))
 	return v
@@ -359,14 +374,16 @@ func (v TasksCreate) DefaultCreatedAt() TasksCreate {
 	return v
 }
 func (v TasksCreate) Plan() (rasql.CreatePlan[TasksRow], error) {
-	return rasql.NewCreatePlan(Tasks().Table, v.fields...)
+	return rasql.NewCreatePlan(v.table, v.fields...)
 }
 
+func (t TasksTable) Create() TasksCreate { return TasksCreate{table: t.tasksTableHandle} }
+
 type TasksPatch struct {
+	table  rasql.Table[TasksRow]
 	fields []rasql.MutationField[TasksRow]
 }
 
-func NewTasksPatch() TasksPatch { return TasksPatch{} }
 func (v TasksPatch) ID(value int64) TasksPatch {
 	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(tasksMutationColumns.ID, value))
 	return v
@@ -412,5 +429,11 @@ func (v TasksPatch) DefaultCreatedAt() TasksPatch {
 	return v
 }
 func (v TasksPatch) Where(value rasql.Predicate) (rasql.PatchPlan[TasksRow], error) {
-	return rasql.NewPatchPlan(Tasks().Table, value, v.fields...)
+	return rasql.NewPatchPlan(v.table, value, v.fields...)
+}
+
+func (t TasksTable) Patch() TasksPatch { return TasksPatch{table: t.tasksTableHandle} }
+
+func (t TasksTable) Delete(where rasql.Predicate) (rasql.DeletePlan[TasksRow], error) {
+	return rasql.NewDeletePlan(t.tasksTableHandle, where)
 }

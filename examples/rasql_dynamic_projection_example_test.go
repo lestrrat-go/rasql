@@ -58,7 +58,7 @@ func Example_rasql_dynamic_projection() {
 	}
 
 	// Populate both tables through the generated create builders.
-	insertUser, err := store.NewUsersCreate().ID(1).Email("ada@example.com").FirstName("First").LastName("Last").Plan()
+	insertUser, err := store.Users().Create().ID(1).Email("ada@example.com").FirstName("First").LastName("Last").Plan()
 	if err != nil {
 		fmt.Printf("failed to build insert: %s\n", err)
 		return
@@ -71,7 +71,7 @@ func Example_rasql_dynamic_projection() {
 		{ID: 1, UserID: 1, Total: 50},
 		{ID: 2, UserID: 1, Total: 10},
 	} {
-		plan, err := store.NewOrdersCreate().ID(order.ID).UserID(order.UserID).Total(order.Total).Plan()
+		plan, err := store.Orders().Create().ID(order.ID).UserID(order.UserID).Total(order.Total).Plan()
 		if err != nil {
 			fmt.Printf("failed to build insert: %s\n", err)
 			return
@@ -82,12 +82,12 @@ func Example_rasql_dynamic_projection() {
 		}
 	}
 
-	usersColumns, err := (store.UsersColumns{}).Bind(users.Table)
+	usersColumns, err := (store.UsersColumns{}).Bind(users)
 	if err != nil {
 		fmt.Printf("failed to bind users columns: %s\n", err)
 		return
 	}
-	ordersColumns, err := (store.OrdersColumns{}).Bind(orders.Table)
+	ordersColumns, err := (store.OrdersColumns{}).Bind(orders)
 	if err != nil {
 		fmt.Printf("failed to bind orders columns: %s\n", err)
 		return

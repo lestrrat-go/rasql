@@ -57,7 +57,7 @@ func Example_rasqlgen_computed_field() {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	plan, err := store.NewUsersCreate().ID(1).Email("ada@example.com").FirstName("Ada").LastName("Lovelace").Plan()
+	plan, err := store.Users().Create().ID(1).Email("ada@example.com").FirstName("Ada").LastName("Lovelace").Plan()
 	if err != nil {
 		fmt.Printf("failed to build insert: %s\n", err)
 		return
@@ -67,7 +67,7 @@ func Example_rasqlgen_computed_field() {
 		return
 	}
 
-	columns, err := (store.UsersColumns{}).Bind(users.Table)
+	columns, err := (store.UsersColumns{}).Bind(users)
 	if err != nil {
 		fmt.Printf("failed to bind users columns: %s\n", err)
 		return

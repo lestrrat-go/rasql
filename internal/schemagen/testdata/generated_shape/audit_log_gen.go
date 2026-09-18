@@ -4,6 +4,7 @@ package generated
 
 import (
 	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 )
 
@@ -25,12 +26,30 @@ var auditLogDefinition = schema.TableDef{
 
 var auditLogTable = rasql.MustTableOf[AuditLogRow](auditLogDefinition)
 
-type AuditLogTable struct{ rasql.Table[AuditLogRow] }
+type auditLogTableHandle = rasql.Table[AuditLogRow]
 
-func AuditLog() AuditLogTable { return AuditLogTable{Table: auditLogTable} }
+type AuditLogTable struct {
+	auditLogTableHandle
+}
 
-func (t AuditLogTable) Source(alias string) (rasql.TypedRelation[AuditLogRow], error) {
-	return rasql.SourceOf[AuditLogRow](t.Table, alias)
+func AuditLog() AuditLogTable { return AuditLogTable{auditLogTableHandle: auditLogTable} }
+
+func (t AuditLogTable) Ref() query.TableRef { return t.auditLogTableHandle.Ref() }
+
+func (t AuditLogTable) As(alias string) (AuditLogTable, error) {
+	aliased, err := t.auditLogTableHandle.As(alias)
+	if err != nil {
+		return AuditLogTable{}, err
+	}
+	return AuditLogTable{auditLogTableHandle: aliased}, nil
+}
+
+func (t AuditLogTable) InSchema(namespace string) (AuditLogTable, error) {
+	moved, err := t.auditLogTableHandle.InSchema(namespace)
+	if err != nil {
+		return AuditLogTable{}, err
+	}
+	return AuditLogTable{auditLogTableHandle: moved}, nil
 }
 
 type AuditLogColumns struct{}
@@ -45,7 +64,7 @@ type OptionalAuditLogExpressions struct {
 	Action rasql.NullColumn[AuditLogRow, string]
 }
 
-func (AuditLogColumns) Bind(source rasql.TypedRelation[AuditLogRow]) (AuditLogExpressions, error) {
+func (AuditLogColumns) Bind(source AuditLogTable) (AuditLogExpressions, error) {
 	var err error
 	result := AuditLogExpressions{
 		ID:     rasqlgenBind(&err, source, "id", "", rasql.BindColumn[AuditLogRow, int64]),
@@ -120,7 +139,7 @@ func OptionalAuditLogProjection(expressions OptionalAuditLogExpressions) (rasql.
 	return rasql.NewProjection(items, auditLogOptionalDecoder{})
 }
 
-func AuditLogGraphKey(source rasql.TypedRelation[AuditLogRow]) (rasql.GraphKey[AuditLogRow], error) {
+func AuditLogGraphKey(source AuditLogTable) (rasql.GraphKey[AuditLogRow], error) {
 	expressions, err := (AuditLogColumns{}).Bind(source)
 	if err != nil {
 		return rasql.GraphKey[AuditLogRow]{}, err
@@ -128,7 +147,7 @@ func AuditLogGraphKey(source rasql.TypedRelation[AuditLogRow]) (rasql.GraphKey[A
 	return rasql.NewGraphKey[AuditLogRow](rasql.KeyPart[AuditLogRow, int64](expressions.ID, func(row AuditLogRow) int64 { return row.ID }))
 }
 
-func AuditLogIDPageKey(source rasql.TypedRelation[AuditLogRow], direction rasql.PageDirection) (rasql.PageKey[AuditLogRow], error) {
+func AuditLogIDPageKey(source AuditLogTable, direction rasql.PageDirection) (rasql.PageKey[AuditLogRow], error) {
 	expressions, err := (AuditLogColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -136,7 +155,7 @@ func AuditLogIDPageKey(source rasql.TypedRelation[AuditLogRow], direction rasql.
 	return rasqlgenPageKey(direction, expressions.ID.Expr(), func(row AuditLogRow) int64 { return row.ID })
 }
 
-func AuditLogActionPageKey(source rasql.TypedRelation[AuditLogRow], direction rasql.PageDirection) (rasql.PageKey[AuditLogRow], error) {
+func AuditLogActionPageKey(source AuditLogTable, direction rasql.PageDirection) (rasql.PageKey[AuditLogRow], error) {
 	expressions, err := (AuditLogColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -145,11 +164,7 @@ func AuditLogActionPageKey(source rasql.TypedRelation[AuditLogRow], direction ra
 }
 
 var auditLogMutationColumns = func() AuditLogExpressions {
-	source, err := AuditLog().Source("")
-	if err != nil {
-		panic(err)
-	}
-	value, err := (AuditLogColumns{}).Bind(source)
+	value, err := (AuditLogColumns{}).Bind(AuditLog())
 	if err != nil {
 		panic(err)
 	}
@@ -157,10 +172,10 @@ var auditLogMutationColumns = func() AuditLogExpressions {
 }()
 
 type AuditLogCreate struct {
+	table  rasql.Table[AuditLogRow]
 	fields []rasql.MutationField[AuditLogRow]
 }
 
-func NewAuditLogCreate() AuditLogCreate { return AuditLogCreate{} }
 func (v AuditLogCreate) ID(value int64) AuditLogCreate {
 	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(auditLogMutationColumns.ID, value))
 	return v
@@ -170,5 +185,7 @@ func (v AuditLogCreate) Action(value string) AuditLogCreate {
 	return v
 }
 func (v AuditLogCreate) Plan() (rasql.CreatePlan[AuditLogRow], error) {
-	return rasql.NewCreatePlan(AuditLog().Table, v.fields...)
+	return rasql.NewCreatePlan(v.table, v.fields...)
 }
+
+func (t AuditLogTable) Create() AuditLogCreate { return AuditLogCreate{table: t.auditLogTableHandle} }

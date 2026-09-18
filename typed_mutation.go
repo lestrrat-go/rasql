@@ -200,11 +200,14 @@ func createColumnOmissible(definition schema.TableDef, column schema.ColumnDef) 
 	return integer
 }
 
-type patchPredicate interface {
+// wherePredicate is the set of predicate shapes NewPatchPlan and NewDeletePlan
+// accept for their where argument: the dynamic query.Predicate and the typed
+// Q1 Predicate this package defines.
+type wherePredicate interface {
 	query.Predicate | Predicate
 }
 
-func patchWhereExpression[P patchPredicate](value P) (query.Expression, error) {
+func wherePredicateExpression[P wherePredicate](value P) (query.Expression, error) {
 	switch predicate := any(value).(type) {
 	case query.Predicate:
 		return predicate.Expression(), nil
@@ -224,8 +227,8 @@ func patchWhereExpression[P patchPredicate](value P) (query.Expression, error) {
 // that failure again.
 //
 // `table` must not be nil.
-func NewPatchPlan[T any, P patchPredicate](table Table[T], where P, fields ...MutationField[T]) (PatchPlan[T], error) {
-	expression, err := patchWhereExpression(where)
+func NewPatchPlan[T any, P wherePredicate](table Table[T], where P, fields ...MutationField[T]) (PatchPlan[T], error) {
+	expression, err := wherePredicateExpression(where)
 	if err != nil {
 		return PatchPlan[T]{table: table, fields: append([]MutationField[T](nil), fields...), err: err}, err
 	}

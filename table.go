@@ -30,8 +30,8 @@ type Table[T any] struct {
 // TableOf creates a typed table from a validated schema definition. It reports
 // an error when definition is not a valid descriptor, and checks nothing about
 // which operations the descriptor permits: NewCreatePlan, NewPatchPlan,
-// NewDeletePlan, CreateTable and Table.Source each check the one bit they need
-// when the statement is built.
+// NewDeletePlan, CreateTable and Select each check the one bit they need when
+// the statement is built.
 func TableOf[T any](definition schema.TableDef) (Table[T], error) {
 	source, err := query.NewTableRef(definition)
 	if err != nil {
@@ -88,9 +88,10 @@ func (t Table[T]) Ref() query.TableRef { return t.ref }
 // it could not find.
 func (t Table[T]) Column(name string) ColumnRef { return t.ref.Column(name) }
 
-// As returns t under alias. Generated table types have their own As returning
-// the generated wrapper; this one is what that method calls and what dynamic
-// code calls directly.
+// As returns t under alias. A generated table's own As is this one, promoted
+// from its embedded handle, so it returns the plain Table[T] the embedded
+// handle names rather than the generated wrapper; dynamic code calls it
+// directly.
 func (t Table[T]) As(alias string) (Table[T], error) {
 	aliased, err := t.ref.As(alias)
 	if err != nil {

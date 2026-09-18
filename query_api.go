@@ -234,43 +234,6 @@ func (t Table[T]) relationSource() Source { return Source{ref: query.Relation(t.
 // never called.
 func (t Table[T]) relationRow() T { var zero T; return zero }
 
-// Source returns t unchanged.
-//
-// Deprecated: a table is already a RowSource, so nothing needs converting. It
-// survives for sample/taskboard, whose hand-written repository still calls it
-// and which the emitter PR regenerates; that PR deletes this method, the
-// TypedRelation alias and SourceOf together.
-func (t Table[T]) Source() Table[T] { return t }
-
-// SourceOf returns table under alias, and reports an error for a descriptor
-// that does not permit schema.OperationRead.
-//
-// Deprecated: Table.As sets an alias and a table needs no widening, so this is
-// two steps that do nothing between them. It survives because the compact
-// emitter still writes it into every generated store, and the PR that
-// regenerates those stores deletes it.
-func SourceOf[R any](table Table[R], alias string) (TypedRelation[R], error) {
-	if err := table.ref.Validate(); err != nil {
-		return Table[R]{}, fmt.Errorf("rasql: table source: %w", err)
-	}
-	if !table.ref.Supports(schema.OperationRead) {
-		return Table[R]{}, fmt.Errorf("rasql: object %q does not support operation %d",
-			table.ref.Definition().QualifiedName(), schema.OperationRead)
-	}
-	if alias == "" {
-		return table, nil
-	}
-	return table.As(alias)
-}
-
-// TypedRelation is rasql.Table under the name the compact emitter still writes.
-//
-// Deprecated: it is an alias rather than a type of its own because the two were
-// always the same thing: every TypedRelation ever built came from one table and
-// carried nothing the table did not already carry. The PR that regenerates every
-// checked-in store deletes it.
-type TypedRelation[R any] = Table[R]
-
 // OptionalRelation is one appearance whose rows may be absent, which is what an
 // outer join produces. Optional builds one, and BindOptionalColumn binds a
 // column of it as nullable whatever the descriptor says.

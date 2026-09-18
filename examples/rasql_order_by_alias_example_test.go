@@ -55,7 +55,7 @@ func Example_rasql_order_by_alias() {
 		return
 	}
 
-	withNickname, err := store.NewUsersCreate().ID(1).Email("ada@example.com").Nickname("Ada").FirstName("First").LastName("Last").Plan()
+	withNickname, err := store.Users().Create().ID(1).Email("ada@example.com").Nickname("Ada").FirstName("First").LastName("Last").Plan()
 	if err != nil {
 		fmt.Printf("failed to build insert: %s\n", err)
 		return
@@ -64,7 +64,7 @@ func Example_rasql_order_by_alias() {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
-	withoutNickname, err := store.NewUsersCreate().ID(2).Email("bob@example.com").FirstName("First").LastName("Last").Plan()
+	withoutNickname, err := store.Users().Create().ID(2).Email("bob@example.com").FirstName("First").LastName("Last").Plan()
 	if err != nil {
 		fmt.Printf("failed to build insert: %s\n", err)
 		return
@@ -74,7 +74,7 @@ func Example_rasql_order_by_alias() {
 		return
 	}
 
-	columns, err := (store.UsersColumns{}).Bind(users.Table)
+	columns, err := (store.UsersColumns{}).Bind(users)
 	if err != nil {
 		fmt.Printf("failed to bind users columns: %s\n", err)
 		return

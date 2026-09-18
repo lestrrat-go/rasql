@@ -9,7 +9,6 @@ import (
 	"io"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/dialect"
@@ -395,67 +394,6 @@ func BenchmarkQueryRenderedBoundArgs(b *testing.B) {
 			b.Fatal(err)
 		}
 		if err := rows.Close(); err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-type benchmarkTaskRow struct {
-	ID, ProjectID int64
-	AssigneeID    rasql.Nullable[int64]
-	Title         string
-	IsOpen        bool
-	CreatedAt     time.Time
-	DueOn         rasql.Nullable[time.Time]
-}
-
-// benchmarkTasksDefinition has the same shape as sample/taskboard's tasks
-// table: 7 columns, 1 index, 2 foreign keys.
-func benchmarkTasksDefinition() schema.TableDef {
-	return schema.TableDef{
-		Name: "tasks",
-		Columns: []schema.ColumnDef{
-			{Name: "id", Type: schema.IntegerType{}, Identity: schema.IdentityAlways},
-			{Name: "project_id", Type: schema.IntegerType{}},
-			{Name: "assignee_id", Type: schema.IntegerType{}, Nullable: true},
-			{Name: "title", Type: schema.TextType{}},
-			{Name: "is_open", Type: schema.BooleanType{}, Default: "true"},
-			{Name: "created_at", Type: schema.TimeType{}, Default: "now()"},
-			{Name: "due_on", Type: schema.TimeType{}, Nullable: true},
-		},
-		PrimaryKey: []string{"id"},
-		Indexes: []schema.IndexDef{
-			{Name: "tasks_open_by_project", Columns: []string{"project_id", "id"}, Predicate: "is_open"},
-		},
-		ForeignKeys: []schema.ForeignKeyDef{
-			{
-				Name: "tasks_assignee_id_fkey", Columns: []string{"assignee_id"},
-				ReferencedTable: "members", ReferencedColumns: []string{"id"},
-				OnDelete: schema.SetNull, OnUpdate: schema.NoAction,
-			},
-			{
-				Name: "tasks_project_id_fkey", Columns: []string{"project_id"},
-				ReferencedTable: "projects", ReferencedColumns: []string{"id"},
-				OnDelete: schema.Cascade, OnUpdate: schema.NoAction,
-			},
-		},
-	}
-}
-
-// BenchmarkSourceOf measures the widening every generated store still pays once
-// per table per query build, through the rasql.SourceOf the compact emitter
-// writes. A caller writing the query by hand pays none of it, because Select
-// takes the table itself; the emitter PR that stops writing SourceOf retires
-// this benchmark with it.
-func BenchmarkSourceOf(b *testing.B) {
-	table, err := rasql.TableOf[benchmarkTaskRow](benchmarkTasksDefinition())
-	if err != nil {
-		b.Fatal(err)
-	}
-	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
-		if _, err := rasql.SourceOf(table, ""); err != nil {
 			b.Fatal(err)
 		}
 	}

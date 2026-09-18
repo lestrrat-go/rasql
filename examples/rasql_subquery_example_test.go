@@ -67,7 +67,7 @@ func Example_rasql_subquery() {
 		{ID: 2, Email: "bob@example.com"},
 		{ID: 3, Email: "cyd@other.example"},
 	} {
-		plan, err := store.NewUsersCreate().ID(user.ID).Email(user.Email).FirstName("First").LastName("Last").Plan()
+		plan, err := store.Users().Create().ID(user.ID).Email(user.Email).FirstName("First").LastName("Last").Plan()
 		if err != nil {
 			fmt.Printf("failed to build insert: %s\n", err)
 			return
@@ -82,7 +82,7 @@ func Example_rasql_subquery() {
 		{ID: 2, UserID: 2, Total: 20},
 		{ID: 3, UserID: 3, Total: 100},
 	} {
-		plan, err := store.NewOrdersCreate().ID(order.ID).UserID(order.UserID).Total(order.Total).Plan()
+		plan, err := store.Orders().Create().ID(order.ID).UserID(order.UserID).Total(order.Total).Plan()
 		if err != nil {
 			fmt.Printf("failed to build insert: %s\n", err)
 			return
@@ -93,12 +93,12 @@ func Example_rasql_subquery() {
 		}
 	}
 
-	usersColumns, err := (store.UsersColumns{}).Bind(users.Table)
+	usersColumns, err := (store.UsersColumns{}).Bind(users)
 	if err != nil {
 		fmt.Printf("failed to bind users columns: %s\n", err)
 		return
 	}
-	ordersColumns, err := (store.OrdersColumns{}).Bind(orders.Table)
+	ordersColumns, err := (store.OrdersColumns{}).Bind(orders)
 	if err != nil {
 		fmt.Printf("failed to bind orders columns: %s\n", err)
 		return

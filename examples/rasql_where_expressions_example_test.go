@@ -42,7 +42,7 @@ func Example_rasql_where_expressions() {
 		{ID: 17, Email: "nia@example.com"},
 		{ID: 20, Email: "edsger@example.com", Nickname: rasql.Nullable[string]{Value: "Ed", Valid: true}},
 	} {
-		create := store.NewUsersCreate().ID(user.ID).Email(user.Email).FirstName("First").LastName("Last")
+		create := store.Users().Create().ID(user.ID).Email(user.Email).FirstName("First").LastName("Last")
 		if user.Nickname.Valid {
 			create = create.Nickname(user.Nickname.Value)
 		}
@@ -59,7 +59,7 @@ func Example_rasql_where_expressions() {
 
 	// The generated columns struct binds every users column to the table, and
 	// the generated projection selects them in the order the row type scans.
-	columns, err := (store.UsersColumns{}).Bind(users.Table)
+	columns, err := (store.UsersColumns{}).Bind(users)
 	if err != nil {
 		fmt.Printf("failed to bind users columns: %s\n", err)
 		return

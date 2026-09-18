@@ -14,7 +14,7 @@ import (
 
 func docsReadTasks(ctx context.Context, executor rasql.Executor) error {
 	// BEGIN(canonical_read)
-	source, err := Tasks().Source("tasks")
+	source, err := Tasks().As("tasks")
 	if err != nil {
 		return err
 	}
@@ -26,7 +26,7 @@ func docsReadTasks(ctx context.Context, executor rasql.Executor) error {
 	if err != nil {
 		return err
 	}
-	q := rasql.Select(source.Source(), projection).
+	q := rasql.Select(source, projection).
 		Where(rasql.EqualValue(expressions.IsOpen.Expr(), true)).
 		OrderBy(rasql.AscExpr(expressions.ID.Expr()))
 	rows, err := rasql.All(ctx, executor, q)
@@ -37,7 +37,7 @@ func docsReadTasks(ctx context.Context, executor rasql.Executor) error {
 
 func docsCreateTask(ctx context.Context, executor rasql.Executor, projectID int64) error {
 	// BEGIN(canonical_create)
-	plan, err := NewTasksCreate().
+	plan, err := Tasks().Create().
 		ProjectID(projectID).
 		ClearAssigneeID().
 		Title("document canonical mutations").
@@ -55,15 +55,11 @@ func docsCreateTask(ctx context.Context, executor rasql.Executor, projectID int6
 
 func docsPatchTask(ctx context.Context, executor rasql.Executor, taskID int64) error {
 	// BEGIN(canonical_patch)
-	source, err := Tasks().Source("")
+	expressions, err := (TasksColumns{}).Bind(Tasks())
 	if err != nil {
 		return err
 	}
-	expressions, err := (TasksColumns{}).Bind(source)
-	if err != nil {
-		return err
-	}
-	plan, err := NewTasksPatch().IsOpen(false).
+	plan, err := Tasks().Patch().IsOpen(false).
 		Where(rasql.EqualValue(expressions.ID.Expr(), taskID))
 	if err != nil {
 		return err
@@ -76,7 +72,7 @@ func docsPatchTask(ctx context.Context, executor rasql.Executor, taskID int64) e
 
 func docsStatementPlan(ctx context.Context, executor rasql.Executor) error {
 	// BEGIN(statement_plan)
-	tasks := Tasks().Table
+	tasks := Tasks()
 	statement, err := query.NewInsert(tasks.Ref(),
 		query.Set(tasks.Column("project_id"), int64(1)),
 		query.Set(tasks.Column("title"), "write the guide"),
@@ -95,11 +91,7 @@ func docsStatementPlan(ctx context.Context, executor rasql.Executor) error {
 }
 
 func docsReturning(ctx context.Context, executor rasql.Executor, plan rasql.MutationPlan) error {
-	source, err := Tasks().Source("")
-	if err != nil {
-		return err
-	}
-	expressions, err := (TasksColumns{}).Bind(source)
+	expressions, err := (TasksColumns{}).Bind(Tasks())
 	if err != nil {
 		return err
 	}

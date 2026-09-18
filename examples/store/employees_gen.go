@@ -4,6 +4,7 @@ package store
 
 import (
 	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 )
 
@@ -26,12 +27,30 @@ var employeesDefinition = schema.TableDef{
 
 var employeesTable = rasql.MustTableOf[EmployeesRow](employeesDefinition)
 
-type EmployeesTable struct{ rasql.Table[EmployeesRow] }
+type employeesTableHandle = rasql.Table[EmployeesRow]
 
-func Employees() EmployeesTable { return EmployeesTable{Table: employeesTable} }
+type EmployeesTable struct {
+	employeesTableHandle
+}
 
-func (t EmployeesTable) Source(alias string) (rasql.TypedRelation[EmployeesRow], error) {
-	return rasql.SourceOf[EmployeesRow](t.Table, alias)
+func Employees() EmployeesTable { return EmployeesTable{employeesTableHandle: employeesTable} }
+
+func (t EmployeesTable) Ref() query.TableRef { return t.employeesTableHandle.Ref() }
+
+func (t EmployeesTable) As(alias string) (EmployeesTable, error) {
+	aliased, err := t.employeesTableHandle.As(alias)
+	if err != nil {
+		return EmployeesTable{}, err
+	}
+	return EmployeesTable{employeesTableHandle: aliased}, nil
+}
+
+func (t EmployeesTable) InSchema(namespace string) (EmployeesTable, error) {
+	moved, err := t.employeesTableHandle.InSchema(namespace)
+	if err != nil {
+		return EmployeesTable{}, err
+	}
+	return EmployeesTable{employeesTableHandle: moved}, nil
 }
 
 type EmployeesColumns struct{}
@@ -48,7 +67,7 @@ type OptionalEmployeesExpressions struct {
 	ManagerID rasql.NullColumn[EmployeesRow, int64]
 }
 
-func (EmployeesColumns) Bind(source rasql.TypedRelation[EmployeesRow]) (EmployeesExpressions, error) {
+func (EmployeesColumns) Bind(source EmployeesTable) (EmployeesExpressions, error) {
 	var err error
 	result := EmployeesExpressions{
 		ID:        rasqlgenBind(&err, source, "id", "", rasql.BindColumn[EmployeesRow, int64]),
@@ -130,7 +149,7 @@ func OptionalEmployeesProjection(expressions OptionalEmployeesExpressions) (rasq
 	return rasql.NewProjection(items, employeesOptionalDecoder{})
 }
 
-func EmployeesGraphKey(source rasql.TypedRelation[EmployeesRow]) (rasql.GraphKey[EmployeesRow], error) {
+func EmployeesGraphKey(source EmployeesTable) (rasql.GraphKey[EmployeesRow], error) {
 	expressions, err := (EmployeesColumns{}).Bind(source)
 	if err != nil {
 		return rasql.GraphKey[EmployeesRow]{}, err
@@ -138,7 +157,7 @@ func EmployeesGraphKey(source rasql.TypedRelation[EmployeesRow]) (rasql.GraphKey
 	return rasql.NewGraphKey[EmployeesRow](rasql.KeyPart[EmployeesRow, int64](expressions.ID, func(row EmployeesRow) int64 { return row.ID }))
 }
 
-func EmployeesIDPageKey(source rasql.TypedRelation[EmployeesRow], direction rasql.PageDirection) (rasql.PageKey[EmployeesRow], error) {
+func EmployeesIDPageKey(source EmployeesTable, direction rasql.PageDirection) (rasql.PageKey[EmployeesRow], error) {
 	expressions, err := (EmployeesColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -146,7 +165,7 @@ func EmployeesIDPageKey(source rasql.TypedRelation[EmployeesRow], direction rasq
 	return rasqlgenPageKey(direction, expressions.ID.Expr(), func(row EmployeesRow) int64 { return row.ID })
 }
 
-func EmployeesNamePageKey(source rasql.TypedRelation[EmployeesRow], direction rasql.PageDirection) (rasql.PageKey[EmployeesRow], error) {
+func EmployeesNamePageKey(source EmployeesTable, direction rasql.PageDirection) (rasql.PageKey[EmployeesRow], error) {
 	expressions, err := (EmployeesColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -154,7 +173,7 @@ func EmployeesNamePageKey(source rasql.TypedRelation[EmployeesRow], direction ra
 	return rasqlgenPageKey(direction, expressions.Name.Expr(), func(row EmployeesRow) string { return row.Name })
 }
 
-func EmployeesManagerIDPageKey(source rasql.TypedRelation[EmployeesRow], direction rasql.PageDirection, nulls rasql.NullOrder) (rasql.PageKey[EmployeesRow], error) {
+func EmployeesManagerIDPageKey(source EmployeesTable, direction rasql.PageDirection, nulls rasql.NullOrder) (rasql.PageKey[EmployeesRow], error) {
 	expressions, err := (EmployeesColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -163,11 +182,7 @@ func EmployeesManagerIDPageKey(source rasql.TypedRelation[EmployeesRow], directi
 }
 
 var employeesMutationColumns = func() EmployeesExpressions {
-	source, err := Employees().Source("")
-	if err != nil {
-		panic(err)
-	}
-	value, err := (EmployeesColumns{}).Bind(source)
+	value, err := (EmployeesColumns{}).Bind(Employees())
 	if err != nil {
 		panic(err)
 	}
@@ -175,10 +190,10 @@ var employeesMutationColumns = func() EmployeesExpressions {
 }()
 
 type EmployeesCreate struct {
+	table  rasql.Table[EmployeesRow]
 	fields []rasql.MutationField[EmployeesRow]
 }
 
-func NewEmployeesCreate() EmployeesCreate { return EmployeesCreate{} }
 func (v EmployeesCreate) ID(value int64) EmployeesCreate {
 	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(employeesMutationColumns.ID, value))
 	return v
@@ -196,14 +211,18 @@ func (v EmployeesCreate) ClearManagerID() EmployeesCreate {
 	return v
 }
 func (v EmployeesCreate) Plan() (rasql.CreatePlan[EmployeesRow], error) {
-	return rasql.NewCreatePlan(Employees().Table, v.fields...)
+	return rasql.NewCreatePlan(v.table, v.fields...)
+}
+
+func (t EmployeesTable) Create() EmployeesCreate {
+	return EmployeesCreate{table: t.employeesTableHandle}
 }
 
 type EmployeesPatch struct {
+	table  rasql.Table[EmployeesRow]
 	fields []rasql.MutationField[EmployeesRow]
 }
 
-func NewEmployeesPatch() EmployeesPatch { return EmployeesPatch{} }
 func (v EmployeesPatch) ID(value int64) EmployeesPatch {
 	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(employeesMutationColumns.ID, value))
 	return v
@@ -221,5 +240,11 @@ func (v EmployeesPatch) ClearManagerID() EmployeesPatch {
 	return v
 }
 func (v EmployeesPatch) Where(value rasql.Predicate) (rasql.PatchPlan[EmployeesRow], error) {
-	return rasql.NewPatchPlan(Employees().Table, value, v.fields...)
+	return rasql.NewPatchPlan(v.table, value, v.fields...)
+}
+
+func (t EmployeesTable) Patch() EmployeesPatch { return EmployeesPatch{table: t.employeesTableHandle} }
+
+func (t EmployeesTable) Delete(where rasql.Predicate) (rasql.DeletePlan[EmployeesRow], error) {
+	return rasql.NewDeletePlan(t.employeesTableHandle, where)
 }

@@ -9,7 +9,7 @@ Bind a generated column set to a source, build its generated projection, and pas
 
 <!-- INCLUDE(sample/taskboard/internal/store/docs_examples_test.go#canonical_read) -->
 ```go
-source, err := Tasks().Source("tasks")
+source, err := Tasks().As("tasks")
 if err != nil {
 	return err
 }
@@ -21,7 +21,7 @@ projection, err := TasksProjection(expressions)
 if err != nil {
 	return err
 }
-q := rasql.Select(source.Source(), projection).
+q := rasql.Select(source, projection).
 	Where(rasql.EqualValue(expressions.IsOpen.Expr(), true)).
 	OrderBy(rasql.AscExpr(expressions.ID.Expr()))
 rows, err := rasql.All(ctx, executor, q)

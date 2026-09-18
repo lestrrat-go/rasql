@@ -190,9 +190,9 @@ func TestCompactEmitsGraphAndPageFactories(t *testing.T) {
 			source = string(file.Source)
 		}
 	}
-	require.Contains(t, source, "func UsersGraphKey(source rasql.TypedRelation[UsersRow])")
-	require.Contains(t, source, "func UsersIDPageKey(source rasql.TypedRelation[UsersRow], direction rasql.PageDirection)")
-	require.Contains(t, source, "func UsersDeletedAtPageKey(source rasql.TypedRelation[UsersRow], direction rasql.PageDirection, nulls rasql.NullOrder)")
+	require.Contains(t, source, "func UsersGraphKey(source UsersTable)")
+	require.Contains(t, source, "func UsersIDPageKey(source UsersTable, direction rasql.PageDirection)")
+	require.Contains(t, source, "func UsersDeletedAtPageKey(source UsersTable, direction rasql.PageDirection, nulls rasql.NullOrder)")
 	require.Contains(t, source, "rasqlgenNullablePageKey")
 }
 

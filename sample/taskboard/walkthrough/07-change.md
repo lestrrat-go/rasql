@@ -104,7 +104,7 @@ instead of by compile error:
 // AddTask files one open task against projectID. A nil assigneeID files it
 // with nobody on it.
 func (repository Repository) AddTask(ctx context.Context, projectID int64, assigneeID *int64, title string) error {
-	create := NewTasksCreate().ProjectID(projectID).Title(title).DefaultIsOpen().DefaultCreatedAt()
+	create := Tasks().Create().ProjectID(projectID).Title(title).DefaultIsOpen().DefaultCreatedAt()
 	if assigneeID == nil {
 		create = create.ClearAssigneeID()
 	} else {

@@ -46,7 +46,7 @@ func (d correlatedUserDecoder) DecodeRow(source rasql.ScanSource, row *correlate
 // so the columns used to seed and filter agree with the columns the
 // projection below reads.
 func correlatedUserColumns(t *testing.T, users rasql.Table[correlatedUser]) (
-	rasql.TypedRelation[correlatedUser], rasql.Column[correlatedUser, int64], rasql.Column[correlatedUser, string], rasql.Column[correlatedUser, int64],
+	rasql.Table[correlatedUser], rasql.Column[correlatedUser, int64], rasql.Column[correlatedUser, string], rasql.Column[correlatedUser, int64],
 ) {
 	t.Helper()
 
@@ -61,7 +61,7 @@ func correlatedUserColumns(t *testing.T, users rasql.Table[correlatedUser]) (
 }
 
 func correlatedOrderColumns(t *testing.T, orders rasql.Table[correlatedOrder]) (
-	rasql.TypedRelation[correlatedOrder], rasql.Column[correlatedOrder, int64], rasql.Column[correlatedOrder, int64], rasql.Column[correlatedOrder, int64],
+	rasql.Table[correlatedOrder], rasql.Column[correlatedOrder, int64], rasql.Column[correlatedOrder, int64], rasql.Column[correlatedOrder, int64],
 ) {
 	t.Helper()
 
@@ -98,7 +98,7 @@ func correlatedUserProjection(
 // correlatedAllUsers reads every user back in id order, through the typed
 // Query API, the way every subtest below confirms what a write actually did.
 func correlatedAllUsers(
-	t *testing.T, executor rasql.Executor, relation rasql.TypedRelation[correlatedUser],
+	t *testing.T, executor rasql.Executor, relation rasql.Table[correlatedUser],
 	projection rasql.Projection[correlatedUser], id rasql.Column[correlatedUser, int64],
 ) []correlatedUser {
 	t.Helper()

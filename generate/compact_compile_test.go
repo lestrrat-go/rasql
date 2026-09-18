@@ -36,26 +36,26 @@ func main() { _ = generated.Account().ID() }
 
 import generated "example.com/compactcompile/generated"
 
-func main() { _ = generated.NewProjectCreate().ClearTitle() }
+func main() { _ = generated.Project().Create().ClearTitle() }
 `, "ClearTitle undefined")
 	compileFail("no_default_default", `package main
 
 import generated "example.com/compactcompile/generated"
 
-func main() { _ = generated.NewAccountCreate().DefaultNickname() }
+func main() { _ = generated.Account().Create().DefaultNickname() }
 `, "DefaultNickname undefined")
 	compileFail("wrong_setter_type", `package main
 
 import generated "example.com/compactcompile/generated"
 
-func main() { _ = generated.NewProjectCreate().Title(42) }
+func main() { _ = generated.Project().Create().Title(42) }
 `, "cannot use 42")
 	compileFail("view_write", `package main
 
 import generated "example.com/compactcompile/generated"
 
-func main() { _ = generated.NewActiveUserCreate() }
-`, "undefined: generated.NewActiveUserCreate")
+func main() { _ = generated.ActiveUser().Create() }
+`, "Create undefined")
 
 	generatedRoot := renderCompactCompileModule(t, richCompactInputWithGeneratedColumn(t))
 	dir := filepath.Join(generatedRoot, "generated_column_write")
@@ -64,7 +64,7 @@ func main() { _ = generated.NewActiveUserCreate() }
 
 import generated "example.com/compactcompile/generated"
 
-func main() { _ = generated.NewAccountCreate().ComputedID(42) }
+func main() { _ = generated.Account().Create().ComputedID(42) }
 `), 0o600))
 	command := exec.Command("go", "test", "-mod=mod", "./generated_column_write")
 	command.Dir = generatedRoot

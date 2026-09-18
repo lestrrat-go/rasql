@@ -4,6 +4,7 @@ package store
 
 import (
 	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 )
 
@@ -24,12 +25,30 @@ var membersDefinition = schema.TableDef{
 
 var membersTable = rasql.MustTableOf[MembersRow](membersDefinition)
 
-type MembersTable struct{ rasql.Table[MembersRow] }
+type membersTableHandle = rasql.Table[MembersRow]
 
-func Members() MembersTable { return MembersTable{Table: membersTable} }
+type MembersTable struct {
+	membersTableHandle
+}
 
-func (t MembersTable) Source(alias string) (rasql.TypedRelation[MembersRow], error) {
-	return rasql.SourceOf[MembersRow](t.Table, alias)
+func Members() MembersTable { return MembersTable{membersTableHandle: membersTable} }
+
+func (t MembersTable) Ref() query.TableRef { return t.membersTableHandle.Ref() }
+
+func (t MembersTable) As(alias string) (MembersTable, error) {
+	aliased, err := t.membersTableHandle.As(alias)
+	if err != nil {
+		return MembersTable{}, err
+	}
+	return MembersTable{membersTableHandle: aliased}, nil
+}
+
+func (t MembersTable) InSchema(namespace string) (MembersTable, error) {
+	moved, err := t.membersTableHandle.InSchema(namespace)
+	if err != nil {
+		return MembersTable{}, err
+	}
+	return MembersTable{membersTableHandle: moved}, nil
 }
 
 type MembersColumns struct{}
@@ -44,7 +63,7 @@ type OptionalMembersExpressions struct {
 	Name rasql.NullColumn[MembersRow, string]
 }
 
-func (MembersColumns) Bind(source rasql.TypedRelation[MembersRow]) (MembersExpressions, error) {
+func (MembersColumns) Bind(source MembersTable) (MembersExpressions, error) {
 	var err error
 	result := MembersExpressions{
 		ID:   rasqlgenBind(&err, source, "id", "", rasql.BindColumn[MembersRow, int64]),
@@ -119,7 +138,7 @@ func OptionalMembersProjection(expressions OptionalMembersExpressions) (rasql.Pr
 	return rasql.NewProjection(items, membersOptionalDecoder{})
 }
 
-func MembersGraphKey(source rasql.TypedRelation[MembersRow]) (rasql.GraphKey[MembersRow], error) {
+func MembersGraphKey(source MembersTable) (rasql.GraphKey[MembersRow], error) {
 	expressions, err := (MembersColumns{}).Bind(source)
 	if err != nil {
 		return rasql.GraphKey[MembersRow]{}, err
@@ -127,7 +146,7 @@ func MembersGraphKey(source rasql.TypedRelation[MembersRow]) (rasql.GraphKey[Mem
 	return rasql.NewGraphKey[MembersRow](rasql.KeyPart[MembersRow, int64](expressions.ID, func(row MembersRow) int64 { return row.ID }))
 }
 
-func MembersIDPageKey(source rasql.TypedRelation[MembersRow], direction rasql.PageDirection) (rasql.PageKey[MembersRow], error) {
+func MembersIDPageKey(source MembersTable, direction rasql.PageDirection) (rasql.PageKey[MembersRow], error) {
 	expressions, err := (MembersColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -135,7 +154,7 @@ func MembersIDPageKey(source rasql.TypedRelation[MembersRow], direction rasql.Pa
 	return rasqlgenPageKey(direction, expressions.ID.Expr(), func(row MembersRow) int64 { return row.ID })
 }
 
-func MembersNamePageKey(source rasql.TypedRelation[MembersRow], direction rasql.PageDirection) (rasql.PageKey[MembersRow], error) {
+func MembersNamePageKey(source MembersTable, direction rasql.PageDirection) (rasql.PageKey[MembersRow], error) {
 	expressions, err := (MembersColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -143,7 +162,7 @@ func MembersNamePageKey(source rasql.TypedRelation[MembersRow], direction rasql.
 	return rasqlgenPageKey(direction, expressions.Name.Expr(), func(row MembersRow) string { return row.Name })
 }
 
-func MembersTasksEdge[G, CG any](parentSource rasql.TypedRelation[MembersRow], childSource rasql.TypedRelation[TasksRow], children rasql.GraphPlan[TasksRow, CG], options rasql.EdgeOptions, attach func(*G, rasql.LoadedMany[CG])) (rasql.GraphEdge[MembersRow, G], error) {
+func MembersTasksEdge[G, CG any](parentSource MembersTable, childSource TasksTable, children rasql.GraphPlan[TasksRow, CG], options rasql.EdgeOptions, attach func(*G, rasql.LoadedMany[CG])) (rasql.GraphEdge[MembersRow, G], error) {
 	parentExpressions, err := (MembersColumns{}).Bind(parentSource)
 	if err != nil {
 		return nil, err
@@ -164,11 +183,7 @@ func MembersTasksEdge[G, CG any](parentSource rasql.TypedRelation[MembersRow], c
 }
 
 var membersMutationColumns = func() MembersExpressions {
-	source, err := Members().Source("")
-	if err != nil {
-		panic(err)
-	}
-	value, err := (MembersColumns{}).Bind(source)
+	value, err := (MembersColumns{}).Bind(Members())
 	if err != nil {
 		panic(err)
 	}
@@ -176,10 +191,10 @@ var membersMutationColumns = func() MembersExpressions {
 }()
 
 type MembersCreate struct {
+	table  rasql.Table[MembersRow]
 	fields []rasql.MutationField[MembersRow]
 }
 
-func NewMembersCreate() MembersCreate { return MembersCreate{} }
 func (v MembersCreate) ID(value int64) MembersCreate {
 	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(membersMutationColumns.ID, value))
 	return v
@@ -189,14 +204,16 @@ func (v MembersCreate) Name(value string) MembersCreate {
 	return v
 }
 func (v MembersCreate) Plan() (rasql.CreatePlan[MembersRow], error) {
-	return rasql.NewCreatePlan(Members().Table, v.fields...)
+	return rasql.NewCreatePlan(v.table, v.fields...)
 }
 
+func (t MembersTable) Create() MembersCreate { return MembersCreate{table: t.membersTableHandle} }
+
 type MembersPatch struct {
+	table  rasql.Table[MembersRow]
 	fields []rasql.MutationField[MembersRow]
 }
 
-func NewMembersPatch() MembersPatch { return MembersPatch{} }
 func (v MembersPatch) ID(value int64) MembersPatch {
 	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(membersMutationColumns.ID, value))
 	return v
@@ -206,5 +223,11 @@ func (v MembersPatch) Name(value string) MembersPatch {
 	return v
 }
 func (v MembersPatch) Where(value rasql.Predicate) (rasql.PatchPlan[MembersRow], error) {
-	return rasql.NewPatchPlan(Members().Table, value, v.fields...)
+	return rasql.NewPatchPlan(v.table, value, v.fields...)
+}
+
+func (t MembersTable) Patch() MembersPatch { return MembersPatch{table: t.membersTableHandle} }
+
+func (t MembersTable) Delete(where rasql.Predicate) (rasql.DeletePlan[MembersRow], error) {
+	return rasql.NewDeletePlan(t.membersTableHandle, where)
 }

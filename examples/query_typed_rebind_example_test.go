@@ -42,7 +42,7 @@ func Example_rebindTypedResult() {
 		{ID: 3, Email: "wrong@example.com"},
 		{ID: 7, Email: "rebind@example.com"},
 	} {
-		plan, err := store.NewUsersCreate().ID(user.ID).Email(user.Email).FirstName("First").LastName("Last").Plan()
+		plan, err := store.Users().Create().ID(user.ID).Email(user.Email).FirstName("First").LastName("Last").Plan()
 		if err != nil {
 			fmt.Printf("failed to build insert: %s\n", err)
 			return
@@ -53,7 +53,7 @@ func Example_rebindTypedResult() {
 		}
 	}
 
-	columns, err := (store.UsersColumns{}).Bind(users.Table)
+	columns, err := (store.UsersColumns{}).Bind(users)
 	if err != nil {
 		fmt.Printf("failed to bind users columns: %s\n", err)
 		return

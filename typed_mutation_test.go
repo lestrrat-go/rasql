@@ -26,7 +26,7 @@ import (
 func usersRowProjection(t *testing.T) rasql.Projection[store.UsersRow] {
 	t.Helper()
 
-	columns, err := (store.UsersColumns{}).Bind(store.Users().Table)
+	columns, err := (store.UsersColumns{}).Bind(store.Users())
 	require.NoError(t, err)
 	projection, err := store.UsersProjection(columns)
 	require.NoError(t, err)
@@ -51,7 +51,7 @@ func TestTypedMutationPlans(t *testing.T) {
 		require.NoError(t, err)
 		projection := usersRowProjection(t)
 
-		createPlan, err := store.NewUsersCreate().Email("ada@example.com").FirstName("Ada").LastName("Lovelace").Plan()
+		createPlan, err := store.Users().Create().Email("ada@example.com").FirstName("Ada").LastName("Lovelace").Plan()
 		require.NoError(t, err)
 		createQuery, err := rasql.Returning(createPlan, projection)
 		require.NoError(t, err)
@@ -59,11 +59,11 @@ func TestTypedMutationPlans(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, int64(1), created.ID)
 		require.Equal(t, "pending", created.Status)
-		patch, err := store.NewUsersPatch().Status("active").Where(queryEqualID(created.ID))
+		patch, err := store.Users().Patch().Status("active").Where(queryEqualID(created.ID))
 		require.NoError(t, err)
 		_, err = rasql.ExecMutation(t.Context(), executor, patch)
 		require.NoError(t, err)
-		patch, err = store.NewUsersPatch().ClearNickname().Where(queryEqualID(created.ID))
+		patch, err = store.Users().Patch().ClearNickname().Where(queryEqualID(created.ID))
 		require.NoError(t, err)
 		patchQuery, err := rasql.Returning(patch, projection)
 		require.NoError(t, err)
@@ -103,7 +103,7 @@ func TestTypedMutationPlans(t *testing.T) {
 }
 
 func queryEqualID(id int64) rasql.Predicate {
-	columns, err := (store.UsersColumns{}).Bind(store.Users().Table)
+	columns, err := (store.UsersColumns{}).Bind(store.Users())
 	if err != nil {
 		panic(err)
 	}
