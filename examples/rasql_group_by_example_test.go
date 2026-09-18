@@ -60,12 +60,7 @@ func Example_rasql_group_by() {
 		{ID: 4, Status: "done"},
 		{ID: 5, Status: "done"},
 	} {
-		plan, err := store.Tasks().Create().ID(task.ID).Status(task.Status).Plan()
-		if err != nil {
-			fmt.Printf("failed to build insert: %s\n", err)
-			return
-		}
-		if _, err := rasql.Exec(ctx, db, plan); err != nil {
+		if _, err := store.Tasks().Create().ID(task.ID).Status(task.Status).Exec(ctx, db); err != nil {
 			fmt.Printf("failed to insert task: %s\n", err)
 			return
 		}

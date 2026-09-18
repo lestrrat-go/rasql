@@ -55,21 +55,11 @@ func Example_rasql_order_by_alias() {
 		return
 	}
 
-	withNickname, err := store.Users().Create().ID(1).Email("ada@example.com").Nickname("Ada").FirstName("First").LastName("Last").Plan()
-	if err != nil {
-		fmt.Printf("failed to build insert: %s\n", err)
-		return
-	}
-	if _, err := rasql.Exec(ctx, db, withNickname); err != nil {
+	if _, err := store.Users().Create().ID(1).Email("ada@example.com").Nickname("Ada").FirstName("First").LastName("Last").Exec(ctx, db); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
-	withoutNickname, err := store.Users().Create().ID(2).Email("bob@example.com").FirstName("First").LastName("Last").Plan()
-	if err != nil {
-		fmt.Printf("failed to build insert: %s\n", err)
-		return
-	}
-	if _, err := rasql.Exec(ctx, db, withoutNickname); err != nil {
+	if _, err := store.Users().Create().ID(2).Email("bob@example.com").FirstName("First").LastName("Last").Exec(ctx, db); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}

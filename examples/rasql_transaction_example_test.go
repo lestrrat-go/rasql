@@ -54,22 +54,12 @@ func Example_rasql_transaction() {
 	txExecutor := tx
 
 	// SQL: INSERT INTO users (id, email) VALUES (?, ?) (arguments: 1, "ada@example.com")
-	first, err := store.Users().Create().ID(1).Email("ada@example.com").FirstName("First").LastName("Last").Plan()
-	if err != nil {
-		fmt.Printf("failed to build insert: %s\n", err)
-		return
-	}
-	if _, err := rasql.Exec(ctx, txExecutor, first); err != nil {
+	if _, err := store.Users().Create().ID(1).Email("ada@example.com").FirstName("First").LastName("Last").Exec(ctx, txExecutor); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
 	// SQL: INSERT INTO users (id, email) VALUES (?, ?) (arguments: 2, "grace@example.com")
-	second, err := store.Users().Create().ID(2).Email("grace@example.com").FirstName("First").LastName("Last").Plan()
-	if err != nil {
-		fmt.Printf("failed to build insert: %s\n", err)
-		return
-	}
-	if _, err := rasql.Exec(ctx, txExecutor, second); err != nil {
+	if _, err := store.Users().Create().ID(2).Email("grace@example.com").FirstName("First").LastName("Last").Exec(ctx, txExecutor); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}

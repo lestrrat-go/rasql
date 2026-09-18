@@ -43,12 +43,7 @@ func Example_rasql_insert_defaults() {
 	// ClearNickname() writes SQL NULL explicitly rather than omitting the
 	// column, and every other column is written from the value given.
 	// SQL: INSERT INTO users (email, nickname, first_name, last_name) VALUES (?, ?, ?, ?) (arguments: "", NULL, "", "")
-	plan, err := store.Users().Create().Email("").ClearNickname().DefaultStatus().FirstName("").LastName("").Plan()
-	if err != nil {
-		fmt.Printf("failed to build insert: %s\n", err)
-		return
-	}
-	if _, err := rasql.Exec(ctx, db, plan); err != nil {
+	if _, err := store.Users().Create().Email("").ClearNickname().DefaultStatus().FirstName("").LastName("").Exec(ctx, db); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}

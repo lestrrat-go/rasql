@@ -39,12 +39,7 @@ func Example_rasql_insert() {
 	// The generated create builder binds the row's fields as values, through
 	// the columns the generator bound for it.
 	// SQL: INSERT INTO users (id, email) VALUES (?, ?) (arguments: 42, "ada@example.com")
-	plan, err := store.Users().Create().ID(42).Email("ada@example.com").FirstName("First").LastName("Last").Plan()
-	if err != nil {
-		fmt.Printf("failed to build insert: %s\n", err)
-		return
-	}
-	outcome, err := rasql.Exec(ctx, db, plan)
+	outcome, err := store.Users().Create().ID(42).Email("ada@example.com").FirstName("First").LastName("Last").Exec(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return

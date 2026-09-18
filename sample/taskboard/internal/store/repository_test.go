@@ -40,22 +40,14 @@ func openTx(t *testing.T) (store.Repository, rasql.Executor) {
 
 func seed(ctx context.Context, t *testing.T, repository store.Repository, executor rasql.Executor) (int64, int64) {
 	t.Helper()
-	memberPlan, err := store.Members().Create().Name("D3 test member").Plan()
-	if err != nil {
-		t.Fatalf("plan member: %s", err)
-	}
-	if _, err := rasql.Exec(ctx, executor, memberPlan); err != nil {
+	if _, err := store.Members().Create().Name("D3 test member").Exec(ctx, executor); err != nil {
 		t.Fatalf("create member: %s", err)
 	}
 	members, err := repository.AllMembers(ctx)
 	if err != nil || len(members) == 0 {
 		t.Fatalf("read created member: rows=%d err=%v", len(members), err)
 	}
-	projectPlan, err := store.Projects().Create().Name("D3 test project").Plan()
-	if err != nil {
-		t.Fatalf("plan project: %s", err)
-	}
-	if _, err := rasql.Exec(ctx, executor, projectPlan); err != nil {
+	if _, err := store.Projects().Create().Name("D3 test project").Exec(ctx, executor); err != nil {
 		t.Fatalf("create project: %s", err)
 	}
 	projects, err := repository.AllProjects(ctx)
@@ -67,16 +59,12 @@ func seed(ctx context.Context, t *testing.T, repository store.Repository, execut
 
 func addTaskDueOn(ctx context.Context, t *testing.T, executor rasql.Executor, projectID, assigneeID int64, title string, dueOn time.Time) {
 	t.Helper()
-	create := store.Tasks().Create().ProjectID(projectID).
+	if _, err := store.Tasks().Create().ProjectID(projectID).
 		AssigneeID(assigneeID).
 		Title(title).
 		DueOn(dueOn).
-		DefaultIsOpen().DefaultCreatedAt()
-	plan, err := create.Plan()
-	if err != nil {
-		t.Fatalf("plan task %q: %s", title, err)
-	}
-	if _, err := rasql.Exec(ctx, executor, plan); err != nil {
+		DefaultIsOpen().DefaultCreatedAt().
+		Exec(ctx, executor); err != nil {
 		t.Fatalf("insert task %q: %s", title, err)
 	}
 }
@@ -151,12 +139,7 @@ func TestAddTaskAndCloseTask(t *testing.T) {
 	if !owned.Row.IsOpen || owned.Row.CreatedAt.IsZero() || !unowned.Row.IsOpen || unowned.Row.CreatedAt.IsZero() {
 		t.Fatalf("new task defaults were not stored: owned=%#v unowned=%#v", owned.Row, unowned.Row)
 	}
-	closedCreate := store.Tasks().Create().ProjectID(projectID).Title("Explicitly closed").IsOpen(false).DefaultCreatedAt()
-	closedPlan, err := closedCreate.Plan()
-	if err != nil {
-		t.Fatalf("plan explicitly closed task: %s", err)
-	}
-	if _, err := rasql.Exec(ctx, executor, closedPlan); err != nil {
+	if _, err := store.Tasks().Create().ProjectID(projectID).Title("Explicitly closed").IsOpen(false).DefaultCreatedAt().Exec(ctx, executor); err != nil {
 		t.Fatalf("insert explicitly closed task: %s", err)
 	}
 	closedRow := readTaskByTitle(ctx, t, executor, "Explicitly closed")
