@@ -30,7 +30,7 @@ Adapt any validated `query.WriteStatement` to the canonical mutation API:
 
 <!-- INCLUDE(sample/taskboard/internal/store/docs_examples_test.go#statement_plan) -->
 ```go
-tasks := Tasks().Table()
+tasks := Tasks()
 statement, err := query.NewInsert(tasks.Ref(),
 	query.Set(tasks.Column("project_id"), int64(1)),
 	query.Set(tasks.Column("title"), "write the guide"),

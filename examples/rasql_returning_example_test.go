@@ -48,7 +48,7 @@ func Example_rasql_returning() {
 	// The generated projection names all six columns rather than only the two
 	// the database filled in, so the RETURNING list supplies every field the
 	// generated row type decodes.
-	columns, err := (store.UsersColumns{}).Bind(users.Table())
+	columns, err := (store.UsersColumns{}).Bind(users)
 	if err != nil {
 		fmt.Printf("failed to bind users columns: %s\n", err)
 		return

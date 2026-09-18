@@ -120,14 +120,14 @@ func runGeneratedInSchemaConsumer(t *testing.T, dialectConfig, dsn, namespace, d
 		"\tplan, err := moved.Create().ID(1).Name(\"ada\").Plan()\n" +
 		"\tif err != nil { t.Fatal(err) }\n" +
 		"\tif _, err := rasql.ExecMutation(ctx, executor, plan); err != nil { t.Fatal(err) }\n" +
-		"\tcolumns, err := (store.WidgetsColumns{}).Bind(moved.Table())\n" +
+		"\tcolumns, err := (store.WidgetsColumns{}).Bind(moved)\n" +
 		"\tif err != nil { t.Fatal(err) }\n" +
 		"\tprojection, err := store.WidgetsProjection(columns)\n" +
 		"\tif err != nil { t.Fatal(err) }\n" +
 		"\trow, err := rasql.One(ctx, executor, rasql.Select(moved, projection).Where(rasql.EqualValue(columns.ID.Expr(), int64(1))))\n" +
 		"\tif err != nil { t.Fatal(err) }\n" +
 		"\tif row.Name != \"ada\" { t.Fatalf(\"moved row = %#v\", row) }\n" +
-		"\thomeColumns, err := (store.WidgetsColumns{}).Bind(home.Table())\n" +
+		"\thomeColumns, err := (store.WidgetsColumns{}).Bind(home)\n" +
 		"\tif err != nil { t.Fatal(err) }\n" +
 		"\thomeProjection, err := store.WidgetsProjection(homeColumns)\n" +
 		"\tif err != nil { t.Fatal(err) }\n" +

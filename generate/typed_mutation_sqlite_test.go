@@ -157,7 +157,7 @@ func TestGeneratedCreateAndPatchMatrix(t *testing.T) {
 	executor, err := rasql.Open(ctx, sqlDB, dialect.SQLite())
 	if err != nil { t.Fatal(err) }
 
-	columns, err := (generated.ItemsColumns{}).Bind(generated.Items().Table())
+	columns, err := (generated.ItemsColumns{}).Bind(generated.Items())
 	if err != nil { t.Fatal(err) }
 	projection, err := generated.ItemsProjection(columns)
 	if err != nil { t.Fatal(err) }

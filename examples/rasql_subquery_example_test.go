@@ -93,12 +93,12 @@ func Example_rasql_subquery() {
 		}
 	}
 
-	usersColumns, err := (store.UsersColumns{}).Bind(users.Table())
+	usersColumns, err := (store.UsersColumns{}).Bind(users)
 	if err != nil {
 		fmt.Printf("failed to bind users columns: %s\n", err)
 		return
 	}
-	ordersColumns, err := (store.OrdersColumns{}).Bind(orders.Table())
+	ordersColumns, err := (store.OrdersColumns{}).Bind(orders)
 	if err != nil {
 		fmt.Printf("failed to bind orders columns: %s\n", err)
 		return
@@ -125,7 +125,7 @@ func Example_rasql_subquery() {
 		fmt.Printf("failed to alias orders: %s\n", err)
 		return
 	}
-	allOrdersColumns, err := (store.OrdersColumns{}).Bind(allOrders.Table())
+	allOrdersColumns, err := (store.OrdersColumns{}).Bind(allOrders)
 	if err != nil {
 		fmt.Printf("failed to bind all_orders columns: %s\n", err)
 		return

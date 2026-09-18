@@ -43,8 +43,6 @@ func (t OrdersTable) As(alias string) (OrdersTable, error) {
 	return OrdersTable{ordersTableHandle: aliased}, nil
 }
 
-func (t OrdersTable) Table() rasql.Table[OrdersRow] { return t.ordersTableHandle }
-
 func (t OrdersTable) InSchema(namespace string) (OrdersTable, error) {
 	moved, err := t.ordersTableHandle.InSchema(namespace)
 	if err != nil {
@@ -63,7 +61,7 @@ type OptionalOrdersExpressions struct {
 	ID, UserID, Total rasql.NullColumn[OrdersRow, int64]
 }
 
-func (OrdersColumns) Bind(source rasql.Table[OrdersRow]) (OrdersExpressions, error) {
+func (OrdersColumns) Bind(source OrdersTable) (OrdersExpressions, error) {
 	var err error
 	result := OrdersExpressions{
 		ID:     rasqlgenBind(&err, source, "id", "", rasql.BindColumn[OrdersRow, int64]),
@@ -143,7 +141,7 @@ func OptionalOrdersProjection(expressions OptionalOrdersExpressions) (rasql.Proj
 	return rasql.NewProjection(items, ordersOptionalDecoder{})
 }
 
-func OrdersGraphKey(source rasql.Table[OrdersRow]) (rasql.GraphKey[OrdersRow], error) {
+func OrdersGraphKey(source OrdersTable) (rasql.GraphKey[OrdersRow], error) {
 	expressions, err := (OrdersColumns{}).Bind(source)
 	if err != nil {
 		return rasql.GraphKey[OrdersRow]{}, err
@@ -151,7 +149,7 @@ func OrdersGraphKey(source rasql.Table[OrdersRow]) (rasql.GraphKey[OrdersRow], e
 	return rasql.NewGraphKey[OrdersRow](rasql.KeyPart[OrdersRow, int64](expressions.ID, func(row OrdersRow) int64 { return row.ID }))
 }
 
-func OrdersIDPageKey(source rasql.Table[OrdersRow], direction rasql.PageDirection) (rasql.PageKey[OrdersRow], error) {
+func OrdersIDPageKey(source OrdersTable, direction rasql.PageDirection) (rasql.PageKey[OrdersRow], error) {
 	expressions, err := (OrdersColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -159,7 +157,7 @@ func OrdersIDPageKey(source rasql.Table[OrdersRow], direction rasql.PageDirectio
 	return rasqlgenPageKey(direction, expressions.ID.Expr(), func(row OrdersRow) int64 { return row.ID })
 }
 
-func OrdersUserIDPageKey(source rasql.Table[OrdersRow], direction rasql.PageDirection) (rasql.PageKey[OrdersRow], error) {
+func OrdersUserIDPageKey(source OrdersTable, direction rasql.PageDirection) (rasql.PageKey[OrdersRow], error) {
 	expressions, err := (OrdersColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -167,7 +165,7 @@ func OrdersUserIDPageKey(source rasql.Table[OrdersRow], direction rasql.PageDire
 	return rasqlgenPageKey(direction, expressions.UserID.Expr(), func(row OrdersRow) int64 { return row.UserID })
 }
 
-func OrdersTotalPageKey(source rasql.Table[OrdersRow], direction rasql.PageDirection) (rasql.PageKey[OrdersRow], error) {
+func OrdersTotalPageKey(source OrdersTable, direction rasql.PageDirection) (rasql.PageKey[OrdersRow], error) {
 	expressions, err := (OrdersColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -176,7 +174,7 @@ func OrdersTotalPageKey(source rasql.Table[OrdersRow], direction rasql.PageDirec
 }
 
 var ordersMutationColumns = func() OrdersExpressions {
-	value, err := (OrdersColumns{}).Bind(Orders().Table())
+	value, err := (OrdersColumns{}).Bind(Orders())
 	if err != nil {
 		panic(err)
 	}

@@ -16,7 +16,7 @@ import (
 // minimum total a caller asks for.
 func preparedParamOrdersQuery() (rasql.Query[store.OrdersRow], rasql.Parameter[int64], error) {
 	orders := store.Orders()
-	columns, err := (store.OrdersColumns{}).Bind(orders.Table())
+	columns, err := (store.OrdersColumns{}).Bind(orders)
 	if err != nil {
 		return rasql.Query[store.OrdersRow]{}, rasql.Parameter[int64]{}, err
 	}

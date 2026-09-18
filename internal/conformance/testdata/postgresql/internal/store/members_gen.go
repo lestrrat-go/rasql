@@ -43,8 +43,6 @@ func (t MembersTable) As(alias string) (MembersTable, error) {
 	return MembersTable{membersTableHandle: aliased}, nil
 }
 
-func (t MembersTable) Table() rasql.Table[MembersRow] { return t.membersTableHandle }
-
 func (t MembersTable) InSchema(namespace string) (MembersTable, error) {
 	moved, err := t.membersTableHandle.InSchema(namespace)
 	if err != nil {
@@ -65,7 +63,7 @@ type OptionalMembersExpressions struct {
 	Name rasql.NullColumn[MembersRow, string]
 }
 
-func (MembersColumns) Bind(source rasql.Table[MembersRow]) (MembersExpressions, error) {
+func (MembersColumns) Bind(source MembersTable) (MembersExpressions, error) {
 	var err error
 	result := MembersExpressions{
 		ID:   rasqlgenBind(&err, source, "id", "", rasql.BindColumn[MembersRow, int64]),
@@ -140,7 +138,7 @@ func OptionalMembersProjection(expressions OptionalMembersExpressions) (rasql.Pr
 	return rasql.NewProjection(items, membersOptionalDecoder{})
 }
 
-func MembersGraphKey(source rasql.Table[MembersRow]) (rasql.GraphKey[MembersRow], error) {
+func MembersGraphKey(source MembersTable) (rasql.GraphKey[MembersRow], error) {
 	expressions, err := (MembersColumns{}).Bind(source)
 	if err != nil {
 		return rasql.GraphKey[MembersRow]{}, err
@@ -148,7 +146,7 @@ func MembersGraphKey(source rasql.Table[MembersRow]) (rasql.GraphKey[MembersRow]
 	return rasql.NewGraphKey[MembersRow](rasql.KeyPart[MembersRow, int64](expressions.ID, func(row MembersRow) int64 { return row.ID }))
 }
 
-func MembersIDPageKey(source rasql.Table[MembersRow], direction rasql.PageDirection) (rasql.PageKey[MembersRow], error) {
+func MembersIDPageKey(source MembersTable, direction rasql.PageDirection) (rasql.PageKey[MembersRow], error) {
 	expressions, err := (MembersColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -156,7 +154,7 @@ func MembersIDPageKey(source rasql.Table[MembersRow], direction rasql.PageDirect
 	return rasqlgenPageKey(direction, expressions.ID.Expr(), func(row MembersRow) int64 { return row.ID })
 }
 
-func MembersNamePageKey(source rasql.Table[MembersRow], direction rasql.PageDirection) (rasql.PageKey[MembersRow], error) {
+func MembersNamePageKey(source MembersTable, direction rasql.PageDirection) (rasql.PageKey[MembersRow], error) {
 	expressions, err := (MembersColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -164,7 +162,7 @@ func MembersNamePageKey(source rasql.Table[MembersRow], direction rasql.PageDire
 	return rasqlgenPageKey(direction, expressions.Name.Expr(), func(row MembersRow) string { return row.Name })
 }
 
-func MembersTasksEdge[G, CG any](parentSource rasql.Table[MembersRow], childSource rasql.Table[TasksRow], children rasql.GraphPlan[TasksRow, CG], options rasql.EdgeOptions, attach func(*G, rasql.LoadedMany[CG])) (rasql.GraphEdge[MembersRow, G], error) {
+func MembersTasksEdge[G, CG any](parentSource MembersTable, childSource TasksTable, children rasql.GraphPlan[TasksRow, CG], options rasql.EdgeOptions, attach func(*G, rasql.LoadedMany[CG])) (rasql.GraphEdge[MembersRow, G], error) {
 	parentExpressions, err := (MembersColumns{}).Bind(parentSource)
 	if err != nil {
 		return nil, err
@@ -185,7 +183,7 @@ func MembersTasksEdge[G, CG any](parentSource rasql.Table[MembersRow], childSour
 }
 
 var membersMutationColumns = func() MembersExpressions {
-	value, err := (MembersColumns{}).Bind(Members().Table())
+	value, err := (MembersColumns{}).Bind(Members())
 	if err != nil {
 		panic(err)
 	}

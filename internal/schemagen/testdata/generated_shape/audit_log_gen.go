@@ -44,8 +44,6 @@ func (t AuditLogTable) As(alias string) (AuditLogTable, error) {
 	return AuditLogTable{auditLogTableHandle: aliased}, nil
 }
 
-func (t AuditLogTable) Table() rasql.Table[AuditLogRow] { return t.auditLogTableHandle }
-
 func (t AuditLogTable) InSchema(namespace string) (AuditLogTable, error) {
 	moved, err := t.auditLogTableHandle.InSchema(namespace)
 	if err != nil {
@@ -66,7 +64,7 @@ type OptionalAuditLogExpressions struct {
 	Action rasql.NullColumn[AuditLogRow, string]
 }
 
-func (AuditLogColumns) Bind(source rasql.Table[AuditLogRow]) (AuditLogExpressions, error) {
+func (AuditLogColumns) Bind(source AuditLogTable) (AuditLogExpressions, error) {
 	var err error
 	result := AuditLogExpressions{
 		ID:     rasqlgenBind(&err, source, "id", "", rasql.BindColumn[AuditLogRow, int64]),
@@ -141,7 +139,7 @@ func OptionalAuditLogProjection(expressions OptionalAuditLogExpressions) (rasql.
 	return rasql.NewProjection(items, auditLogOptionalDecoder{})
 }
 
-func AuditLogGraphKey(source rasql.Table[AuditLogRow]) (rasql.GraphKey[AuditLogRow], error) {
+func AuditLogGraphKey(source AuditLogTable) (rasql.GraphKey[AuditLogRow], error) {
 	expressions, err := (AuditLogColumns{}).Bind(source)
 	if err != nil {
 		return rasql.GraphKey[AuditLogRow]{}, err
@@ -149,7 +147,7 @@ func AuditLogGraphKey(source rasql.Table[AuditLogRow]) (rasql.GraphKey[AuditLogR
 	return rasql.NewGraphKey[AuditLogRow](rasql.KeyPart[AuditLogRow, int64](expressions.ID, func(row AuditLogRow) int64 { return row.ID }))
 }
 
-func AuditLogIDPageKey(source rasql.Table[AuditLogRow], direction rasql.PageDirection) (rasql.PageKey[AuditLogRow], error) {
+func AuditLogIDPageKey(source AuditLogTable, direction rasql.PageDirection) (rasql.PageKey[AuditLogRow], error) {
 	expressions, err := (AuditLogColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -157,7 +155,7 @@ func AuditLogIDPageKey(source rasql.Table[AuditLogRow], direction rasql.PageDire
 	return rasqlgenPageKey(direction, expressions.ID.Expr(), func(row AuditLogRow) int64 { return row.ID })
 }
 
-func AuditLogActionPageKey(source rasql.Table[AuditLogRow], direction rasql.PageDirection) (rasql.PageKey[AuditLogRow], error) {
+func AuditLogActionPageKey(source AuditLogTable, direction rasql.PageDirection) (rasql.PageKey[AuditLogRow], error) {
 	expressions, err := (AuditLogColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -166,7 +164,7 @@ func AuditLogActionPageKey(source rasql.Table[AuditLogRow], direction rasql.Page
 }
 
 var auditLogMutationColumns = func() AuditLogExpressions {
-	value, err := (AuditLogColumns{}).Bind(AuditLog().Table())
+	value, err := (AuditLogColumns{}).Bind(AuditLog())
 	if err != nil {
 		panic(err)
 	}

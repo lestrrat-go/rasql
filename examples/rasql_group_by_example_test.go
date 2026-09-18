@@ -71,7 +71,7 @@ func Example_rasql_group_by() {
 		}
 	}
 
-	tasksColumns, err := (store.TasksColumns{}).Bind(tasks.Table())
+	tasksColumns, err := (store.TasksColumns{}).Bind(tasks)
 	if err != nil {
 		fmt.Printf("failed to bind tasks columns: %s\n", err)
 		return

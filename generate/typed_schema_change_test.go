@@ -23,7 +23,7 @@ func TestTypedQuerySchemaChangeBreaksStaleCaller(t *testing.T) {
 		require.NoError(t, compactPackageStore(t, generated, table).Write())
 	}
 	writeCaller := func(value string) {
-		source := "package caller\n\nimport (\n\t\"github.com/lestrrat-go/rasql\"\n\t\"example.com/schema-change/generated\"\n)\n\nfunc predicate() rasql.Predicate {\n\tcolumns, err := (generated.UsersColumns{}).Bind(generated.Users().Table())\n\tif err != nil {\n\t\tpanic(err)\n\t}\n\treturn rasql.EqualValue(columns.ID.Expr(), " + value + ")\n}\n"
+		source := "package caller\n\nimport (\n\t\"github.com/lestrrat-go/rasql\"\n\t\"example.com/schema-change/generated\"\n)\n\nfunc predicate() rasql.Predicate {\n\tcolumns, err := (generated.UsersColumns{}).Bind(generated.Users())\n\tif err != nil {\n\t\tpanic(err)\n\t}\n\treturn rasql.EqualValue(columns.ID.Expr(), " + value + ")\n}\n"
 		require.NoError(t, os.WriteFile(caller, []byte(source), 0o600))
 	}
 	run := func() ([]byte, error) {

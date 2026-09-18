@@ -65,57 +65,54 @@ type OpenProjectsPage struct {
 
 // END(opentask)
 
-func openProjectsPlan(hooks *openProjectsHooks) (rasql.GraphPlan[ProjectsRow, openProjectGraph], rasql.Table[ProjectsRow], error) {
-	projectsWrapper, err := Projects().As("project")
+func openProjectsPlan(hooks *openProjectsHooks) (rasql.GraphPlan[ProjectsRow, openProjectGraph], ProjectsTable, error) {
+	projectsSource, err := Projects().As("project")
 	if err != nil {
-		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.Table[ProjectsRow]{}, err
+		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, ProjectsTable{}, err
 	}
-	projectsSource := projectsWrapper.Table()
 	projectsExpressions, err := (ProjectsColumns{}).Bind(projectsSource)
 	if err != nil {
-		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.Table[ProjectsRow]{}, err
+		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, ProjectsTable{}, err
 	}
 	projectsProjection, err := ProjectsProjection(projectsExpressions)
 	if err != nil {
-		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.Table[ProjectsRow]{}, err
+		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, ProjectsTable{}, err
 	}
 	projectsQuery := rasql.Select(projectsSource, projectsProjection).
 		OrderBy(rasql.AscExpr(projectsExpressions.ID.Expr()))
 
-	tasksWrapper, err := Tasks().As("task")
+	tasksSource, err := Tasks().As("task")
 	if err != nil {
-		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.Table[ProjectsRow]{}, err
+		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, ProjectsTable{}, err
 	}
-	tasksSource := tasksWrapper.Table()
 	tasksExpressions, err := (TasksColumns{}).Bind(tasksSource)
 	if err != nil {
-		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.Table[ProjectsRow]{}, err
+		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, ProjectsTable{}, err
 	}
 	tasksProjection, err := TasksProjection(tasksExpressions)
 	if err != nil {
-		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.Table[ProjectsRow]{}, err
+		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, ProjectsTable{}, err
 	}
 	tasksQuery := rasql.Select(tasksSource, tasksProjection).
 		OrderBy(rasql.AscExpr(tasksExpressions.ID.Expr()))
 
-	membersWrapper, err := Members().As("assignee")
+	membersSource, err := Members().As("assignee")
 	if err != nil {
-		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.Table[ProjectsRow]{}, err
+		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, ProjectsTable{}, err
 	}
-	membersSource := membersWrapper.Table()
 	membersExpressions, err := (MembersColumns{}).Bind(membersSource)
 	if err != nil {
-		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.Table[ProjectsRow]{}, err
+		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, ProjectsTable{}, err
 	}
 	membersProjection, err := MembersProjection(membersExpressions)
 	if err != nil {
-		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.Table[ProjectsRow]{}, err
+		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, ProjectsTable{}, err
 	}
 	membersQuery := rasql.Select(membersSource, membersProjection).
 		OrderBy(rasql.AscExpr(membersExpressions.ID.Expr()))
 	membersPlan, err := rasql.NewGraphPlan(membersQuery, func(row MembersRow) MembersRow { return row })
 	if err != nil {
-		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.Table[ProjectsRow]{}, err
+		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, ProjectsTable{}, err
 	}
 	assigneeEdge, err := TasksAssigneeEdge(
 		tasksSource,
@@ -130,7 +127,7 @@ func openProjectsPlan(hooks *openProjectsHooks) (rasql.GraphPlan[ProjectsRow, op
 		},
 	)
 	if err != nil {
-		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.Table[ProjectsRow]{}, err
+		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, ProjectsTable{}, err
 	}
 	tasksPlan, err := rasql.NewGraphPlan(
 		tasksQuery,
@@ -138,7 +135,7 @@ func openProjectsPlan(hooks *openProjectsHooks) (rasql.GraphPlan[ProjectsRow, op
 		assigneeEdge,
 	)
 	if err != nil {
-		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.Table[ProjectsRow]{}, err
+		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, ProjectsTable{}, err
 	}
 	tasksEdge, err := ProjectsTasksEdge(
 		projectsSource,
@@ -157,7 +154,7 @@ func openProjectsPlan(hooks *openProjectsHooks) (rasql.GraphPlan[ProjectsRow, op
 		},
 	)
 	if err != nil {
-		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.Table[ProjectsRow]{}, err
+		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, ProjectsTable{}, err
 	}
 	projectsPlan, err := rasql.NewGraphPlan(
 		projectsQuery,
@@ -170,7 +167,7 @@ func openProjectsPlan(hooks *openProjectsHooks) (rasql.GraphPlan[ProjectsRow, op
 		tasksEdge,
 	)
 	if err != nil {
-		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, rasql.Table[ProjectsRow]{}, err
+		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, ProjectsTable{}, err
 	}
 	return projectsPlan, projectsSource, nil
 }
@@ -246,7 +243,7 @@ func (repository Repository) AddTask(ctx context.Context, projectID int64, assig
 // CloseTask closes the task with taskID. Closing an already closed task
 // changes nothing and reports no error.
 func (repository Repository) CloseTask(ctx context.Context, taskID int64) error {
-	tasksExpressions, err := (TasksColumns{}).Bind(Tasks().Table())
+	tasksExpressions, err := (TasksColumns{}).Bind(Tasks())
 	if err != nil {
 		return fmt.Errorf("bind tasks columns for close %d: %w", taskID, err)
 	}
@@ -270,7 +267,7 @@ func (repository Repository) AllProjects(ctx context.Context) ([]ProjectsRow, er
 	if err != nil {
 		return nil, fmt.Errorf("bind projects source: %w", err)
 	}
-	expressions, err := (ProjectsColumns{}).Bind(source.Table())
+	expressions, err := (ProjectsColumns{}).Bind(source)
 	if err != nil {
 		return nil, fmt.Errorf("bind projects columns: %w", err)
 	}
@@ -301,7 +298,7 @@ func (repository Repository) AllMembers(ctx context.Context) ([]MembersRow, erro
 	if err != nil {
 		return nil, fmt.Errorf("bind members source: %w", err)
 	}
-	expressions, err := (MembersColumns{}).Bind(source.Table())
+	expressions, err := (MembersColumns{}).Bind(source)
 	if err != nil {
 		return nil, fmt.Errorf("bind members columns: %w", err)
 	}

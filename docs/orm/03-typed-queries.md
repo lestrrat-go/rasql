@@ -13,7 +13,7 @@ source, err := Tasks().As("tasks")
 if err != nil {
 	return err
 }
-expressions, err := (TasksColumns{}).Bind(source.Table())
+expressions, err := (TasksColumns{}).Bind(source)
 if err != nil {
 	return err
 }

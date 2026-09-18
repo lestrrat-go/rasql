@@ -53,7 +53,7 @@ func TestGeneratedSQLiteViewCanBeRead(t *testing.T) {
 		"\tcreatePlan, err := generated.Users().Create().ID(1).Email(\"ada@example.com\").Plan()\n" +
 		"\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
 		"\tif _, err := rasql.ExecMutation(ctx, executor, createPlan); err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
-		"\tviewSource := generated.ActiveUsers().Table()\n" +
+		"\tviewSource := generated.ActiveUsers()\n" +
 		"\tviewColumns, err := (generated.ActiveUsersColumns{}).Bind(viewSource)\n" +
 		"\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
 		"\tviewProjection, err := generated.ActiveUsersProjection(viewColumns)\n" +

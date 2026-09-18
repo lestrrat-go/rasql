@@ -67,7 +67,7 @@ func Example_rasql_distinct() {
 		}
 	}
 
-	ordersColumns, err := (store.OrdersColumns{}).Bind(orders.Table())
+	ordersColumns, err := (store.OrdersColumns{}).Bind(orders)
 	if err != nil {
 		fmt.Printf("failed to bind orders columns: %s\n", err)
 		return

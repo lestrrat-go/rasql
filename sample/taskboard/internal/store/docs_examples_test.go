@@ -18,7 +18,7 @@ func docsReadTasks(ctx context.Context, executor rasql.Executor) error {
 	if err != nil {
 		return err
 	}
-	expressions, err := (TasksColumns{}).Bind(source.Table())
+	expressions, err := (TasksColumns{}).Bind(source)
 	if err != nil {
 		return err
 	}
@@ -55,7 +55,7 @@ func docsCreateTask(ctx context.Context, executor rasql.Executor, projectID int6
 
 func docsPatchTask(ctx context.Context, executor rasql.Executor, taskID int64) error {
 	// BEGIN(canonical_patch)
-	expressions, err := (TasksColumns{}).Bind(Tasks().Table())
+	expressions, err := (TasksColumns{}).Bind(Tasks())
 	if err != nil {
 		return err
 	}
@@ -72,7 +72,7 @@ func docsPatchTask(ctx context.Context, executor rasql.Executor, taskID int64) e
 
 func docsStatementPlan(ctx context.Context, executor rasql.Executor) error {
 	// BEGIN(statement_plan)
-	tasks := Tasks().Table()
+	tasks := Tasks()
 	statement, err := query.NewInsert(tasks.Ref(),
 		query.Set(tasks.Column("project_id"), int64(1)),
 		query.Set(tasks.Column("title"), "write the guide"),
@@ -91,7 +91,7 @@ func docsStatementPlan(ctx context.Context, executor rasql.Executor) error {
 }
 
 func docsReturning(ctx context.Context, executor rasql.Executor, plan rasql.MutationPlan) error {
-	expressions, err := (TasksColumns{}).Bind(Tasks().Table())
+	expressions, err := (TasksColumns{}).Bind(Tasks())
 	if err != nil {
 		return err
 	}

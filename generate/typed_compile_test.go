@@ -26,7 +26,7 @@ func (usersIDDecoder) DecodeRow(source rasql.ScanSource, result *store.UsersRow)
 
 func usersQuery() rasql.Query[store.UsersRow] {
 	relation := store.Users()
-	columns, err := (store.UsersColumns{}).Bind(relation.Table())
+	columns, err := (store.UsersColumns{}).Bind(relation)
 	if err != nil {
 		panic(err)
 	}

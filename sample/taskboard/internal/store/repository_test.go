@@ -185,7 +185,7 @@ func readTaskByTitle(ctx context.Context, t *testing.T, executor rasql.Executor,
 	if err != nil {
 		t.Fatalf("create task source: %s", err)
 	}
-	expressions, err := (store.TasksColumns{}).Bind(source.Table())
+	expressions, err := (store.TasksColumns{}).Bind(source)
 	if err != nil {
 		t.Fatalf("bind task columns: %s", err)
 	}

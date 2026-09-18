@@ -45,8 +45,6 @@ func (t EmployeesTable) As(alias string) (EmployeesTable, error) {
 	return EmployeesTable{employeesTableHandle: aliased}, nil
 }
 
-func (t EmployeesTable) Table() rasql.Table[EmployeesRow] { return t.employeesTableHandle }
-
 func (t EmployeesTable) InSchema(namespace string) (EmployeesTable, error) {
 	moved, err := t.employeesTableHandle.InSchema(namespace)
 	if err != nil {
@@ -69,7 +67,7 @@ type OptionalEmployeesExpressions struct {
 	ManagerID rasql.NullColumn[EmployeesRow, int64]
 }
 
-func (EmployeesColumns) Bind(source rasql.Table[EmployeesRow]) (EmployeesExpressions, error) {
+func (EmployeesColumns) Bind(source EmployeesTable) (EmployeesExpressions, error) {
 	var err error
 	result := EmployeesExpressions{
 		ID:        rasqlgenBind(&err, source, "id", "", rasql.BindColumn[EmployeesRow, int64]),
@@ -151,7 +149,7 @@ func OptionalEmployeesProjection(expressions OptionalEmployeesExpressions) (rasq
 	return rasql.NewProjection(items, employeesOptionalDecoder{})
 }
 
-func EmployeesGraphKey(source rasql.Table[EmployeesRow]) (rasql.GraphKey[EmployeesRow], error) {
+func EmployeesGraphKey(source EmployeesTable) (rasql.GraphKey[EmployeesRow], error) {
 	expressions, err := (EmployeesColumns{}).Bind(source)
 	if err != nil {
 		return rasql.GraphKey[EmployeesRow]{}, err
@@ -159,7 +157,7 @@ func EmployeesGraphKey(source rasql.Table[EmployeesRow]) (rasql.GraphKey[Employe
 	return rasql.NewGraphKey[EmployeesRow](rasql.KeyPart[EmployeesRow, int64](expressions.ID, func(row EmployeesRow) int64 { return row.ID }))
 }
 
-func EmployeesIDPageKey(source rasql.Table[EmployeesRow], direction rasql.PageDirection) (rasql.PageKey[EmployeesRow], error) {
+func EmployeesIDPageKey(source EmployeesTable, direction rasql.PageDirection) (rasql.PageKey[EmployeesRow], error) {
 	expressions, err := (EmployeesColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -167,7 +165,7 @@ func EmployeesIDPageKey(source rasql.Table[EmployeesRow], direction rasql.PageDi
 	return rasqlgenPageKey(direction, expressions.ID.Expr(), func(row EmployeesRow) int64 { return row.ID })
 }
 
-func EmployeesNamePageKey(source rasql.Table[EmployeesRow], direction rasql.PageDirection) (rasql.PageKey[EmployeesRow], error) {
+func EmployeesNamePageKey(source EmployeesTable, direction rasql.PageDirection) (rasql.PageKey[EmployeesRow], error) {
 	expressions, err := (EmployeesColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -175,7 +173,7 @@ func EmployeesNamePageKey(source rasql.Table[EmployeesRow], direction rasql.Page
 	return rasqlgenPageKey(direction, expressions.Name.Expr(), func(row EmployeesRow) string { return row.Name })
 }
 
-func EmployeesManagerIDPageKey(source rasql.Table[EmployeesRow], direction rasql.PageDirection, nulls rasql.NullOrder) (rasql.PageKey[EmployeesRow], error) {
+func EmployeesManagerIDPageKey(source EmployeesTable, direction rasql.PageDirection, nulls rasql.NullOrder) (rasql.PageKey[EmployeesRow], error) {
 	expressions, err := (EmployeesColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -184,7 +182,7 @@ func EmployeesManagerIDPageKey(source rasql.Table[EmployeesRow], direction rasql
 }
 
 var employeesMutationColumns = func() EmployeesExpressions {
-	value, err := (EmployeesColumns{}).Bind(Employees().Table())
+	value, err := (EmployeesColumns{}).Bind(Employees())
 	if err != nil {
 		panic(err)
 	}

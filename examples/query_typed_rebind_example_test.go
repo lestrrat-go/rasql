@@ -53,7 +53,7 @@ func Example_rebindTypedResult() {
 		}
 	}
 
-	columns, err := (store.UsersColumns{}).Bind(users.Table())
+	columns, err := (store.UsersColumns{}).Bind(users)
 	if err != nil {
 		fmt.Printf("failed to bind users columns: %s\n", err)
 		return

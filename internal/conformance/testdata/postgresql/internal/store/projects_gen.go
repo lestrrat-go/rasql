@@ -43,8 +43,6 @@ func (t ProjectsTable) As(alias string) (ProjectsTable, error) {
 	return ProjectsTable{projectsTableHandle: aliased}, nil
 }
 
-func (t ProjectsTable) Table() rasql.Table[ProjectsRow] { return t.projectsTableHandle }
-
 func (t ProjectsTable) InSchema(namespace string) (ProjectsTable, error) {
 	moved, err := t.projectsTableHandle.InSchema(namespace)
 	if err != nil {
@@ -65,7 +63,7 @@ type OptionalProjectsExpressions struct {
 	Name rasql.NullColumn[ProjectsRow, string]
 }
 
-func (ProjectsColumns) Bind(source rasql.Table[ProjectsRow]) (ProjectsExpressions, error) {
+func (ProjectsColumns) Bind(source ProjectsTable) (ProjectsExpressions, error) {
 	var err error
 	result := ProjectsExpressions{
 		ID:   rasqlgenBind(&err, source, "id", "", rasql.BindColumn[ProjectsRow, int64]),
@@ -140,7 +138,7 @@ func OptionalProjectsProjection(expressions OptionalProjectsExpressions) (rasql.
 	return rasql.NewProjection(items, projectsOptionalDecoder{})
 }
 
-func ProjectsGraphKey(source rasql.Table[ProjectsRow]) (rasql.GraphKey[ProjectsRow], error) {
+func ProjectsGraphKey(source ProjectsTable) (rasql.GraphKey[ProjectsRow], error) {
 	expressions, err := (ProjectsColumns{}).Bind(source)
 	if err != nil {
 		return rasql.GraphKey[ProjectsRow]{}, err
@@ -148,7 +146,7 @@ func ProjectsGraphKey(source rasql.Table[ProjectsRow]) (rasql.GraphKey[ProjectsR
 	return rasql.NewGraphKey[ProjectsRow](rasql.KeyPart[ProjectsRow, int64](expressions.ID, func(row ProjectsRow) int64 { return row.ID }))
 }
 
-func ProjectsIDPageKey(source rasql.Table[ProjectsRow], direction rasql.PageDirection) (rasql.PageKey[ProjectsRow], error) {
+func ProjectsIDPageKey(source ProjectsTable, direction rasql.PageDirection) (rasql.PageKey[ProjectsRow], error) {
 	expressions, err := (ProjectsColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -156,7 +154,7 @@ func ProjectsIDPageKey(source rasql.Table[ProjectsRow], direction rasql.PageDire
 	return rasqlgenPageKey(direction, expressions.ID.Expr(), func(row ProjectsRow) int64 { return row.ID })
 }
 
-func ProjectsNamePageKey(source rasql.Table[ProjectsRow], direction rasql.PageDirection) (rasql.PageKey[ProjectsRow], error) {
+func ProjectsNamePageKey(source ProjectsTable, direction rasql.PageDirection) (rasql.PageKey[ProjectsRow], error) {
 	expressions, err := (ProjectsColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -164,7 +162,7 @@ func ProjectsNamePageKey(source rasql.Table[ProjectsRow], direction rasql.PageDi
 	return rasqlgenPageKey(direction, expressions.Name.Expr(), func(row ProjectsRow) string { return row.Name })
 }
 
-func ProjectsTasksEdge[G, CG any](parentSource rasql.Table[ProjectsRow], childSource rasql.Table[TasksRow], children rasql.GraphPlan[TasksRow, CG], options rasql.EdgeOptions, attach func(*G, rasql.LoadedMany[CG])) (rasql.GraphEdge[ProjectsRow, G], error) {
+func ProjectsTasksEdge[G, CG any](parentSource ProjectsTable, childSource TasksTable, children rasql.GraphPlan[TasksRow, CG], options rasql.EdgeOptions, attach func(*G, rasql.LoadedMany[CG])) (rasql.GraphEdge[ProjectsRow, G], error) {
 	parentExpressions, err := (ProjectsColumns{}).Bind(parentSource)
 	if err != nil {
 		return nil, err
@@ -185,7 +183,7 @@ func ProjectsTasksEdge[G, CG any](parentSource rasql.Table[ProjectsRow], childSo
 }
 
 var projectsMutationColumns = func() ProjectsExpressions {
-	value, err := (ProjectsColumns{}).Bind(Projects().Table())
+	value, err := (ProjectsColumns{}).Bind(Projects())
 	if err != nil {
 		panic(err)
 	}

@@ -50,8 +50,6 @@ func (t UsersTable) As(alias string) (UsersTable, error) {
 	return UsersTable{usersTableHandle: aliased}, nil
 }
 
-func (t UsersTable) Table() rasql.Table[UsersRow] { return t.usersTableHandle }
-
 func (t UsersTable) InSchema(namespace string) (UsersTable, error) {
 	moved, err := t.usersTableHandle.InSchema(namespace)
 	if err != nil {
@@ -74,7 +72,7 @@ type OptionalUsersExpressions struct {
 	Email, Nickname, Status, FirstName, LastName rasql.NullColumn[UsersRow, string]
 }
 
-func (UsersColumns) Bind(source rasql.Table[UsersRow]) (UsersExpressions, error) {
+func (UsersColumns) Bind(source UsersTable) (UsersExpressions, error) {
 	var err error
 	result := UsersExpressions{
 		ID:        rasqlgenBind(&err, source, "id", "", rasql.BindColumn[UsersRow, int64]),
@@ -172,7 +170,7 @@ func OptionalUsersProjection(expressions OptionalUsersExpressions) (rasql.Projec
 	return rasql.NewProjection(items, usersOptionalDecoder{})
 }
 
-func UsersGraphKey(source rasql.Table[UsersRow]) (rasql.GraphKey[UsersRow], error) {
+func UsersGraphKey(source UsersTable) (rasql.GraphKey[UsersRow], error) {
 	expressions, err := (UsersColumns{}).Bind(source)
 	if err != nil {
 		return rasql.GraphKey[UsersRow]{}, err
@@ -180,7 +178,7 @@ func UsersGraphKey(source rasql.Table[UsersRow]) (rasql.GraphKey[UsersRow], erro
 	return rasql.NewGraphKey[UsersRow](rasql.KeyPart[UsersRow, int64](expressions.ID, func(row UsersRow) int64 { return row.ID }))
 }
 
-func UsersIDPageKey(source rasql.Table[UsersRow], direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
+func UsersIDPageKey(source UsersTable, direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
 	expressions, err := (UsersColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -188,7 +186,7 @@ func UsersIDPageKey(source rasql.Table[UsersRow], direction rasql.PageDirection)
 	return rasqlgenPageKey(direction, expressions.ID.Expr(), func(row UsersRow) int64 { return row.ID })
 }
 
-func UsersEmailPageKey(source rasql.Table[UsersRow], direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
+func UsersEmailPageKey(source UsersTable, direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
 	expressions, err := (UsersColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -196,7 +194,7 @@ func UsersEmailPageKey(source rasql.Table[UsersRow], direction rasql.PageDirecti
 	return rasqlgenPageKey(direction, expressions.Email.Expr(), func(row UsersRow) string { return row.Email })
 }
 
-func UsersNicknamePageKey(source rasql.Table[UsersRow], direction rasql.PageDirection, nulls rasql.NullOrder) (rasql.PageKey[UsersRow], error) {
+func UsersNicknamePageKey(source UsersTable, direction rasql.PageDirection, nulls rasql.NullOrder) (rasql.PageKey[UsersRow], error) {
 	expressions, err := (UsersColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -204,7 +202,7 @@ func UsersNicknamePageKey(source rasql.Table[UsersRow], direction rasql.PageDire
 	return rasqlgenNullablePageKey(direction, expressions.Nickname.NullExpr(), func(row UsersRow) rasql.Nullable[string] { return row.Nickname }, nulls)
 }
 
-func UsersStatusPageKey(source rasql.Table[UsersRow], direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
+func UsersStatusPageKey(source UsersTable, direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
 	expressions, err := (UsersColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -212,7 +210,7 @@ func UsersStatusPageKey(source rasql.Table[UsersRow], direction rasql.PageDirect
 	return rasqlgenPageKey(direction, expressions.Status.Expr(), func(row UsersRow) string { return row.Status })
 }
 
-func UsersFirstNamePageKey(source rasql.Table[UsersRow], direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
+func UsersFirstNamePageKey(source UsersTable, direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
 	expressions, err := (UsersColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -220,7 +218,7 @@ func UsersFirstNamePageKey(source rasql.Table[UsersRow], direction rasql.PageDir
 	return rasqlgenPageKey(direction, expressions.FirstName.Expr(), func(row UsersRow) string { return row.FirstName })
 }
 
-func UsersLastNamePageKey(source rasql.Table[UsersRow], direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
+func UsersLastNamePageKey(source UsersTable, direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
 	expressions, err := (UsersColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -229,7 +227,7 @@ func UsersLastNamePageKey(source rasql.Table[UsersRow], direction rasql.PageDire
 }
 
 var usersMutationColumns = func() UsersExpressions {
-	value, err := (UsersColumns{}).Bind(Users().Table())
+	value, err := (UsersColumns{}).Bind(Users())
 	if err != nil {
 		panic(err)
 	}

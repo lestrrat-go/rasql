@@ -26,7 +26,7 @@ import (
 func usersRowProjection(t *testing.T) rasql.Projection[store.UsersRow] {
 	t.Helper()
 
-	columns, err := (store.UsersColumns{}).Bind(store.Users().Table())
+	columns, err := (store.UsersColumns{}).Bind(store.Users())
 	require.NoError(t, err)
 	projection, err := store.UsersProjection(columns)
 	require.NoError(t, err)
@@ -103,7 +103,7 @@ func TestTypedMutationPlans(t *testing.T) {
 }
 
 func queryEqualID(id int64) rasql.Predicate {
-	columns, err := (store.UsersColumns{}).Bind(store.Users().Table())
+	columns, err := (store.UsersColumns{}).Bind(store.Users())
 	if err != nil {
 		panic(err)
 	}

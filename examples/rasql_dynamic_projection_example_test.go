@@ -82,12 +82,12 @@ func Example_rasql_dynamic_projection() {
 		}
 	}
 
-	usersColumns, err := (store.UsersColumns{}).Bind(users.Table())
+	usersColumns, err := (store.UsersColumns{}).Bind(users)
 	if err != nil {
 		fmt.Printf("failed to bind users columns: %s\n", err)
 		return
 	}
-	ordersColumns, err := (store.OrdersColumns{}).Bind(orders.Table())
+	ordersColumns, err := (store.OrdersColumns{}).Bind(orders)
 	if err != nil {
 		fmt.Printf("failed to bind orders columns: %s\n", err)
 		return

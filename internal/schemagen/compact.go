@@ -151,13 +151,6 @@ func CompactObjectSource(packageName string, object CompactObject) ([]byte, erro
 	b.WriteString(": aliased}, nil\n}\n\n")
 	b.WriteString("func (t ")
 	b.WriteString(accessor)
-	b.WriteString("Table) Table() rasql.Table[")
-	b.WriteString(row)
-	b.WriteString("] { return t.")
-	b.WriteString(handleName)
-	b.WriteString(" }\n\n")
-	b.WriteString("func (t ")
-	b.WriteString(accessor)
 	b.WriteString("Table) InSchema(namespace string) (")
 	b.WriteString(accessor)
 	b.WriteString("Table, error) {\n\tmoved, err := t.")
@@ -376,11 +369,13 @@ func writeCompactBinder(b *bytes.Buffer, object CompactObject, accessor, row str
 	b.WriteString(name)
 	if optional {
 		b.WriteString("(source rasql.OptionalRelation[")
+		b.WriteString(row)
+		b.WriteString("]) (")
 	} else {
-		b.WriteString("(source rasql.Table[")
+		b.WriteString("(source ")
+		b.WriteString(accessor)
+		b.WriteString("Table) (")
 	}
-	b.WriteString(row)
-	b.WriteString("]) (")
 	b.WriteString(result)
 	b.WriteString(", error) {\n")
 	b.WriteString("\tvar err error\n\tresult := ")
@@ -659,9 +654,9 @@ func writeCompactKeys(b *bytes.Buffer, object CompactObject, accessor, row strin
 	if len(marker) > 0 {
 		b.WriteString("func ")
 		b.WriteString(accessor)
-		b.WriteString("GraphKey(source rasql.Table[")
-		b.WriteString(row)
-		b.WriteString("]) (rasql.GraphKey[")
+		b.WriteString("GraphKey(source ")
+		b.WriteString(accessor)
+		b.WriteString("Table) (rasql.GraphKey[")
 		b.WriteString(row)
 		b.WriteString("], error) {\n\texpressions, err := (")
 		b.WriteString(accessor)
@@ -679,9 +674,9 @@ func writeCompactKeys(b *bytes.Buffer, object CompactObject, accessor, row strin
 		b.WriteString("func ")
 		b.WriteString(accessor)
 		b.WriteString(field)
-		b.WriteString("PageKey(source rasql.Table[")
-		b.WriteString(row)
-		b.WriteString("], direction rasql.PageDirection")
+		b.WriteString("PageKey(source ")
+		b.WriteString(accessor)
+		b.WriteString("Table, direction rasql.PageDirection")
 		if column.Nullable {
 			b.WriteString(", nulls rasql.NullOrder")
 		}
@@ -786,22 +781,22 @@ func writeCompactRelations(b *bytes.Buffer, object CompactObject, accessor, row 
 		name := accessor + compilerir.RelationGoName(relation.Name) + "Edge"
 		b.WriteString("func ")
 		b.WriteString(name)
-		b.WriteString("[G, CG any](parentSource rasql.Table[")
-		b.WriteString(row)
-		b.WriteString("], ")
+		b.WriteString("[G, CG any](parentSource ")
+		b.WriteString(accessor)
+		b.WriteString("Table, ")
 		if relation.Kind == "many_through" && relation.Through != nil {
 			through := object.Targets[relation.Through.Object]
-			throughRow := through.Generation.Row
-			if throughRow == "" {
-				throughRow = exportedCompact(through.Catalog.Name) + "Row"
+			throughAccessor := through.Generation.Source
+			if throughAccessor == "" {
+				throughAccessor = exportedCompact(through.Catalog.Name)
 			}
-			b.WriteString("junctionSource rasql.Table[")
-			b.WriteString(throughRow)
-			b.WriteString("], ")
+			b.WriteString("junctionSource ")
+			b.WriteString(throughAccessor)
+			b.WriteString("Table, ")
 		}
-		b.WriteString("childSource rasql.Table[")
-		b.WriteString(targetRow)
-		b.WriteString("], children rasql.GraphPlan[")
+		b.WriteString("childSource ")
+		b.WriteString(targetAccessor)
+		b.WriteString("Table, children rasql.GraphPlan[")
 		b.WriteString(targetRow)
 		b.WriteString(", CG], options rasql.EdgeOptions, attach func(*G, rasql.Loaded")
 		if relation.Kind == "belongs_to" || relation.Kind == "has_one" {
@@ -913,7 +908,7 @@ func writeCompactMutations(b *bytes.Buffer, object CompactObject, accessor, row,
 		b.WriteString(accessor)
 		b.WriteString("Columns{}).Bind(")
 		b.WriteString(accessor)
-		b.WriteString("().Table()); if err != nil { panic(err) }; return value }()\n\n")
+		b.WriteString("()); if err != nil { panic(err) }; return value }()\n\n")
 		if insert {
 			writeMutationType(b, object, row, create, false, mutationColumns)
 			b.WriteString("func (t ")

@@ -73,7 +73,7 @@ func Example_rasqlgen_column_fields() {
 	// form to write wherever the table is known as it is compiled, because
 	// columns.Emial is not a field and the package does not build.
 	// BEGIN(typed_column)
-	columns, err := (store.UsersColumns{}).Bind(users.Table())
+	columns, err := (store.UsersColumns{}).Bind(users)
 	if err != nil {
 		fmt.Printf("failed to bind users columns: %s\n", err)
 		return

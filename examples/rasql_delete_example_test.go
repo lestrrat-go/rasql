@@ -51,18 +51,15 @@ func Example_rasql_delete() {
 	}
 
 	// The generated table's own Delete method takes a typed rasql.Predicate
-	// and needs no table argument. This example instead builds the same
-	// deletes through rasql.NewDeletePlan and the query package, to show the
-	// lower-level path Delete calls: one that also reaches AllowAll for the
-	// unconditional delete further down, which Delete itself refuses.
-	// TypedColumnOf pairs the column with the row type the predicate is
-	// checked against.
-	id := query.TypedColumnOf[store.UsersRow, int64](users.Column("id"))
+	// and needs no table argument.
+	columns, err := (store.UsersColumns{}).Bind(users)
+	if err != nil {
+		fmt.Printf("failed to bind users columns: %s\n", err)
+		return
+	}
 
-	// NewDeletePlan takes a table and a typed predicate built through the
-	// query package.
 	// SQL: DELETE FROM users WHERE users.id = ? (argument: 1)
-	byID, err := rasql.NewDeletePlan(users.Table(), query.EqualValue(id, int64(1)))
+	byID, err := users.Delete(rasql.EqualValue(columns.ID.Expr(), int64(1)))
 	if err != nil {
 		fmt.Printf("failed to build delete: %s\n", err)
 		return
@@ -74,9 +71,9 @@ func Example_rasql_delete() {
 	}
 	fmt.Printf("%d user deleted by id\n", outcome.Affected)
 
-	// Where takes any predicate the query package can build.
+	// Delete's Where argument is any typed rasql.Predicate.
 	// SQL: DELETE FROM users WHERE users.id > ? (argument: 2)
-	byPredicate, err := rasql.NewDeletePlan(users.Table(), query.GreaterValue(id, int64(2)))
+	byPredicate, err := users.Delete(rasql.GreaterValue(columns.ID.Expr(), int64(2)))
 	if err != nil {
 		fmt.Printf("failed to build delete: %s\n", err)
 		return
@@ -90,7 +87,7 @@ func Example_rasql_delete() {
 
 	// A zero predicate is rejected, so a dropped Where cannot become a
 	// full-table delete by accident.
-	if _, err := rasql.NewDeletePlan(users.Table(), query.Predicate{}); err != nil {
+	if _, err := users.Delete(rasql.Predicate{}); err != nil {
 		fmt.Println(err)
 	}
 

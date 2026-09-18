@@ -43,8 +43,6 @@ func (t TasksTable) As(alias string) (TasksTable, error) {
 	return TasksTable{tasksTableHandle: aliased}, nil
 }
 
-func (t TasksTable) Table() rasql.Table[TasksRow] { return t.tasksTableHandle }
-
 func (t TasksTable) InSchema(namespace string) (TasksTable, error) {
 	moved, err := t.tasksTableHandle.InSchema(namespace)
 	if err != nil {
@@ -65,7 +63,7 @@ type OptionalTasksExpressions struct {
 	Status rasql.NullColumn[TasksRow, string]
 }
 
-func (TasksColumns) Bind(source rasql.Table[TasksRow]) (TasksExpressions, error) {
+func (TasksColumns) Bind(source TasksTable) (TasksExpressions, error) {
 	var err error
 	result := TasksExpressions{
 		ID:     rasqlgenBind(&err, source, "id", "", rasql.BindColumn[TasksRow, int64]),
@@ -140,7 +138,7 @@ func OptionalTasksProjection(expressions OptionalTasksExpressions) (rasql.Projec
 	return rasql.NewProjection(items, tasksOptionalDecoder{})
 }
 
-func TasksGraphKey(source rasql.Table[TasksRow]) (rasql.GraphKey[TasksRow], error) {
+func TasksGraphKey(source TasksTable) (rasql.GraphKey[TasksRow], error) {
 	expressions, err := (TasksColumns{}).Bind(source)
 	if err != nil {
 		return rasql.GraphKey[TasksRow]{}, err
@@ -148,7 +146,7 @@ func TasksGraphKey(source rasql.Table[TasksRow]) (rasql.GraphKey[TasksRow], erro
 	return rasql.NewGraphKey[TasksRow](rasql.KeyPart[TasksRow, int64](expressions.ID, func(row TasksRow) int64 { return row.ID }))
 }
 
-func TasksIDPageKey(source rasql.Table[TasksRow], direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
+func TasksIDPageKey(source TasksTable, direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
 	expressions, err := (TasksColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -156,7 +154,7 @@ func TasksIDPageKey(source rasql.Table[TasksRow], direction rasql.PageDirection)
 	return rasqlgenPageKey(direction, expressions.ID.Expr(), func(row TasksRow) int64 { return row.ID })
 }
 
-func TasksStatusPageKey(source rasql.Table[TasksRow], direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
+func TasksStatusPageKey(source TasksTable, direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
 	expressions, err := (TasksColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -165,7 +163,7 @@ func TasksStatusPageKey(source rasql.Table[TasksRow], direction rasql.PageDirect
 }
 
 var tasksMutationColumns = func() TasksExpressions {
-	value, err := (TasksColumns{}).Bind(Tasks().Table())
+	value, err := (TasksColumns{}).Bind(Tasks())
 	if err != nil {
 		panic(err)
 	}

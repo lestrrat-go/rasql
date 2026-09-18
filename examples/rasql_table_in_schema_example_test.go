@@ -72,7 +72,7 @@ func Example_rasql_table_in_schema() {
 		return
 	}
 
-	tenantColumns, err := (store.UsersColumns{}).Bind(tenant.Table())
+	tenantColumns, err := (store.UsersColumns{}).Bind(tenant)
 	if err != nil {
 		fmt.Printf("failed to bind tenant columns: %s\n", err)
 		return
@@ -92,7 +92,7 @@ func Example_rasql_table_in_schema() {
 
 	// The point of the whole example: the identically named table where the
 	// connection is sitting never saw the insert the moved plan built.
-	homeColumns, err := (store.UsersColumns{}).Bind(home.Table())
+	homeColumns, err := (store.UsersColumns{}).Bind(home)
 	if err != nil {
 		fmt.Printf("failed to bind home columns: %s\n", err)
 		return

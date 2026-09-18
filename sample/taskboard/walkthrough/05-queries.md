@@ -82,7 +82,7 @@ named as a string.
 // CloseTask closes the task with taskID. Closing an already closed task
 // changes nothing and reports no error.
 func (repository Repository) CloseTask(ctx context.Context, taskID int64) error {
-	tasksExpressions, err := (TasksColumns{}).Bind(Tasks().Table())
+	tasksExpressions, err := (TasksColumns{}).Bind(Tasks())
 	if err != nil {
 		return fmt.Errorf("bind tasks columns for close %d: %w", taskID, err)
 	}
@@ -110,7 +110,7 @@ func (repository Repository) AllProjects(ctx context.Context) ([]ProjectsRow, er
 	if err != nil {
 		return nil, fmt.Errorf("bind projects source: %w", err)
 	}
-	expressions, err := (ProjectsColumns{}).Bind(source.Table())
+	expressions, err := (ProjectsColumns{}).Bind(source)
 	if err != nil {
 		return nil, fmt.Errorf("bind projects columns: %w", err)
 	}

@@ -82,12 +82,12 @@ func Example_rasql_self_join() {
 		fmt.Printf("failed to alias employees: %s\n", err)
 		return
 	}
-	employeeColumns, err := (store.EmployeesColumns{}).Bind(employees.Table())
+	employeeColumns, err := (store.EmployeesColumns{}).Bind(employees)
 	if err != nil {
 		fmt.Printf("failed to bind employees columns: %s\n", err)
 		return
 	}
-	managerColumns, err := (store.EmployeesColumns{}).Bind(managerSource.Table())
+	managerColumns, err := (store.EmployeesColumns{}).Bind(managerSource)
 	if err != nil {
 		fmt.Printf("failed to bind manager columns: %s\n", err)
 		return

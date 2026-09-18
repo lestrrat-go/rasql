@@ -35,7 +35,7 @@ caller. Build and execute it through the same mutation terminal:
 
 <!-- INCLUDE(sample/taskboard/internal/store/docs_examples_test.go#canonical_patch) -->
 ```go
-expressions, err := (TasksColumns{}).Bind(Tasks().Table())
+expressions, err := (TasksColumns{}).Bind(Tasks())
 if err != nil {
 	return err
 }

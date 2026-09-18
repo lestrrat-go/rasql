@@ -33,8 +33,9 @@ var updateGeneratedShape = flag.Bool("update-golden", false, "rewrite testdata/g
 //
 // The wrapper holds its rasql.Table in an unexported field, promoted through a
 // package-private alias so As, Column and the CatalogObject methods stay
-// reachable without exporting the field itself. Ref, Table, As and InSchema
-// forward to that field explicitly; there is no Source method.
+// reachable without exporting the field itself. Ref, As and InSchema forward
+// to that field explicitly; there is no Table or Source method, so a caller
+// hands the wrapper itself to Bind, GraphKey, PageKey and the edge functions.
 func TestGeneratedShape(t *testing.T) {
 	for _, testcase := range []struct {
 		file  string

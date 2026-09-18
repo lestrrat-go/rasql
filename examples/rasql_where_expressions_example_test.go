@@ -59,7 +59,7 @@ func Example_rasql_where_expressions() {
 
 	// The generated columns struct binds every users column to the table, and
 	// the generated projection selects them in the order the row type scans.
-	columns, err := (store.UsersColumns{}).Bind(users.Table())
+	columns, err := (store.UsersColumns{}).Bind(users)
 	if err != nil {
 		fmt.Printf("failed to bind users columns: %s\n", err)
 		return
