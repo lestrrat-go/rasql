@@ -4,6 +4,7 @@ package store
 
 import (
 	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 )
 
@@ -24,12 +25,32 @@ var projectsDefinition = schema.TableDef{
 
 var projectsTable = rasql.MustTableOf[ProjectsRow](projectsDefinition)
 
-type ProjectsTable struct{ rasql.Table[ProjectsRow] }
+type projectsTableHandle = rasql.Table[ProjectsRow]
 
-func Projects() ProjectsTable { return ProjectsTable{Table: projectsTable} }
+type ProjectsTable struct {
+	projectsTableHandle
+}
 
-func (t ProjectsTable) Source(alias string) (rasql.TypedRelation[ProjectsRow], error) {
-	return rasql.SourceOf[ProjectsRow](t.Table, alias)
+func Projects() ProjectsTable { return ProjectsTable{projectsTableHandle: projectsTable} }
+
+func (t ProjectsTable) Ref() query.TableRef { return t.projectsTableHandle.Ref() }
+
+func (t ProjectsTable) As(alias string) (ProjectsTable, error) {
+	aliased, err := t.projectsTableHandle.As(alias)
+	if err != nil {
+		return ProjectsTable{}, err
+	}
+	return ProjectsTable{projectsTableHandle: aliased}, nil
+}
+
+func (t ProjectsTable) Table() rasql.Table[ProjectsRow] { return t.projectsTableHandle }
+
+func (t ProjectsTable) InSchema(namespace string) (ProjectsTable, error) {
+	moved, err := t.projectsTableHandle.InSchema(namespace)
+	if err != nil {
+		return ProjectsTable{}, err
+	}
+	return ProjectsTable{projectsTableHandle: moved}, nil
 }
 
 type ProjectsColumns struct{}
@@ -44,7 +65,7 @@ type OptionalProjectsExpressions struct {
 	Name rasql.NullColumn[ProjectsRow, string]
 }
 
-func (ProjectsColumns) Bind(source rasql.TypedRelation[ProjectsRow]) (ProjectsExpressions, error) {
+func (ProjectsColumns) Bind(source rasql.Table[ProjectsRow]) (ProjectsExpressions, error) {
 	var err error
 	result := ProjectsExpressions{
 		ID:   rasqlgenBind(&err, source, "id", "", rasql.BindColumn[ProjectsRow, int64]),
@@ -119,7 +140,7 @@ func OptionalProjectsProjection(expressions OptionalProjectsExpressions) (rasql.
 	return rasql.NewProjection(items, projectsOptionalDecoder{})
 }
 
-func ProjectsGraphKey(source rasql.TypedRelation[ProjectsRow]) (rasql.GraphKey[ProjectsRow], error) {
+func ProjectsGraphKey(source rasql.Table[ProjectsRow]) (rasql.GraphKey[ProjectsRow], error) {
 	expressions, err := (ProjectsColumns{}).Bind(source)
 	if err != nil {
 		return rasql.GraphKey[ProjectsRow]{}, err
@@ -127,7 +148,7 @@ func ProjectsGraphKey(source rasql.TypedRelation[ProjectsRow]) (rasql.GraphKey[P
 	return rasql.NewGraphKey[ProjectsRow](rasql.KeyPart[ProjectsRow, int64](expressions.ID, func(row ProjectsRow) int64 { return row.ID }))
 }
 
-func ProjectsIDPageKey(source rasql.TypedRelation[ProjectsRow], direction rasql.PageDirection) (rasql.PageKey[ProjectsRow], error) {
+func ProjectsIDPageKey(source rasql.Table[ProjectsRow], direction rasql.PageDirection) (rasql.PageKey[ProjectsRow], error) {
 	expressions, err := (ProjectsColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -135,7 +156,7 @@ func ProjectsIDPageKey(source rasql.TypedRelation[ProjectsRow], direction rasql.
 	return rasqlgenPageKey(direction, expressions.ID.Expr(), func(row ProjectsRow) int64 { return row.ID })
 }
 
-func ProjectsNamePageKey(source rasql.TypedRelation[ProjectsRow], direction rasql.PageDirection) (rasql.PageKey[ProjectsRow], error) {
+func ProjectsNamePageKey(source rasql.Table[ProjectsRow], direction rasql.PageDirection) (rasql.PageKey[ProjectsRow], error) {
 	expressions, err := (ProjectsColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -143,7 +164,7 @@ func ProjectsNamePageKey(source rasql.TypedRelation[ProjectsRow], direction rasq
 	return rasqlgenPageKey(direction, expressions.Name.Expr(), func(row ProjectsRow) string { return row.Name })
 }
 
-func ProjectsTasksEdge[G, CG any](parentSource rasql.TypedRelation[ProjectsRow], childSource rasql.TypedRelation[TasksRow], children rasql.GraphPlan[TasksRow, CG], options rasql.EdgeOptions, attach func(*G, rasql.LoadedMany[CG])) (rasql.GraphEdge[ProjectsRow, G], error) {
+func ProjectsTasksEdge[G, CG any](parentSource rasql.Table[ProjectsRow], childSource rasql.Table[TasksRow], children rasql.GraphPlan[TasksRow, CG], options rasql.EdgeOptions, attach func(*G, rasql.LoadedMany[CG])) (rasql.GraphEdge[ProjectsRow, G], error) {
 	parentExpressions, err := (ProjectsColumns{}).Bind(parentSource)
 	if err != nil {
 		return nil, err
@@ -164,11 +185,7 @@ func ProjectsTasksEdge[G, CG any](parentSource rasql.TypedRelation[ProjectsRow],
 }
 
 var projectsMutationColumns = func() ProjectsExpressions {
-	source, err := Projects().Source("")
-	if err != nil {
-		panic(err)
-	}
-	value, err := (ProjectsColumns{}).Bind(source)
+	value, err := (ProjectsColumns{}).Bind(Projects().Table())
 	if err != nil {
 		panic(err)
 	}
@@ -176,10 +193,10 @@ var projectsMutationColumns = func() ProjectsExpressions {
 }()
 
 type ProjectsCreate struct {
+	table  rasql.Table[ProjectsRow]
 	fields []rasql.MutationField[ProjectsRow]
 }
 
-func NewProjectsCreate() ProjectsCreate { return ProjectsCreate{} }
 func (v ProjectsCreate) ID(value int64) ProjectsCreate {
 	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(projectsMutationColumns.ID, value))
 	return v
@@ -189,14 +206,16 @@ func (v ProjectsCreate) Name(value string) ProjectsCreate {
 	return v
 }
 func (v ProjectsCreate) Plan() (rasql.CreatePlan[ProjectsRow], error) {
-	return rasql.NewCreatePlan(Projects().Table, v.fields...)
+	return rasql.NewCreatePlan(v.table, v.fields...)
 }
 
+func (t ProjectsTable) Create() ProjectsCreate { return ProjectsCreate{table: t.projectsTableHandle} }
+
 type ProjectsPatch struct {
+	table  rasql.Table[ProjectsRow]
 	fields []rasql.MutationField[ProjectsRow]
 }
 
-func NewProjectsPatch() ProjectsPatch { return ProjectsPatch{} }
 func (v ProjectsPatch) ID(value int64) ProjectsPatch {
 	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(projectsMutationColumns.ID, value))
 	return v
@@ -206,5 +225,11 @@ func (v ProjectsPatch) Name(value string) ProjectsPatch {
 	return v
 }
 func (v ProjectsPatch) Where(value rasql.Predicate) (rasql.PatchPlan[ProjectsRow], error) {
-	return rasql.NewPatchPlan(Projects().Table, value, v.fields...)
+	return rasql.NewPatchPlan(v.table, value, v.fields...)
+}
+
+func (t ProjectsTable) Patch() ProjectsPatch { return ProjectsPatch{table: t.projectsTableHandle} }
+
+func (t ProjectsTable) Delete(where rasql.Predicate) (rasql.DeletePlan[ProjectsRow], error) {
+	return rasql.NewDeletePlan(t.projectsTableHandle, where)
 }

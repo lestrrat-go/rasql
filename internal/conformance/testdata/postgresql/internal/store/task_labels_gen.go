@@ -4,6 +4,7 @@ package store
 
 import (
 	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 )
 
@@ -27,12 +28,34 @@ var task_labelsDefinition = schema.TableDef{
 
 var task_labelsTable = rasql.MustTableOf[Task_labelsRow](task_labelsDefinition)
 
-type Task_labelsTable struct{ rasql.Table[Task_labelsRow] }
+type task_labelsTableHandle = rasql.Table[Task_labelsRow]
 
-func Task_labels() Task_labelsTable { return Task_labelsTable{Table: task_labelsTable} }
+type Task_labelsTable struct {
+	task_labelsTableHandle
+}
 
-func (t Task_labelsTable) Source(alias string) (rasql.TypedRelation[Task_labelsRow], error) {
-	return rasql.SourceOf[Task_labelsRow](t.Table, alias)
+func Task_labels() Task_labelsTable {
+	return Task_labelsTable{task_labelsTableHandle: task_labelsTable}
+}
+
+func (t Task_labelsTable) Ref() query.TableRef { return t.task_labelsTableHandle.Ref() }
+
+func (t Task_labelsTable) As(alias string) (Task_labelsTable, error) {
+	aliased, err := t.task_labelsTableHandle.As(alias)
+	if err != nil {
+		return Task_labelsTable{}, err
+	}
+	return Task_labelsTable{task_labelsTableHandle: aliased}, nil
+}
+
+func (t Task_labelsTable) Table() rasql.Table[Task_labelsRow] { return t.task_labelsTableHandle }
+
+func (t Task_labelsTable) InSchema(namespace string) (Task_labelsTable, error) {
+	moved, err := t.task_labelsTableHandle.InSchema(namespace)
+	if err != nil {
+		return Task_labelsTable{}, err
+	}
+	return Task_labelsTable{task_labelsTableHandle: moved}, nil
 }
 
 type Task_labelsColumns struct{}
@@ -47,7 +70,7 @@ type OptionalTask_labelsExpressions struct {
 	Label  rasql.NullColumn[Task_labelsRow, string]
 }
 
-func (Task_labelsColumns) Bind(source rasql.TypedRelation[Task_labelsRow]) (Task_labelsExpressions, error) {
+func (Task_labelsColumns) Bind(source rasql.Table[Task_labelsRow]) (Task_labelsExpressions, error) {
 	var err error
 	result := Task_labelsExpressions{
 		TaskID: rasqlgenBind(&err, source, "task_id", "", rasql.BindColumn[Task_labelsRow, int64]),
@@ -124,7 +147,7 @@ func OptionalTask_labelsProjection(expressions OptionalTask_labelsExpressions) (
 	return rasql.NewProjection(items, task_labelsOptionalDecoder{})
 }
 
-func Task_labelsGraphKey(source rasql.TypedRelation[Task_labelsRow]) (rasql.GraphKey[Task_labelsRow], error) {
+func Task_labelsGraphKey(source rasql.Table[Task_labelsRow]) (rasql.GraphKey[Task_labelsRow], error) {
 	expressions, err := (Task_labelsColumns{}).Bind(source)
 	if err != nil {
 		return rasql.GraphKey[Task_labelsRow]{}, err
@@ -132,7 +155,7 @@ func Task_labelsGraphKey(source rasql.TypedRelation[Task_labelsRow]) (rasql.Grap
 	return rasql.NewGraphKey[Task_labelsRow](rasql.KeyPart[Task_labelsRow, int64](expressions.TaskID, func(row Task_labelsRow) int64 { return row.TaskID }), rasql.KeyPart[Task_labelsRow, string](expressions.Label, func(row Task_labelsRow) string { return row.Label }))
 }
 
-func Task_labelsTaskIDPageKey(source rasql.TypedRelation[Task_labelsRow], direction rasql.PageDirection) (rasql.PageKey[Task_labelsRow], error) {
+func Task_labelsTaskIDPageKey(source rasql.Table[Task_labelsRow], direction rasql.PageDirection) (rasql.PageKey[Task_labelsRow], error) {
 	expressions, err := (Task_labelsColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -140,7 +163,7 @@ func Task_labelsTaskIDPageKey(source rasql.TypedRelation[Task_labelsRow], direct
 	return rasqlgenPageKey(direction, expressions.TaskID.Expr(), func(row Task_labelsRow) int64 { return row.TaskID })
 }
 
-func Task_labelsLabelPageKey(source rasql.TypedRelation[Task_labelsRow], direction rasql.PageDirection) (rasql.PageKey[Task_labelsRow], error) {
+func Task_labelsLabelPageKey(source rasql.Table[Task_labelsRow], direction rasql.PageDirection) (rasql.PageKey[Task_labelsRow], error) {
 	expressions, err := (Task_labelsColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -148,7 +171,7 @@ func Task_labelsLabelPageKey(source rasql.TypedRelation[Task_labelsRow], directi
 	return rasqlgenPageKey(direction, expressions.Label.Expr(), func(row Task_labelsRow) string { return row.Label })
 }
 
-func Task_labelsTaskEdge[G, CG any](parentSource rasql.TypedRelation[Task_labelsRow], childSource rasql.TypedRelation[TasksRow], children rasql.GraphPlan[TasksRow, CG], options rasql.EdgeOptions, attach func(*G, rasql.LoadedOne[CG])) (rasql.GraphEdge[Task_labelsRow, G], error) {
+func Task_labelsTaskEdge[G, CG any](parentSource rasql.Table[Task_labelsRow], childSource rasql.Table[TasksRow], children rasql.GraphPlan[TasksRow, CG], options rasql.EdgeOptions, attach func(*G, rasql.LoadedOne[CG])) (rasql.GraphEdge[Task_labelsRow, G], error) {
 	parentExpressions, err := (Task_labelsColumns{}).Bind(parentSource)
 	if err != nil {
 		return nil, err
@@ -169,11 +192,7 @@ func Task_labelsTaskEdge[G, CG any](parentSource rasql.TypedRelation[Task_labels
 }
 
 var task_labelsMutationColumns = func() Task_labelsExpressions {
-	source, err := Task_labels().Source("")
-	if err != nil {
-		panic(err)
-	}
-	value, err := (Task_labelsColumns{}).Bind(source)
+	value, err := (Task_labelsColumns{}).Bind(Task_labels().Table())
 	if err != nil {
 		panic(err)
 	}
@@ -181,10 +200,10 @@ var task_labelsMutationColumns = func() Task_labelsExpressions {
 }()
 
 type Task_labelsCreate struct {
+	table  rasql.Table[Task_labelsRow]
 	fields []rasql.MutationField[Task_labelsRow]
 }
 
-func NewTask_labelsCreate() Task_labelsCreate { return Task_labelsCreate{} }
 func (v Task_labelsCreate) TaskID(value int64) Task_labelsCreate {
 	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(task_labelsMutationColumns.TaskID, value))
 	return v
@@ -194,14 +213,18 @@ func (v Task_labelsCreate) Label(value string) Task_labelsCreate {
 	return v
 }
 func (v Task_labelsCreate) Plan() (rasql.CreatePlan[Task_labelsRow], error) {
-	return rasql.NewCreatePlan(Task_labels().Table, v.fields...)
+	return rasql.NewCreatePlan(v.table, v.fields...)
+}
+
+func (t Task_labelsTable) Create() Task_labelsCreate {
+	return Task_labelsCreate{table: t.task_labelsTableHandle}
 }
 
 type Task_labelsPatch struct {
+	table  rasql.Table[Task_labelsRow]
 	fields []rasql.MutationField[Task_labelsRow]
 }
 
-func NewTask_labelsPatch() Task_labelsPatch { return Task_labelsPatch{} }
 func (v Task_labelsPatch) TaskID(value int64) Task_labelsPatch {
 	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(task_labelsMutationColumns.TaskID, value))
 	return v
@@ -211,5 +234,13 @@ func (v Task_labelsPatch) Label(value string) Task_labelsPatch {
 	return v
 }
 func (v Task_labelsPatch) Where(value rasql.Predicate) (rasql.PatchPlan[Task_labelsRow], error) {
-	return rasql.NewPatchPlan(Task_labels().Table, value, v.fields...)
+	return rasql.NewPatchPlan(v.table, value, v.fields...)
+}
+
+func (t Task_labelsTable) Patch() Task_labelsPatch {
+	return Task_labelsPatch{table: t.task_labelsTableHandle}
+}
+
+func (t Task_labelsTable) Delete(where rasql.Predicate) (rasql.DeletePlan[Task_labelsRow], error) {
+	return rasql.NewDeletePlan(t.task_labelsTableHandle, where)
 }
