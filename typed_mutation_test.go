@@ -580,3 +580,245 @@ func pointerWriteTable(t *testing.T) query.TableRef {
 	require.NoError(t, err)
 	return users
 }
+
+// tasksRow is the row type for the InSchema mutation fixtures below. id is
+// the primary key, title is an ordinary required column, notes carries a
+// default so a create plan can omit it, sequence is an identity-always
+// column no field may target, and version is the optimistic-lock column.
+type tasksRow struct {
+	ID    int64
+	Title string
+}
+
+func tasksDefinition() schema.TableDef {
+	return schema.TableDef{
+		Name:       "tasks",
+		PrimaryKey: []string{"id"},
+		Columns: []schema.ColumnDef{
+			{Name: "id", Type: schema.IntegerType{}},
+			{Name: "title", Type: schema.TextType{}},
+			{Name: "notes", Type: schema.TextType{}, Default: "''"},
+			{Name: "sequence", Type: schema.IntegerType{}, Identity: schema.IdentityAlways},
+			{Name: "version", Type: schema.IntegerType{}},
+		},
+	}
+}
+
+func tasks(t *testing.T) rasql.Table[tasksRow] {
+	t.Helper()
+	table, err := rasql.TableOf[tasksRow](tasksDefinition())
+	require.NoError(t, err)
+	return table
+}
+
+// unrelatedTasksTable shares tasksRow's Go row type but names a different
+// table, the same way mutationValidationTables' "second" table shares
+// mutationValidationRow with "first": a column bound from it must still be
+// refused by a plan built over tasks.
+func unrelatedTasksTable(t *testing.T) rasql.Table[tasksRow] {
+	t.Helper()
+	table, err := rasql.TableOf[tasksRow](schema.TableDef{
+		Name:       "labels",
+		PrimaryKey: []string{"id"},
+		Columns:    []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}},
+	})
+	require.NoError(t, err)
+	return table
+}
+
+// TestMutationPlanAcrossNamespace proves the fix for the defect where a
+// mutation field bound from a table in its default namespace was refused by
+// a plan targeting that same table moved with query.TableRef.InSchema: the
+// two identity checks in typed_mutation.go used to compare by qualified name,
+// which differs once the table is moved, even though the field and the plan
+// still name the same table.
+func TestMutationPlanAcrossNamespace(t *testing.T) {
+	t.Run("create plan accepts a field bound from the default table and renders the moved namespace", func(t *testing.T) {
+		home := tasks(t)
+		id, err := rasql.BindColumn[tasksRow, int64](home, "id", "")
+		require.NoError(t, err)
+		title, err := rasql.BindColumn[tasksRow, string](home, "title", "")
+		require.NoError(t, err)
+		version, err := rasql.BindColumn[tasksRow, int64](home, "version", "")
+		require.NoError(t, err)
+
+		moved, err := home.InSchema("tenant_a")
+		require.NoError(t, err)
+
+		plan, err := rasql.NewCreatePlan(moved,
+			rasql.SetField(id, int64(1)),
+			rasql.SetField(title, "write the doc"),
+			rasql.SetField(version, int64(1)))
+		require.NoError(t, err)
+
+		database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			mock.ExpectClose()
+			require.NoError(t, database.Close())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+		executor, err := rasql.Open(t.Context(), database, dialect.PostgreSQL(), rasql.WithProfile(rasql.PostgreSQL17()))
+		require.NoError(t, err)
+		mock.ExpectExec(`INSERT INTO "tenant_a"\."tasks" \("id", "title", "version"\) VALUES \(\$1, \$2, \$3\)`).
+			WithArgs(int64(1), "write the doc", int64(1)).
+			WillReturnResult(sqlmock.NewResult(1, 1))
+		_, err = rasql.ExecMutation(t.Context(), executor, plan)
+		require.NoError(t, err)
+	})
+
+	t.Run("patch plan accepts a field bound from the default table and renders the moved namespace", func(t *testing.T) {
+		home := tasks(t)
+		title, err := rasql.BindColumn[tasksRow, string](home, "title", "")
+		require.NoError(t, err)
+
+		moved, err := home.InSchema("tenant_a")
+		require.NoError(t, err)
+		movedID, err := rasql.BindColumn[tasksRow, int64](moved, "id", "")
+		require.NoError(t, err)
+
+		plan, err := rasql.NewPatchPlan(moved, rasql.EqualValue(movedID.Expr(), int64(7)), rasql.SetField(title, "renamed"))
+		require.NoError(t, err)
+
+		database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			mock.ExpectClose()
+			require.NoError(t, database.Close())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+		executor, err := rasql.Open(t.Context(), database, dialect.PostgreSQL(), rasql.WithProfile(rasql.PostgreSQL17()))
+		require.NoError(t, err)
+		mock.ExpectExec(`UPDATE "tenant_a"\."tasks" SET "title" = \$1 WHERE \("tenant_a"\."tasks"\."id" = \$2\)`).
+			WithArgs("renamed", int64(7)).
+			WillReturnResult(sqlmock.NewResult(1, 1))
+		_, err = rasql.ExecMutation(t.Context(), executor, plan)
+		require.NoError(t, err)
+	})
+
+	t.Run("WithVersion accepts a version column bound from the default table against the moved table", func(t *testing.T) {
+		home := tasks(t)
+		version, err := rasql.BindColumn[tasksRow, int64](home, "version", "")
+		require.NoError(t, err)
+		title, err := rasql.BindColumn[tasksRow, string](home, "title", "")
+		require.NoError(t, err)
+
+		moved, err := home.InSchema("tenant_a")
+		require.NoError(t, err)
+		movedID, err := rasql.BindColumn[tasksRow, int64](moved, "id", "")
+		require.NoError(t, err)
+
+		patchPlan, err := rasql.NewPatchPlan(moved, rasql.EqualValue(movedID.Expr(), int64(7)), rasql.SetField(title, "renamed"))
+		require.NoError(t, err)
+
+		_, err = patchPlan.WithVersion(version, 3)
+		require.NoError(t, err)
+	})
+
+	t.Run("WithVersion rejects a version column from an unrelated table", func(t *testing.T) {
+		home := tasks(t)
+		other := unrelatedTasksTable(t)
+		title, err := rasql.BindColumn[tasksRow, string](home, "title", "")
+		require.NoError(t, err)
+		id, err := rasql.BindColumn[tasksRow, int64](home, "id", "")
+		require.NoError(t, err)
+		otherID, err := rasql.BindColumn[tasksRow, int64](other, "id", "")
+		require.NoError(t, err)
+
+		patchPlan, err := rasql.NewPatchPlan(home, rasql.EqualValue(id.Expr(), int64(1)), rasql.SetField(title, "x"))
+		require.NoError(t, err)
+
+		_, err = patchPlan.WithVersion(otherID, 5)
+		require.ErrorContains(t, err, "must belong to the patch table")
+	})
+
+	t.Run("WithVersion rejects a non-integer version column", func(t *testing.T) {
+		home := tasks(t)
+		notesAsVersion, err := rasql.BindColumn[tasksRow, int64](home, "notes", "")
+		require.NoError(t, err)
+		id, err := rasql.BindColumn[tasksRow, int64](home, "id", "")
+		require.NoError(t, err)
+		title, err := rasql.BindColumn[tasksRow, string](home, "title", "")
+		require.NoError(t, err)
+
+		patchPlan, err := rasql.NewPatchPlan(home, rasql.EqualValue(id.Expr(), int64(1)), rasql.SetField(title, "x"))
+		require.NoError(t, err)
+
+		_, err = patchPlan.WithVersion(notesAsVersion, 5)
+		require.ErrorContains(t, err, "must be a non-null ordinary integer")
+	})
+
+	t.Run("WithVersion rejects a nullable version column", func(t *testing.T) {
+		// The version column is bound from a table where it is genuinely
+		// non-null; the patch plan targets a second, independently built
+		// table that merely shares its bare name and row type. The
+		// loosened table-identity check accepts the pair, so this proves
+		// the per-column checks that follow it -- read from the plan's own
+		// table, not the column's source -- still catch a nullable column.
+		source, err := rasql.TableOf[tasksRow](schema.TableDef{
+			Name:       "tasks",
+			PrimaryKey: []string{"id"},
+			Columns: []schema.ColumnDef{
+				{Name: "id", Type: schema.IntegerType{}},
+				{Name: "version", Type: schema.IntegerType{}},
+			},
+		})
+		require.NoError(t, err)
+		version, err := rasql.BindColumn[tasksRow, int64](source, "version", "")
+		require.NoError(t, err)
+
+		nullableTarget, err := rasql.TableOf[tasksRow](schema.TableDef{
+			Name:       "tasks",
+			PrimaryKey: []string{"id"},
+			Columns: []schema.ColumnDef{
+				{Name: "id", Type: schema.IntegerType{}},
+				{Name: "title", Type: schema.TextType{}},
+				{Name: "version", Type: schema.IntegerType{}, Nullable: true},
+			},
+		})
+		require.NoError(t, err)
+		id, err := rasql.BindColumn[tasksRow, int64](nullableTarget, "id", "")
+		require.NoError(t, err)
+		title, err := rasql.BindColumn[tasksRow, string](nullableTarget, "title", "")
+		require.NoError(t, err)
+
+		patchPlan, err := rasql.NewPatchPlan(nullableTarget, rasql.EqualValue(id.Expr(), int64(1)), rasql.SetField(title, "x"))
+		require.NoError(t, err)
+
+		_, err = patchPlan.WithVersion(version, 5)
+		require.ErrorContains(t, err, "must be a non-null ordinary integer")
+	})
+
+	t.Run("WithVersion rejects a version column already assigned as a field", func(t *testing.T) {
+		home := tasks(t)
+		title, err := rasql.BindColumn[tasksRow, string](home, "title", "")
+		require.NoError(t, err)
+		version, err := rasql.BindColumn[tasksRow, int64](home, "version", "")
+		require.NoError(t, err)
+		id, err := rasql.BindColumn[tasksRow, int64](home, "id", "")
+		require.NoError(t, err)
+
+		patchPlan, err := rasql.NewPatchPlan(home, rasql.EqualValue(id.Expr(), int64(1)), rasql.SetField(title, "x"), rasql.SetField(version, int64(2)))
+		require.NoError(t, err)
+
+		_, err = patchPlan.WithVersion(version, 5)
+		require.ErrorContains(t, err, "is already assigned")
+	})
+
+	t.Run("a field targeting the always-identity column is rejected", func(t *testing.T) {
+		home := tasks(t)
+		sequence, err := rasql.BindColumn[tasksRow, int64](home, "sequence", "")
+		require.NoError(t, err)
+
+		_, err = rasql.NewCreatePlan(home, rasql.SetField(sequence, int64(99)))
+		require.ErrorContains(t, err, "not writable")
+	})
+
+	t.Run("NULL into a non-nullable column is rejected", func(t *testing.T) {
+		home := tasks(t)
+		nullableTitle := query.NullableColumnOf[tasksRow, string](home.Column("title"))
+
+		_, err := rasql.NewCreatePlan(home, rasql.ClearField(nullableTitle))
+		require.ErrorContains(t, err, "does not accept NULL")
+	})
+}

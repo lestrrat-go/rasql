@@ -2,7 +2,6 @@ package rasql
 
 import (
 	"fmt"
-	"reflect"
 
 	"github.com/lestrrat-go/rasql/internal/mutationcolumn"
 	"github.com/lestrrat-go/rasql/query"
@@ -100,6 +99,20 @@ type versionMutation struct {
 	expected int64
 }
 
+// sameMutationTable reports whether a and b are the table a mutation field or
+// version column must belong to. It compares the bare table name and not the
+// namespace: [query.TableRef.InSchema] returns a copy of a table's ref
+// pointed at a different schema, database or attached-database name, and a
+// generated store binds its column expressions once against the table in its
+// default namespace. A column bound that way still identifies which table it
+// came from through its Go row type — a MutationField[TasksRow] can only be
+// built from a column typed for TasksRow, and only the tasks store emits one
+// — so once a plan and a field agree on the row type, a namespace difference
+// no longer answers whether the column belongs to the table being written.
+func sameMutationTable(a, b schema.TableDef) bool {
+	return a.Name == b.Name
+}
+
 func (p PatchPlan[T]) WithVersion(column Column[T, int64], expected int64) (PatchPlan[T], error) {
 	if p.version != nil {
 		return p, fmt.Errorf("rasql: version predicate is already configured")
@@ -110,11 +123,11 @@ func (p PatchPlan[T]) WithVersion(column Column[T, int64], expected int64) (Patc
 	ref := column.ref
 	definition := p.table.Ref().Definition()
 	sourceTable, ok := ref.Source().Table()
-	if !ok || !reflect.DeepEqual(sourceTable.Definition(), definition) {
+	if !ok || !sameMutationTable(sourceTable.Definition(), definition) {
 		return p, fmt.Errorf("rasql: version column must belong to the patch table")
 	}
 	columnDef, ok := definition.Column(ref.Name())
-	if !ok || ref.Source().Definition().QualifiedName() != definition.QualifiedName() {
+	if !ok || !sameMutationTable(ref.Source().Definition(), definition) {
 		return p, fmt.Errorf("rasql: version column %q belongs to another table", ref.Name())
 	}
 	if _, integer := columnDef.Type.(schema.IntegerType); !integer || columnDef.Nullable || columnDef.GeneratedExpression != "" || columnDef.Identity != "" {
@@ -245,7 +258,7 @@ func validateMutationPlan[T any](table Table[T], fields []MutationField[T], patc
 			return fmt.Errorf("rasql: mutation plan contains a zero field")
 		}
 		column, ok := definition.Column(field.column.Name())
-		if !ok || field.column.Source().Definition().QualifiedName() != definition.QualifiedName() {
+		if !ok || !sameMutationTable(field.column.Source().Definition(), definition) {
 			return fmt.Errorf("rasql: mutation field %q belongs to another table", field.column.Name())
 		}
 		if _, duplicate := seen[column.Name]; duplicate {
