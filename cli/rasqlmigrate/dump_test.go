@@ -13,6 +13,7 @@ import (
 	"context"
 	"database/sql"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -151,7 +152,10 @@ func TestRunDumpIncludesSelectedSQLiteTable(t *testing.T) {
 
 	output := setCommandOutput(t)
 	require.NoError(t, run([]string{"dump", "-dialect", "sqlite", "-dsn", dsn, "-table", "members"}))
-	require.Contains(t, output.String(), `CREATE TABLE "main"."members"`)
+	// The connection's own namespace ("main") is cleared, so the table renders
+	// unqualified rather than as "main"."members".
+	require.Contains(t, output.String(), `CREATE TABLE "members"`)
+	require.NotContains(t, output.String(), `"main"."members"`)
 }
 
 func TestDumpSQLiteSweepExcludesMigrationProgressTable(t *testing.T) {
@@ -179,9 +183,70 @@ func TestDumpSQLiteSweepExcludesMigrationProgressTable(t *testing.T) {
 			})
 			require.NoError(t, err)
 			require.Len(t, files, 1)
-			require.Equal(t, "main__app.sql", files[0].Name)
+			// The connection's own namespace ("main") is cleared, so the file is
+			// named "app.sql" rather than "main__app.sql".
+			require.Equal(t, "app.sql", files[0].Name)
 		})
 	}
+}
+
+// TestDumpSQLiteMainTableWritesUnqualifiedFile pins the SQLite half of the namespace-clearing
+// rule: a table read from "main", the database the connection is already using, writes a file
+// named for the bare table and renders with no schema qualifier at all.
+func TestDumpSQLiteMainTableWritesUnqualifiedFile(t *testing.T) {
+	database, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "application.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE users (id INTEGER PRIMARY KEY)`)
+	require.NoError(t, err)
+
+	files, err := dumpFilesFromDatabase(t.Context(), dialect.SQLite(), database, dumpOptions{Format: "schema"})
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	require.Equal(t, "users.sql", files[0].Name)
+	require.Contains(t, files[0].SQL, `CREATE TABLE "users"`)
+	require.NotContains(t, files[0].SQL, `"main"`)
+}
+
+// TestDumpSQLiteAttachedDatabaseTableStaysQualified pins the other half: a table in a database
+// attached under another name is not the namespace the connection is using, so
+// namespace.Unqualify leaves it alone and its file keeps the
+// "<database>__<table>.sql" name a statement needs to reach it.
+func TestDumpSQLiteAttachedDatabaseTableStaysQualified(t *testing.T) {
+	dir := t.TempDir()
+	database, err := sql.Open("sqlite", filepath.Join(dir, "application.db"))
+	require.NoError(t, err)
+	database.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	_, err = database.ExecContext(t.Context(), fmt.Sprintf("ATTACH DATABASE %q AS audit", filepath.Join(dir, "audit.db")))
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE audit.events (id INTEGER PRIMARY KEY)`)
+	require.NoError(t, err)
+
+	files, err := dumpFilesFromDatabase(t.Context(), dialect.SQLite(), database, dumpOptions{Format: "schema"})
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	require.Equal(t, "audit__events.sql", files[0].Name)
+	require.Contains(t, files[0].SQL, `CREATE TABLE "audit"."events"`)
+}
+
+// TestDumpSQLiteOrdersForeignKeysAfterNamespaceClearing proves that clearing every table's
+// namespace before orderTablesByDependency runs does not break dependency ordering: two tables in
+// the connection's own namespace, related by a foreign key, both have their Schema cleared to "",
+// and orderTablesByDependency resolves an empty ReferencedSchema to the referencing table's own
+// Schema, so "teams" still emits before "members".
+func TestDumpSQLiteOrdersForeignKeysAfterNamespaceClearing(t *testing.T) {
+	database, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "application.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE teams (id INTEGER PRIMARY KEY)`)
+	require.NoError(t, err)
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE members (id INTEGER PRIMARY KEY, team_id INTEGER NOT NULL REFERENCES teams(id))`)
+	require.NoError(t, err)
+
+	files, err := dumpFilesFromDatabase(t.Context(), dialect.SQLite(), database, dumpOptions{Format: "schema"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"teams.sql", "members.sql"}, dumpFileNames(files))
 }
 
 func TestOrderTablesByDependencyOrdersByForeignKey(t *testing.T) {
@@ -323,10 +388,12 @@ func TestRunDumpPreviewWritesNothingToDisk(t *testing.T) {
 
 	outputBuffer := setCommandOutput(t)
 	require.NoError(t, run([]string{"dump", "-dialect", "sqlite", "-dsn", dsn}))
-	// SQLite inspection reports the table qualified by its "main" schema,
-	// so the dumped file is named "main__members.sql", not "members.sql".
-	require.Contains(t, outputBuffer.String(), "-- main__members.sql\n")
-	require.Contains(t, outputBuffer.String(), `CREATE TABLE "main"."members"`)
+	// SQLite inspection reports the table qualified by its "main" schema, but
+	// dump clears the namespace the connection is already using, so the file
+	// is named "members.sql" and the table renders unqualified.
+	require.Contains(t, outputBuffer.String(), "-- members.sql\n")
+	require.Contains(t, outputBuffer.String(), `CREATE TABLE "members"`)
+	require.NotContains(t, outputBuffer.String(), `"main"."members"`)
 }
 
 func TestRunDumpSchemaOutputWritesPlainSources(t *testing.T) {
@@ -343,7 +410,9 @@ func TestRunDumpSchemaOutputWritesPlainSources(t *testing.T) {
 	entries, err := os.ReadDir(output)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
-	require.Equal(t, "main__members.sql", entries[0].Name())
+	// The connection's own namespace ("main") is cleared, so the file is
+	// named "members.sql" rather than "main__members.sql".
+	require.Equal(t, "members.sql", entries[0].Name())
 }
 
 func TestWriteDumpOutputDirectoryHandling(t *testing.T) {
