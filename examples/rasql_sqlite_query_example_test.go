@@ -41,12 +41,7 @@ func Example_rasql_sqlite_query() {
 	}
 	// The generated create builder binds the row's fields as values, through
 	// the columns the generator bound for it.
-	plan, err := store.Users().Create().ID(42).Email("ada@example.com").FirstName("First").LastName("Last").Plan()
-	if err != nil {
-		fmt.Printf("failed to build insert: %s\n", err)
-		return
-	}
-	if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
+	if _, err := store.Users().Create().ID(42).Email("ada@example.com").FirstName("First").LastName("Last").Exec(ctx, db); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}

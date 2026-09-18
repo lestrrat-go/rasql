@@ -81,7 +81,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 			rasql.SetField(eventCreatedAt, expected.CreatedAt),
 		)
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), executor, createPlan)
+		_, err = rasql.Exec(t.Context(), executor, createPlan)
 		require.NoError(t, err)
 
 		actual, err := rasql.One(t.Context(), executor, rasql.Select(relation, projection).
@@ -181,7 +181,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 		for _, row := range inserted {
 			plan, err := rasql.NewCreatePlan(users, rasql.SetField(userID, row.ID), rasql.SetField(userEmail, row.Email))
 			require.NoError(t, err)
-			_, err = rasql.ExecMutation(t.Context(), executor, plan)
+			_, err = rasql.Exec(t.Context(), executor, plan)
 			require.NoError(t, err)
 		}
 
@@ -261,7 +261,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 		for _, row := range insertedUsers {
 			plan, err := rasql.NewCreatePlan(users, rasql.SetField(userID, row.ID), rasql.SetField(userEmail, row.Email))
 			require.NoError(t, err)
-			_, err = rasql.ExecMutation(t.Context(), executor, plan)
+			_, err = rasql.Exec(t.Context(), executor, plan)
 			require.NoError(t, err)
 		}
 		for _, row := range []roundtripOrder{
@@ -272,7 +272,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 			plan, err := rasql.NewCreatePlan(orders,
 				rasql.SetField(orderID, row.ID), rasql.SetField(orderUserID, row.UserID), rasql.SetField(orderAmount, row.Amount))
 			require.NoError(t, err)
-			_, err = rasql.ExecMutation(t.Context(), executor, plan)
+			_, err = rasql.Exec(t.Context(), executor, plan)
 			require.NoError(t, err)
 		}
 
@@ -360,7 +360,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 			}
 			plan, err := rasql.NewCreatePlan(users, fields...)
 			require.NoError(t, err)
-			_, err = rasql.ExecMutation(t.Context(), executor, plan)
+			_, err = rasql.Exec(t.Context(), executor, plan)
 			require.NoError(t, err)
 		}
 
@@ -404,7 +404,7 @@ func TestSQLiteTypedSelect(t *testing.T) {
 		} {
 			plan, err := rasql.NewCreatePlan(events, rasql.SetField(eventID, row.ID), rasql.SetField(eventActive, row.Active))
 			require.NoError(t, err)
-			_, err = rasql.ExecMutation(t.Context(), executor, plan)
+			_, err = rasql.Exec(t.Context(), executor, plan)
 			require.NoError(t, err)
 		}
 
@@ -566,7 +566,7 @@ func TestSQLiteRoundTrip(t *testing.T) {
 		expected := roundtripInvoice{ID: 1, Amount: "1234.5678901234567890"}
 		plan, err := rasql.NewCreatePlan(invoices, rasql.SetField(invoiceID, expected.ID), rasql.SetField(invoiceAmount, expected.Amount))
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), executor, plan)
+		_, err = rasql.Exec(t.Context(), executor, plan)
 		require.NoError(t, err)
 
 		actual, err := rasql.One(t.Context(), executor, rasql.Select(relation, projection).
@@ -637,7 +637,7 @@ func TestSQLiteRoundTrip(t *testing.T) {
 		require.NoError(t, err)
 		insertPlan, err := rasql.NewStatementPlan(insertRows)
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), executor, insertPlan)
+		_, err = rasql.Exec(t.Context(), executor, insertPlan)
 		require.NoError(t, err)
 
 		// SELECT with a qualified predicate.
@@ -697,7 +697,7 @@ func TestSQLiteRoundTrip(t *testing.T) {
 		require.NoError(t, err)
 		updatePlan, err := rasql.NewStatementPlan(update)
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), executor, updatePlan)
+		_, err = rasql.Exec(t.Context(), executor, updatePlan)
 		require.NoError(t, err)
 
 		updated, err := rasql.One(t.Context(), executor, rasql.Select(relation, eventProjection).
@@ -712,7 +712,7 @@ func TestSQLiteRoundTrip(t *testing.T) {
 		require.NoError(t, err)
 		deletePlan, err := rasql.NewStatementPlan(deleteStatement)
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), executor, deletePlan)
+		_, err = rasql.Exec(t.Context(), executor, deletePlan)
 		require.NoError(t, err)
 
 		remaining, err := rasql.All(t.Context(), executor, rasql.Select(relation, eventProjection).

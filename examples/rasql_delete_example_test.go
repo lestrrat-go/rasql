@@ -39,19 +39,15 @@ func Example_rasql_delete() {
 		return
 	}
 	for id, email := range map[int64]string{1: "ada@example.com", 2: "grace@example.com", 3: "edsger@example.com"} {
-		plan, err := store.Users().Create().ID(id).Email(email).FirstName("First").LastName("Last").Plan()
-		if err != nil {
-			fmt.Printf("failed to build insert: %s\n", err)
-			return
-		}
-		if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
+		if _, err := store.Users().Create().ID(id).Email(email).FirstName("First").LastName("Last").Exec(ctx, db); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
 	}
 
-	// The generated table's own Delete method takes a typed rasql.Predicate
-	// and needs no table argument.
+	// The generated table's own Delete method takes no argument and hands
+	// back a builder whose Where takes a typed rasql.Predicate; Exec plans
+	// and runs the delete in one call.
 	columns, err := (store.UsersColumns{}).Bind(users)
 	if err != nil {
 		fmt.Printf("failed to bind users columns: %s\n", err)
@@ -59,12 +55,7 @@ func Example_rasql_delete() {
 	}
 
 	// SQL: DELETE FROM users WHERE users.id = ? (argument: 1)
-	byID, err := users.Delete(rasql.EqualValue(columns.ID.Expr(), int64(1)))
-	if err != nil {
-		fmt.Printf("failed to build delete: %s\n", err)
-		return
-	}
-	outcome, err := rasql.ExecMutation(ctx, db, byID)
+	outcome, err := users.Delete().Where(rasql.EqualValue(columns.ID.Expr(), int64(1))).Exec(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to delete user: %s\n", err)
 		return
@@ -73,12 +64,7 @@ func Example_rasql_delete() {
 
 	// Delete's Where argument is any typed rasql.Predicate.
 	// SQL: DELETE FROM users WHERE users.id > ? (argument: 2)
-	byPredicate, err := users.Delete(rasql.GreaterValue(columns.ID.Expr(), int64(2)))
-	if err != nil {
-		fmt.Printf("failed to build delete: %s\n", err)
-		return
-	}
-	outcome, err = rasql.ExecMutation(ctx, db, byPredicate)
+	outcome, err = users.Delete().Where(rasql.GreaterValue(columns.ID.Expr(), int64(2))).Exec(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to delete users: %s\n", err)
 		return
@@ -87,7 +73,7 @@ func Example_rasql_delete() {
 
 	// A zero predicate is rejected, so a dropped Where cannot become a
 	// full-table delete by accident.
-	if _, err := users.Delete(rasql.Predicate{}); err != nil {
+	if _, err := users.Delete().Where(rasql.Predicate{}).Exec(ctx, db); err != nil {
 		fmt.Println(err)
 	}
 

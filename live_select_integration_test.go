@@ -131,7 +131,7 @@ func testAggregateOrdering(t *testing.T, database *sql.DB, test aggregateOrderin
 	} {
 		plan, err := rasql.NewCreatePlan(records, rasql.SetField(recordID, fixture.ID), rasql.SetField(recordEmail, fixture.Email))
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), db, plan)
+		_, err = rasql.Exec(t.Context(), db, plan)
 		require.NoError(t, err)
 	}
 
@@ -317,7 +317,7 @@ func testDistinctOrder(t *testing.T, database *sql.DB, test distinctOrderCase) {
 			rasql.SetField(recordAge, fixture.Age),
 		)
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), db, plan)
+		_, err = rasql.Exec(t.Context(), db, plan)
 		require.NoError(t, err)
 	}
 
@@ -451,7 +451,7 @@ func testOrderResultAlias(t *testing.T, database *sql.DB, test orderResultAliasC
 	} {
 		plan, err := rasql.NewCreatePlan(records, rasql.SetField(recordID, fixture.ID), rasql.SetField(recordCity, fixture.City))
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), db, plan)
+		_, err = rasql.Exec(t.Context(), db, plan)
 		require.NoError(t, err)
 	}
 

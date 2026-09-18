@@ -28,7 +28,7 @@ func Example_mutationBatch() {
 		fmt.Println(err)
 		return
 	}
-	outcome, err := rasql.ExecMutationBatch(context.Background(), executor,
+	outcome, err := rasql.ExecBatch(context.Background(), executor,
 		[]rasql.MutationPlan{first, second}, rasql.BulkOptions{MaxRows: 100})
 	if err != nil {
 		fmt.Println(err)

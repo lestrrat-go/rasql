@@ -22,8 +22,7 @@ func Example_typedPatch() {
 		fmt.Println(err)
 		return
 	}
-	plan, _ := store.Users().Patch().Status("active").Where(rasql.EqualValue(columns.ID.Expr(), int64(1)))
-	_, err = rasql.ExecMutation(context.Background(), executor, plan)
+	_, err = store.Users().Patch().Status("active").Where(rasql.EqualValue(columns.ID.Expr(), int64(1))).Exec(context.Background(), executor)
 	fmt.Println(err)
 	// Output: <nil>
 }

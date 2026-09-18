@@ -62,12 +62,7 @@ func Example_rasql_table_in_schema() {
 		return
 	}
 
-	plan, err := tenant.Create().ID(1).Email("ada@example.com").FirstName("Ada").LastName("Lovelace").Plan()
-	if err != nil {
-		fmt.Printf("failed to build insert: %s\n", err)
-		return
-	}
-	if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
+	if _, err := tenant.Create().ID(1).Email("ada@example.com").FirstName("Ada").LastName("Lovelace").Exec(ctx, db); err != nil {
 		fmt.Printf("failed to insert into the tenant table: %s\n", err)
 		return
 	}

@@ -37,17 +37,13 @@ func docsReadTasks(ctx context.Context, executor rasql.Executor) error {
 
 func docsCreateTask(ctx context.Context, executor rasql.Executor, projectID int64) error {
 	// BEGIN(canonical_create)
-	plan, err := Tasks().Create().
+	outcome, err := Tasks().Create().
 		ProjectID(projectID).
 		ClearAssigneeID().
 		Title("document canonical mutations").
 		DefaultIsOpen().
 		DefaultCreatedAt().
-		Plan()
-	if err != nil {
-		return err
-	}
-	outcome, err := rasql.ExecMutation(ctx, executor, plan)
+		Exec(ctx, executor)
 	// END(canonical_create)
 	_ = outcome
 	return err
@@ -59,12 +55,9 @@ func docsPatchTask(ctx context.Context, executor rasql.Executor, taskID int64) e
 	if err != nil {
 		return err
 	}
-	plan, err := Tasks().Patch().IsOpen(false).
-		Where(rasql.EqualValue(expressions.ID.Expr(), taskID))
-	if err != nil {
-		return err
-	}
-	outcome, err := rasql.ExecMutation(ctx, executor, plan)
+	outcome, err := Tasks().Patch().IsOpen(false).
+		Where(rasql.EqualValue(expressions.ID.Expr(), taskID)).
+		Exec(ctx, executor)
 	// END(canonical_patch)
 	_ = outcome
 	return err
@@ -84,7 +77,7 @@ func docsStatementPlan(ctx context.Context, executor rasql.Executor) error {
 	if err != nil {
 		return err
 	}
-	outcome, err := rasql.ExecMutation(ctx, executor, plan)
+	outcome, err := rasql.Exec(ctx, executor, plan)
 	// END(statement_plan)
 	_ = outcome
 	return err
@@ -112,7 +105,7 @@ func docsReturning(ctx context.Context, executor rasql.Executor, plan rasql.Muta
 
 func docsBatch(ctx context.Context, executor rasql.Executor, plans []rasql.MutationPlan) error {
 	// BEGIN(mutation_batch)
-	outcome, err := rasql.ExecMutationBatch(ctx, executor, plans, rasql.BulkOptions{
+	outcome, err := rasql.ExecBatch(ctx, executor, plans, rasql.BulkOptions{
 		MaxRows:           500,
 		MaxBindParameters: 32000,
 		Atomic:            true,
@@ -125,10 +118,10 @@ func docsBatch(ctx context.Context, executor rasql.Executor, plans []rasql.Mutat
 func docsWithin(ctx context.Context, executor rasql.Executor, first, second rasql.MutationPlan) error {
 	// BEGIN(transaction_scope)
 	err := rasql.Within(ctx, executor, nil, func(ctx context.Context, scoped rasql.Executor) error {
-		if _, err := rasql.ExecMutation(ctx, scoped, first); err != nil {
+		if _, err := rasql.Exec(ctx, scoped, first); err != nil {
 			return err
 		}
-		_, err := rasql.ExecMutation(ctx, scoped, second)
+		_, err := rasql.Exec(ctx, scoped, second)
 		return err
 	})
 	// END(transaction_scope)

@@ -93,12 +93,12 @@ func TestGeneratedColumnWriteAgainstLiveDatabases(t *testing.T) {
 			// generated column as omissible and there is no field here that
 			// sets fahrenheit at all, so if the generated column ever again
 			// had to be named explicitly to build a valid plan, this would
-			// fail before the server saw a statement. Reaching ExecMutation
+			// fail before the server saw a statement. Reaching Exec
 			// puts the server itself -- not a mock -- in the position to
 			// refuse the statement if the column reached the INSERT list.
 			plan, err := rasql.NewCreatePlan(measurements, rasql.SetField(id, int64(1)), rasql.SetField(celsius, int64(20)))
 			require.NoError(t, err, "create plan must accept a table with a generated column when nothing sets it")
-			_, err = rasql.ExecMutation(ctx, executor, plan)
+			_, err = rasql.Exec(ctx, executor, plan)
 			require.NoError(t, err, "insert into a table with a generated column must succeed: the generated column must not reach the INSERT statement")
 
 			// Read the row back directly, bypassing the typed read path,
@@ -165,7 +165,7 @@ func TestIdentityColumnWriteAgainstLiveDatabases(t *testing.T) {
 		// and the server, not the caller, must assign the key.
 		plan, err := rasql.NewCreatePlan(members, rasql.SetField(name, "Ada"))
 		require.NoError(t, err, "create plan must accept a table with an ALWAYS identity column when nothing sets it")
-		_, err = rasql.ExecMutation(ctx, executor, plan)
+		_, err = rasql.Exec(ctx, executor, plan)
 		require.NoError(t, err, "insert into a table with an ALWAYS identity column must succeed: the identity column must not reach the INSERT statement")
 
 		var assignedID int64
@@ -232,7 +232,7 @@ func TestIdentityColumnWriteAgainstLiveDatabases(t *testing.T) {
 				name := query.TypedColumnOf[member, string](members.Column("name"))
 				plan, err := rasql.NewCreatePlan(members, rasql.SetField(id, int64(7)), rasql.SetField(name, "Grace"))
 				require.NoError(t, err, "create plan for a BY DEFAULT identity column must accept an explicit value")
-				_, err = rasql.ExecMutation(ctx, executor, plan)
+				_, err = rasql.Exec(ctx, executor, plan)
 				require.NoError(t, err, "insert an explicit value into a BY DEFAULT identity column must succeed")
 
 				var keptID int64

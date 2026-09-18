@@ -57,12 +57,7 @@ func Example_rasqlgen_computed_field() {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	plan, err := store.Users().Create().ID(1).Email("ada@example.com").FirstName("Ada").LastName("Lovelace").Plan()
-	if err != nil {
-		fmt.Printf("failed to build insert: %s\n", err)
-		return
-	}
-	if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
+	if _, err := store.Users().Create().ID(1).Email("ada@example.com").FirstName("Ada").LastName("Lovelace").Exec(ctx, db); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}

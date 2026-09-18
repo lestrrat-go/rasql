@@ -64,12 +64,7 @@ func Example_rasql_self_join() {
 		if employee.ManagerID.Valid {
 			create = create.ManagerID(employee.ManagerID.Value)
 		}
-		plan, err := create.Plan()
-		if err != nil {
-			fmt.Printf("failed to build insert: %s\n", err)
-			return
-		}
-		if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
+		if _, err := create.Exec(ctx, db); err != nil {
 			fmt.Printf("failed to insert employee: %s\n", err)
 			return
 		}

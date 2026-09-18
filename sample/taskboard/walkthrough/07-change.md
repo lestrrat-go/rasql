@@ -110,11 +110,7 @@ func (repository Repository) AddTask(ctx context.Context, projectID int64, assig
 	} else {
 		create = create.AssigneeID(*assigneeID)
 	}
-	plan, err := create.Plan()
-	if err != nil {
-		return fmt.Errorf("plan insert task %q: %w", title, err)
-	}
-	if _, err := rasql.ExecMutation(ctx, repository.executor, plan); err != nil {
+	if _, err := create.Exec(ctx, repository.executor); err != nil {
 		return fmt.Errorf("insert task %q: %w", title, err)
 	}
 	return nil

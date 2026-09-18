@@ -119,12 +119,12 @@ func NewStatementPlan(statement query.WriteStatement) (StatementPlan, error) {
 }
 func (p StatementPlan) mutationPlan() (query.WriteStatement, error) { return p.statement, nil }
 
-// ExecMutation compiles plan for executor's engine profile, sends it, and
+// Exec compiles plan for executor's engine profile, sends it, and
 // reports how many rows it affected. It reports an error when the statement
 // carries RETURNING projections; Returning is the entry point for those.
 //
 // `executor` and `plan` must not be nil.
-func ExecMutation(ctx context.Context, executor Executor, plan MutationPlan) (MutationOutcome, error) {
+func Exec(ctx context.Context, executor Executor, plan MutationPlan) (MutationOutcome, error) {
 	if executor == nil {
 		return MutationOutcome{}, fmt.Errorf("rasql: executor must not be nil")
 	}
@@ -319,12 +319,12 @@ func Returning[R any](plan MutationPlan, projection Projection[R]) (Query[R], er
 	return result, nil
 }
 
-// ExecMutationBatch groups plans into multi-row statements bounded by options
+// ExecBatch groups plans into multi-row statements bounded by options
 // and sends them in order. Every plan must target the same table, and none may
 // carry RETURNING projections.
 //
 // `executor` must not be nil, and no element of `plans` may be nil.
-func ExecMutationBatch(ctx context.Context, executor Executor, plans []MutationPlan, options BulkOptions) (BulkOutcome, error) {
+func ExecBatch(ctx context.Context, executor Executor, plans []MutationPlan, options BulkOptions) (BulkOutcome, error) {
 	if executor == nil {
 		return BulkOutcome{}, fmt.Errorf("rasql: executor must not be nil")
 	}

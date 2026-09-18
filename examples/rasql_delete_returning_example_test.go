@@ -109,16 +109,16 @@ func Example_rasql_delete_returning() {
 	}
 
 	// The typed layer reads the same clause without naming a column twice. The
-	// generated table's own Delete method takes a typed rasql.Predicate, and
-	// the generated projection names all six columns, so Returning hands One a
-	// whole decoded store.UsersRow.
+	// generated table's own Delete method takes no argument, and its Where
+	// takes a typed rasql.Predicate; the generated projection names all six
+	// columns, so Returning hands One a whole decoded store.UsersRow.
 	// SQL: DELETE FROM users WHERE users.id = ? RETURNING id, email, nickname, status, first_name, last_name (argument: 43)
 	columns, err := (store.UsersColumns{}).Bind(users)
 	if err != nil {
 		fmt.Printf("failed to bind users columns: %s\n", err)
 		return
 	}
-	plan, err := users.Delete(rasql.EqualValue(columns.ID.Expr(), int64(43)))
+	plan, err := users.Delete().Where(rasql.EqualValue(columns.ID.Expr(), int64(43))).Plan()
 	if err != nil {
 		fmt.Printf("failed to build typed delete: %s\n", err)
 		return

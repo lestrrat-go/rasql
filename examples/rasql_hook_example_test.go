@@ -72,7 +72,7 @@ func Example_rasql_hook() {
 		fmt.Printf("failed to adapt delete: %s\n", err)
 		return
 	}
-	if _, err := rasql.ExecMutation(ctx, executor, unfiltered); err != nil {
+	if _, err := rasql.Exec(ctx, executor, unfiltered); err != nil {
 		fmt.Println("refused:", err)
 	}
 
@@ -82,12 +82,7 @@ func Example_rasql_hook() {
 		fmt.Printf("failed to bind users columns: %s\n", err)
 		return
 	}
-	filtered, err := users.Delete(rasql.EqualValue(columns.ID.Expr(), int64(1)))
-	if err != nil {
-		fmt.Printf("failed to build delete: %s\n", err)
-		return
-	}
-	if _, err := rasql.ExecMutation(ctx, executor, filtered); err != nil {
+	if _, err := users.Delete().Where(rasql.EqualValue(columns.ID.Expr(), int64(1))).Exec(ctx, executor); err != nil {
 		fmt.Printf("failed to delete user: %s\n", err)
 		return
 	}

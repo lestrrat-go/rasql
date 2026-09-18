@@ -604,7 +604,7 @@ func TestNativeMutation(t *testing.T) {
 		raw := &nativeMutationExecutor{dialect: dialect.SQLite()}
 		executor, err := rasql.WithEngineProfile(raw, profile)
 		require.NoError(t, err)
-		outcome, err := rasql.ExecMutation(t.Context(), executor, plan)
+		outcome, err := rasql.Exec(t.Context(), executor, plan)
 		require.NoError(t, err)
 		require.Equal(t, int64(3), outcome.Affected)
 		require.Equal(t, "UPDATE users SET name = ?", raw.last.SQL())
@@ -638,7 +638,7 @@ func TestNativeMutation(t *testing.T) {
 		raw := &nativeMutationExecutor{dialect: dialect.PostgreSQL()}
 		executor, err := rasql.WithEngineProfile(raw, profile)
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), executor, plan)
+		_, err = rasql.Exec(t.Context(), executor, plan)
 		var planErr *rasql.PlanError
 		require.ErrorAs(t, err, &planErr)
 		require.Equal(t, "engine_mismatch", planErr.Code)
@@ -677,7 +677,7 @@ func TestNativeMutation(t *testing.T) {
 				raw := &nativeMutationExecutor{dialect: dialect.SQLite()}
 				executor, err := rasql.WithEngineProfile(raw, profile)
 				require.NoError(t, err)
-				_, err = rasql.ExecMutationBatch(t.Context(), executor, tc.plans(t), rasql.BulkOptions{Atomic: true})
+				_, err = rasql.ExecBatch(t.Context(), executor, tc.plans(t), rasql.BulkOptions{Atomic: true})
 				var planErr *rasql.PlanError
 				require.ErrorAs(t, err, &planErr)
 				require.Equal(t, "unsupported_feature", planErr.Code)
@@ -706,7 +706,7 @@ func TestNativeMutation(t *testing.T) {
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				executor, raw := nativeMutationExecutorForTest(t)
-				_, err := rasql.ExecMutationBatch(t.Context(), executor, tc.plans(t), rasql.BulkOptions{Atomic: true})
+				_, err := rasql.ExecBatch(t.Context(), executor, tc.plans(t), rasql.BulkOptions{Atomic: true})
 				var planErr *rasql.PlanError
 				require.ErrorAs(t, err, &planErr)
 				require.Equal(t, "unsupported_feature", planErr.Code)
@@ -734,7 +734,7 @@ func TestNativeMutation(t *testing.T) {
 				tc.setup(raw)
 				plan, err := rasql.NativeMutation(rasql.NativeStatement{Engine: "sqlite", SQL: "UPDATE users SET name = ?", Args: []rasql.NativeArgument{{Value: "x"}}})
 				require.NoError(t, err)
-				outcome, err := rasql.ExecMutation(t.Context(), executor, plan)
+				outcome, err := rasql.Exec(t.Context(), executor, plan)
 				require.Error(t, err)
 				if tc.want != nil {
 					require.ErrorIs(t, err, tc.want)
@@ -756,10 +756,10 @@ func TestNativeMutation(t *testing.T) {
 		require.NoError(t, err)
 		plan, err := rasql.NativeMutation(rasql.NativeStatement{Engine: "sqlite", SQL: "UPDATE users SET name = ?", Args: []rasql.NativeArgument{{Value: "x", Codec: "text"}}})
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), executor, plan)
+		_, err = rasql.Exec(t.Context(), executor, plan)
 		require.NoError(t, err)
 		first := raw.last
-		_, err = rasql.ExecMutation(t.Context(), executor, plan)
+		_, err = rasql.Exec(t.Context(), executor, plan)
 		require.NoError(t, err)
 		require.Equal(t, 2, count)
 		require.NotSame(t, &first, &raw.last)
@@ -788,7 +788,7 @@ func TestNativeMutation(t *testing.T) {
 				}
 				plan, err := rasql.NativeMutation(tc.plan)
 				require.NoError(t, err)
-				_, err = rasql.ExecMutation(context.Background(), executor, plan)
+				_, err = rasql.Exec(context.Background(), executor, plan)
 				require.Error(t, err)
 				require.Zero(t, raw.calls.Load())
 			})
@@ -803,7 +803,7 @@ func TestNativeMutation(t *testing.T) {
 		require.NoError(t, err)
 		plan, err := rasql.NativeMutation(rasql.NativeStatement{Engine: "sqlite", SQL: "UPDATE users SET name = ?", Args: []rasql.NativeArgument{{Value: "x", Codec: "text"}}})
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), executor, plan)
+		_, err = rasql.Exec(t.Context(), executor, plan)
 		require.ErrorIs(t, err, errNativeMutationCodec)
 		require.Zero(t, raw.calls.Load())
 
@@ -812,7 +812,7 @@ func TestNativeMutation(t *testing.T) {
 		raw.honorContext = true
 		plain, err := rasql.NativeMutation(rasql.NativeStatement{Engine: "sqlite", SQL: "UPDATE users SET name = ?", Args: []rasql.NativeArgument{{Value: "x"}}})
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(cancelled, executor, plain)
+		_, err = rasql.Exec(cancelled, executor, plain)
 		require.ErrorIs(t, err, context.Canceled)
 		require.EqualValues(t, 1, raw.calls.Load())
 	})

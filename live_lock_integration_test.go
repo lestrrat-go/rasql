@@ -135,7 +135,7 @@ func TestLiveConditionalUpsert(t *testing.T) {
 	require.NoError(t, err)
 	seedPlan, err := rasql.NewStatementPlan(seed)
 	require.NoError(t, err)
-	_, err = rasql.ExecMutation(t.Context(), executor, seedPlan)
+	_, err = rasql.Exec(t.Context(), executor, seedPlan)
 	require.NoError(t, err)
 	run := func(versionValue int, payloadValue string) {
 		insert, buildErr := query.NewInsert(table, query.Set(id, 1), query.Set(version, versionValue), query.Set(payload, payloadValue))
@@ -148,7 +148,7 @@ func TestLiveConditionalUpsert(t *testing.T) {
 		require.NoError(t, buildErr)
 		plan, planErr := rasql.NewStatementPlan(statement)
 		require.NoError(t, planErr)
-		_, execErr := rasql.ExecMutation(t.Context(), executor, plan)
+		_, execErr := rasql.Exec(t.Context(), executor, plan)
 		require.NoError(t, execErr)
 	}
 	run(1, "v1")
@@ -240,7 +240,7 @@ func TestLiveUpdateDefault(t *testing.T) {
 			count := query.TypedColumnOf[g5LiveRow, int64](table.Column("count"))
 			plan, err := rasql.NewPatchPlan(table, query.EqualValue(id, int64(1)), rasql.DefaultField(value), rasql.SetField(count, int64(8)))
 			require.NoError(t, err)
-			outcome, err := rasql.ExecMutation(t.Context(), executor, plan)
+			outcome, err := rasql.Exec(t.Context(), executor, plan)
 			require.NoError(t, err)
 			require.Equal(t, int64(1), outcome.Affected)
 			var gotValue, gotCount int64

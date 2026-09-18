@@ -23,7 +23,8 @@ func Example_rasql_render_mutation() {
 	}
 
 	plan, err := users.Patch().Email("ada@example.com").
-		Where(rasql.EqualValue(columns.ID.Expr(), int64(1)))
+		Where(rasql.EqualValue(columns.ID.Expr(), int64(1))).
+		Plan()
 	if err != nil {
 		fmt.Printf("failed to build the patch plan: %s\n", err)
 		return

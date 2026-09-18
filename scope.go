@@ -12,7 +12,7 @@ import (
 type Scope func(context.Context, Executor) error
 
 // ScopeBeginner is an Executor that can open an owned transaction. Within and
-// ExecMutationBatch open a transaction through this interface, so an executor
+// ExecBatch open a transaction through this interface, so an executor
 // written outside this package joins them by implementing it. An executor that
 // does not implement it is rejected with the code transaction_scope_unsupported.
 //

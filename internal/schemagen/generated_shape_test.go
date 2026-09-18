@@ -78,8 +78,8 @@ func TestGeneratedShapeCompiles(t *testing.T) {
 		"func TestShape(t *testing.T) {\n" +
 		"\tif _, err := generated.Tasks().As(\"t\"); err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
 		"\tif _, err := generated.Tasks().Create().ID(1).Title(\"write it down\").Plan(); err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
-		"\tif _, err := generated.Tasks().Patch().Title(\"write it down\").Where(rasql.Predicate{}); err == nil {\n\t\tt.Fatal(\"a patch with no predicate was accepted\")\n\t}\n" +
-		"\tif _, err := generated.Tasks().Delete(rasql.Predicate{}); err == nil {\n\t\tt.Fatal(\"a delete with no predicate was accepted\")\n\t}\n" +
+		"\tif _, err := generated.Tasks().Patch().Title(\"write it down\").Where(rasql.Predicate{}).Plan(); err == nil {\n\t\tt.Fatal(\"a patch with no predicate was accepted\")\n\t}\n" +
+		"\tif _, err := generated.Tasks().Delete().Where(rasql.Predicate{}).Plan(); err == nil {\n\t\tt.Fatal(\"a delete with no predicate was accepted\")\n\t}\n" +
 		"\tmoved, err := generated.Tasks().InSchema(\"tenant\")\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n" +
 		"\tif moved.Ref().Definition().Name != \"tasks\" {\n\t\tt.Fatal(\"InSchema changed the table name\")\n\t}\n" +
 		"\tif _, err := generated.ActiveUsers().As(\"v\"); err != nil {\n\t\tt.Fatal(err)\n\t}\n" +

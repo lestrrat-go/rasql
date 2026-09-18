@@ -105,7 +105,7 @@ func requireMovedTableReachesNamespace(t *testing.T, database *sql.DB, d dialect
 	email := query.TypedColumnOf[tenantRow, string](moved.Column("email"))
 	plan, err := rasql.NewCreatePlan(moved, rasql.SetField(id, int64(1)), rasql.SetField(email, "ada@example.com"))
 	require.NoError(t, err, "build a create plan over the moved table")
-	_, err = rasql.ExecMutation(ctx, db, plan)
+	_, err = rasql.Exec(ctx, db, plan)
 	require.NoError(t, err, "the server must accept an INSERT qualified with a second namespace")
 
 	statement, err := render.SelectFrom(d, moved.Ref()).Select("id", "email").Build()
