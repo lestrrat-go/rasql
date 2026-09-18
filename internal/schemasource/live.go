@@ -17,6 +17,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/lestrrat-go/rasql/dialect"
 	"github.com/lestrrat-go/rasql/internal/catalogread"
+	"github.com/lestrrat-go/rasql/internal/dbnamespace"
 	"github.com/lestrrat-go/rasql/internal/engineprofile"
 	"github.com/lestrrat-go/rasql/migrate"
 	_ "modernc.org/sqlite"
@@ -170,15 +171,11 @@ func replaceKeywordDatabase(s, name string) string {
 	return s + " dbname=" + quoted
 }
 
+// engineID maps a dialect name to the engine it names. It defers to dbnamespace.EngineID, which
+// cli/rasqlmigrate's dump command needs the same mapping for, rather than repeating the switch a
+// second time in this package.
 func engineID(s string) engineprofile.EngineID {
-	switch strings.ToLower(s) {
-	case "postgresql", "postgres":
-		return engineprofile.PostgreSQL
-	case "mysql":
-		return engineprofile.MySQL
-	default:
-		return engineprofile.SQLite
-	}
+	return dbnamespace.EngineID(s)
 }
 
 type defaultCatalogs struct{}

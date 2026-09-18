@@ -17,6 +17,7 @@ import (
 
 	"github.com/lestrrat-go/rasql/catalog"
 	"github.com/lestrrat-go/rasql/dialect"
+	"github.com/lestrrat-go/rasql/internal/dbnamespace"
 	"github.com/lestrrat-go/rasql/internal/dsnredact"
 	"github.com/lestrrat-go/rasql/internal/migrationorder"
 	"github.com/lestrrat-go/rasql/migrate/diff"
@@ -130,11 +131,24 @@ type dumpOptions struct {
 }
 
 // dumpFilesFromDatabase reads database inside one read-only transaction,
-// applies the fidelity guards from CLAUDE.md design section 4, orders the
-// result per design section 5, and renders it into the files runDump would
-// preview or write. It is runDump's own implementation with the -dsn open
-// and the output step factored out, so both runDump and a live test share
-// one code path for the sweep, the guards, the ordering, and the rendering.
+// applies the fidelity guards from CLAUDE.md design section 4, asks the
+// server which namespace the connection is using and clears that one from
+// every table (see internal/dbnamespace.UnqualifyDefaultNamespace), orders
+// the result per design section 5, and renders it into the files runDump
+// would preview or write. It is runDump's own implementation with the -dsn
+// open and the output step factored out, so both runDump and a live test
+// share one code path for the sweep, the guards, the namespace clearing,
+// the ordering, and the rendering.
+//
+// The namespace is cleared after applyDumpGuards and before
+// orderTablesByDependency, deliberately: fetchSQLiteColumnFacts qualifies
+// its PRAGMA table_xinfo by a table's own Schema and falls back to "main"
+// when it is empty, so clearing the namespace any earlier would still
+// happen to work on a "main" connection, by luck rather than by design.
+// Clearing last keeps every guard's live read working on the namespace the
+// catalog actually reported, and orderTablesByDependency resolves an empty
+// ReferencedSchema to the referencing table's own Schema, so clearing both
+// together leaves dependency ordering intact.
 func dumpFilesFromDatabase(ctx context.Context, d dialect.Dialect, database *sql.DB, opts dumpOptions) ([]dumpFile, error) {
 	historyTable := opts.HistoryTable
 	if historyTable == "" {
@@ -172,6 +186,14 @@ func dumpFilesFromDatabase(ctx context.Context, d dialect.Dialect, database *sql
 	if err != nil {
 		return nil, err
 	}
+
+	namespace, err := runWithHardDeadline(ctx, func() (string, error) {
+		return dbnamespace.DefaultNamespace(ctx, transaction, dbnamespace.EngineID(d.Name()))
+	})
+	if err != nil {
+		return nil, fmt.Errorf("dump: read default namespace: %w", err)
+	}
+	tables = dbnamespace.UnqualifyDefaultNamespace(tables, namespace)
 
 	ordered, err := orderTablesByDependency(tables)
 	if err != nil {
