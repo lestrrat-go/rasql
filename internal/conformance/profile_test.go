@@ -594,14 +594,14 @@ func TestGeneratedProfile(t *testing.T) {
 		require.NoError(t, queryErr)
 		require.Equal(t, int64(4001), createdRow.ID)
 	} else {
-		outcome, execErr := rasql.ExecMutation(t.Context(), executor, createPlan)
+		outcome, execErr := rasql.Exec(t.Context(), executor, createPlan)
 		require.NoError(t, execErr)
 		require.Equal(t, int64(1), outcome.Affected)
 	}
 	patchSource := store.Members()
 	patchColumns, err := (store.MembersColumns{}).Bind(patchSource)
 	require.NoError(t, err)
-	patchPlan, err := store.Members().Patch().Name("patched").Where(rasql.EqualValue(patchColumns.ID.Expr(), int64(4001)))
+	patchPlan, err := store.Members().Patch().Name("patched").Where(rasql.EqualValue(patchColumns.ID.Expr(), int64(4001))).Plan()
 	require.NoError(t, err)
 	if %t {
 		patchProjection, projectionErr := store.MembersProjection(patchColumns)
@@ -612,7 +612,7 @@ func TestGeneratedProfile(t *testing.T) {
 		require.NoError(t, queryErr)
 		require.Equal(t, "patched", patchedRow.Name)
 	} else {
-		outcome, execErr := rasql.ExecMutation(t.Context(), executor, patchPlan)
+		outcome, execErr := rasql.Exec(t.Context(), executor, patchPlan)
 		require.NoError(t, execErr)
 		require.Equal(t, int64(1), outcome.Affected)
 	}

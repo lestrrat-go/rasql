@@ -59,11 +59,9 @@ func TestTypedMutationPlans(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, int64(1), created.ID)
 		require.Equal(t, "pending", created.Status)
-		patch, err := store.Users().Patch().Status("active").Where(queryEqualID(created.ID))
+		_, err = store.Users().Patch().Status("active").Where(queryEqualID(created.ID)).Exec(t.Context(), executor)
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), executor, patch)
-		require.NoError(t, err)
-		patch, err = store.Users().Patch().ClearNickname().Where(queryEqualID(created.ID))
+		patch, err := store.Users().Patch().ClearNickname().Where(queryEqualID(created.ID)).Plan()
 		require.NoError(t, err)
 		patchQuery, err := rasql.Returning(patch, projection)
 		require.NoError(t, err)
@@ -87,13 +85,13 @@ func TestTypedMutationPlans(t *testing.T) {
 		create, err := rasql.NewCreatePlan(table, rasql.SetField(id, int64(1)), rasql.SetField(celsius, int64(20)))
 		require.NoError(t, err)
 		mock.ExpectExec("INSERT INTO \"measurements\" (\"id\", \"celsius\") VALUES ($1, $2)").WithArgs(int64(1), int64(20)).WillReturnResult(sqlmock.NewResult(1, 1))
-		_, err = rasql.ExecMutation(t.Context(), executor, create)
+		_, err = rasql.Exec(t.Context(), executor, create)
 		require.NoError(t, err)
 
 		patch, err := rasql.NewPatchPlan(table, rasql.EqualExpr(id.Expr(), rasql.Value(int64(1))), rasql.SetField(celsius, int64(21)))
 		require.NoError(t, err)
 		mock.ExpectExec("UPDATE \"measurements\" SET \"celsius\" = $1 WHERE (\"measurements\".\"id\" = $2)").WithArgs(int64(21), int64(1)).WillReturnResult(sqlmock.NewResult(1, 1))
-		_, err = rasql.ExecMutation(t.Context(), executor, patch)
+		_, err = rasql.Exec(t.Context(), executor, patch)
 		require.NoError(t, err)
 
 		invalid, err := rasql.NewCreatePlan(table, rasql.SetField(fahrenheit, int64(68)))
@@ -210,7 +208,7 @@ func TestTypedMutationPlanValidation(t *testing.T) {
 
 		plan, err := rasql.NewCreatePlan(first, rasql.SetField(name, "x"), rasql.SetField(name, "y"))
 		require.Error(t, err)
-		_, terminalErr := rasql.ExecMutation(context.Background(), noCallExecutor{}, plan)
+		_, terminalErr := rasql.Exec(context.Background(), noCallExecutor{}, plan)
 		require.EqualError(t, terminalErr, err.Error(), "constructor errors remain sticky through terminals")
 
 		patchPlan, err := rasql.NewPatchPlan(first, validPredicate, rasql.SetField(name, "x"))
@@ -262,7 +260,7 @@ func TestTypedMutationPlanValidation(t *testing.T) {
 		for _, test := range createErrors {
 			t.Run("sticky create "+test.name, func(t *testing.T) {
 				require.Error(t, test.err)
-				_, got := rasql.ExecMutation(context.Background(), noCallExecutor{}, test.plan)
+				_, got := rasql.Exec(context.Background(), noCallExecutor{}, test.plan)
 				require.EqualError(t, got, test.err.Error())
 			})
 		}
@@ -421,7 +419,7 @@ func TestTypedWrite(t *testing.T) {
 		require.NoError(t, err)
 		fixture.mock.ExpectExec(`INSERT INTO "users" \("id", "email"\) VALUES \(\$1, \$2\)`).
 			WithArgs(int64(42), "ada@example.com").WillReturnResult(sqlmock.NewResult(1, 1))
-		outcome, err := rasql.ExecMutation(t.Context(), fixture.executor, plan)
+		outcome, err := rasql.Exec(t.Context(), fixture.executor, plan)
 		require.NoError(t, err)
 		require.Equal(t, int64(1), outcome.Affected)
 	})
@@ -432,7 +430,7 @@ func TestTypedWrite(t *testing.T) {
 		require.NoError(t, err)
 		fixture.mock.ExpectExec(`UPDATE "users" SET "email" = \$1 WHERE \("users"\."id" = \$2\)`).
 			WithArgs("grace@example.com", int64(42)).WillReturnResult(sqlmock.NewResult(1, 1))
-		outcome, err := rasql.ExecMutation(t.Context(), fixture.executor, plan)
+		outcome, err := rasql.Exec(t.Context(), fixture.executor, plan)
 		require.NoError(t, err)
 		require.Equal(t, int64(1), outcome.Affected)
 	})
@@ -511,7 +509,7 @@ func execPointerStatement(t *testing.T, executor rasql.Executor, statement query
 
 	plan, err := rasql.NewStatementPlan(statement)
 	require.NoError(t, err)
-	_, err = rasql.ExecMutation(t.Context(), executor, plan)
+	_, err = rasql.Exec(t.Context(), executor, plan)
 	require.NoError(t, err)
 }
 
@@ -666,7 +664,7 @@ func TestMutationPlanAcrossNamespace(t *testing.T) {
 		mock.ExpectExec(`INSERT INTO "tenant_a"\."tasks" \("id", "title", "version"\) VALUES \(\$1, \$2, \$3\)`).
 			WithArgs(int64(1), "write the doc", int64(1)).
 			WillReturnResult(sqlmock.NewResult(1, 1))
-		_, err = rasql.ExecMutation(t.Context(), executor, plan)
+		_, err = rasql.Exec(t.Context(), executor, plan)
 		require.NoError(t, err)
 	})
 
@@ -695,7 +693,7 @@ func TestMutationPlanAcrossNamespace(t *testing.T) {
 		mock.ExpectExec(`UPDATE "tenant_a"\."tasks" SET "title" = \$1 WHERE \("tenant_a"\."tasks"\."id" = \$2\)`).
 			WithArgs("renamed", int64(7)).
 			WillReturnResult(sqlmock.NewResult(1, 1))
-		_, err = rasql.ExecMutation(t.Context(), executor, plan)
+		_, err = rasql.Exec(t.Context(), executor, plan)
 		require.NoError(t, err)
 	})
 

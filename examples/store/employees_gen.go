@@ -3,6 +3,7 @@
 package store
 
 import (
+	"context"
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
@@ -214,6 +215,14 @@ func (v EmployeesCreate) Plan() (rasql.CreatePlan[EmployeesRow], error) {
 	return rasql.NewCreatePlan(v.table, v.fields...)
 }
 
+func (v EmployeesCreate) Exec(ctx context.Context, executor rasql.Executor) (rasql.MutationOutcome, error) {
+	plan, err := v.Plan()
+	if err != nil {
+		return rasql.MutationOutcome{}, err
+	}
+	return rasql.Exec(ctx, executor, plan)
+}
+
 func (t EmployeesTable) Create() EmployeesCreate {
 	return EmployeesCreate{table: t.employeesTableHandle}
 }
@@ -221,6 +230,7 @@ func (t EmployeesTable) Create() EmployeesCreate {
 type EmployeesPatch struct {
 	table  rasql.Table[EmployeesRow]
 	fields []rasql.MutationField[EmployeesRow]
+	where  rasql.Predicate
 }
 
 func (v EmployeesPatch) ID(value int64) EmployeesPatch {
@@ -239,12 +249,41 @@ func (v EmployeesPatch) ClearManagerID() EmployeesPatch {
 	v.fields = rasqlgenAppendMutationField(v.fields, rasql.ClearField(employeesMutationColumns.ManagerID))
 	return v
 }
-func (v EmployeesPatch) Where(value rasql.Predicate) (rasql.PatchPlan[EmployeesRow], error) {
-	return rasql.NewPatchPlan(v.table, value, v.fields...)
+func (v EmployeesPatch) Where(value rasql.Predicate) EmployeesPatch { v.where = value; return v }
+
+func (v EmployeesPatch) Plan() (rasql.PatchPlan[EmployeesRow], error) {
+	return rasql.NewPatchPlan(v.table, v.where, v.fields...)
+}
+
+func (v EmployeesPatch) Exec(ctx context.Context, executor rasql.Executor) (rasql.MutationOutcome, error) {
+	plan, err := v.Plan()
+	if err != nil {
+		return rasql.MutationOutcome{}, err
+	}
+	return rasql.Exec(ctx, executor, plan)
 }
 
 func (t EmployeesTable) Patch() EmployeesPatch { return EmployeesPatch{table: t.employeesTableHandle} }
 
-func (t EmployeesTable) Delete(where rasql.Predicate) (rasql.DeletePlan[EmployeesRow], error) {
-	return rasql.NewDeletePlan(t.employeesTableHandle, where)
+type EmployeesDelete struct {
+	table rasql.Table[EmployeesRow]
+	where rasql.Predicate
+}
+
+func (t EmployeesTable) Delete() EmployeesDelete {
+	return EmployeesDelete{table: t.employeesTableHandle}
+}
+
+func (v EmployeesDelete) Where(value rasql.Predicate) EmployeesDelete { v.where = value; return v }
+
+func (v EmployeesDelete) Plan() (rasql.DeletePlan[EmployeesRow], error) {
+	return rasql.NewDeletePlan(v.table, v.where)
+}
+
+func (v EmployeesDelete) Exec(ctx context.Context, executor rasql.Executor) (rasql.MutationOutcome, error) {
+	plan, err := v.Plan()
+	if err != nil {
+		return rasql.MutationOutcome{}, err
+	}
+	return rasql.Exec(ctx, executor, plan)
 }

@@ -3,6 +3,7 @@
 package store
 
 import (
+	"context"
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
@@ -207,11 +208,20 @@ func (v ProjectsCreate) Plan() (rasql.CreatePlan[ProjectsRow], error) {
 	return rasql.NewCreatePlan(v.table, v.fields...)
 }
 
+func (v ProjectsCreate) Exec(ctx context.Context, executor rasql.Executor) (rasql.MutationOutcome, error) {
+	plan, err := v.Plan()
+	if err != nil {
+		return rasql.MutationOutcome{}, err
+	}
+	return rasql.Exec(ctx, executor, plan)
+}
+
 func (t ProjectsTable) Create() ProjectsCreate { return ProjectsCreate{table: t.projectsTableHandle} }
 
 type ProjectsPatch struct {
 	table  rasql.Table[ProjectsRow]
 	fields []rasql.MutationField[ProjectsRow]
+	where  rasql.Predicate
 }
 
 func (v ProjectsPatch) ID(value int64) ProjectsPatch {
@@ -222,12 +232,39 @@ func (v ProjectsPatch) Name(value string) ProjectsPatch {
 	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(projectsMutationColumns.Name, value))
 	return v
 }
-func (v ProjectsPatch) Where(value rasql.Predicate) (rasql.PatchPlan[ProjectsRow], error) {
-	return rasql.NewPatchPlan(v.table, value, v.fields...)
+func (v ProjectsPatch) Where(value rasql.Predicate) ProjectsPatch { v.where = value; return v }
+
+func (v ProjectsPatch) Plan() (rasql.PatchPlan[ProjectsRow], error) {
+	return rasql.NewPatchPlan(v.table, v.where, v.fields...)
+}
+
+func (v ProjectsPatch) Exec(ctx context.Context, executor rasql.Executor) (rasql.MutationOutcome, error) {
+	plan, err := v.Plan()
+	if err != nil {
+		return rasql.MutationOutcome{}, err
+	}
+	return rasql.Exec(ctx, executor, plan)
 }
 
 func (t ProjectsTable) Patch() ProjectsPatch { return ProjectsPatch{table: t.projectsTableHandle} }
 
-func (t ProjectsTable) Delete(where rasql.Predicate) (rasql.DeletePlan[ProjectsRow], error) {
-	return rasql.NewDeletePlan(t.projectsTableHandle, where)
+type ProjectsDelete struct {
+	table rasql.Table[ProjectsRow]
+	where rasql.Predicate
+}
+
+func (t ProjectsTable) Delete() ProjectsDelete { return ProjectsDelete{table: t.projectsTableHandle} }
+
+func (v ProjectsDelete) Where(value rasql.Predicate) ProjectsDelete { v.where = value; return v }
+
+func (v ProjectsDelete) Plan() (rasql.DeletePlan[ProjectsRow], error) {
+	return rasql.NewDeletePlan(v.table, v.where)
+}
+
+func (v ProjectsDelete) Exec(ctx context.Context, executor rasql.Executor) (rasql.MutationOutcome, error) {
+	plan, err := v.Plan()
+	if err != nil {
+		return rasql.MutationOutcome{}, err
+	}
+	return rasql.Exec(ctx, executor, plan)
 }

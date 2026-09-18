@@ -73,12 +73,12 @@ func TestGeneratedViewRejectsEachMutationIndependently(t *testing.T) {
 			table: `_, _ = generated.Users().Create().Plan()`,
 		},
 		"update": {
-			view:  `_, _ = generated.ActiveUsers().Patch().Where(rasql.Predicate{})`,
-			table: `_, _ = generated.Users().Patch().Where(rasql.Predicate{})`,
+			view:  `_, _ = generated.ActiveUsers().Patch().Where(rasql.Predicate{}).Plan()`,
+			table: `_, _ = generated.Users().Patch().Where(rasql.Predicate{}).Plan()`,
 		},
 		"delete": {
-			view:  `_, _ = generated.ActiveUsers().Delete(rasql.Predicate{})`,
-			table: `_, _ = generated.Users().Delete(rasql.Predicate{})`,
+			view:  `_, _ = generated.ActiveUsers().Delete().Where(rasql.Predicate{}).Plan()`,
+			table: `_, _ = generated.Users().Delete().Where(rasql.Predicate{}).Plan()`,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
