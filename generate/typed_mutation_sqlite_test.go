@@ -73,14 +73,14 @@ func TestGeneratedMutationPlansRejectForbiddenCompileCallers(t *testing.T) {
 		want  string
 		table schema.TableDef
 	}{
-		{"wrong setter type", `generated.NewItemsCreate().Required(42)`, "cannot use", table},
-		{"wrong nullable setter type", `generated.NewItemsCreate().Label(42)`, "cannot use", table},
-		{"nonnull clear", `generated.NewItemsCreate().ClearRequired()`, "ClearRequired", table},
-		{"identity setter", `generated.NewItemsCreate().ID(1)`, "ID", table},
-		{"generated setter", `generated.NewItemsCreate().Computed("x")`, "Computed", table},
-		{"primary key patch setter", `generated.NewItemsPatch().ID(1)`, "ID", table},
-		{"stale renamed caller", `generated.NewItemsCreate().Name("x")`, "Name", table},
-		{"stale type caller", `generated.NewItemsCreate().Required("x")`, "cannot use", typeChanged},
+		{"wrong setter type", `generated.Items().Create().Required(42)`, "cannot use", table},
+		{"wrong nullable setter type", `generated.Items().Create().Label(42)`, "cannot use", table},
+		{"nonnull clear", `generated.Items().Create().ClearRequired()`, "ClearRequired", table},
+		{"identity setter", `generated.Items().Create().ID(1)`, "ID", table},
+		{"generated setter", `generated.Items().Create().Computed("x")`, "Computed", table},
+		{"primary key patch setter", `generated.Items().Patch().ID(1)`, "ID", table},
+		{"stale renamed caller", `generated.Items().Create().Name("x")`, "Name", table},
+		{"stale type caller", `generated.Items().Create().Required("x")`, "cannot use", typeChanged},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -112,7 +112,7 @@ func TestGeneratedMutationCallerBecomesStaleAfterColumnRename(t *testing.T) {
 	directory := t.TempDir()
 	require.NoError(t, scratchmod.Write(directory, repository, "example.com/renamedmutation"))
 	packageDir := filepath.Join(directory, "generated")
-	caller := "package renamedmutation_test\n\nimport (\n\t\"testing\"\n\t\"example.com/renamedmutation/generated\"\n)\n\nfunc TestOldCaller(t *testing.T) { _ = generated.NewItemsCreate().Required(\"old\") }\n"
+	caller := "package renamedmutation_test\n\nimport (\n\t\"testing\"\n\t\"example.com/renamedmutation/generated\"\n)\n\nfunc TestOldCaller(t *testing.T) { _ = generated.Items().Create().Required(\"old\") }\n"
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "caller_test.go"), []byte(caller), 0o600))
 	require.NoError(t, compactPackageStore(t, packageDir, oldTable).Write())
 	command := exec.CommandContext(t.Context(), "go", "test", "-mod=mod", "-run", "^$", "./...")
@@ -157,9 +157,7 @@ func TestGeneratedCreateAndPatchMatrix(t *testing.T) {
 	executor, err := rasql.Open(ctx, sqlDB, dialect.SQLite())
 	if err != nil { t.Fatal(err) }
 
-	source, err := generated.Items().Source("")
-	if err != nil { t.Fatal(err) }
-	columns, err := (generated.ItemsColumns{}).Bind(source)
+	columns, err := (generated.ItemsColumns{}).Bind(generated.Items().Table())
 	if err != nil { t.Fatal(err) }
 	projection, err := generated.ItemsProjection(columns)
 	if err != nil { t.Fatal(err) }
@@ -179,39 +177,39 @@ func TestGeneratedCreateAndPatchMatrix(t *testing.T) {
 	}
 
 	// Each row uses the generated builder, including identity and default behavior.
-	omittedPlan, err := generated.NewItemsCreate().Required("omitted").Plan()
+	omittedPlan, err := generated.Items().Create().Required("omitted").Plan()
 	if err != nil { t.Fatal(err) }
 	omitted := returning(omittedPlan)
 	if omitted.ID == 0 || omitted.Count != 7 || omitted.Enabled { t.Fatalf("omitted create = %#v", omitted) }
-	zeroPlan, err := generated.NewItemsCreate().Required("zero").Count(0).Enabled(false).Plan()
+	zeroPlan, err := generated.Items().Create().Required("zero").Count(0).Enabled(false).Plan()
 	if err != nil { t.Fatal(err) }
 	zero := returning(zeroPlan)
 	if zero.Count != 0 || zero.Enabled { t.Fatalf("zero create = %#v", zero) }
-	valuePlan, err := generated.NewItemsCreate().Required("value").Count(4).Enabled(true).Label("label").Note("note").Plan()
+	valuePlan, err := generated.Items().Create().Required("value").Count(4).Enabled(true).Label("label").Note("note").Plan()
 	if err != nil { t.Fatal(err) }
 	value := returning(valuePlan)
 	if !value.Enabled || value.Label.Value != "label" || !value.Label.Valid || !value.Note.Valid || value.Note.Value != "note" { t.Fatalf("value create = %#v", value) }
-	nullPlan, err := generated.NewItemsCreate().Required("null").ClearLabel().ClearNote().Plan()
+	nullPlan, err := generated.Items().Create().Required("null").ClearLabel().ClearNote().Plan()
 	if err != nil { t.Fatal(err) }
 	null := returning(nullPlan)
 	if null.Label.Valid || null.Note.Valid { t.Fatalf("null create = %#v", null) }
-	defaultsPlan, err := generated.NewItemsCreate().Required("defaults").DefaultCount().DefaultEnabled().Plan()
+	defaultsPlan, err := generated.Items().Create().Required("defaults").DefaultCount().DefaultEnabled().Plan()
 	if err != nil { t.Fatal(err) }
 	defaults := returning(defaultsPlan)
 	if defaults.Count != 7 || defaults.Enabled { t.Fatalf("default create = %#v", defaults) }
 
 	// Distinct patch calls preserve omission, false, zero, and NULL semantics.
-	patched := patchOn(generated.NewItemsPatch().Required("omission-patch"), omitted.ID)
+	patched := patchOn(generated.Items().Patch().Required("omission-patch"), omitted.ID)
 	if patched.Count != 7 || patched.Enabled { t.Fatalf("omission patch = %#v", patched) }
-	patched = patchOn(generated.NewItemsPatch().Enabled(false), value.ID)
+	patched = patchOn(generated.Items().Patch().Enabled(false), value.ID)
 	if patched.Enabled { t.Fatalf("false patch = %#v", patched) }
-	patched = patchOn(generated.NewItemsPatch().Count(0), zero.ID)
+	patched = patchOn(generated.Items().Patch().Count(0), zero.ID)
 	if patched.Count != 0 { t.Fatalf("zero patch = %#v", patched) }
-	patched = patchOn(generated.NewItemsPatch().ClearLabel().ClearNote(), value.ID)
+	patched = patchOn(generated.Items().Patch().ClearLabel().ClearNote(), value.ID)
 	if patched.Label.Valid || patched.Note.Valid { t.Fatalf("NULL patch = %#v", patched) }
 
 	// Derived builders leave their base unchanged, and duplicate setters remain sticky errors.
-	base := generated.NewItemsCreate().Required("base")
+	base := generated.Items().Create().Required("base")
 	left, right := base.Count(1), base.Count(2)
 	basePlan, err := base.Plan()
 	if err != nil { t.Fatal(err) }
@@ -225,9 +223,9 @@ func TestGeneratedCreateAndPatchMatrix(t *testing.T) {
 	if err != nil { t.Fatal(err) }
 	rightRow := returning(rightPlan)
 	if rightRow.Count != 2 { t.Fatalf("right variant: %#v", rightRow) }
-	if _, err := generated.NewItemsCreate().Required("duplicate").Required("again").Plan(); err == nil { t.Fatal("duplicate setter unexpectedly succeeded") }
+	if _, err := generated.Items().Create().Required("duplicate").Required("again").Plan(); err == nil { t.Fatal("duplicate setter unexpectedly succeeded") }
 
-	patchBase := generated.NewItemsPatch().Required("patch-base")
+	patchBase := generated.Items().Patch().Required("patch-base")
 	patchLeft, patchRight := patchBase.Count(1), patchBase.Count(2)
 	patchBaseRow := patchOn(patchBase, baseRow.ID)
 	if patchBaseRow.Count != 7 { t.Fatalf("patch base changed: %#v", patchBaseRow) }
@@ -236,7 +234,7 @@ func TestGeneratedCreateAndPatchMatrix(t *testing.T) {
 	patchRightRow := patchOn(patchRight, rightRow.ID)
 	if patchRightRow.Count != 2 { t.Fatalf("patch right variant: %#v", patchRightRow) }
 
-	missingPlan, err := generated.NewItemsPatch().Count(1).Where(rasql.EqualValue(columns.ID.Expr(), int64(-1)))
+	missingPlan, err := generated.Items().Patch().Count(1).Where(rasql.EqualValue(columns.ID.Expr(), int64(-1)))
 	if err != nil { t.Fatal(err) }
 	missingQuery, err := rasql.Returning(missingPlan, projection)
 	if err != nil { t.Fatal(err) }
