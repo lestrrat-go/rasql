@@ -40,7 +40,7 @@ func (c Compiler) EngineProfile() EngineProfile {
 	return EngineProfile{profile: c.compiler.EngineProfile()}
 }
 
-// Mutation renders plan into the SQL text and bound arguments ExecMutation
+// Mutation renders plan into the SQL text and bound arguments Exec
 // would send for it. Bound values are copied on the way out, so the statement
 // a caller inspects holds the same values a later render produces even if the
 // caller writes through what it was given.

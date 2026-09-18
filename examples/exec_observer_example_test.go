@@ -49,7 +49,7 @@ func Example_rasql_observer() {
 		fmt.Printf("failed to build insert: %s\n", err)
 		return
 	}
-	outcome, err := rasql.ExecMutation(ctx, executor, plan)
+	outcome, err := rasql.Exec(ctx, executor, plan)
 	if err != nil {
 		fmt.Printf("insert failed: %s\n", err)
 		return

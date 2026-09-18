@@ -82,7 +82,7 @@ func Example_schema_bind_row_type() {
 		fmt.Printf("failed to build create plan: %s\n", err)
 		return
 	}
-	if _, err := rasql.ExecMutation(ctx, db, createPlan); err != nil {
+	if _, err := rasql.Exec(ctx, db, createPlan); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}

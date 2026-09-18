@@ -22,7 +22,7 @@ func Example_typedCreate() {
 		fmt.Println(err)
 		return
 	}
-	_, err = rasql.ExecMutation(context.Background(), executor, plan)
+	_, err = rasql.Exec(context.Background(), executor, plan)
 	fmt.Println(err)
 	// Output: <nil>
 }

@@ -298,7 +298,7 @@ func TestSQLiteCorrelatedProjectionConstructorsDecode(t *testing.T) {
 	for _, user := range []apiQ7User{{ID: 1}, {ID: 2}} {
 		plan, err := rasql.NewCreatePlan(users, rasql.SetField(usersID, user.ID))
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), executor, plan)
+		_, err = rasql.Exec(t.Context(), executor, plan)
 		require.NoError(t, err)
 	}
 	for _, order := range []apiQ7Order{{ID: 1, UserID: 1, Amount: 1}, {ID: 2, UserID: 2, Amount: 2}} {
@@ -308,7 +308,7 @@ func TestSQLiteCorrelatedProjectionConstructorsDecode(t *testing.T) {
 			rasql.SetField(ordersAmount, order.Amount),
 		)
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), executor, plan)
+		_, err = rasql.Exec(t.Context(), executor, plan)
 		require.NoError(t, err)
 	}
 

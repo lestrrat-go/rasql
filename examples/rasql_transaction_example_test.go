@@ -59,7 +59,7 @@ func Example_rasql_transaction() {
 		fmt.Printf("failed to build insert: %s\n", err)
 		return
 	}
-	if _, err := rasql.ExecMutation(ctx, txExecutor, first); err != nil {
+	if _, err := rasql.Exec(ctx, txExecutor, first); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
@@ -69,7 +69,7 @@ func Example_rasql_transaction() {
 		fmt.Printf("failed to build insert: %s\n", err)
 		return
 	}
-	if _, err := rasql.ExecMutation(ctx, txExecutor, second); err != nil {
+	if _, err := rasql.Exec(ctx, txExecutor, second); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}

@@ -33,8 +33,8 @@ unsupported syntax and enforce actual bind limits before opening rows or executi
 
 ## Run queries and mutations
 
-Every `Query[R]` uses `Rows`, `All`, `One`, or `Maybe`. Every `MutationPlan` uses `ExecMutation`, or
-`ExecMutationBatch` for an ordered batch. Native SQL enters through `Native` or `NativeMutation` and states its engine
+Every `Query[R]` uses `Rows`, `All`, `One`, or `Maybe`. Every `MutationPlan` uses `Exec`, or
+`ExecBatch` for an ordered batch. Native SQL enters through `Native` or `NativeMutation` and states its engine
 identity explicitly.
 
 The executor applies codecs and reports `PlanError`, `BindError`, or `DecodeError` with structured paths. Each of
@@ -47,10 +47,10 @@ Use `rasql.Within` to execute a scope atomically:
 <!-- INCLUDE(sample/taskboard/internal/store/docs_examples_test.go#transaction_scope) -->
 ```go
 err := rasql.Within(ctx, executor, nil, func(ctx context.Context, scoped rasql.Executor) error {
-	if _, err := rasql.ExecMutation(ctx, scoped, first); err != nil {
+	if _, err := rasql.Exec(ctx, scoped, first); err != nil {
 		return err
 	}
-	_, err := rasql.ExecMutation(ctx, scoped, second)
+	_, err := rasql.Exec(ctx, scoped, second)
 	return err
 })
 ```

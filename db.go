@@ -90,7 +90,7 @@ func (db DB) beginSavepoint(ctx context.Context) (DB, ScopeFinalizer, error) {
 
 // BeginScope starts an owned transaction and returns the child DB as an
 // Executor, along with the finalizer that ends it. It satisfies ScopeBeginner,
-// so a DB itself can be handed to Within or ExecMutationBatch. The child
+// so a DB itself can be handed to Within or ExecBatch. The child
 // carries db's engine profile and compiler and a fresh busy token, so a
 // statement run concurrently on the child while another is still in flight is
 // rejected rather than racing the same *sql.Tx.

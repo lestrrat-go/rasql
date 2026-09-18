@@ -44,7 +44,7 @@ func Example_rasql_partial_update() {
 			fmt.Printf("failed to build insert: %s\n", err)
 			return
 		}
-		if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
+		if _, err := rasql.Exec(ctx, db, plan); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
@@ -68,7 +68,7 @@ func Example_rasql_partial_update() {
 		fmt.Printf("failed to adapt update: %s\n", err)
 		return
 	}
-	outcome, err := rasql.ExecMutation(ctx, db, plan)
+	outcome, err := rasql.Exec(ctx, db, plan)
 	if err != nil {
 		fmt.Printf("failed to run update: %s\n", err)
 		return

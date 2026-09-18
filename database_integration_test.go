@@ -127,13 +127,13 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 		rasql.SetField(recordID, first.ID), rasql.SetField(recordActive, first.Active),
 		rasql.SetField(recordEmail, first.Email), rasql.SetField(recordAmount, first.Amount))
 	require.NoError(t, err)
-	_, err = rasql.ExecMutation(t.Context(), db, firstCreate)
+	_, err = rasql.Exec(t.Context(), db, firstCreate)
 	require.NoError(t, err)
 	secondCreate, err := rasql.NewCreatePlan(records,
 		rasql.SetField(recordID, second.ID), rasql.SetField(recordActive, second.Active),
 		rasql.SetField(recordEmail, second.Email), rasql.SetField(recordAmount, second.Amount))
 	require.NoError(t, err)
-	_, err = rasql.ExecMutation(t.Context(), db, secondCreate)
+	_, err = rasql.Exec(t.Context(), db, secondCreate)
 	require.NoError(t, err)
 
 	first.Email = "ada.lovelace@example.com"
@@ -141,7 +141,7 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 		rasql.SetField(recordActive, first.Active), rasql.SetField(recordEmail, first.Email),
 		rasql.SetField(recordAmount, first.Amount))
 	require.NoError(t, err)
-	_, err = rasql.ExecMutation(t.Context(), db, firstPatch)
+	_, err = rasql.Exec(t.Context(), db, firstPatch)
 	require.NoError(t, err)
 
 	// PostgreSQL and MySQL both return an exact decimal in the scale its
@@ -461,12 +461,12 @@ func testQualifiedDDLPostgreSQL(t *testing.T) {
 	customerCreate, err := rasql.NewCreatePlan(customers,
 		rasql.SetField(customersID, int64(1)), rasql.SetField(customersNameColumn, "ada"))
 	require.NoError(t, err)
-	_, err = rasql.ExecMutation(t.Context(), db, customerCreate)
+	_, err = rasql.Exec(t.Context(), db, customerCreate)
 	require.NoError(t, err)
 	orderCreate, err := rasql.NewCreatePlan(orders,
 		rasql.SetField(ordersID, int64(1)), rasql.SetField(ordersCustomerID, int64(1)))
 	require.NoError(t, err)
-	_, err = rasql.ExecMutation(t.Context(), db, orderCreate)
+	_, err = rasql.Exec(t.Context(), db, orderCreate)
 	require.NoError(t, err)
 
 	orderSchema, err := rasql.NewResultSchema(
@@ -561,7 +561,7 @@ func testQualifiedDDLMySQL(t *testing.T) {
 		rasql.SetField(eventID, int64(1)), rasql.SetField(eventActorID, int64(7)),
 		rasql.SetField(eventAction, "created"))
 	require.NoError(t, err)
-	_, err = rasql.ExecMutation(t.Context(), db, eventCreate)
+	_, err = rasql.Exec(t.Context(), db, eventCreate)
 	require.NoError(t, err)
 
 	eventSchema, err := rasql.NewResultSchema(

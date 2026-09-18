@@ -61,7 +61,7 @@ func Example_rasql_scalar_function() {
 		fmt.Printf("failed to build insert: %s\n", err)
 		return
 	}
-	if _, err := rasql.ExecMutation(ctx, db, withNickname); err != nil {
+	if _, err := rasql.Exec(ctx, db, withNickname); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
@@ -70,7 +70,7 @@ func Example_rasql_scalar_function() {
 		fmt.Printf("failed to build insert: %s\n", err)
 		return
 	}
-	if _, err := rasql.ExecMutation(ctx, db, withoutNickname); err != nil {
+	if _, err := rasql.Exec(ctx, db, withoutNickname); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}

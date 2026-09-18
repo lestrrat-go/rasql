@@ -67,7 +67,7 @@ func Example_rasql_table_in_schema() {
 		fmt.Printf("failed to build insert: %s\n", err)
 		return
 	}
-	if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
+	if _, err := rasql.Exec(ctx, db, plan); err != nil {
 		fmt.Printf("failed to insert into the tenant table: %s\n", err)
 		return
 	}

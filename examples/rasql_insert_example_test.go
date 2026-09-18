@@ -44,7 +44,7 @@ func Example_rasql_insert() {
 		fmt.Printf("failed to build insert: %s\n", err)
 		return
 	}
-	outcome, err := rasql.ExecMutation(ctx, db, plan)
+	outcome, err := rasql.Exec(ctx, db, plan)
 	if err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return

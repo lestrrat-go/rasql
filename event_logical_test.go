@@ -126,7 +126,7 @@ func TestLogicalInvocation(t *testing.T) {
 		executor := logicalExecutor(t)
 		_, plan := logicalMutationPlan(t)
 		err := rasql.Within(t.Context(), executor, nil, func(ctx context.Context, child rasql.Executor) error {
-			_, batchErr := rasql.ExecMutationBatch(ctx, child,
+			_, batchErr := rasql.ExecBatch(ctx, child,
 				[]rasql.MutationPlan{plan(1), plan(2)}, rasql.BulkOptions{})
 			return batchErr
 		})
@@ -172,7 +172,7 @@ func TestLogicalInvocation(t *testing.T) {
 		executor := logicalExecutor(t, observer)
 		_, plan := logicalMutationPlan(t)
 		err := rasql.Within(t.Context(), executor, nil, func(ctx context.Context, child rasql.Executor) error {
-			_, batchErr := rasql.ExecMutationBatch(ctx, child,
+			_, batchErr := rasql.ExecBatch(ctx, child,
 				[]rasql.MutationPlan{plan(1)}, rasql.BulkOptions{})
 			return batchErr
 		})
@@ -200,7 +200,7 @@ func TestLogicalInvocation(t *testing.T) {
 			if _, execErr := child.Exec(ctx, stmt.New("SELECT 1")); execErr != nil {
 				return execErr
 			}
-			if _, batchErr := rasql.ExecMutationBatch(ctx, child,
+			if _, batchErr := rasql.ExecBatch(ctx, child,
 				[]rasql.MutationPlan{plan(1), plan(2)}, rasql.BulkOptions{MaxRows: 1}); batchErr != nil {
 				return batchErr
 			}

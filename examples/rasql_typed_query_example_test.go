@@ -48,7 +48,7 @@ func Example_rasql_typed_query() {
 			fmt.Printf("failed to build insert: %s\n", err)
 			return
 		}
-		if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
+		if _, err := rasql.Exec(ctx, db, plan); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}

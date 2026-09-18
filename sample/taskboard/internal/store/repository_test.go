@@ -44,7 +44,7 @@ func seed(ctx context.Context, t *testing.T, repository store.Repository, execut
 	if err != nil {
 		t.Fatalf("plan member: %s", err)
 	}
-	if _, err := rasql.ExecMutation(ctx, executor, memberPlan); err != nil {
+	if _, err := rasql.Exec(ctx, executor, memberPlan); err != nil {
 		t.Fatalf("create member: %s", err)
 	}
 	members, err := repository.AllMembers(ctx)
@@ -55,7 +55,7 @@ func seed(ctx context.Context, t *testing.T, repository store.Repository, execut
 	if err != nil {
 		t.Fatalf("plan project: %s", err)
 	}
-	if _, err := rasql.ExecMutation(ctx, executor, projectPlan); err != nil {
+	if _, err := rasql.Exec(ctx, executor, projectPlan); err != nil {
 		t.Fatalf("create project: %s", err)
 	}
 	projects, err := repository.AllProjects(ctx)
@@ -76,7 +76,7 @@ func addTaskDueOn(ctx context.Context, t *testing.T, executor rasql.Executor, pr
 	if err != nil {
 		t.Fatalf("plan task %q: %s", title, err)
 	}
-	if _, err := rasql.ExecMutation(ctx, executor, plan); err != nil {
+	if _, err := rasql.Exec(ctx, executor, plan); err != nil {
 		t.Fatalf("insert task %q: %s", title, err)
 	}
 }
@@ -156,7 +156,7 @@ func TestAddTaskAndCloseTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("plan explicitly closed task: %s", err)
 	}
-	if _, err := rasql.ExecMutation(ctx, executor, closedPlan); err != nil {
+	if _, err := rasql.Exec(ctx, executor, closedPlan); err != nil {
 		t.Fatalf("insert explicitly closed task: %s", err)
 	}
 	closedRow := readTaskByTitle(ctx, t, executor, "Explicitly closed")
