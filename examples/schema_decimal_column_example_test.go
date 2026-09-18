@@ -30,8 +30,8 @@ type InvoicesTable struct {
 	rasql.Table[InvoiceRow]
 }
 
-func (t InvoicesTable) ID() query.ColumnRef     { return t.Column("id") }
-func (t InvoicesTable) Amount() query.ColumnRef { return t.Column("amount") }
+func (t InvoicesTable) ID() query.ColumnRef     { return t.Ref().Column("id") }
+func (t InvoicesTable) Amount() query.ColumnRef { return t.Ref().Column("amount") }
 
 // invoiceDecoder decodes an InvoiceRow from its two columns, in projection order.
 type invoiceDecoder struct{ result rasql.ResultSchema }

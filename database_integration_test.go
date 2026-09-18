@@ -177,10 +177,10 @@ func testDatabaseIntegration(t *testing.T, database *sql.DB, d dialect.Dialect, 
 	// change had to fit without a capability gap. The row it reads back comes
 	// from the server, so it carries the padded amount for the same reason the
 	// two expectations above do -- expect firstStored, never first.
-	recordIDRef := records.Column("id")
-	recordActiveRef := records.Column("active")
-	recordEmailRef := records.Column("email")
-	recordAmountRef := records.Column("amount")
+	recordIDRef := records.Ref().Column("id")
+	recordActiveRef := records.Ref().Column("active")
+	recordEmailRef := records.Ref().Column("email")
+	recordAmountRef := records.Ref().Column("amount")
 	activeIDs, err := query.NewSelect(records.Ref(), recordIDRef)
 	require.NoError(t, err)
 	activeIDs, err = activeIDs.WithWhere(query.Equal(recordActiveRef, query.Bind(true)))

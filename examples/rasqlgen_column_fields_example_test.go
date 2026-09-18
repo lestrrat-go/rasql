@@ -21,7 +21,7 @@ import (
 // a column turns the field references into build failures, instead of leaving
 // queries that assemble happily and fail when they run.
 //
-// `Table.Column(name)` names a column by string, and costs a check the
+// `Table.Ref().Column(name)` names a column by string, and costs a check the
 // compiler would otherwise have made. Two cases need it:
 //
 //   - The name arrives as data rather than as source code. A table read out of
@@ -31,8 +31,8 @@ import (
 //     `ColumnRef.Validate`.
 //   - The statement is built with the `query` package, which takes a
 //     `query.ColumnRef` and knows nothing about Go row types. The generated
-//     columns struct binds a `rasql.Column` instead, so `Column` is the only
-//     way across.
+//     columns struct binds a `rasql.Column` instead, so `Ref().Column` is the
+//     only way across.
 //
 // Reaching for the string where the generated field would do gives up the
 // compile-time check and gains nothing, which is why the rest of the
@@ -44,17 +44,17 @@ func Example_rasqlgen_column_fields() {
 	// The cost is visible: the correct name and the typo are the same kind of
 	// value, and nothing separates them at this point.
 	// BEGIN(string_column)
-	correct, err := query.NewSelect(users.Ref(), users.Column("id"))
+	correct, err := query.NewSelect(users.Ref(), users.Ref().Column("id"))
 	if err != nil {
 		fmt.Printf("failed to create the correct select: %s\n", err)
 		return
 	}
-	correct, err = correct.WithWhere(query.Equal(users.Column("id"), query.Bind(42)))
+	correct, err = correct.WithWhere(query.Equal(users.Ref().Column("id"), query.Bind(42)))
 	if err != nil {
 		fmt.Printf("failed to add the correct predicate: %s\n", err)
 		return
 	}
-	typo := users.Column("emial")
+	typo := users.Ref().Column("emial")
 	// END(string_column)
 
 	// The correct statement renders successfully, while the invalid runtime
@@ -93,7 +93,7 @@ func Example_rasqlgen_column_fields() {
 	}
 	fmt.Println(built.SQL())
 
-	// Column is the escape hatch, shown here with a name a caller would have
+	// Ref().Column is the escape hatch, shown here with a name a caller would have
 	// received as data. It is worth reaching for only when the name is not
 	// known as the code is written; a hard-coded "emial" like this one is a
 	// bug that columns.Email would never have compiled. Validate reports the

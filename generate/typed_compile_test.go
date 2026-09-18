@@ -48,15 +48,15 @@ func usersQuery() rasql.Query[store.UsersRow] {
 // rasql.Column values instead, and the query package's typed predicates take
 // query.TypedColumn, so these fixtures name the two columns they exercise.
 func usersTypedID() query.TypedColumn[store.UsersRow, int64] {
-	return query.TypedColumnOf[store.UsersRow, int64](store.Users().Column("id"))
+	return query.TypedColumnOf[store.UsersRow, int64](store.Users().Ref().Column("id"))
 }
 
 func usersTypedNickname() query.NullableColumn[store.UsersRow, *string] {
-	return query.NullableColumnOf[store.UsersRow, *string](store.Users().Column("nickname"))
+	return query.NullableColumnOf[store.UsersRow, *string](store.Users().Ref().Column("nickname"))
 }
 
 func usersTypedEmail() query.TypedColumn[store.UsersRow, string] {
-	return query.TypedColumnOf[store.UsersRow, string](store.Users().Column("email"))
+	return query.TypedColumnOf[store.UsersRow, string](store.Users().Ref().Column("email"))
 }
 `
 
@@ -125,7 +125,7 @@ func compile() {
     _ = query.AssignValue(id, int64(3))
     _ = query.AssignNullableValue(email, (*string)(nil))
     other, _ := users.As("other")
-    otherID := query.TypedColumnOf[store.UsersRow, int64](other.Column("id"))
+    otherID := query.TypedColumnOf[store.UsersRow, int64](other.Ref().Column("id"))
     _ = query.TypedInnerJoin(other.Ref(), query.EqualColumns(id, otherID))
     _ = query.TypedLeftJoin(other.Ref(), query.EqualColumns(id, otherID))
 

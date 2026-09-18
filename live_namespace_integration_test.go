@@ -101,8 +101,8 @@ func requireMovedTableReachesNamespace(t *testing.T, database *sql.DB, d dialect
 	require.NoError(t, rasql.CreateTable(ctx, db, home), "create the table where the connection already is")
 	require.NoError(t, rasql.CreateTable(ctx, db, moved), "create the same table in the second namespace")
 
-	id := query.TypedColumnOf[tenantRow, int64](moved.Column("id"))
-	email := query.TypedColumnOf[tenantRow, string](moved.Column("email"))
+	id := query.TypedColumnOf[tenantRow, int64](moved.Ref().Column("id"))
+	email := query.TypedColumnOf[tenantRow, string](moved.Ref().Column("email"))
 	plan, err := rasql.NewCreatePlan(moved, rasql.SetField(id, int64(1)), rasql.SetField(email, "ada@example.com"))
 	require.NoError(t, err, "build a create plan over the moved table")
 	_, err = rasql.ExecMutation(ctx, db, plan)

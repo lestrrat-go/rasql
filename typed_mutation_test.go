@@ -175,9 +175,9 @@ func mutationValidationTables() (rasql.Table[mutationValidationRow], rasql.Table
 func TestTypedMutationPlanValidation(t *testing.T) {
 	t.Run("validation errors and sticky terminals", func(t *testing.T) {
 		first, second := mutationValidationTables()
-		id := query.TypedColumnOf[mutationValidationRow, int64](first.Column("id"))
-		name := query.TypedColumnOf[mutationValidationRow, string](first.Column("name"))
-		otherID := query.TypedColumnOf[mutationValidationRow, int64](second.Column("id"))
+		id := query.TypedColumnOf[mutationValidationRow, int64](first.Ref().Column("id"))
+		name := query.TypedColumnOf[mutationValidationRow, string](first.Ref().Column("name"))
+		otherID := query.TypedColumnOf[mutationValidationRow, int64](second.Ref().Column("id"))
 
 		var zeroField rasql.MutationField[mutationValidationRow]
 		var nilTable rasql.Table[mutationValidationRow]
@@ -319,8 +319,8 @@ func TestTypedMutationPlanValidation(t *testing.T) {
 	// the refusal happens at compile time, never at the database.
 	t.Run("RETURNING is preflighted before the database is touched", func(t *testing.T) {
 		first, _ := mutationValidationTables()
-		name := query.TypedColumnOf[mutationValidationRow, string](first.Column("name"))
-		id := query.TypedColumnOf[mutationValidationRow, int64](first.Column("id"))
+		name := query.TypedColumnOf[mutationValidationRow, string](first.Ref().Column("name"))
+		id := query.TypedColumnOf[mutationValidationRow, int64](first.Ref().Column("id"))
 		plan, err := rasql.NewCreatePlan(first, rasql.SetField(name, "x"))
 		require.NoError(t, err)
 		executor, err := rasql.Open(t.Context(), noCallHandle{}, dialect.MySQL(), rasql.WithProfile(rasql.MySQL84()))
@@ -819,7 +819,7 @@ func TestMutationPlanAcrossNamespace(t *testing.T) {
 
 	t.Run("NULL into a non-nullable column is rejected", func(t *testing.T) {
 		home := tasks(t)
-		nullableTitle := query.NullableColumnOf[tasksRow, string](home.Column("title"))
+		nullableTitle := query.NullableColumnOf[tasksRow, string](home.Ref().Column("title"))
 
 		_, err := rasql.NewCreatePlan(home, rasql.ClearField(nullableTitle))
 		require.ErrorContains(t, err, "does not accept NULL")

@@ -453,17 +453,17 @@ two lines are indistinguishable until then:
 
 <!-- INCLUDE(examples/rasqlgen_column_fields_example_test.go#string_column) -->
 ```go
-correct, err := query.NewSelect(users.Ref(), users.Column("id"))
+correct, err := query.NewSelect(users.Ref(), users.Ref().Column("id"))
 if err != nil {
 	fmt.Printf("failed to create the correct select: %s\n", err)
 	return
 }
-correct, err = correct.WithWhere(query.Equal(users.Column("id"), query.Bind(42)))
+correct, err = correct.WithWhere(query.Equal(users.Ref().Column("id"), query.Bind(42)))
 if err != nil {
 	fmt.Printf("failed to add the correct predicate: %s\n", err)
 	return
 }
-typo := users.Column("emial")
+typo := users.Ref().Column("emial")
 ```
 source: [examples/rasqlgen_column_fields_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasqlgen_column_fields_example_test.go)
 <!-- END INCLUDE -->

@@ -105,11 +105,11 @@ func CompactObjectSource(packageName string, object CompactObject) ([]byte, erro
 	b.WriteString(definitionName)
 	b.WriteString(")\n\n")
 	// handleName is the wrapper's embedded field: an unexported alias for
-	// rasql.Table[row], so the wrapper's own As, Column and CatalogObject
-	// methods stay promoted from it while the field itself stays out of the
-	// package's exported surface. An alias field keeps the exact type rasql.
-	// Table[row] is, so promotion reaches the same unexported methods
-	// (Relation, RowSource) a directly embedded rasql.Table[row] would give.
+	// rasql.Table[row], so the wrapper's own Ref, As and CatalogObject methods
+	// stay promoted from it while the field itself stays out of the package's
+	// exported surface. An alias field keeps the exact type rasql.Table[row]
+	// is, so promotion reaches the same unexported methods (Relation,
+	// RowSource) a directly embedded rasql.Table[row] would give.
 	handleName := compactLowerFirst(accessor) + "TableHandle"
 	b.WriteString("type ")
 	b.WriteString(handleName)

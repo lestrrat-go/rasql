@@ -45,13 +45,13 @@ func mutationFixture(t *testing.T) (rasql.Executor, rasql.Table[mutationRow], qu
 	require.NoError(t, err)
 	executor, err := rasql.Open(t.Context(), database, dialect.SQLite())
 	require.NoError(t, err)
-	return executor, table, query.TypedColumnOf[mutationRow, int64](table.Column("id"))
+	return executor, table, query.TypedColumnOf[mutationRow, int64](table.Ref().Column("id"))
 }
 
 func TestMutation(t *testing.T) {
 	t.Run("an optimistic version", func(t *testing.T) {
 		executor, table, id := mutationFixture(t)
-		value := query.TypedColumnOf[mutationRow, string](table.Column("value"))
+		value := query.TypedColumnOf[mutationRow, string](table.Ref().Column("value"))
 		relation := table
 		version, err := rasql.BindColumn[mutationRow, int64](relation, "version", "")
 		require.NoError(t, err)
@@ -73,7 +73,7 @@ func TestMutation(t *testing.T) {
 
 	t.Run("RETURNING and outcomes", func(t *testing.T) {
 		executor, table, id := mutationFixture(t)
-		value := query.TypedColumnOf[mutationRow, string](table.Column("value"))
+		value := query.TypedColumnOf[mutationRow, string](table.Ref().Column("value"))
 		create, err := rasql.NewCreatePlan(table, rasql.SetField(id, int64(7)), rasql.SetField(value, "before"))
 		require.NoError(t, err)
 		outcome, err := rasql.ExecMutation(t.Context(), executor, create)
@@ -171,8 +171,8 @@ func TestMutation(t *testing.T) {
 		require.NoError(t, err)
 		table, err := rasql.TableOf[mutationRow](schema.TableDef{Name: "items", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "value", Type: schema.TextType{}}}})
 		require.NoError(t, err)
-		id := query.TypedColumnOf[mutationRow, int64](table.Column("id"))
-		value := query.TypedColumnOf[mutationRow, string](table.Column("value"))
+		id := query.TypedColumnOf[mutationRow, int64](table.Ref().Column("id"))
+		value := query.TypedColumnOf[mutationRow, string](table.Ref().Column("value"))
 		plan, err := rasql.NewCreatePlan(table, rasql.SetField(id, int64(1)), rasql.SetField(value, "pending"))
 		require.NoError(t, err)
 		outcome, err := rasql.ExecMutation(t.Context(), executor, plan)
@@ -218,7 +218,7 @@ func TestMutationParameterUnsupported(t *testing.T) {
 	executor, table, idTyped := mutationFixture(t)
 	id, err := rasql.BindTypedColumn[mutationRow, int64](idTyped)
 	require.NoError(t, err)
-	value := query.TypedColumnOf[mutationRow, string](table.Column("value"))
+	value := query.TypedColumnOf[mutationRow, string](table.Ref().Column("value"))
 	param := rasql.NewParameter[int64]()
 	patch, err := rasql.NewPatchPlan(table, rasql.EqualExpr(id.Expr(), param.Expr()), rasql.SetField(value, "after"))
 	require.NoError(t, err)
@@ -232,7 +232,7 @@ func TestMutationParameterUnsupported(t *testing.T) {
 func TestMutationBatch(t *testing.T) {
 	t.Run("groups compatible creates", func(t *testing.T) {
 		executor, table, id := mutationFixture(t)
-		value := query.TypedColumnOf[mutationRow, string](table.Column("value"))
+		value := query.TypedColumnOf[mutationRow, string](table.Ref().Column("value"))
 		plans := make([]rasql.MutationPlan, 0, 6)
 		for i := int64(1); i <= 6; i++ {
 			plan, err := rasql.NewCreatePlan(table, rasql.SetField(id, i), rasql.SetField(value, "v"))
@@ -246,7 +246,7 @@ func TestMutationBatch(t *testing.T) {
 
 	t.Run("emits a logical invocation", func(t *testing.T) {
 		executor, table, id := mutationFixture(t)
-		value := query.TypedColumnOf[mutationRow, string](table.Column("value"))
+		value := query.TypedColumnOf[mutationRow, string](table.Ref().Column("value"))
 		plans := make([]rasql.MutationPlan, 0, 6)
 		for i := int64(1); i <= 6; i++ {
 			plan, err := rasql.NewCreatePlan(table, rasql.SetField(id, i), rasql.SetField(value, "event"))
@@ -286,7 +286,7 @@ func TestMutationBatch(t *testing.T) {
 
 	t.Run("reports a rejected batch and unattempted inputs", func(t *testing.T) {
 		executor, table, id := mutationFixture(t)
-		value := query.TypedColumnOf[mutationRow, string](table.Column("value"))
+		value := query.TypedColumnOf[mutationRow, string](table.Ref().Column("value"))
 		plans := make([]rasql.MutationPlan, 0, 6)
 		for i := int64(1); i <= 6; i++ {
 			key := i
@@ -308,7 +308,7 @@ func TestMutationBatch(t *testing.T) {
 
 	t.Run("cancellation before execution", func(t *testing.T) {
 		executor, table, id := mutationFixture(t)
-		value := query.TypedColumnOf[mutationRow, string](table.Column("value"))
+		value := query.TypedColumnOf[mutationRow, string](table.Ref().Column("value"))
 		plan, err := rasql.NewCreatePlan(table, rasql.SetField(id, int64(1)), rasql.SetField(value, "v"))
 		require.NoError(t, err)
 		ctx, cancel := context.WithCancel(t.Context())
@@ -320,7 +320,7 @@ func TestMutationBatch(t *testing.T) {
 
 	t.Run("atomic rollback states", func(t *testing.T) {
 		executor, table, id := mutationFixture(t)
-		value := query.TypedColumnOf[mutationRow, string](table.Column("value"))
+		value := query.TypedColumnOf[mutationRow, string](table.Ref().Column("value"))
 		first, err := rasql.NewCreatePlan(table, rasql.SetField(id, int64(1)), rasql.SetField(value, "one"))
 		require.NoError(t, err)
 		second, err := rasql.NewCreatePlan(table, rasql.SetField(id, int64(1)), rasql.SetField(value, "duplicate"))
@@ -348,7 +348,7 @@ func TestMutationBatch(t *testing.T) {
 
 	t.Run("a caller limit cuts a run on its last fitting row", func(t *testing.T) {
 		executor, table, id := mutationFixture(t)
-		value := query.TypedColumnOf[mutationRow, string](table.Column("value"))
+		value := query.TypedColumnOf[mutationRow, string](table.Ref().Column("value"))
 		// Two bound arguments per row against a limit of five puts two rows in
 		// each statement. The fourth input repeats the first key, so the batch
 		// that fails names the rows the second statement carries.
@@ -432,12 +432,12 @@ func newMutationAcceptanceFixture(t *testing.T) mutationAcceptanceFixture {
 		},
 	})
 	return mutationAcceptanceFixture{database: database, executor: executor, table: table,
-		id:       query.TypedColumnOf[mutationAcceptanceItem, int64](table.Column("id")),
-		required: query.TypedColumnOf[mutationAcceptanceItem, string](table.Column("required_text")),
-		zero:     query.TypedColumnOf[mutationAcceptanceItem, int64](table.Column("zero_number")),
-		nullable: query.NullableColumnOf[mutationAcceptanceItem, string](table.Column("nullable_text")),
-		defaults: query.TypedColumnOf[mutationAcceptanceItem, string](table.Column("default_text")),
-		version:  query.TypedColumnOf[mutationAcceptanceItem, int64](table.Column("version"))}
+		id:       query.TypedColumnOf[mutationAcceptanceItem, int64](table.Ref().Column("id")),
+		required: query.TypedColumnOf[mutationAcceptanceItem, string](table.Ref().Column("required_text")),
+		zero:     query.TypedColumnOf[mutationAcceptanceItem, int64](table.Ref().Column("zero_number")),
+		nullable: query.NullableColumnOf[mutationAcceptanceItem, string](table.Ref().Column("nullable_text")),
+		defaults: query.TypedColumnOf[mutationAcceptanceItem, string](table.Ref().Column("default_text")),
+		version:  query.TypedColumnOf[mutationAcceptanceItem, int64](table.Ref().Column("version"))}
 }
 
 func mutationAcceptanceProjection(t *testing.T, table rasql.Table[mutationAcceptanceItem]) rasql.Projection[mutationAcceptanceItem] {
@@ -558,7 +558,7 @@ func TestMutationAtomic(t *testing.T) {
 }
 
 func queryTypedMutationValue(table rasql.Table[mutationRow]) query.TypedColumn[mutationRow, string] {
-	return query.TypedColumnOf[mutationRow, string](table.Column("value"))
+	return query.TypedColumnOf[mutationRow, string](table.Ref().Column("value"))
 }
 
 type mutationCodec struct{ enc *int }
@@ -607,7 +607,7 @@ func TestMutationCodec(t *testing.T) {
 		require.NoError(t, database.QueryRowContext(t.Context(), "SELECT value FROM codec_items WHERE id = 1").Scan(&stored))
 		require.Equal(t, "encoded:one", stored)
 
-		patch, err := rasql.NewPatchPlan(table, query.EqualValue(query.TypedColumnOf[mutationCodecRow, int64](table.Column("id")), int64(1)), rasql.SetField(value, "two"), rasql.ClearField(nullable))
+		patch, err := rasql.NewPatchPlan(table, query.EqualValue(query.TypedColumnOf[mutationCodecRow, int64](table.Ref().Column("id")), int64(1)), rasql.SetField(value, "two"), rasql.ClearField(nullable))
 		require.NoError(t, err)
 		_, err = rasql.ExecMutation(t.Context(), executor, patch)
 		require.NoError(t, err)
@@ -720,7 +720,7 @@ func TestMutationVersioned(t *testing.T) {
 
 	t.Run("a patch canonicalizes an aliased version column", func(t *testing.T) {
 		executor, table, id := mutationFixture(t)
-		value := query.TypedColumnOf[mutationRow, string](table.Column("value"))
+		value := query.TypedColumnOf[mutationRow, string](table.Ref().Column("value"))
 		relation, err := table.As("vsrc")
 		require.NoError(t, err)
 		version, err := rasql.BindColumn[mutationRow, int64](relation, "version", "")
@@ -742,7 +742,7 @@ func TestMutationVersioned(t *testing.T) {
 func newVersionedReturningAcceptance(t *testing.T, rows int) (rasql.Executor, rasql.Query[mutationRow]) {
 	t.Helper()
 	executor, table, id := mutationFixture(t)
-	value := query.TypedColumnOf[mutationRow, string](table.Column("value"))
+	value := query.TypedColumnOf[mutationRow, string](table.Ref().Column("value"))
 	relation := table
 	version, err := rasql.BindColumn[mutationRow, int64](relation, "version", "")
 	require.NoError(t, err)

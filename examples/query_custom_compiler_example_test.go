@@ -65,7 +65,7 @@ func Example_customCompiler() {
 	// containsExample holds a query.Expression, and Column is the generated
 	// table's only way to produce a query.ColumnRef: the generated columns
 	// struct binds a rasql.Column, which the query package does not take.
-	statement, err := query.NewSelect(users.Ref(), query.Project(containsExample{column: users.Column("email"), value: "@example.com"}))
+	statement, err := query.NewSelect(users.Ref(), query.Project(containsExample{column: users.Ref().Column("email"), value: "@example.com"}))
 	if err != nil {
 		fmt.Println(err)
 		return

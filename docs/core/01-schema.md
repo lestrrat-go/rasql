@@ -260,8 +260,8 @@ type EventsTable struct {
 	rasql.Table[EventRow]
 }
 
-func (t EventsTable) ID() query.ColumnRef     { return t.Column("id") }
-func (t EventsTable) Action() query.ColumnRef { return t.Column("action") }
+func (t EventsTable) ID() query.ColumnRef     { return t.Ref().Column("id") }
+func (t EventsTable) Action() query.ColumnRef { return t.Ref().Column("action") }
 
 // eventDecoder decodes an EventRow from its two columns, in projection order.
 type eventDecoder struct{ result rasql.ResultSchema }
@@ -472,8 +472,8 @@ type InvoicesTable struct {
 	rasql.Table[InvoiceRow]
 }
 
-func (t InvoicesTable) ID() query.ColumnRef     { return t.Column("id") }
-func (t InvoicesTable) Amount() query.ColumnRef { return t.Column("amount") }
+func (t InvoicesTable) ID() query.ColumnRef     { return t.Ref().Column("id") }
+func (t InvoicesTable) Amount() query.ColumnRef { return t.Ref().Column("amount") }
 
 // invoiceDecoder decodes an InvoiceRow from its two columns, in projection order.
 type invoiceDecoder struct{ result rasql.ResultSchema }
@@ -761,9 +761,8 @@ That is the shape a hand-written table should have.
 [`rasqlgen`](../orm/01-codegen.md) buys the same compiler check a different way: it emits a columns struct whose `Bind` returns one `rasql.Column` field per column, and [What the bound columns catch](../orm/02-generated-store.md#what-the-bound-columns-catch) shows the mistakes those fields turn into build failures.
 
 Call a generated accessor's `Ref()` when your code needs the dynamic `query.ColumnRef` that the lower-level query package accepts, such as a projection or a dynamic predicate.
-Two methods take a column name your code only learns while it runs.
-`users.Column(name)` returns a `query.ColumnRef` for that name, and `ColumnRef.Validate` checks the name at the lookup rather than waiting for the statement that carries it.
 `users.Ref()` returns the underlying `query.TableRef` that [The SQL builder](02-sql-builder.md) works in terms of.
+For a column name your code only learns while it runs, `users.Ref().Column(name)` returns a `query.ColumnRef` for that name, and `ColumnRef.Validate` reports an unknown name at the lookup rather than waiting for the statement that carries it.
 
 ## Read a table out of a database
 

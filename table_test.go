@@ -24,9 +24,9 @@ type staffTable struct {
 	rasql.Table[staffRow]
 }
 
-func (t staffTable) ID() query.ColumnRef        { return t.Column("id") }
-func (t staffTable) ManagerID() query.ColumnRef { return t.Column("manager_id") }
-func (t staffTable) Email() query.ColumnRef     { return t.Column("email") }
+func (t staffTable) ID() query.ColumnRef        { return t.Ref().Column("id") }
+func (t staffTable) ManagerID() query.ColumnRef { return t.Ref().Column("manager_id") }
+func (t staffTable) Email() query.ColumnRef     { return t.Ref().Column("email") }
 
 func (t staffTable) As(alias string) (staffTable, error) {
 	aliased, err := t.Table.As(alias)
@@ -108,11 +108,11 @@ func TestTable(t *testing.T) {
 			table, err := rasql.TableOf[staffRow](staffDefinition())
 			require.NoError(t, err)
 
-			column := table.Column("email")
+			column := table.Ref().Column("email")
 			require.Equal(t, "email", column.Name())
 			require.Equal(t, "staff", column.Source().Qualifier())
 
-			require.ErrorContains(t, table.Column("missing").Validate(), "missing")
+			require.ErrorContains(t, table.Ref().Column("missing").Validate(), "missing")
 		})
 
 		t.Run("Ref exposes the validated definition", func(t *testing.T) {
@@ -150,7 +150,7 @@ func TestTable(t *testing.T) {
 			table, err := rasql.TableOf[staffRow](staffDefinition())
 			require.NoError(t, err)
 
-			column := table.Column("missing")
+			column := table.Ref().Column("missing")
 			require.Equal(t, "missing", column.Name())
 			require.Equal(t, query.Relation(table.Ref()), column.Source())
 
@@ -222,7 +222,7 @@ func TestTable(t *testing.T) {
 	})
 
 	t.Run("a select builder rejects a foreign column", func(t *testing.T) {
-		contractorID := contractors(t).Column("id")
+		contractorID := contractors(t).Ref().Column("id")
 
 		_, err := render.SelectFrom(dbForBuild(t).Dialect(), staff(t).Ref()).
 			Select("id").
@@ -423,7 +423,7 @@ func TestZeroTable(t *testing.T) {
 		// the zero table through the value it hands back rather than through
 		// an error its signature cannot carry.
 		var zero rasql.Table[staffRow]
-		require.ErrorIs(t, zero.Column("id").Validate(), query.ErrNilTable)
+		require.ErrorIs(t, zero.Ref().Column("id").Validate(), query.ErrNilTable)
 	})
 }
 
@@ -453,10 +453,10 @@ func requireTableUsable(t *testing.T, name string, table rasql.Table[staffRow]) 
 		require.NoError(t, err)
 		require.Equal(t, "alias", aliased.Ref().Qualifier())
 
-		require.Equal(t, "email", table.Column("email").Name())
+		require.Equal(t, "email", table.Ref().Column("email").Name())
 
 		others := contractors(t)
-		othersID := others.Column("id")
+		othersID := others.Ref().Column("id")
 
 		joined, err := render.SelectFrom(dbForBuild(t).Dialect(), others.Ref()).
 			Select("id").
@@ -501,7 +501,7 @@ func viewCapabilityDB(t *testing.T) rasql.DB {
 func capabilityCalls(t *testing.T, table rasql.Table[viewCapabilityRow]) map[string]func() error {
 	t.Helper()
 
-	id := query.TypedColumnOf[viewCapabilityRow, int64](table.Column("id"))
+	id := query.TypedColumnOf[viewCapabilityRow, int64](table.Ref().Column("id"))
 	db := viewCapabilityDB(t)
 	return map[string]func() error{
 		"read": func() error {
@@ -729,7 +729,7 @@ func TestInSchema(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "tenant_0001", moved.Ref().Schema())
 		require.Equal(t, "", view.Ref().Schema())
-		require.NoError(t, moved.Column("email").Validate())
+		require.NoError(t, moved.Ref().Column("email").Validate())
 
 		_, err = view.InSchema("")
 		require.ErrorContains(t, err, "must not be empty")

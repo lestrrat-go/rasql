@@ -25,8 +25,8 @@ type EventsTable struct {
 	rasql.Table[EventRow]
 }
 
-func (t EventsTable) ID() query.ColumnRef     { return t.Column("id") }
-func (t EventsTable) Action() query.ColumnRef { return t.Column("action") }
+func (t EventsTable) ID() query.ColumnRef     { return t.Ref().Column("id") }
+func (t EventsTable) Action() query.ColumnRef { return t.Ref().Column("action") }
 
 // eventDecoder decodes an EventRow from its two columns, in projection order.
 type eventDecoder struct{ result rasql.ResultSchema }

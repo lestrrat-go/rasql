@@ -235,9 +235,9 @@ func TestLiveUpdateDefault(t *testing.T) {
 			table := rasql.MustTableOf[g5LiveRow](schema.TableDef{Name: name, PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{
 				{Name: "id", Type: schema.IntegerType{}}, {Name: "value", Type: schema.IntegerType{}, Default: "41"}, {Name: "count", Type: schema.IntegerType{}},
 			}})
-			id := query.TypedColumnOf[g5LiveRow, int64](table.Column("id"))
-			value := query.TypedColumnOf[g5LiveRow, int64](table.Column("value"))
-			count := query.TypedColumnOf[g5LiveRow, int64](table.Column("count"))
+			id := query.TypedColumnOf[g5LiveRow, int64](table.Ref().Column("id"))
+			value := query.TypedColumnOf[g5LiveRow, int64](table.Ref().Column("value"))
+			count := query.TypedColumnOf[g5LiveRow, int64](table.Ref().Column("count"))
 			plan, err := rasql.NewPatchPlan(table, query.EqualValue(id, int64(1)), rasql.DefaultField(value), rasql.SetField(count, int64(8)))
 			require.NoError(t, err)
 			outcome, err := rasql.ExecMutation(t.Context(), executor, plan)

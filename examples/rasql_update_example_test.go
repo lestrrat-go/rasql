@@ -71,12 +71,12 @@ func Example_rasql_update() {
 	// packages the typed layer builds on. query.NewSelect takes a
 	// query.ColumnRef, and Column is the generated table's only way to
 	// produce one.
-	statement, err := query.NewSelect(users.Ref(), users.Column("id"), users.Column("email"))
+	statement, err := query.NewSelect(users.Ref(), users.Ref().Column("id"), users.Ref().Column("email"))
 	if err != nil {
 		fmt.Printf("failed to build select: %s\n", err)
 		return
 	}
-	statement, err = statement.WithWhere(query.Equal(users.Column("id"), 42))
+	statement, err = statement.WithWhere(query.Equal(users.Ref().Column("id"), 42))
 	if err != nil {
 		fmt.Printf("failed to filter select: %s\n", err)
 		return

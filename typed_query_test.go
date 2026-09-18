@@ -778,13 +778,13 @@ type bindTypedColumnGapTable struct {
 }
 
 func (t bindTypedColumnGapTable) ID() query.TypedColumn[bindTypedColumnGapRow, int64] {
-	return query.TypedColumnOf[bindTypedColumnGapRow, int64](t.Column("id"))
+	return query.TypedColumnOf[bindTypedColumnGapRow, int64](t.Ref().Column("id"))
 }
 func (t bindTypedColumnGapTable) Name() query.TypedColumn[bindTypedColumnGapRow, string] {
-	return query.TypedColumnOf[bindTypedColumnGapRow, string](t.Column("name"))
+	return query.TypedColumnOf[bindTypedColumnGapRow, string](t.Ref().Column("name"))
 }
 func (t bindTypedColumnGapTable) Nickname() query.NullableColumn[bindTypedColumnGapRow, string] {
-	return query.NullableColumnOf[bindTypedColumnGapRow, string](t.Column("nickname"))
+	return query.NullableColumnOf[bindTypedColumnGapRow, string](t.Ref().Column("nickname"))
 }
 
 func bindTypedColumnGapUsers(t *testing.T) bindTypedColumnGapTable {

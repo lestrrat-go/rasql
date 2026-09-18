@@ -87,7 +87,7 @@ func TestMutationPlanValidation(t *testing.T) {
 	// `rasql: object "active_users" does not support operation 2`.
 	t.Run("a forged table handle rejects insert and update", func(t *testing.T) {
 		table := capabilityGuardTable(t)
-		id := query.TypedColumnOf[capabilityGuardRow, int64](table.Column("id"))
+		id := query.TypedColumnOf[capabilityGuardRow, int64](table.Ref().Column("id"))
 
 		t.Run("insert", func(t *testing.T) {
 			field := rasql.SetField[capabilityGuardRow, int64](id, 1)
@@ -246,7 +246,7 @@ func TestUpdateDefault(t *testing.T) {
 	t.Run("the patch predicate bridge accepts both families", func(t *testing.T) {
 		table, id, name := g5MutationTable(t)
 		rootPredicate := rasql.EqualValue(id.Expr(), int64(1))
-		legacyPredicate := query.EqualValue(query.TypedColumnOf[g5MutationRow, int64](table.Column("id")), int64(1))
+		legacyPredicate := query.EqualValue(query.TypedColumnOf[g5MutationRow, int64](table.Ref().Column("id")), int64(1))
 		rootPlan, err := rasql.NewPatchPlan(table, rootPredicate, rasql.SetField(name, int64(3)))
 		require.NoError(t, err)
 		legacyPlan, err := rasql.NewPatchPlan(table, legacyPredicate, rasql.SetField(name, int64(4)))
@@ -269,7 +269,7 @@ func TestUpdateDefault(t *testing.T) {
 		table, flag, _, name := g5MutationTableWithFlag(t)
 		other, err := rasql.TableOf[g5MutationRow](schema.TableDef{Name: "g5_other", PrimaryKey: []string{"id"}, Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}, {Name: "name", Type: schema.IntegerType{}}}})
 		require.NoError(t, err)
-		wrongPredicate := query.EqualValue(query.TypedColumnOf[g5MutationRow, int64](other.Column("id")), int64(1))
+		wrongPredicate := query.EqualValue(query.TypedColumnOf[g5MutationRow, int64](other.Ref().Column("id")), int64(1))
 		wrongPlan, err := rasql.NewPatchPlan(table, wrongPredicate, rasql.SetField(name, int64(3)))
 		require.NoError(t, err)
 		compiler := mutationCompiler(t)
