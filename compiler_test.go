@@ -393,7 +393,7 @@ func (compilerBytesDecoder) DecodeRow(source rasql.ScanSource, row *compilerByte
 	return source.Scan(&row.Payload)
 }
 
-func mustRelation(t *testing.T, table rasql.Table[compilerRow]) rasql.TypedRelation[compilerRow] {
+func mustRelation(t *testing.T, table rasql.Table[compilerRow]) rasql.Table[compilerRow] {
 	t.Helper()
 	relation := table
 	return relation

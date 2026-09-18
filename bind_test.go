@@ -331,7 +331,7 @@ func (bindFixtureDecoder) DecodeRow(source rasql.ScanSource, row *bindFixtureRow
 
 // bindQueryRelation returns a two-column query and the relation it reads, so a
 // caller can bind another column of the same source.
-func bindQueryRelation(t *testing.T) (rasql.Query[bindFixtureRow], rasql.TypedRelation[bindFixtureRow]) {
+func bindQueryRelation(t *testing.T) (rasql.Query[bindFixtureRow], rasql.Table[bindFixtureRow]) {
 	t.Helper()
 	table, err := rasql.TableOf[bindFixtureRow](schema.TableDef{
 		Name: "bind_items",

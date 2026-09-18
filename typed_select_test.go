@@ -27,7 +27,7 @@ func (selectUserDecoder) DecodeRow(source rasql.ScanSource, result *selectUser) 
 
 type selectFixture struct {
 	executor rasql.Executor
-	source   rasql.TypedRelation[selectUser]
+	source   rasql.Table[selectUser]
 	id       rasql.Column[selectUser, int64]
 	email    rasql.Column[selectUser, string]
 }
@@ -140,7 +140,7 @@ func (reusableEmailDecoder) DecodeRow(source rasql.ScanSource, result *reusableE
 	return source.Scan(&result.Email)
 }
 
-func reusableUsers(t *testing.T) (rasql.TypedRelation[reusableUser], rasql.Column[reusableUser, int64], rasql.Column[reusableUser, string]) {
+func reusableUsers(t *testing.T) (rasql.Table[reusableUser], rasql.Column[reusableUser, int64], rasql.Column[reusableUser, string]) {
 	t.Helper()
 	table, err := rasql.TableOf[reusableUser](schema.TableDef{Name: "users", Columns: []schema.ColumnDef{
 		{Name: "id", Type: schema.IntegerType{}},

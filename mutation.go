@@ -50,7 +50,7 @@ func (p PatchPlan[T]) mutationPrecondition() bool                   { return p.v
 // DeletePlan is a typed immutable DELETE command.
 type DeletePlan[T any] struct {
 	table Table[T]
-	where query.Predicate
+	where query.Expression
 	all   bool
 }
 
@@ -70,14 +70,18 @@ func (p UpsertPlan[T]) mutationPlan() (query.WriteStatement, error) { return p.s
 // matches. It reports an error when where carries no expression.
 //
 // `table` must not be nil.
-func NewDeletePlan[T any](table Table[T], where query.Predicate) (DeletePlan[T], error) {
+func NewDeletePlan[T any, P wherePredicate](table Table[T], where P) (DeletePlan[T], error) {
+	expression, err := wherePredicateExpression(where)
+	if err != nil {
+		return DeletePlan[T]{}, err
+	}
 	if err := requireTableOperation(table, schema.OperationDelete); err != nil {
 		return DeletePlan[T]{}, err
 	}
-	if where.Expression() == nil {
+	if expression == nil {
 		return DeletePlan[T]{}, fmt.Errorf("rasql: delete plan requires a predicate")
 	}
-	return DeletePlan[T]{table: table, where: where}, nil
+	return DeletePlan[T]{table: table, where: expression}, nil
 }
 
 func (p DeletePlan[T]) mutationPlan() (query.WriteStatement, error) {
@@ -88,13 +92,13 @@ func (p DeletePlan[T]) mutationPlan() (query.WriteStatement, error) {
 	if err != nil {
 		return nil, err
 	}
-	if p.where.Expression() == nil {
+	if p.where == nil {
 		if !p.all {
 			return nil, fmt.Errorf("rasql: delete plan requires a predicate")
 		}
 		return statement.AllowAll()
 	}
-	return statement.WithWhere(p.where.Expression())
+	return statement.WithWhere(p.where)
 }
 
 // StatementPlan adapts a validated query write statement to MutationPlan.
