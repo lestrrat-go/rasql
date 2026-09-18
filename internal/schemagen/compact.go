@@ -66,6 +66,7 @@ func CompactObjectSource(packageName string, object CompactObject) ([]byte, erro
 	b.WriteString(packageName)
 	b.WriteString("\n\nimport (\n")
 	b.WriteString("\t\"github.com/lestrrat-go/rasql\"\n")
+	b.WriteString("\t\"github.com/lestrrat-go/rasql/query\"\n")
 	b.WriteString("\t\"github.com/lestrrat-go/rasql/schema\"\n")
 	for _, imp := range compactImports(object) {
 		b.WriteString("\t")
@@ -103,26 +104,71 @@ func CompactObjectSource(packageName string, object CompactObject) ([]byte, erro
 	b.WriteString("](")
 	b.WriteString(definitionName)
 	b.WriteString(")\n\n")
+	// handleName is the wrapper's embedded field: an unexported alias for
+	// rasql.Table[row], so the wrapper's own As, Column and CatalogObject
+	// methods stay promoted from it while the field itself stays out of the
+	// package's exported surface. An alias field keeps the exact type rasql.
+	// Table[row] is, so promotion reaches the same unexported methods
+	// (Relation, RowSource) a directly embedded rasql.Table[row] would give.
+	handleName := compactLowerFirst(accessor) + "TableHandle"
+	b.WriteString("type ")
+	b.WriteString(handleName)
+	b.WriteString(" = rasql.Table[")
+	b.WriteString(row)
+	b.WriteString("]\n\n")
 	b.WriteString("type ")
 	b.WriteString(accessor)
-	b.WriteString("Table struct { rasql.Table[")
-	b.WriteString(row)
-	b.WriteString("] }\n\nfunc ")
+	b.WriteString("Table struct {\n\t")
+	b.WriteString(handleName)
+	b.WriteString("\n}\n\nfunc ")
 	b.WriteString(accessor)
 	b.WriteString("() ")
 	b.WriteString(accessor)
 	b.WriteString("Table { return ")
 	b.WriteString(accessor)
-	b.WriteString("Table{Table: ")
+	b.WriteString("Table{")
+	b.WriteString(handleName)
+	b.WriteString(": ")
 	b.WriteString(tableName)
 	b.WriteString("} }\n\n")
 	b.WriteString("func (t ")
 	b.WriteString(accessor)
-	b.WriteString("Table) Source(alias string) (rasql.TypedRelation[")
+	b.WriteString("Table) Ref() query.TableRef { return t.")
+	b.WriteString(handleName)
+	b.WriteString(".Ref() }\n\n")
+	b.WriteString("func (t ")
+	b.WriteString(accessor)
+	b.WriteString("Table) As(alias string) (")
+	b.WriteString(accessor)
+	b.WriteString("Table, error) {\n\taliased, err := t.")
+	b.WriteString(handleName)
+	b.WriteString(".As(alias)\n\tif err != nil {\n\t\treturn ")
+	b.WriteString(accessor)
+	b.WriteString("Table{}, err\n\t}\n\treturn ")
+	b.WriteString(accessor)
+	b.WriteString("Table{")
+	b.WriteString(handleName)
+	b.WriteString(": aliased}, nil\n}\n\n")
+	b.WriteString("func (t ")
+	b.WriteString(accessor)
+	b.WriteString("Table) Table() rasql.Table[")
 	b.WriteString(row)
-	b.WriteString("], error) { return rasql.SourceOf[")
-	b.WriteString(row)
-	b.WriteString("](t.Table, alias) }\n\n")
+	b.WriteString("] { return t.")
+	b.WriteString(handleName)
+	b.WriteString(" }\n\n")
+	b.WriteString("func (t ")
+	b.WriteString(accessor)
+	b.WriteString("Table) InSchema(namespace string) (")
+	b.WriteString(accessor)
+	b.WriteString("Table, error) {\n\tmoved, err := t.")
+	b.WriteString(handleName)
+	b.WriteString(".InSchema(namespace)\n\tif err != nil {\n\t\treturn ")
+	b.WriteString(accessor)
+	b.WriteString("Table{}, err\n\t}\n\treturn ")
+	b.WriteString(accessor)
+	b.WriteString("Table{")
+	b.WriteString(handleName)
+	b.WriteString(": moved}, nil\n}\n\n")
 
 	writeCompactColumns(&b, object, accessor, row)
 	writeCompactDecoder(&b, object, accessor, row, false)
@@ -133,7 +179,7 @@ func CompactObjectSource(packageName string, object CompactObject) ([]byte, erro
 	writeCompactProjections(&b, object, accessor, row, len(marker) > 0)
 	writeCompactKeys(&b, object, accessor, row, marker)
 	writeCompactRelations(&b, object, accessor, row)
-	writeCompactMutations(&b, object, accessor, row)
+	writeCompactMutations(&b, object, accessor, row, handleName)
 	formatted, err := format.Source(b.Bytes())
 	if err != nil {
 		return nil, fmt.Errorf("compact %s: format source: %w", object.Catalog.ID, err)
@@ -253,7 +299,7 @@ func compactImports(object CompactObject) []compactImport {
 	}
 	result := make([]compactImport, 0, len(seen))
 	for _, imp := range seen {
-		if imp.Path == "github.com/lestrrat-go/rasql" || imp.Path == "github.com/lestrrat-go/rasql/schema" {
+		if imp.Path == "github.com/lestrrat-go/rasql" || imp.Path == "github.com/lestrrat-go/rasql/query" || imp.Path == "github.com/lestrrat-go/rasql/schema" {
 			continue
 		}
 		result = append(result, imp)
@@ -331,7 +377,7 @@ func writeCompactBinder(b *bytes.Buffer, object CompactObject, accessor, row str
 	if optional {
 		b.WriteString("(source rasql.OptionalRelation[")
 	} else {
-		b.WriteString("(source rasql.TypedRelation[")
+		b.WriteString("(source rasql.Table[")
 	}
 	b.WriteString(row)
 	b.WriteString("]) (")
@@ -613,7 +659,7 @@ func writeCompactKeys(b *bytes.Buffer, object CompactObject, accessor, row strin
 	if len(marker) > 0 {
 		b.WriteString("func ")
 		b.WriteString(accessor)
-		b.WriteString("GraphKey(source rasql.TypedRelation[")
+		b.WriteString("GraphKey(source rasql.Table[")
 		b.WriteString(row)
 		b.WriteString("]) (rasql.GraphKey[")
 		b.WriteString(row)
@@ -633,7 +679,7 @@ func writeCompactKeys(b *bytes.Buffer, object CompactObject, accessor, row strin
 		b.WriteString("func ")
 		b.WriteString(accessor)
 		b.WriteString(field)
-		b.WriteString("PageKey(source rasql.TypedRelation[")
+		b.WriteString("PageKey(source rasql.Table[")
 		b.WriteString(row)
 		b.WriteString("], direction rasql.PageDirection")
 		if column.Nullable {
@@ -740,7 +786,7 @@ func writeCompactRelations(b *bytes.Buffer, object CompactObject, accessor, row 
 		name := accessor + compilerir.RelationGoName(relation.Name) + "Edge"
 		b.WriteString("func ")
 		b.WriteString(name)
-		b.WriteString("[G, CG any](parentSource rasql.TypedRelation[")
+		b.WriteString("[G, CG any](parentSource rasql.Table[")
 		b.WriteString(row)
 		b.WriteString("], ")
 		if relation.Kind == "many_through" && relation.Through != nil {
@@ -749,11 +795,11 @@ func writeCompactRelations(b *bytes.Buffer, object CompactObject, accessor, row 
 			if throughRow == "" {
 				throughRow = exportedCompact(through.Catalog.Name) + "Row"
 			}
-			b.WriteString("junctionSource rasql.TypedRelation[")
+			b.WriteString("junctionSource rasql.Table[")
 			b.WriteString(throughRow)
 			b.WriteString("], ")
 		}
-		b.WriteString("childSource rasql.TypedRelation[")
+		b.WriteString("childSource rasql.Table[")
 		b.WriteString(targetRow)
 		b.WriteString("], children rasql.GraphPlan[")
 		b.WriteString(targetRow)
@@ -830,58 +876,88 @@ func writeCompactRelations(b *bytes.Buffer, object CompactObject, accessor, row 
 }
 
 // writeCompactMutations writes the mutation builder for each row write the
-// descriptor permits: a create builder for schema.OperationInsert and a patch
-// builder for schema.OperationUpdate. A view permits neither and gets neither,
-// which is what the Kind test this replaced already produced, and a descriptor
-// naming only some of the writes now gets only the builders for those.
+// descriptor permits: a create builder for schema.OperationInsert, a patch
+// builder for schema.OperationUpdate, and a delete method for
+// schema.OperationDelete. A view permits none of the three and gets none,
+// which is what the Kind test this replaced already produced, and a
+// descriptor naming only some of the writes now gets only the builders for
+// those.
 //
-// An object permitting no row write at all skips the shared mutation-columns
-// variable too, since nothing left in the file reads it.
-func writeCompactMutations(b *bytes.Buffer, object CompactObject, accessor, row string) {
+// Each create and patch builder stores the table its Create or Patch method
+// was called on, so Plan and Where write through that table -- including one
+// InSchema moved to a different namespace -- rather than through the
+// package-level accessor. The delete method does the same directly, since it
+// needs no builder of its own.
+//
+// An object permitting neither insert nor update skips the shared
+// mutation-columns variable too, since nothing left in the file reads it.
+func writeCompactMutations(b *bytes.Buffer, object CompactObject, accessor, row, handleName string) {
 	insert := object.Table.Supports(schema.OperationInsert)
 	update := object.Table.Supports(schema.OperationUpdate)
-	if !insert && !update {
-		return
+	remove := object.Table.Supports(schema.OperationDelete)
+	if insert || update {
+		create := object.Generation.Create
+		patch := object.Generation.Patch
+		if create == "" {
+			create = accessor + "Create"
+		}
+		if patch == "" {
+			patch = accessor + "Patch"
+		}
+		mutationColumns := compactLowerFirst(accessor) + "MutationColumns"
+		b.WriteString("var ")
+		b.WriteString(mutationColumns)
+		b.WriteString(" = func() ")
+		b.WriteString(accessor)
+		b.WriteString("Expressions { value, err := (")
+		b.WriteString(accessor)
+		b.WriteString("Columns{}).Bind(")
+		b.WriteString(accessor)
+		b.WriteString("().Table()); if err != nil { panic(err) }; return value }()\n\n")
+		if insert {
+			writeMutationType(b, object, row, create, false, mutationColumns)
+			b.WriteString("func (t ")
+			b.WriteString(accessor)
+			b.WriteString("Table) Create() ")
+			b.WriteString(create)
+			b.WriteString(" { return ")
+			b.WriteString(create)
+			b.WriteString("{table: t.")
+			b.WriteString(handleName)
+			b.WriteString("} }\n\n")
+		}
+		if update {
+			writeMutationType(b, object, row, patch, true, mutationColumns)
+			b.WriteString("func (t ")
+			b.WriteString(accessor)
+			b.WriteString("Table) Patch() ")
+			b.WriteString(patch)
+			b.WriteString(" { return ")
+			b.WriteString(patch)
+			b.WriteString("{table: t.")
+			b.WriteString(handleName)
+			b.WriteString("} }\n\n")
+		}
 	}
-	create := object.Generation.Create
-	patch := object.Generation.Patch
-	if create == "" {
-		create = accessor + "Create"
-	}
-	if patch == "" {
-		patch = accessor + "Patch"
-	}
-	mutationColumns := compactLowerFirst(accessor) + "MutationColumns"
-	b.WriteString("var ")
-	b.WriteString(mutationColumns)
-	b.WriteString(" = func() ")
-	b.WriteString(accessor)
-	b.WriteString("Expressions { source, err := ")
-	b.WriteString(accessor)
-	b.WriteString("().Source(\"\"); if err != nil { panic(err) }; value, err := (")
-	b.WriteString(accessor)
-	b.WriteString("Columns{}).Bind(source); if err != nil { panic(err) }; return value }()\n\n")
-	if insert {
-		writeMutationType(b, object, accessor, row, create, false, mutationColumns)
-	}
-	if update {
-		writeMutationType(b, object, accessor, row, patch, true, mutationColumns)
+	if remove {
+		b.WriteString("func (t ")
+		b.WriteString(accessor)
+		b.WriteString("Table) Delete(where rasql.Predicate) (rasql.DeletePlan[")
+		b.WriteString(row)
+		b.WriteString("], error) { return rasql.NewDeletePlan(t.")
+		b.WriteString(handleName)
+		b.WriteString(", where) }\n\n")
 	}
 }
 
-func writeMutationType(b *bytes.Buffer, object CompactObject, accessor, row, name string, patch bool, mutationColumns string) {
+func writeMutationType(b *bytes.Buffer, object CompactObject, row, name string, patch bool, mutationColumns string) {
 	b.WriteString("type ")
 	b.WriteString(name)
-	b.WriteString(" struct { fields []rasql.MutationField[")
+	b.WriteString(" struct {\n\ttable  rasql.Table[")
 	b.WriteString(row)
-	b.WriteString("] }")
-	b.WriteString("\nfunc New")
-	b.WriteString(name)
-	b.WriteString("() ")
-	b.WriteString(name)
-	b.WriteString(" { return ")
-	b.WriteString(name)
-	b.WriteString("{} }\n")
+	b.WriteString("]\n\tfields []rasql.MutationField[")
+	b.WriteString(row)
+	b.WriteString("]\n}\n")
 	shape := object.Go.Create
 	if patch {
 		shape = object.Go.Patch
@@ -949,9 +1025,7 @@ func writeMutationType(b *bytes.Buffer, object CompactObject, accessor, row, nam
 		b.WriteString(name)
 		b.WriteString(") Where(value rasql.Predicate) (rasql.PatchPlan[")
 		b.WriteString(row)
-		b.WriteString("], error) { return rasql.NewPatchPlan(")
-		b.WriteString(accessor)
-		b.WriteString("().Table, value, v.fields...) }\n\n")
+		b.WriteString("], error) { return rasql.NewPatchPlan(v.table, value, v.fields...) }\n\n")
 		return
 	}
 	b.WriteString("func (v ")
@@ -959,9 +1033,7 @@ func writeMutationType(b *bytes.Buffer, object CompactObject, accessor, row, nam
 	b.WriteString(") Plan() (rasql.CreatePlan[")
 	b.WriteString(row)
 	b.WriteString("], error) {\n")
-	b.WriteString("\treturn rasql.NewCreatePlan(")
-	b.WriteString(accessor)
-	b.WriteString("().Table, v.fields...)")
+	b.WriteString("\treturn rasql.NewCreatePlan(v.table, v.fields...)")
 	b.WriteString("\n}\n\n")
 }
 

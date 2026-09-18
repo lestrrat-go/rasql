@@ -68,15 +68,15 @@ func TestGeneratedViewRejectsEachMutationIndependently(t *testing.T) {
 	for name, proof := range map[string]struct{ view, table string }{
 		"insert": {
 			view:  `_, _ = rasql.NewCreatePlan(generated.ActiveUsers())`,
-			table: `_, _ = rasql.NewCreatePlan(generated.Users().Table)`,
+			table: `_, _ = rasql.NewCreatePlan(generated.Users().Table())`,
 		},
 		"update": {
 			view:  `_, _ = rasql.NewPatchPlan(generated.ActiveUsers(), rasql.Predicate{})`,
-			table: `_, _ = rasql.NewPatchPlan(generated.Users().Table, rasql.Predicate{})`,
+			table: `_, _ = rasql.NewPatchPlan(generated.Users().Table(), rasql.Predicate{})`,
 		},
 		"delete": {
 			view:  `_, _ = rasql.NewDeletePlan(generated.ActiveUsers(), query.Predicate{})`,
-			table: `_, _ = rasql.NewDeletePlan(generated.Users().Table, query.Predicate{})`,
+			table: `_, _ = rasql.NewDeletePlan(generated.Users().Table(), query.Predicate{})`,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -98,16 +98,16 @@ func TestGeneratedViewRejectsEachMutationIndependently(t *testing.T) {
 }
 
 // TestGeneratedViewHandleIsRefusedWhenThePlanIsBuilt covers what the compile
-// error above does not. The generated wrapper still holds its handle in an
-// exported embedded field, so a caller can write generated.ActiveUsers().Table
-// and reach every mutation constructor, and CreateTable takes the wrapper
-// itself; each entry point reads OperationInsert, OperationUpdate,
-// OperationDelete or OperationDDL off the descriptor and refuses, naming the
-// object and the operation.
-//
-// Making that field unexported is the emitter PR's work, because it moves the
-// bytes of every checked-in generated store. Until then this is the check that
-// stops a write to a view.
+// error above does not. The generated wrapper's handle is an unexported
+// embedded field, but its Table method still hands back the plain
+// rasql.Table[T] it holds, so a caller can write
+// generated.ActiveUsers().Table() and reach every mutation constructor, and
+// CreateTable takes the wrapper itself; each entry point reads
+// OperationInsert, OperationUpdate, OperationDelete or OperationDDL off the
+// descriptor and refuses, naming the object and the operation. This is the
+// check that stops a write to a view even when a caller reaches around the
+// wrapper's own Create, Patch and Delete methods -- a view has none of the
+// three, so this is also the only way to try one against it.
 func TestGeneratedViewHandleIsRefusedWhenThePlanIsBuilt(t *testing.T) {
 	body := "package generated_test\n\n" +
 		"import (\n" +
@@ -117,7 +117,7 @@ func TestGeneratedViewHandleIsRefusedWhenThePlanIsBuilt(t *testing.T) {
 		"func TestRefused(t *testing.T) {\n" +
 		"\tctx := context.Background()\n" +
 		"\tvar db rasql.DB\n" +
-		"\tview := generated.ActiveUsers().Table\n" +
+		"\tview := generated.ActiveUsers().Table()\n" +
 		"\tfor name, call := range map[string]func() error{\n" +
 		"\t\t\"insert\": func() error { _, err := rasql.NewCreatePlan(view); return err },\n" +
 		"\t\t\"update\": func() error { _, err := rasql.NewPatchPlan(view, rasql.Predicate{}); return err },\n" +
