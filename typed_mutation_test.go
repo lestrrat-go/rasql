@@ -581,15 +581,18 @@ func pointerWriteTable(t *testing.T) query.TableRef {
 	return users
 }
 
-// tasksRow is the row type for the InSchema mutation fixtures below. id is
-// the primary key, title is an ordinary required column, notes carries a
-// default so a create plan can omit it, sequence is an identity-always
-// column no field may target, and version is the optimistic-lock column.
+// tasksRow is the row type for the InSchema mutation fixtures below. It names
+// only the two columns those fixtures read back; tasksDefinition describes the
+// whole table.
 type tasksRow struct {
 	ID    int64
 	Title string
 }
 
+// tasksDefinition describes the table the InSchema mutation fixtures write to.
+// id is the primary key, title is an ordinary required column, notes carries a
+// default so a create plan can omit it, sequence is an identity-always column
+// no field may target, and version is the optimistic-lock column.
 func tasksDefinition() schema.TableDef {
 	return schema.TableDef{
 		Name:       "tasks",
