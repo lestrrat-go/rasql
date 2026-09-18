@@ -4,6 +4,7 @@ package store
 
 import (
 	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 )
 
@@ -24,12 +25,32 @@ var ordersDefinition = schema.TableDef{
 
 var ordersTable = rasql.MustTableOf[OrdersRow](ordersDefinition)
 
-type OrdersTable struct{ rasql.Table[OrdersRow] }
+type ordersTableHandle = rasql.Table[OrdersRow]
 
-func Orders() OrdersTable { return OrdersTable{Table: ordersTable} }
+type OrdersTable struct {
+	ordersTableHandle
+}
 
-func (t OrdersTable) Source(alias string) (rasql.TypedRelation[OrdersRow], error) {
-	return rasql.SourceOf[OrdersRow](t.Table, alias)
+func Orders() OrdersTable { return OrdersTable{ordersTableHandle: ordersTable} }
+
+func (t OrdersTable) Ref() query.TableRef { return t.ordersTableHandle.Ref() }
+
+func (t OrdersTable) As(alias string) (OrdersTable, error) {
+	aliased, err := t.ordersTableHandle.As(alias)
+	if err != nil {
+		return OrdersTable{}, err
+	}
+	return OrdersTable{ordersTableHandle: aliased}, nil
+}
+
+func (t OrdersTable) Table() rasql.Table[OrdersRow] { return t.ordersTableHandle }
+
+func (t OrdersTable) InSchema(namespace string) (OrdersTable, error) {
+	moved, err := t.ordersTableHandle.InSchema(namespace)
+	if err != nil {
+		return OrdersTable{}, err
+	}
+	return OrdersTable{ordersTableHandle: moved}, nil
 }
 
 type OrdersColumns struct{}
@@ -42,7 +63,7 @@ type OptionalOrdersExpressions struct {
 	ID, UserID, Total rasql.NullColumn[OrdersRow, int64]
 }
 
-func (OrdersColumns) Bind(source rasql.TypedRelation[OrdersRow]) (OrdersExpressions, error) {
+func (OrdersColumns) Bind(source rasql.Table[OrdersRow]) (OrdersExpressions, error) {
 	var err error
 	result := OrdersExpressions{
 		ID:     rasqlgenBind(&err, source, "id", "", rasql.BindColumn[OrdersRow, int64]),
@@ -122,7 +143,7 @@ func OptionalOrdersProjection(expressions OptionalOrdersExpressions) (rasql.Proj
 	return rasql.NewProjection(items, ordersOptionalDecoder{})
 }
 
-func OrdersGraphKey(source rasql.TypedRelation[OrdersRow]) (rasql.GraphKey[OrdersRow], error) {
+func OrdersGraphKey(source rasql.Table[OrdersRow]) (rasql.GraphKey[OrdersRow], error) {
 	expressions, err := (OrdersColumns{}).Bind(source)
 	if err != nil {
 		return rasql.GraphKey[OrdersRow]{}, err
@@ -130,7 +151,7 @@ func OrdersGraphKey(source rasql.TypedRelation[OrdersRow]) (rasql.GraphKey[Order
 	return rasql.NewGraphKey[OrdersRow](rasql.KeyPart[OrdersRow, int64](expressions.ID, func(row OrdersRow) int64 { return row.ID }))
 }
 
-func OrdersIDPageKey(source rasql.TypedRelation[OrdersRow], direction rasql.PageDirection) (rasql.PageKey[OrdersRow], error) {
+func OrdersIDPageKey(source rasql.Table[OrdersRow], direction rasql.PageDirection) (rasql.PageKey[OrdersRow], error) {
 	expressions, err := (OrdersColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -138,7 +159,7 @@ func OrdersIDPageKey(source rasql.TypedRelation[OrdersRow], direction rasql.Page
 	return rasqlgenPageKey(direction, expressions.ID.Expr(), func(row OrdersRow) int64 { return row.ID })
 }
 
-func OrdersUserIDPageKey(source rasql.TypedRelation[OrdersRow], direction rasql.PageDirection) (rasql.PageKey[OrdersRow], error) {
+func OrdersUserIDPageKey(source rasql.Table[OrdersRow], direction rasql.PageDirection) (rasql.PageKey[OrdersRow], error) {
 	expressions, err := (OrdersColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -146,7 +167,7 @@ func OrdersUserIDPageKey(source rasql.TypedRelation[OrdersRow], direction rasql.
 	return rasqlgenPageKey(direction, expressions.UserID.Expr(), func(row OrdersRow) int64 { return row.UserID })
 }
 
-func OrdersTotalPageKey(source rasql.TypedRelation[OrdersRow], direction rasql.PageDirection) (rasql.PageKey[OrdersRow], error) {
+func OrdersTotalPageKey(source rasql.Table[OrdersRow], direction rasql.PageDirection) (rasql.PageKey[OrdersRow], error) {
 	expressions, err := (OrdersColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -155,11 +176,7 @@ func OrdersTotalPageKey(source rasql.TypedRelation[OrdersRow], direction rasql.P
 }
 
 var ordersMutationColumns = func() OrdersExpressions {
-	source, err := Orders().Source("")
-	if err != nil {
-		panic(err)
-	}
-	value, err := (OrdersColumns{}).Bind(source)
+	value, err := (OrdersColumns{}).Bind(Orders().Table())
 	if err != nil {
 		panic(err)
 	}
@@ -167,10 +184,10 @@ var ordersMutationColumns = func() OrdersExpressions {
 }()
 
 type OrdersCreate struct {
+	table  rasql.Table[OrdersRow]
 	fields []rasql.MutationField[OrdersRow]
 }
 
-func NewOrdersCreate() OrdersCreate { return OrdersCreate{} }
 func (v OrdersCreate) ID(value int64) OrdersCreate {
 	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(ordersMutationColumns.ID, value))
 	return v
@@ -184,14 +201,16 @@ func (v OrdersCreate) Total(value int64) OrdersCreate {
 	return v
 }
 func (v OrdersCreate) Plan() (rasql.CreatePlan[OrdersRow], error) {
-	return rasql.NewCreatePlan(Orders().Table, v.fields...)
+	return rasql.NewCreatePlan(v.table, v.fields...)
 }
 
+func (t OrdersTable) Create() OrdersCreate { return OrdersCreate{table: t.ordersTableHandle} }
+
 type OrdersPatch struct {
+	table  rasql.Table[OrdersRow]
 	fields []rasql.MutationField[OrdersRow]
 }
 
-func NewOrdersPatch() OrdersPatch { return OrdersPatch{} }
 func (v OrdersPatch) ID(value int64) OrdersPatch {
 	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(ordersMutationColumns.ID, value))
 	return v
@@ -205,5 +224,11 @@ func (v OrdersPatch) Total(value int64) OrdersPatch {
 	return v
 }
 func (v OrdersPatch) Where(value rasql.Predicate) (rasql.PatchPlan[OrdersRow], error) {
-	return rasql.NewPatchPlan(Orders().Table, value, v.fields...)
+	return rasql.NewPatchPlan(v.table, value, v.fields...)
+}
+
+func (t OrdersTable) Patch() OrdersPatch { return OrdersPatch{table: t.ordersTableHandle} }
+
+func (t OrdersTable) Delete(where rasql.Predicate) (rasql.DeletePlan[OrdersRow], error) {
+	return rasql.NewDeletePlan(t.ordersTableHandle, where)
 }

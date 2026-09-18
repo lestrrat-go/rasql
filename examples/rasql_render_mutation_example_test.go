@@ -16,13 +16,13 @@ import (
 // test assertion wants.
 func Example_rasql_render_mutation() {
 	users := store.Users()
-	columns, err := (store.UsersColumns{}).Bind(users.Table)
+	columns, err := (store.UsersColumns{}).Bind(users.Table())
 	if err != nil {
 		fmt.Printf("failed to bind users columns: %s\n", err)
 		return
 	}
 
-	plan, err := rasql.NewPatchPlan(users.Table,
+	plan, err := rasql.NewPatchPlan(users.Table(),
 		rasql.EqualValue(columns.ID.Expr(), int64(1)),
 		rasql.SetField(columns.Email, "ada@example.com"),
 	)

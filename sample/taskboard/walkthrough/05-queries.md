@@ -82,15 +82,11 @@ named as a string.
 // CloseTask closes the task with taskID. Closing an already closed task
 // changes nothing and reports no error.
 func (repository Repository) CloseTask(ctx context.Context, taskID int64) error {
-	tasksSource, err := Tasks().Source("")
-	if err != nil {
-		return fmt.Errorf("bind tasks source for close %d: %w", taskID, err)
-	}
-	tasksExpressions, err := (TasksColumns{}).Bind(tasksSource)
+	tasksExpressions, err := (TasksColumns{}).Bind(Tasks().Table())
 	if err != nil {
 		return fmt.Errorf("bind tasks columns for close %d: %w", taskID, err)
 	}
-	plan, err := NewTasksPatch().IsOpen(false).Where(rasql.EqualValue(tasksExpressions.ID.Expr(), taskID))
+	plan, err := Tasks().Patch().IsOpen(false).Where(rasql.EqualValue(tasksExpressions.ID.Expr(), taskID))
 	if err != nil {
 		return fmt.Errorf("plan close task %d: %w", taskID, err)
 	}
@@ -110,11 +106,11 @@ typed relation. It treats zero affected rows as success.
 ```go
 // AllProjects returns every project in id order, for the form's project list.
 func (repository Repository) AllProjects(ctx context.Context) ([]ProjectsRow, error) {
-	source, err := Projects().Source("project")
+	source, err := Projects().As("project")
 	if err != nil {
 		return nil, fmt.Errorf("bind projects source: %w", err)
 	}
-	expressions, err := (ProjectsColumns{}).Bind(source)
+	expressions, err := (ProjectsColumns{}).Bind(source.Table())
 	if err != nil {
 		return nil, fmt.Errorf("bind projects columns: %w", err)
 	}
@@ -122,7 +118,7 @@ func (repository Repository) AllProjects(ctx context.Context) ([]ProjectsRow, er
 	if err != nil {
 		return nil, fmt.Errorf("build projects projection: %w", err)
 	}
-	q := rasql.Select(source.Source(), projection).OrderBy(rasql.AscExpr(expressions.ID.Expr()))
+	q := rasql.Select(source, projection).OrderBy(rasql.AscExpr(expressions.ID.Expr()))
 	sequence, err := rasql.Rows(ctx, repository.executor, q)
 	if err != nil {
 		return nil, fmt.Errorf("read projects: %w", err)

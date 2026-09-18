@@ -41,7 +41,7 @@ func Example_rasql_sqlite_query() {
 	}
 	// The generated create builder binds the row's fields as values, through
 	// the columns the generator bound for it.
-	plan, err := store.NewUsersCreate().ID(42).Email("ada@example.com").FirstName("First").LastName("Last").Plan()
+	plan, err := store.Users().Create().ID(42).Email("ada@example.com").FirstName("First").LastName("Last").Plan()
 	if err != nil {
 		fmt.Printf("failed to build insert: %s\n", err)
 		return
@@ -54,7 +54,7 @@ func Example_rasql_sqlite_query() {
 	// The generated projection names one column per users field, so One
 	// returns a decoded store.UsersRow.
 	// SQL: SELECT users.id, users.email, users.nickname, users.status, users.first_name, users.last_name FROM users WHERE users.id = ? (argument: 42)
-	columns, err := (store.UsersColumns{}).Bind(users.Table)
+	columns, err := (store.UsersColumns{}).Bind(users.Table())
 	if err != nil {
 		fmt.Printf("failed to bind users columns: %s\n", err)
 		return

@@ -56,7 +56,7 @@ func Example_rasql_distinct() {
 		{ID: 2, UserID: 2},
 		{ID: 3, UserID: 1},
 	} {
-		plan, err := store.NewOrdersCreate().ID(order.ID).UserID(order.UserID).Total(order.Total).Plan()
+		plan, err := store.Orders().Create().ID(order.ID).UserID(order.UserID).Total(order.Total).Plan()
 		if err != nil {
 			fmt.Printf("failed to build insert: %s\n", err)
 			return
@@ -67,7 +67,7 @@ func Example_rasql_distinct() {
 		}
 	}
 
-	ordersColumns, err := (store.OrdersColumns{}).Bind(orders.Table)
+	ordersColumns, err := (store.OrdersColumns{}).Bind(orders.Table())
 	if err != nil {
 		fmt.Printf("failed to bind orders columns: %s\n", err)
 		return

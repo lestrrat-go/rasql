@@ -56,7 +56,7 @@ func Example_rasql_scalar_function() {
 		return
 	}
 
-	withNickname, err := store.NewUsersCreate().ID(1).Email("Ada@Example.com").Nickname("Ada").FirstName("First").LastName("Last").Plan()
+	withNickname, err := store.Users().Create().ID(1).Email("Ada@Example.com").Nickname("Ada").FirstName("First").LastName("Last").Plan()
 	if err != nil {
 		fmt.Printf("failed to build insert: %s\n", err)
 		return
@@ -65,7 +65,7 @@ func Example_rasql_scalar_function() {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
-	withoutNickname, err := store.NewUsersCreate().ID(2).Email("bob@example.com").FirstName("First").LastName("Last").Plan()
+	withoutNickname, err := store.Users().Create().ID(2).Email("bob@example.com").FirstName("First").LastName("Last").Plan()
 	if err != nil {
 		fmt.Printf("failed to build insert: %s\n", err)
 		return
@@ -75,7 +75,7 @@ func Example_rasql_scalar_function() {
 		return
 	}
 
-	columns, err := (store.UsersColumns{}).Bind(users.Table)
+	columns, err := (store.UsersColumns{}).Bind(users.Table())
 	if err != nil {
 		fmt.Printf("failed to bind users columns: %s\n", err)
 		return

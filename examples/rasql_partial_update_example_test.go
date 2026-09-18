@@ -39,7 +39,7 @@ func Example_rasql_partial_update() {
 		return
 	}
 	for id, email := range map[int64]string{42: "old@example.com", 512: "keep@example.com"} {
-		plan, err := store.NewUsersCreate().ID(id).Email(email).FirstName("First").LastName("Last").Plan()
+		plan, err := store.Users().Create().ID(id).Email(email).FirstName("First").LastName("Last").Plan()
 		if err != nil {
 			fmt.Printf("failed to build insert: %s\n", err)
 			return

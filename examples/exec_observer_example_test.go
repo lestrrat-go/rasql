@@ -44,7 +44,7 @@ func Example_rasql_observer() {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	plan, err := store.NewUsersCreate().ID(1).Email("ada@example.com").Status("active").FirstName("First").LastName("Last").Plan()
+	plan, err := store.Users().Create().ID(1).Email("ada@example.com").Status("active").FirstName("First").LastName("Last").Plan()
 	if err != nil {
 		fmt.Printf("failed to build insert: %s\n", err)
 		return

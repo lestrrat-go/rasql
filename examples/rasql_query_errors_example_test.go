@@ -35,7 +35,7 @@ func Example_rasql_query_errors() {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	plan, err := store.NewUsersCreate().ID(1).Email("ada@example.com").FirstName("First").LastName("Last").Plan()
+	plan, err := store.Users().Create().ID(1).Email("ada@example.com").FirstName("First").LastName("Last").Plan()
 	if err != nil {
 		fmt.Printf("failed to build insert: %s\n", err)
 		return
@@ -45,7 +45,7 @@ func Example_rasql_query_errors() {
 		return
 	}
 
-	columns, err := (store.UsersColumns{}).Bind(users.Table)
+	columns, err := (store.UsersColumns{}).Bind(users.Table())
 	if err != nil {
 		fmt.Printf("failed to bind users columns: %s\n", err)
 		return

@@ -55,11 +55,11 @@ generated files and use `rasql codegen check` in CI to detect drift.
 
 <!-- INCLUDE(sample/taskboard/internal/store/docs_examples_test.go#canonical_read) -->
 ```go
-source, err := Tasks().Source("tasks")
+source, err := Tasks().As("tasks")
 if err != nil {
 	return err
 }
-expressions, err := (TasksColumns{}).Bind(source)
+expressions, err := (TasksColumns{}).Bind(source.Table())
 if err != nil {
 	return err
 }
@@ -67,7 +67,7 @@ projection, err := TasksProjection(expressions)
 if err != nil {
 	return err
 }
-q := rasql.Select(source.Source(), projection).
+q := rasql.Select(source, projection).
 	Where(rasql.EqualValue(expressions.IsOpen.Expr(), true)).
 	OrderBy(rasql.AscExpr(expressions.ID.Expr()))
 rows, err := rasql.All(ctx, executor, q)
@@ -84,7 +84,7 @@ Generated mutation builders create immutable plans:
 
 <!-- INCLUDE(sample/taskboard/internal/store/docs_examples_test.go#canonical_create) -->
 ```go
-plan, err := NewTasksCreate().
+plan, err := Tasks().Create().
 	ProjectID(projectID).
 	ClearAssigneeID().
 	Title("document canonical mutations").

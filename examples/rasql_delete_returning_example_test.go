@@ -114,12 +114,12 @@ func Example_rasql_delete_returning() {
 	// whole decoded store.UsersRow.
 	// SQL: DELETE FROM users WHERE users.id = ? RETURNING id, email, nickname, status, first_name, last_name (argument: 43)
 	id := query.TypedColumnOf[store.UsersRow, int64](users.Column("id"))
-	plan, err := rasql.NewDeletePlan(users.Table, query.EqualValue(id, int64(43)))
+	plan, err := rasql.NewDeletePlan(users.Table(), query.EqualValue(id, int64(43)))
 	if err != nil {
 		fmt.Printf("failed to build typed delete: %s\n", err)
 		return
 	}
-	columns, err := (store.UsersColumns{}).Bind(users.Table)
+	columns, err := (store.UsersColumns{}).Bind(users.Table())
 	if err != nil {
 		fmt.Printf("failed to bind users columns: %s\n", err)
 		return

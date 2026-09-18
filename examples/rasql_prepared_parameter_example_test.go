@@ -16,7 +16,7 @@ import (
 // minimum total a caller asks for.
 func preparedParamOrdersQuery() (rasql.Query[store.OrdersRow], rasql.Parameter[int64], error) {
 	orders := store.Orders()
-	columns, err := (store.OrdersColumns{}).Bind(orders.Table)
+	columns, err := (store.OrdersColumns{}).Bind(orders.Table())
 	if err != nil {
 		return rasql.Query[store.OrdersRow]{}, rasql.Parameter[int64]{}, err
 	}
@@ -59,7 +59,7 @@ func Example_rasql_prepared_parameter() {
 		{ID: 2, UserID: 1, Total: 50},
 		{ID: 3, UserID: 2, Total: 90},
 	} {
-		plan, err := store.NewOrdersCreate().ID(order.ID).UserID(order.UserID).Total(order.Total).Plan()
+		plan, err := store.Orders().Create().ID(order.ID).UserID(order.UserID).Total(order.Total).Plan()
 		if err != nil {
 			fmt.Printf("failed to build insert: %s\n", err)
 			return

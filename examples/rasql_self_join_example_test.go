@@ -60,7 +60,7 @@ func Example_rasql_self_join() {
 		{ID: 2, Name: "grace", ManagerID: ada},
 		{ID: 3, Name: "edsger", ManagerID: ada},
 	} {
-		create := store.NewEmployeesCreate().ID(employee.ID).Name(employee.Name)
+		create := store.Employees().Create().ID(employee.ID).Name(employee.Name)
 		if employee.ManagerID.Valid {
 			create = create.ManagerID(employee.ManagerID.Value)
 		}
@@ -82,12 +82,12 @@ func Example_rasql_self_join() {
 		fmt.Printf("failed to alias employees: %s\n", err)
 		return
 	}
-	employeeColumns, err := (store.EmployeesColumns{}).Bind(employees.Table)
+	employeeColumns, err := (store.EmployeesColumns{}).Bind(employees.Table())
 	if err != nil {
 		fmt.Printf("failed to bind employees columns: %s\n", err)
 		return
 	}
-	managerColumns, err := (store.EmployeesColumns{}).Bind(managerSource)
+	managerColumns, err := (store.EmployeesColumns{}).Bind(managerSource.Table())
 	if err != nil {
 		fmt.Printf("failed to bind manager columns: %s\n", err)
 		return

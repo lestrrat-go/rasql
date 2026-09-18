@@ -60,7 +60,7 @@ func Example_rasql_group_by() {
 		{ID: 4, Status: "done"},
 		{ID: 5, Status: "done"},
 	} {
-		plan, err := store.NewTasksCreate().ID(task.ID).Status(task.Status).Plan()
+		plan, err := store.Tasks().Create().ID(task.ID).Status(task.Status).Plan()
 		if err != nil {
 			fmt.Printf("failed to build insert: %s\n", err)
 			return
@@ -71,7 +71,7 @@ func Example_rasql_group_by() {
 		}
 	}
 
-	tasksColumns, err := (store.TasksColumns{}).Bind(tasks.Table)
+	tasksColumns, err := (store.TasksColumns{}).Bind(tasks.Table())
 	if err != nil {
 		fmt.Printf("failed to bind tasks columns: %s\n", err)
 		return

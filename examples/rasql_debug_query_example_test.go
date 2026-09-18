@@ -18,7 +18,7 @@ func Example_rasql_debug_query() {
 	users := store.Users()
 	// Bind binds every users column to the table, and UsersProjection selects
 	// them in the order the generated row type scans them.
-	columns, err := (store.UsersColumns{}).Bind(users.Table)
+	columns, err := (store.UsersColumns{}).Bind(users.Table())
 	if err != nil {
 		fmt.Printf("failed to bind users columns: %s\n", err)
 		return

@@ -39,7 +39,7 @@ func Example_rasql_returning() {
 	// The insert names every column it has a value for. id is left to the
 	// database and status to its column default, which is what this example
 	// reads back.
-	plan, err := store.NewUsersCreate().Email("ada@example.com").FirstName("Ada").LastName("Lovelace").Plan()
+	plan, err := store.Users().Create().Email("ada@example.com").FirstName("Ada").LastName("Lovelace").Plan()
 	if err != nil {
 		fmt.Printf("failed to build insert: %s\n", err)
 		return
@@ -48,7 +48,7 @@ func Example_rasql_returning() {
 	// The generated projection names all six columns rather than only the two
 	// the database filled in, so the RETURNING list supplies every field the
 	// generated row type decodes.
-	columns, err := (store.UsersColumns{}).Bind(users.Table)
+	columns, err := (store.UsersColumns{}).Bind(users.Table())
 	if err != nil {
 		fmt.Printf("failed to bind users columns: %s\n", err)
 		return

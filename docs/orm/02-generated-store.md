@@ -31,6 +31,7 @@ package store
 
 import (
 	"github.com/lestrrat-go/rasql"
+	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
 )
 
@@ -58,12 +59,32 @@ var usersDefinition = schema.TableDef{
 
 var usersTable = rasql.MustTableOf[UsersRow](usersDefinition)
 
-type UsersTable struct{ rasql.Table[UsersRow] }
+type usersTableHandle = rasql.Table[UsersRow]
 
-func Users() UsersTable { return UsersTable{Table: usersTable} }
+type UsersTable struct {
+	usersTableHandle
+}
 
-func (t UsersTable) Source(alias string) (rasql.TypedRelation[UsersRow], error) {
-	return rasql.SourceOf[UsersRow](t.Table, alias)
+func Users() UsersTable { return UsersTable{usersTableHandle: usersTable} }
+
+func (t UsersTable) Ref() query.TableRef { return t.usersTableHandle.Ref() }
+
+func (t UsersTable) As(alias string) (UsersTable, error) {
+	aliased, err := t.usersTableHandle.As(alias)
+	if err != nil {
+		return UsersTable{}, err
+	}
+	return UsersTable{usersTableHandle: aliased}, nil
+}
+
+func (t UsersTable) Table() rasql.Table[UsersRow] { return t.usersTableHandle }
+
+func (t UsersTable) InSchema(namespace string) (UsersTable, error) {
+	moved, err := t.usersTableHandle.InSchema(namespace)
+	if err != nil {
+		return UsersTable{}, err
+	}
+	return UsersTable{usersTableHandle: moved}, nil
 }
 
 type UsersColumns struct{}
@@ -80,7 +101,7 @@ type OptionalUsersExpressions struct {
 	Email, Nickname, Status, FirstName, LastName rasql.NullColumn[UsersRow, string]
 }
 
-func (UsersColumns) Bind(source rasql.TypedRelation[UsersRow]) (UsersExpressions, error) {
+func (UsersColumns) Bind(source rasql.Table[UsersRow]) (UsersExpressions, error) {
 	var err error
 	result := UsersExpressions{
 		ID:        rasqlgenBind(&err, source, "id", "", rasql.BindColumn[UsersRow, int64]),
@@ -178,7 +199,7 @@ func OptionalUsersProjection(expressions OptionalUsersExpressions) (rasql.Projec
 	return rasql.NewProjection(items, usersOptionalDecoder{})
 }
 
-func UsersGraphKey(source rasql.TypedRelation[UsersRow]) (rasql.GraphKey[UsersRow], error) {
+func UsersGraphKey(source rasql.Table[UsersRow]) (rasql.GraphKey[UsersRow], error) {
 	expressions, err := (UsersColumns{}).Bind(source)
 	if err != nil {
 		return rasql.GraphKey[UsersRow]{}, err
@@ -186,7 +207,7 @@ func UsersGraphKey(source rasql.TypedRelation[UsersRow]) (rasql.GraphKey[UsersRo
 	return rasql.NewGraphKey[UsersRow](rasql.KeyPart[UsersRow, int64](expressions.ID, func(row UsersRow) int64 { return row.ID }))
 }
 
-func UsersIDPageKey(source rasql.TypedRelation[UsersRow], direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
+func UsersIDPageKey(source rasql.Table[UsersRow], direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
 	expressions, err := (UsersColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -194,7 +215,7 @@ func UsersIDPageKey(source rasql.TypedRelation[UsersRow], direction rasql.PageDi
 	return rasqlgenPageKey(direction, expressions.ID.Expr(), func(row UsersRow) int64 { return row.ID })
 }
 
-func UsersEmailPageKey(source rasql.TypedRelation[UsersRow], direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
+func UsersEmailPageKey(source rasql.Table[UsersRow], direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
 	expressions, err := (UsersColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -202,7 +223,7 @@ func UsersEmailPageKey(source rasql.TypedRelation[UsersRow], direction rasql.Pag
 	return rasqlgenPageKey(direction, expressions.Email.Expr(), func(row UsersRow) string { return row.Email })
 }
 
-func UsersNicknamePageKey(source rasql.TypedRelation[UsersRow], direction rasql.PageDirection, nulls rasql.NullOrder) (rasql.PageKey[UsersRow], error) {
+func UsersNicknamePageKey(source rasql.Table[UsersRow], direction rasql.PageDirection, nulls rasql.NullOrder) (rasql.PageKey[UsersRow], error) {
 	expressions, err := (UsersColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -210,7 +231,7 @@ func UsersNicknamePageKey(source rasql.TypedRelation[UsersRow], direction rasql.
 	return rasqlgenNullablePageKey(direction, expressions.Nickname.NullExpr(), func(row UsersRow) rasql.Nullable[string] { return row.Nickname }, nulls)
 }
 
-func UsersStatusPageKey(source rasql.TypedRelation[UsersRow], direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
+func UsersStatusPageKey(source rasql.Table[UsersRow], direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
 	expressions, err := (UsersColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -218,7 +239,7 @@ func UsersStatusPageKey(source rasql.TypedRelation[UsersRow], direction rasql.Pa
 	return rasqlgenPageKey(direction, expressions.Status.Expr(), func(row UsersRow) string { return row.Status })
 }
 
-func UsersFirstNamePageKey(source rasql.TypedRelation[UsersRow], direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
+func UsersFirstNamePageKey(source rasql.Table[UsersRow], direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
 	expressions, err := (UsersColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -226,7 +247,7 @@ func UsersFirstNamePageKey(source rasql.TypedRelation[UsersRow], direction rasql
 	return rasqlgenPageKey(direction, expressions.FirstName.Expr(), func(row UsersRow) string { return row.FirstName })
 }
 
-func UsersLastNamePageKey(source rasql.TypedRelation[UsersRow], direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
+func UsersLastNamePageKey(source rasql.Table[UsersRow], direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
 	expressions, err := (UsersColumns{}).Bind(source)
 	if err != nil {
 		return nil, err
@@ -235,11 +256,7 @@ func UsersLastNamePageKey(source rasql.TypedRelation[UsersRow], direction rasql.
 }
 
 var usersMutationColumns = func() UsersExpressions {
-	source, err := Users().Source("")
-	if err != nil {
-		panic(err)
-	}
-	value, err := (UsersColumns{}).Bind(source)
+	value, err := (UsersColumns{}).Bind(Users().Table())
 	if err != nil {
 		panic(err)
 	}
@@ -247,10 +264,10 @@ var usersMutationColumns = func() UsersExpressions {
 }()
 
 type UsersCreate struct {
+	table  rasql.Table[UsersRow]
 	fields []rasql.MutationField[UsersRow]
 }
 
-func NewUsersCreate() UsersCreate { return UsersCreate{} }
 func (v UsersCreate) ID(value int64) UsersCreate {
 	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(usersMutationColumns.ID, value))
 	return v
@@ -284,14 +301,16 @@ func (v UsersCreate) LastName(value string) UsersCreate {
 	return v
 }
 func (v UsersCreate) Plan() (rasql.CreatePlan[UsersRow], error) {
-	return rasql.NewCreatePlan(Users().Table, v.fields...)
+	return rasql.NewCreatePlan(v.table, v.fields...)
 }
 
+func (t UsersTable) Create() UsersCreate { return UsersCreate{table: t.usersTableHandle} }
+
 type UsersPatch struct {
+	table  rasql.Table[UsersRow]
 	fields []rasql.MutationField[UsersRow]
 }
 
-func NewUsersPatch() UsersPatch { return UsersPatch{} }
 func (v UsersPatch) ID(value int64) UsersPatch {
 	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(usersMutationColumns.ID, value))
 	return v
@@ -325,7 +344,13 @@ func (v UsersPatch) LastName(value string) UsersPatch {
 	return v
 }
 func (v UsersPatch) Where(value rasql.Predicate) (rasql.PatchPlan[UsersRow], error) {
-	return rasql.NewPatchPlan(Users().Table, value, v.fields...)
+	return rasql.NewPatchPlan(v.table, value, v.fields...)
+}
+
+func (t UsersTable) Patch() UsersPatch { return UsersPatch{table: t.usersTableHandle} }
+
+func (t UsersTable) Delete(where rasql.Predicate) (rasql.DeletePlan[UsersRow], error) {
+	return rasql.NewDeletePlan(t.usersTableHandle, where)
 }
 ```
 source: [examples/store/users_gen.go](https://github.com/lestrrat-go/rasql/blob/main/examples/store/users_gen.go)
@@ -450,7 +475,7 @@ same typo stops at the compiler:
 
 <!-- INCLUDE(examples/rasqlgen_column_fields_example_test.go#typed_column) -->
 ```go
-columns, err := (store.UsersColumns{}).Bind(users.Table)
+columns, err := (store.UsersColumns{}).Bind(users.Table())
 if err != nil {
 	fmt.Printf("failed to bind users columns: %s\n", err)
 	return
@@ -694,12 +719,12 @@ batch must own rollback or savepoint cleanup.
 
 <!-- INCLUDE(examples/mutation_batch_example_test.go#mutationBatch) -->
 ```go
-first, err := store.NewUsersCreate().Email("ada@example.com").FirstName("Ada").LastName("Lovelace").Plan()
+first, err := store.Users().Create().Email("ada@example.com").FirstName("Ada").LastName("Lovelace").Plan()
 if err != nil {
 	fmt.Println(err)
 	return
 }
-second, err := store.NewUsersCreate().Email("grace@example.com").FirstName("Grace").LastName("Hopper").Plan()
+second, err := store.Users().Create().Email("grace@example.com").FirstName("Grace").LastName("Hopper").Plan()
 if err != nil {
 	fmt.Println(err)
 	return

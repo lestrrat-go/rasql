@@ -17,12 +17,12 @@ func Example_typedPatch() {
 		WithArgs("active", int64(1)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	executor, _ := rasql.Open(context.Background(), database, dialect.SQLite(), rasql.WithProfile(rasql.SQLite335()))
-	columns, err := (store.UsersColumns{}).Bind(store.Users().Table)
+	columns, err := (store.UsersColumns{}).Bind(store.Users().Table())
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
-	plan, _ := store.NewUsersPatch().Status("active").Where(rasql.EqualValue(columns.ID.Expr(), int64(1)))
+	plan, _ := store.Users().Patch().Status("active").Where(rasql.EqualValue(columns.ID.Expr(), int64(1)))
 	_, err = rasql.ExecMutation(context.Background(), executor, plan)
 	fmt.Println(err)
 	// Output: <nil>

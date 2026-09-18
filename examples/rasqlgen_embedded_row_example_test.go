@@ -57,7 +57,7 @@ func Example_rasqlgen_embedded_row() {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	plan, err := store.NewUsersCreate().ID(1).Email("ada@example.com").FirstName("First").LastName("Last").Plan()
+	plan, err := store.Users().Create().ID(1).Email("ada@example.com").FirstName("First").LastName("Last").Plan()
 	if err != nil {
 		fmt.Printf("failed to build insert: %s\n", err)
 		return
@@ -70,7 +70,7 @@ func Example_rasqlgen_embedded_row() {
 	// The generated columns are reused, but not the generated projection:
 	// store.UsersProjection decodes into store.UsersRow, and this query
 	// decodes into the wrapper instead, so it states its own decoder.
-	columns, err := (store.UsersColumns{}).Bind(users.Table)
+	columns, err := (store.UsersColumns{}).Bind(users.Table())
 	if err != nil {
 		fmt.Printf("failed to bind users columns: %s\n", err)
 		return
