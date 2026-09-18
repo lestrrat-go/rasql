@@ -85,18 +85,13 @@ func Example_rasql_named_scope() {
 		{ID: 3, Email: "cyd@example.com", Status: "active", FirstName: "Cyd", LastName: "Hopper"},
 		{ID: 4, Email: "dee@example.com", Status: "active", FirstName: "Dee", LastName: "Hopper"},
 	} {
-		plan, err := users.Create().
+		if _, err := users.Create().
 			ID(user.ID).
 			Email(user.Email).
 			Status(user.Status).
 			FirstName(user.FirstName).
 			LastName(user.LastName).
-			Plan()
-		if err != nil {
-			fmt.Printf("failed to build insert plan: %s\n", err)
-			return
-		}
-		if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
+			Exec(ctx, db); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
