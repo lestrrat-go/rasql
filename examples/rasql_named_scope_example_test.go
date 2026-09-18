@@ -16,11 +16,7 @@ import (
 // order by them.
 func namedScopeUsersQuery() (rasql.Query[store.UsersRow], store.UsersExpressions, error) {
 	users := store.Users()
-	source, err := users.Source("")
-	if err != nil {
-		return rasql.Query[store.UsersRow]{}, store.UsersExpressions{}, err
-	}
-	columns, err := (store.UsersColumns{}).Bind(source)
+	columns, err := (store.UsersColumns{}).Bind(users)
 	if err != nil {
 		return rasql.Query[store.UsersRow]{}, store.UsersExpressions{}, err
 	}
@@ -28,7 +24,7 @@ func namedScopeUsersQuery() (rasql.Query[store.UsersRow], store.UsersExpressions
 	if err != nil {
 		return rasql.Query[store.UsersRow]{}, store.UsersExpressions{}, err
 	}
-	return rasql.Select(source, projection), columns, nil
+	return rasql.Select(users, projection), columns, nil
 }
 
 type namedScopeUsersScope interface {
@@ -89,7 +85,7 @@ func Example_rasql_named_scope() {
 		{ID: 3, Email: "cyd@example.com", Status: "active", FirstName: "Cyd", LastName: "Hopper"},
 		{ID: 4, Email: "dee@example.com", Status: "active", FirstName: "Dee", LastName: "Hopper"},
 	} {
-		plan, err := store.NewUsersCreate().
+		plan, err := users.Create().
 			ID(user.ID).
 			Email(user.Email).
 			Status(user.Status).
