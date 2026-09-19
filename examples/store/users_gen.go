@@ -36,9 +36,14 @@ type usersTableHandle = rasql.Table[UsersRow]
 
 type UsersTable struct {
 	usersTableHandle
+	UsersExpressions
 }
 
-func Users() UsersTable { return UsersTable{usersTableHandle: usersTable} }
+func newUsersTable(handle usersTableHandle) UsersTable {
+	return UsersTable{usersTableHandle: handle, UsersExpressions: bindUsersExpressions(handle)}
+}
+
+func Users() UsersTable { return newUsersTable(usersTable) }
 
 func (t UsersTable) Ref() query.TableRef { return t.usersTableHandle.Ref() }
 
@@ -47,7 +52,7 @@ func (t UsersTable) As(alias string) (UsersTable, error) {
 	if err != nil {
 		return UsersTable{}, err
 	}
-	return UsersTable{usersTableHandle: aliased}, nil
+	return newUsersTable(aliased), nil
 }
 
 func (t UsersTable) InSchema(namespace string) (UsersTable, error) {
@@ -55,10 +60,8 @@ func (t UsersTable) InSchema(namespace string) (UsersTable, error) {
 	if err != nil {
 		return UsersTable{}, err
 	}
-	return UsersTable{usersTableHandle: moved}, nil
+	return newUsersTable(moved), nil
 }
-
-type UsersColumns struct{}
 
 type UsersExpressions struct {
 	ID                          rasql.Column[UsersRow, int64]
@@ -72,30 +75,29 @@ type OptionalUsersExpressions struct {
 	Email, Nickname, Status, FirstName, LastName rasql.NullColumn[UsersRow, string]
 }
 
-func (UsersColumns) Bind(source UsersTable) (UsersExpressions, error) {
-	var err error
-	result := UsersExpressions{
-		ID:        rasqlgenBind(&err, source, "id", "", rasql.BindColumn[UsersRow, int64]),
-		Email:     rasqlgenBind(&err, source, "email", "", rasql.BindColumn[UsersRow, string]),
-		Nickname:  rasqlgenBind(&err, source, "nickname", "", rasql.BindNullColumn[UsersRow, string]),
-		Status:    rasqlgenBind(&err, source, "status", "", rasql.BindColumn[UsersRow, string]),
-		FirstName: rasqlgenBind(&err, source, "first_name", "", rasql.BindColumn[UsersRow, string]),
-		LastName:  rasqlgenBind(&err, source, "last_name", "", rasql.BindColumn[UsersRow, string]),
+func bindUsersExpressions(source usersTableHandle) UsersExpressions {
+	return UsersExpressions{
+		ID:        rasqlgenColumn(source, "id", "", rasql.BindColumn[UsersRow, int64]),
+		Email:     rasqlgenColumn(source, "email", "", rasql.BindColumn[UsersRow, string]),
+		Nickname:  rasqlgenColumn(source, "nickname", "", rasql.BindNullColumn[UsersRow, string]),
+		Status:    rasqlgenColumn(source, "status", "", rasql.BindColumn[UsersRow, string]),
+		FirstName: rasqlgenColumn(source, "first_name", "", rasql.BindColumn[UsersRow, string]),
+		LastName:  rasqlgenColumn(source, "last_name", "", rasql.BindColumn[UsersRow, string]),
 	}
-	return result, err
 }
 
-func (UsersColumns) BindOptional(source rasql.OptionalRelation[UsersRow]) (OptionalUsersExpressions, error) {
-	var err error
-	result := OptionalUsersExpressions{
-		ID:        rasqlgenBind(&err, source, "id", "", rasql.BindOptionalColumn[UsersRow, int64]),
-		Email:     rasqlgenBind(&err, source, "email", "", rasql.BindOptionalColumn[UsersRow, string]),
-		Nickname:  rasqlgenBind(&err, source, "nickname", "", rasql.BindOptionalColumn[UsersRow, string]),
-		Status:    rasqlgenBind(&err, source, "status", "", rasql.BindOptionalColumn[UsersRow, string]),
-		FirstName: rasqlgenBind(&err, source, "first_name", "", rasql.BindOptionalColumn[UsersRow, string]),
-		LastName:  rasqlgenBind(&err, source, "last_name", "", rasql.BindOptionalColumn[UsersRow, string]),
+// Optional names every column of t as it appears on the nullable side
+// of an outer join, where the whole row may be absent.
+func (t UsersTable) Optional() OptionalUsersExpressions {
+	source := rasql.Optional[UsersRow](t.usersTableHandle)
+	return OptionalUsersExpressions{
+		ID:        rasqlgenColumn(source, "id", "", rasql.BindOptionalColumn[UsersRow, int64]),
+		Email:     rasqlgenColumn(source, "email", "", rasql.BindOptionalColumn[UsersRow, string]),
+		Nickname:  rasqlgenColumn(source, "nickname", "", rasql.BindOptionalColumn[UsersRow, string]),
+		Status:    rasqlgenColumn(source, "status", "", rasql.BindOptionalColumn[UsersRow, string]),
+		FirstName: rasqlgenColumn(source, "first_name", "", rasql.BindOptionalColumn[UsersRow, string]),
+		LastName:  rasqlgenColumn(source, "last_name", "", rasql.BindOptionalColumn[UsersRow, string]),
 	}
-	return result, err
 }
 
 var usersResultColumns = []rasql.ResultColumn{
@@ -146,93 +148,59 @@ func (usersOptionalDecoder) DecodeRow(source rasql.ScanSource, row *UsersRow) er
 	return nil
 }
 
-func UsersProjection(expressions UsersExpressions) (rasql.Projection[UsersRow], error) {
+func UsersProjection(source UsersTable) (rasql.Projection[UsersRow], error) {
 	items := []rasql.ProjectionItem{
-		rasql.Item("id", expressions.ID.Expr(), schema.IntegerType{}, ""),
-		rasql.Item("email", expressions.Email.Expr(), schema.TextType{}, ""),
-		rasql.NullItem("nickname", expressions.Nickname.NullExpr(), schema.TextType{}, ""),
-		rasql.Item("status", expressions.Status.Expr(), schema.TextType{}, ""),
-		rasql.Item("first_name", expressions.FirstName.Expr(), schema.TextType{}, ""),
-		rasql.Item("last_name", expressions.LastName.Expr(), schema.TextType{}, ""),
+		rasql.Item("id", source.ID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("email", source.Email.Expr(), schema.TextType{}, ""),
+		rasql.NullItem("nickname", source.Nickname.NullExpr(), schema.TextType{}, ""),
+		rasql.Item("status", source.Status.Expr(), schema.TextType{}, ""),
+		rasql.Item("first_name", source.FirstName.Expr(), schema.TextType{}, ""),
+		rasql.Item("last_name", source.LastName.Expr(), schema.TextType{}, ""),
 	}
 	return rasql.NewProjection(items, usersDecoder{})
 }
 
-func OptionalUsersProjection(expressions OptionalUsersExpressions) (rasql.Projection[UsersRow], error) {
+func OptionalUsersProjection(source OptionalUsersExpressions) (rasql.Projection[UsersRow], error) {
 	items := []rasql.ProjectionItem{
-		rasql.NullItem("id", expressions.ID.NullExpr(), schema.IntegerType{}, ""),
-		rasql.NullItem("email", expressions.Email.NullExpr(), schema.TextType{}, ""),
-		rasql.NullItem("nickname", expressions.Nickname.NullExpr(), schema.TextType{}, ""),
-		rasql.NullItem("status", expressions.Status.NullExpr(), schema.TextType{}, ""),
-		rasql.NullItem("first_name", expressions.FirstName.NullExpr(), schema.TextType{}, ""),
-		rasql.NullItem("last_name", expressions.LastName.NullExpr(), schema.TextType{}, ""),
+		rasql.NullItem("id", source.ID.NullExpr(), schema.IntegerType{}, ""),
+		rasql.NullItem("email", source.Email.NullExpr(), schema.TextType{}, ""),
+		rasql.NullItem("nickname", source.Nickname.NullExpr(), schema.TextType{}, ""),
+		rasql.NullItem("status", source.Status.NullExpr(), schema.TextType{}, ""),
+		rasql.NullItem("first_name", source.FirstName.NullExpr(), schema.TextType{}, ""),
+		rasql.NullItem("last_name", source.LastName.NullExpr(), schema.TextType{}, ""),
 	}
 	return rasql.NewProjection(items, usersOptionalDecoder{})
 }
 
 func UsersGraphKey(source UsersTable) (rasql.GraphKey[UsersRow], error) {
-	expressions, err := (UsersColumns{}).Bind(source)
-	if err != nil {
-		return rasql.GraphKey[UsersRow]{}, err
-	}
-	return rasql.NewGraphKey[UsersRow](rasql.KeyPart[UsersRow, int64](expressions.ID, func(row UsersRow) int64 { return row.ID }))
+	return rasql.NewGraphKey[UsersRow](rasql.KeyPart[UsersRow, int64](source.ID, func(row UsersRow) int64 { return row.ID }))
 }
 
 func UsersIDPageKey(source UsersTable, direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
-	expressions, err := (UsersColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenPageKey(direction, expressions.ID.Expr(), func(row UsersRow) int64 { return row.ID })
+	return rasqlgenPageKey(direction, source.ID.Expr(), func(row UsersRow) int64 { return row.ID })
 }
 
 func UsersEmailPageKey(source UsersTable, direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
-	expressions, err := (UsersColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenPageKey(direction, expressions.Email.Expr(), func(row UsersRow) string { return row.Email })
+	return rasqlgenPageKey(direction, source.Email.Expr(), func(row UsersRow) string { return row.Email })
 }
 
 func UsersNicknamePageKey(source UsersTable, direction rasql.PageDirection, nulls rasql.NullOrder) (rasql.PageKey[UsersRow], error) {
-	expressions, err := (UsersColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenNullablePageKey(direction, expressions.Nickname.NullExpr(), func(row UsersRow) rasql.Nullable[string] { return row.Nickname }, nulls)
+	return rasqlgenNullablePageKey(direction, source.Nickname.NullExpr(), func(row UsersRow) rasql.Nullable[string] { return row.Nickname }, nulls)
 }
 
 func UsersStatusPageKey(source UsersTable, direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
-	expressions, err := (UsersColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenPageKey(direction, expressions.Status.Expr(), func(row UsersRow) string { return row.Status })
+	return rasqlgenPageKey(direction, source.Status.Expr(), func(row UsersRow) string { return row.Status })
 }
 
 func UsersFirstNamePageKey(source UsersTable, direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
-	expressions, err := (UsersColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenPageKey(direction, expressions.FirstName.Expr(), func(row UsersRow) string { return row.FirstName })
+	return rasqlgenPageKey(direction, source.FirstName.Expr(), func(row UsersRow) string { return row.FirstName })
 }
 
 func UsersLastNamePageKey(source UsersTable, direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
-	expressions, err := (UsersColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenPageKey(direction, expressions.LastName.Expr(), func(row UsersRow) string { return row.LastName })
+	return rasqlgenPageKey(direction, source.LastName.Expr(), func(row UsersRow) string { return row.LastName })
 }
 
-var usersMutationColumns = func() UsersExpressions {
-	value, err := (UsersColumns{}).Bind(Users())
-	if err != nil {
-		panic(err)
-	}
-	return value
-}()
+var usersMutationColumns = bindUsersExpressions(usersTable)
 
 type UsersCreate struct {
 	table  rasql.Table[UsersRow]

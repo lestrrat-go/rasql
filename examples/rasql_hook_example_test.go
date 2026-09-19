@@ -77,12 +77,7 @@ func Example_rasql_hook() {
 	}
 
 	// A delete carrying a predicate renders different SQL, so the hook lets it through.
-	columns, err := (store.UsersColumns{}).Bind(users)
-	if err != nil {
-		fmt.Printf("failed to bind users columns: %s\n", err)
-		return
-	}
-	filtered, err := users.Delete(rasql.EqualValue(columns.ID.Expr(), int64(1)))
+	filtered, err := users.Delete(rasql.EqualValue(users.ID.Expr(), int64(1)))
 	if err != nil {
 		fmt.Printf("failed to build delete: %s\n", err)
 		return

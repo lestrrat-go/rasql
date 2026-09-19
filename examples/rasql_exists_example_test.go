@@ -85,16 +85,6 @@ func Example_rasql_exists() {
 		}
 	}
 
-	usersColumns, err := (store.UsersColumns{}).Bind(users)
-	if err != nil {
-		fmt.Printf("failed to bind users columns: %s\n", err)
-		return
-	}
-	ordersColumns, err := (store.OrdersColumns{}).Bind(orders)
-	if err != nil {
-		fmt.Printf("failed to bind orders columns: %s\n", err)
-		return
-	}
 
 	result, err := rasql.NewResultSchema(
 		rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}},
@@ -105,8 +95,8 @@ func Example_rasql_exists() {
 		return
 	}
 	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
-		rasql.Item("id", usersColumns.ID.Expr(), schema.IntegerType{}, ""),
-		rasql.Item("email", usersColumns.Email.Expr(), schema.TextType{}, ""),
+		rasql.Item("id", users.ID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("email", users.Email.Expr(), schema.TextType{}, ""),
 	}, userSummaryDecoder{result: result})
 	if err != nil {
 		fmt.Printf("failed to build projection: %s\n", err)
@@ -119,14 +109,14 @@ func Example_rasql_exists() {
 	// EXISTS reads no value, so the projected column is arbitrary; a column of
 	// the subquery's own table costs no parameter and renders the same on
 	// every engine.
-	ordersIDProjection, err := rasql.Scalar("id", ordersColumns.ID.Expr(), schema.IntegerType{}, "")
+	ordersIDProjection, err := rasql.Scalar("id", orders.ID.Expr(), schema.IntegerType{}, "")
 	if err != nil {
 		fmt.Printf("failed to build the orders subquery projection: %s\n", err)
 		return
 	}
 	hasOrder := rasql.Select(orders, ordersIDProjection).
 		Correlated(users).
-		Where(rasql.EqualExpr(ordersColumns.UserID.Expr(), usersColumns.ID.Expr()))
+		Where(rasql.EqualExpr(orders.UserID.Expr(), users.ID.Expr()))
 
 	exists, err := rasql.ExistsQuery(hasOrder)
 	if err != nil {
@@ -137,7 +127,7 @@ func Example_rasql_exists() {
 	buyers, err := rasql.All(ctx, db,
 		rasql.Select(users, projection).
 			Where(exists).
-			OrderBy(rasql.AscExpr(usersColumns.ID.Expr())))
+			OrderBy(rasql.AscExpr(users.ID.Expr())))
 	if err != nil {
 		fmt.Printf("failed to query users with an order: %s\n", err)
 		return
@@ -156,7 +146,7 @@ func Example_rasql_exists() {
 	quiet, err := rasql.All(ctx, db,
 		rasql.Select(users, projection).
 			Where(notExists).
-			OrderBy(rasql.AscExpr(usersColumns.ID.Expr())))
+			OrderBy(rasql.AscExpr(users.ID.Expr())))
 	if err != nil {
 		fmt.Printf("failed to query users without an order: %s\n", err)
 		return

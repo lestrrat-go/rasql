@@ -74,11 +74,6 @@ func Example_rasql_order_by_alias() {
 		return
 	}
 
-	columns, err := (store.UsersColumns{}).Bind(users)
-	if err != nil {
-		fmt.Printf("failed to bind users columns: %s\n", err)
-		return
-	}
 
 	result, err := rasql.NewResultSchema(
 		rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}},
@@ -91,10 +86,10 @@ func Example_rasql_order_by_alias() {
 	// displayName is written once and used in both the projection and the
 	// OrderBy below. CoalesceExpr falls back to email whenever nickname is
 	// NULL, so display_name is never NULL even though nickname is.
-	displayNameValue := rasql.CoalesceExpr(columns.Nickname.NullExpr(), columns.Email.Expr())
+	displayNameValue := rasql.CoalesceExpr(users.Nickname.NullExpr(), users.Email.Expr())
 	displayName := rasql.Item("display_name", displayNameValue, schema.TextType{}, "")
 	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
-		rasql.Item("id", columns.ID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("id", users.ID.Expr(), schema.IntegerType{}, ""),
 		displayName,
 	}, userDisplayNameDecoder{result: result})
 	if err != nil {
@@ -126,9 +121,9 @@ func Example_rasql_order_by_alias() {
 	// rasql refuses this before the projection can even be built, since
 	// PostgreSQL and MySQL both call two results with the same name
 	// ambiguous and SQLite would otherwise resolve it silently.
-	emailAsID := rasql.Item("id", columns.Email.Expr(), schema.TextType{}, "")
+	emailAsID := rasql.Item("id", users.Email.Expr(), schema.TextType{}, "")
 	_, ambiguousErr := rasql.NewProjection([]rasql.ProjectionItem{
-		rasql.Item("id", columns.ID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("id", users.ID.Expr(), schema.IntegerType{}, ""),
 		emailAsID,
 	}, userDisplayNameDecoder{result: result})
 	if ambiguousErr != nil {

@@ -48,16 +48,11 @@ func Example_rasql_update() {
 		return
 	}
 
-	columns, err := (store.UsersColumns{}).Bind(users)
-	if err != nil {
-		fmt.Printf("failed to bind users columns: %s\n", err)
-		return
-	}
 
 	// The generated patch builder writes only the fields named, and its
 	// Where takes the typed predicate that matches the target row.
 	// SQL: UPDATE users SET email = ? WHERE users.id = ? (arguments: "grace@example.com", 42)
-	patchPlan, err := store.Users().Patch().Email("grace@example.com").Where(rasql.EqualValue(columns.ID.Expr(), int64(42)))
+	patchPlan, err := store.Users().Patch().Email("grace@example.com").Where(rasql.EqualValue(users.ID.Expr(), int64(42)))
 	if err != nil {
 		fmt.Printf("failed to build patch: %s\n", err)
 		return

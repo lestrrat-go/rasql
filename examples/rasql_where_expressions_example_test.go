@@ -59,12 +59,7 @@ func Example_rasql_where_expressions() {
 
 	// The generated columns struct binds every users column to the table, and
 	// the generated projection selects them in the order the row type scans.
-	columns, err := (store.UsersColumns{}).Bind(users)
-	if err != nil {
-		fmt.Printf("failed to bind users columns: %s\n", err)
-		return
-	}
-	projection, err := store.UsersProjection(columns)
+	projection, err := store.UsersProjection(users)
 	if err != nil {
 		fmt.Printf("failed to build users projection: %s\n", err)
 		return
@@ -76,9 +71,9 @@ func Example_rasql_where_expressions() {
 	// SQL: SELECT users.id, users.email, users.nickname, users.status, users.first_name, users.last_name FROM users WHERE (users.id > ? AND users.nickname IS NOT NULL) ORDER BY users.id DESC (argument: 10)
 	rows, err := rasql.All(ctx, db,
 		base.Where(rasql.And(
-			rasql.GreaterValue(columns.ID.Expr(), int64(10)),
-			rasql.IsNotNull(columns.Nickname.NullExpr()),
-		)).OrderBy(rasql.DescExpr(columns.ID.Expr())))
+			rasql.GreaterValue(users.ID.Expr(), int64(10)),
+			rasql.IsNotNull(users.Nickname.NullExpr()),
+		)).OrderBy(rasql.DescExpr(users.ID.Expr())))
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return

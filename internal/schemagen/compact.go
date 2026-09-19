@@ -120,17 +120,38 @@ func CompactObjectSource(packageName string, object CompactObject) ([]byte, erro
 	b.WriteString(accessor)
 	b.WriteString("Table struct {\n\t")
 	b.WriteString(handleName)
-	b.WriteString("\n}\n\nfunc ")
+	b.WriteString("\n\t")
 	b.WriteString(accessor)
-	b.WriteString("() ")
+	b.WriteString("Expressions\n}\n\n")
+	// The wrapper carries its own columns, so a caller writes t.ID rather
+	// than binding a separate value first. Every constructor below rebuilds
+	// them, because a column reference holds the alias and namespace of the
+	// table it was bound against, and As and InSchema each return a table
+	// carrying a different one.
+	b.WriteString("func new")
 	b.WriteString(accessor)
-	b.WriteString("Table { return ")
+	b.WriteString("Table(handle ")
+	b.WriteString(handleName)
+	b.WriteString(") ")
+	b.WriteString(accessor)
+	b.WriteString("Table {\n\treturn ")
 	b.WriteString(accessor)
 	b.WriteString("Table{")
 	b.WriteString(handleName)
-	b.WriteString(": ")
+	b.WriteString(": handle, ")
+	b.WriteString(accessor)
+	b.WriteString("Expressions: bind")
+	b.WriteString(accessor)
+	b.WriteString("Expressions(handle)}\n}\n\n")
+	b.WriteString("func ")
+	b.WriteString(accessor)
+	b.WriteString("() ")
+	b.WriteString(accessor)
+	b.WriteString("Table { return new")
+	b.WriteString(accessor)
+	b.WriteString("Table(")
 	b.WriteString(tableName)
-	b.WriteString("} }\n\n")
+	b.WriteString(") }\n\n")
 	b.WriteString("func (t ")
 	b.WriteString(accessor)
 	b.WriteString("Table) Ref() query.TableRef { return t.")
@@ -144,11 +165,9 @@ func CompactObjectSource(packageName string, object CompactObject) ([]byte, erro
 	b.WriteString(handleName)
 	b.WriteString(".As(alias)\n\tif err != nil {\n\t\treturn ")
 	b.WriteString(accessor)
-	b.WriteString("Table{}, err\n\t}\n\treturn ")
+	b.WriteString("Table{}, err\n\t}\n\treturn new")
 	b.WriteString(accessor)
-	b.WriteString("Table{")
-	b.WriteString(handleName)
-	b.WriteString(": aliased}, nil\n}\n\n")
+	b.WriteString("Table(aliased), nil\n}\n\n")
 	b.WriteString("func (t ")
 	b.WriteString(accessor)
 	b.WriteString("Table) InSchema(namespace string) (")
@@ -157,11 +176,9 @@ func CompactObjectSource(packageName string, object CompactObject) ([]byte, erro
 	b.WriteString(handleName)
 	b.WriteString(".InSchema(namespace)\n\tif err != nil {\n\t\treturn ")
 	b.WriteString(accessor)
-	b.WriteString("Table{}, err\n\t}\n\treturn ")
+	b.WriteString("Table{}, err\n\t}\n\treturn new")
 	b.WriteString(accessor)
-	b.WriteString("Table{")
-	b.WriteString(handleName)
-	b.WriteString(": moved}, nil\n}\n\n")
+	b.WriteString("Table(moved), nil\n}\n\n")
 
 	writeCompactColumns(&b, object, accessor, row)
 	writeCompactDecoder(&b, object, accessor, row, false)
@@ -312,8 +329,6 @@ func slicesSortImports(values []compactImport) {
 func writeCompactColumns(b *bytes.Buffer, object CompactObject, accessor, row string) {
 	b.WriteString("type ")
 	b.WriteString(accessor)
-	b.WriteString("Columns struct{}\n\ntype ")
-	b.WriteString(accessor)
 	b.WriteString("Expressions struct {\n")
 	groups := make([]compactFieldGroup, 0, len(object.Go.Columns))
 	for _, column := range object.Go.Columns {
@@ -356,29 +371,42 @@ func writeCompactColumns(b *bytes.Buffer, object CompactObject, accessor, row st
 	writeCompactBinder(b, object, accessor, row, true)
 }
 
+// writeCompactBinder writes the function that names every column of one table.
+//
+// The non-optional form is the unexported constructor the wrapper's own Table
+// accessor, As and InSchema each call, so the columns a caller reads as fields
+// carry whatever alias or namespace that particular table value holds. The
+// optional form is a method on the wrapper, because an outer join's nullable
+// side is asked for one appearance at a time.
+//
+// Neither reports an error. rasqlgenColumn in schema_gen.go states why.
 func writeCompactBinder(b *bytes.Buffer, object CompactObject, accessor, row string, optional bool) {
-	name := "Bind"
 	result := accessor + "Expressions"
+	handle := compactLowerFirst(accessor) + "TableHandle"
 	if optional {
-		name = "BindOptional"
 		result = "Optional" + accessor + "Expressions"
-	}
-	b.WriteString("func (")
-	b.WriteString(accessor)
-	b.WriteString("Columns) ")
-	b.WriteString(name)
-	if optional {
-		b.WriteString("(source rasql.OptionalRelation[")
-		b.WriteString(row)
-		b.WriteString("]) (")
-	} else {
-		b.WriteString("(source ")
+		b.WriteString("// Optional names every column of t as it appears on the nullable side\n")
+		b.WriteString("// of an outer join, where the whole row may be absent.\n")
+		b.WriteString("func (t ")
 		b.WriteString(accessor)
-		b.WriteString("Table) (")
+		b.WriteString("Table) Optional() ")
+	} else {
+		b.WriteString("func bind")
+		b.WriteString(accessor)
+		b.WriteString("Expressions(source ")
+		b.WriteString(handle)
+		b.WriteString(") ")
 	}
 	b.WriteString(result)
-	b.WriteString(", error) {\n")
-	b.WriteString("\tvar err error\n\tresult := ")
+	b.WriteString(" {\n")
+	if optional {
+		b.WriteString("\tsource := rasql.Optional[")
+		b.WriteString(row)
+		b.WriteString("](t.")
+		b.WriteString(handle)
+		b.WriteString(")\n")
+	}
+	b.WriteString("\treturn ")
 	b.WriteString(result)
 	b.WriteString("{\n")
 	for _, column := range object.Go.Columns {
@@ -387,7 +415,7 @@ func writeCompactBinder(b *bytes.Buffer, object CompactObject, accessor, row str
 		}
 		b.WriteString("\t\t")
 		b.WriteString(exportedCompact(column.Name))
-		b.WriteString(": rasqlgenBind(&err, source, ")
+		b.WriteString(": rasqlgenColumn(source, ")
 		b.WriteString(strconv.Quote(column.PhysicalName))
 		b.WriteString(", ")
 		b.WriteString(strconv.Quote(column.Codec))
@@ -404,7 +432,7 @@ func writeCompactBinder(b *bytes.Buffer, object CompactObject, accessor, row str
 		b.WriteString(compactColumnValueType(object, column))
 		b.WriteString("]),\n")
 	}
-	b.WriteString("\t}\n\treturn result, err\n}\n\n")
+	b.WriteString("\t}\n}\n\n")
 }
 
 func writeCompactDecoder(b *bytes.Buffer, object CompactObject, accessor, row string, optional bool) {
@@ -556,12 +584,18 @@ func writeCompactProjections(b *bytes.Buffer, object CompactObject, accessor, ro
 	writeProjection := func(name string, optionalProjection bool) {
 		b.WriteString("func ")
 		b.WriteString(name)
-		b.WriteString("(expressions ")
+		b.WriteString("(source ")
 		if optionalProjection {
 			b.WriteString("Optional")
+			b.WriteString(accessor)
+			b.WriteString("Expressions")
+		} else {
+			// The table carries its own columns, so the caller passes the
+			// table itself rather than a value bound from it first.
+			b.WriteString(accessor)
+			b.WriteString("Table")
 		}
-		b.WriteString(accessor)
-		b.WriteString("Expressions) (rasql.Projection[")
+		b.WriteString(") (rasql.Projection[")
 		b.WriteString(row)
 		b.WriteString("], error) {\n\titems := []rasql.ProjectionItem{\n")
 		for _, column := range object.Go.Columns {
@@ -578,11 +612,11 @@ func writeCompactProjections(b *bytes.Buffer, object CompactObject, accessor, ro
 			b.WriteString(strconv.Quote(column.PhysicalName))
 			b.WriteString(", ")
 			if optionalProjection || column.Nullable {
-				b.WriteString("expressions.")
+				b.WriteString("source.")
 				b.WriteString(field)
 				b.WriteString(".NullExpr()")
 			} else {
-				b.WriteString("expressions.")
+				b.WriteString("source.")
 				b.WriteString(field)
 				b.WriteString(".Expr()")
 			}
@@ -658,14 +692,10 @@ func writeCompactKeys(b *bytes.Buffer, object CompactObject, accessor, row strin
 		b.WriteString(accessor)
 		b.WriteString("Table) (rasql.GraphKey[")
 		b.WriteString(row)
-		b.WriteString("], error) {\n\texpressions, err := (")
-		b.WriteString(accessor)
-		b.WriteString("Columns{}).Bind(source)\n\tif err != nil { return rasql.GraphKey[")
-		b.WriteString(row)
-		b.WriteString("]{}, err }\n\treturn rasql.NewGraphKey[")
+		b.WriteString("], error) {\n\treturn rasql.NewGraphKey[")
 		b.WriteString(row)
 		b.WriteString("](")
-		writeCompactGraphParts(b, object, accessor, row, marker, "expressions")
+		writeCompactGraphParts(b, object, accessor, row, marker, "source")
 		b.WriteString(")\n}\n\n")
 	}
 	for _, column := range compactPageColumns(object) {
@@ -682,15 +712,13 @@ func writeCompactKeys(b *bytes.Buffer, object CompactObject, accessor, row strin
 		}
 		b.WriteString(") (rasql.PageKey[")
 		b.WriteString(row)
-		b.WriteString("], error) {\n\texpressions, err := (")
-		b.WriteString(accessor)
-		b.WriteString("Columns{}).Bind(source)\n\tif err != nil { return nil, err }\n\treturn rasqlgen")
+		b.WriteString("], error) {\n\treturn rasqlgen")
 		if column.Nullable {
 			b.WriteString("NullablePageKey(direction, ")
 		} else {
 			b.WriteString("PageKey(direction, ")
 		}
-		b.WriteString("expressions")
+		b.WriteString("source")
 		b.WriteString(".")
 		b.WriteString(field)
 		if column.Nullable {
@@ -807,16 +835,10 @@ func writeCompactRelations(b *bytes.Buffer, object CompactObject, accessor, row 
 		b.WriteString("CG])) (rasql.GraphEdge[")
 		b.WriteString(row)
 		b.WriteString(", G], error) {\n")
-		b.WriteString("\tparentExpressions, err := (")
-		b.WriteString(accessor)
-		b.WriteString("Columns{}).Bind(parentSource)\n\tif err != nil { return nil, err }\n")
-		b.WriteString("\tchildExpressions, err := (")
-		b.WriteString(targetAccessor)
-		b.WriteString("Columns{}).Bind(childSource)\n\tif err != nil { return nil, err }\n")
 		b.WriteString("\tparent, err := rasql.NewGraphKey[")
 		b.WriteString(row)
 		b.WriteString("](")
-		writeCompactGraphParts(b, object, accessor, row, relation.From, "parentExpressions")
+		writeCompactGraphParts(b, object, accessor, row, relation.From, "parentSource")
 		b.WriteString(")\n\tif err != nil { return nil, err }\n")
 		if relation.Kind == "many_through" && relation.Through != nil {
 			through, ok := object.Targets[relation.Through.Object]
@@ -831,23 +853,20 @@ func writeCompactRelations(b *bytes.Buffer, object CompactObject, accessor, row 
 			if throughRow == "" {
 				throughRow = exportedCompact(through.Catalog.Name) + "Row"
 			}
-			b.WriteString("\tjunctionExpressions, err := (")
-			b.WriteString(throughAccessor)
-			b.WriteString("Columns{}).Bind(junctionSource)\n\tif err != nil { return nil, err }\n")
 			b.WriteString("\tjunctionParent, err := rasql.NewGraphKey[")
 			b.WriteString(throughRow)
 			b.WriteString("](")
-			writeCompactGraphParts(b, CompactObject{Catalog: through.Catalog, Go: through.Go, Mappings: object.Mappings, ColumnBindings: through.ColumnBindings}, throughAccessor, throughRow, relation.Through.SourceFrom, "junctionExpressions")
+			writeCompactGraphParts(b, CompactObject{Catalog: through.Catalog, Go: through.Go, Mappings: object.Mappings, ColumnBindings: through.ColumnBindings}, throughAccessor, throughRow, relation.Through.SourceFrom, "junctionSource")
 			b.WriteString(")\n\tif err != nil { return nil, err }\n")
 			b.WriteString("\tjunctionChild, err := rasql.NewGraphKey[")
 			b.WriteString(throughRow)
 			b.WriteString("](")
-			writeCompactGraphParts(b, CompactObject{Catalog: through.Catalog, Go: through.Go, Mappings: object.Mappings, ColumnBindings: through.ColumnBindings}, throughAccessor, throughRow, relation.Through.TargetFrom, "junctionExpressions")
+			writeCompactGraphParts(b, CompactObject{Catalog: through.Catalog, Go: through.Go, Mappings: object.Mappings, ColumnBindings: through.ColumnBindings}, throughAccessor, throughRow, relation.Through.TargetFrom, "junctionSource")
 			b.WriteString(")\n\tif err != nil { return nil, err }\n")
 			b.WriteString("\tchild, err := rasql.NewGraphKey[")
 			b.WriteString(targetRow)
 			b.WriteString("](")
-			writeCompactGraphParts(b, CompactObject{Catalog: target.Catalog, Go: target.Go, Mappings: object.Mappings, ColumnBindings: target.ColumnBindings}, targetAccessor, targetRow, relation.To, "childExpressions")
+			writeCompactGraphParts(b, CompactObject{Catalog: target.Catalog, Go: target.Go, Mappings: object.Mappings, ColumnBindings: target.ColumnBindings}, targetAccessor, targetRow, relation.To, "childSource")
 			b.WriteString(")\n\tif err != nil { return nil, err }\n")
 			b.WriteString("\treturn rasql.ManyThrough(\"")
 			b.WriteString(relation.Name)
@@ -857,7 +876,7 @@ func writeCompactRelations(b *bytes.Buffer, object CompactObject, accessor, row 
 		b.WriteString("\tchild, err := rasql.NewGraphKey[")
 		b.WriteString(targetRow)
 		b.WriteString("](")
-		writeCompactGraphParts(b, CompactObject{Catalog: target.Catalog, Go: target.Go, Mappings: object.Mappings, ColumnBindings: target.ColumnBindings}, targetAccessor, targetRow, relation.To, "childExpressions")
+		writeCompactGraphParts(b, CompactObject{Catalog: target.Catalog, Go: target.Go, Mappings: object.Mappings, ColumnBindings: target.ColumnBindings}, targetAccessor, targetRow, relation.To, "childSource")
 		b.WriteString(")\n\tif err != nil { return nil, err }\n\treturn rasql.")
 		if relation.Kind == "belongs_to" || relation.Kind == "has_one" {
 			b.WriteString("HasOne")
@@ -902,13 +921,11 @@ func writeCompactMutations(b *bytes.Buffer, object CompactObject, accessor, row,
 		mutationColumns := compactLowerFirst(accessor) + "MutationColumns"
 		b.WriteString("var ")
 		b.WriteString(mutationColumns)
-		b.WriteString(" = func() ")
+		b.WriteString(" = bind")
 		b.WriteString(accessor)
-		b.WriteString("Expressions { value, err := (")
-		b.WriteString(accessor)
-		b.WriteString("Columns{}).Bind(")
-		b.WriteString(accessor)
-		b.WriteString("()); if err != nil { panic(err) }; return value }()\n\n")
+		b.WriteString("Expressions(")
+		b.WriteString(compactLowerFirst(accessor))
+		b.WriteString("Table)\n\n")
 		if insert {
 			writeMutationType(b, object, row, create, false, mutationColumns)
 			b.WriteString("func (t ")

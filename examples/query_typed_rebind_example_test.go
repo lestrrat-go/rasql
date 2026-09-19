@@ -53,12 +53,7 @@ func Example_rebindTypedResult() {
 		}
 	}
 
-	columns, err := (store.UsersColumns{}).Bind(users)
-	if err != nil {
-		fmt.Printf("failed to bind users columns: %s\n", err)
-		return
-	}
-	idProjection, err := rasql.Scalar("id", columns.ID.Expr(), schema.IntegerType{}, "")
+	idProjection, err := rasql.Scalar("id", users.ID.Expr(), schema.IntegerType{}, "")
 	if err != nil {
 		fmt.Printf("failed to build id projection: %s\n", err)
 		return
@@ -66,9 +61,9 @@ func Example_rebindTypedResult() {
 	// base projects id and filters to one row. A caller who only needed the
 	// filter, not this particular projected shape, still built it this way to
 	// reuse the WHERE.
-	base := rasql.Select(users, idProjection).Where(rasql.EqualValue(columns.ID.Expr(), int64(7)))
+	base := rasql.Select(users, idProjection).Where(rasql.EqualValue(users.ID.Expr(), int64(7)))
 
-	emailProjection, err := rasql.Scalar("email", columns.Email.Expr(), schema.TextType{}, "")
+	emailProjection, err := rasql.Scalar("email", users.Email.Expr(), schema.TextType{}, "")
 	if err != nil {
 		fmt.Printf("failed to build email projection: %s\n", err)
 		return

@@ -26,16 +26,12 @@ func (usersIDDecoder) DecodeRow(source rasql.ScanSource, result *store.UsersRow)
 
 func usersQuery() rasql.Query[store.UsersRow] {
 	relation := store.Users()
-	columns, err := (store.UsersColumns{}).Bind(relation)
-	if err != nil {
-		panic(err)
-	}
 	resultSchema, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}})
 	if err != nil {
 		panic(err)
 	}
 	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
-		rasql.Item("id", columns.ID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("id", relation.ID.Expr(), schema.IntegerType{}, ""),
 	}, usersIDDecoder{schema: resultSchema})
 	if err != nil {
 		panic(err)

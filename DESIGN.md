@@ -54,7 +54,7 @@ schema ──> dialect ──┐
 
 The public API starts with descriptors rather than a global registry. Applications can create a `schema.TableDef` directly, while generated code exposes typed `rasql.Table` values that retain reusable `query.TableRef` values. This keeps multiple schemas and test fixtures isolated in the same process.
 
-`rasql.Table[T]` is a struct holding one `query.TableRef` in an unexported field, so nothing outside `rasql` builds one that carries a table. A generated table type holds one, and a generated columns struct binds one `rasql.Column` field per column against it, so application code names a column as a field the compiler checks rather than as a string, and never names a table type of its own. `Table.Ref()` reaches the `query.TableRef` underneath, and `Ref().Column(name)` is the one way to name a column the code only learns while it runs.
+`rasql.Table[T]` is a struct holding one `query.TableRef` in an unexported field, so nothing outside `rasql` builds one that carries a table. A generated table type holds one and carries one `rasql.Column` field per column, bound against whatever alias and namespace that table value holds, so application code names a column as a field the compiler checks rather than as a string, and never names a table type of its own. `Table.Ref()` reaches the `query.TableRef` underneath, and `Ref().Column(name)` is the one way to name a column the code only learns while it runs.
 
 Statements are immutable after construction. The basic `query` API exposes validated statement values. The `render` fluent builder owns a dialect and returns parameterized SQL, while the root `rasql` fluent builder carries neither a database handle nor a dialect and receives a `rasql.DB` only at terminal calls.
 

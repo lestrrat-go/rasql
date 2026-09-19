@@ -45,12 +45,7 @@ func Example_rasql_query_errors() {
 		return
 	}
 
-	columns, err := (store.UsersColumns{}).Bind(users)
-	if err != nil {
-		fmt.Printf("failed to bind users columns: %s\n", err)
-		return
-	}
-	projection, err := store.UsersProjection(columns)
+	projection, err := store.UsersProjection(users)
 	if err != nil {
 		fmt.Printf("failed to build users projection: %s\n", err)
 		return

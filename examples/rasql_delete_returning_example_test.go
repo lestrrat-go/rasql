@@ -18,9 +18,9 @@ import (
 // individual values or the generated row type.
 //
 // It builds its statements with the query package, whose Set and WithReturning
-// take a query.ColumnRef. Column is the generated table's only way to produce
-// one, so this example names its columns as strings; an example that stays in
-// the typed layer binds them through store.UsersColumns instead.
+// take a query.ColumnRef. Ref().Column is the generated table's only way to
+// produce one, so this example names its columns as strings; an example that
+// stays in the typed layer reads them off the table as fields instead.
 func Example_rasql_delete_returning() {
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
@@ -113,17 +113,12 @@ func Example_rasql_delete_returning() {
 	// the generated projection names all six columns, so Returning hands One a
 	// whole decoded store.UsersRow.
 	// SQL: DELETE FROM users WHERE users.id = ? RETURNING id, email, nickname, status, first_name, last_name (argument: 43)
-	columns, err := (store.UsersColumns{}).Bind(users)
-	if err != nil {
-		fmt.Printf("failed to bind users columns: %s\n", err)
-		return
-	}
-	plan, err := users.Delete(rasql.EqualValue(columns.ID.Expr(), int64(43)))
+	plan, err := users.Delete(rasql.EqualValue(users.ID.Expr(), int64(43)))
 	if err != nil {
 		fmt.Printf("failed to build typed delete: %s\n", err)
 		return
 	}
-	projection, err := store.UsersProjection(columns)
+	projection, err := store.UsersProjection(users)
 	if err != nil {
 		fmt.Printf("failed to build users projection: %s\n", err)
 		return

@@ -46,9 +46,14 @@ type tasksTableHandle = rasql.Table[TasksRow]
 
 type TasksTable struct {
 	tasksTableHandle
+	TasksExpressions
 }
 
-func Tasks() TasksTable { return TasksTable{tasksTableHandle: tasksTable} }
+func newTasksTable(handle tasksTableHandle) TasksTable {
+	return TasksTable{tasksTableHandle: handle, TasksExpressions: bindTasksExpressions(handle)}
+}
+
+func Tasks() TasksTable { return newTasksTable(tasksTable) }
 
 func (t TasksTable) Ref() query.TableRef { return t.tasksTableHandle.Ref() }
 
@@ -57,7 +62,7 @@ func (t TasksTable) As(alias string) (TasksTable, error) {
 	if err != nil {
 		return TasksTable{}, err
 	}
-	return TasksTable{tasksTableHandle: aliased}, nil
+	return newTasksTable(aliased), nil
 }
 
 func (t TasksTable) InSchema(namespace string) (TasksTable, error) {
@@ -65,10 +70,8 @@ func (t TasksTable) InSchema(namespace string) (TasksTable, error) {
 	if err != nil {
 		return TasksTable{}, err
 	}
-	return TasksTable{tasksTableHandle: moved}, nil
+	return newTasksTable(moved), nil
 }
-
-type TasksColumns struct{}
 
 type TasksExpressions struct {
 	ID, ProjectID rasql.Column[TasksRow, int64]
@@ -86,32 +89,31 @@ type OptionalTasksExpressions struct {
 	CreatedAt, DueOn          rasql.NullColumn[TasksRow, time.Time]
 }
 
-func (TasksColumns) Bind(source TasksTable) (TasksExpressions, error) {
-	var err error
-	result := TasksExpressions{
-		ID:         rasqlgenBind(&err, source, "id", "", rasql.BindColumn[TasksRow, int64]),
-		ProjectID:  rasqlgenBind(&err, source, "project_id", "", rasql.BindColumn[TasksRow, int64]),
-		AssigneeID: rasqlgenBind(&err, source, "assignee_id", "", rasql.BindNullColumn[TasksRow, int64]),
-		Title:      rasqlgenBind(&err, source, "title", "", rasql.BindColumn[TasksRow, string]),
-		IsOpen:     rasqlgenBind(&err, source, "is_open", "", rasql.BindColumn[TasksRow, bool]),
-		CreatedAt:  rasqlgenBind(&err, source, "created_at", "", rasql.BindColumn[TasksRow, time.Time]),
-		DueOn:      rasqlgenBind(&err, source, "due_on", "", rasql.BindNullColumn[TasksRow, time.Time]),
+func bindTasksExpressions(source tasksTableHandle) TasksExpressions {
+	return TasksExpressions{
+		ID:         rasqlgenColumn(source, "id", "", rasql.BindColumn[TasksRow, int64]),
+		ProjectID:  rasqlgenColumn(source, "project_id", "", rasql.BindColumn[TasksRow, int64]),
+		AssigneeID: rasqlgenColumn(source, "assignee_id", "", rasql.BindNullColumn[TasksRow, int64]),
+		Title:      rasqlgenColumn(source, "title", "", rasql.BindColumn[TasksRow, string]),
+		IsOpen:     rasqlgenColumn(source, "is_open", "", rasql.BindColumn[TasksRow, bool]),
+		CreatedAt:  rasqlgenColumn(source, "created_at", "", rasql.BindColumn[TasksRow, time.Time]),
+		DueOn:      rasqlgenColumn(source, "due_on", "", rasql.BindNullColumn[TasksRow, time.Time]),
 	}
-	return result, err
 }
 
-func (TasksColumns) BindOptional(source rasql.OptionalRelation[TasksRow]) (OptionalTasksExpressions, error) {
-	var err error
-	result := OptionalTasksExpressions{
-		ID:         rasqlgenBind(&err, source, "id", "", rasql.BindOptionalColumn[TasksRow, int64]),
-		ProjectID:  rasqlgenBind(&err, source, "project_id", "", rasql.BindOptionalColumn[TasksRow, int64]),
-		AssigneeID: rasqlgenBind(&err, source, "assignee_id", "", rasql.BindOptionalColumn[TasksRow, int64]),
-		Title:      rasqlgenBind(&err, source, "title", "", rasql.BindOptionalColumn[TasksRow, string]),
-		IsOpen:     rasqlgenBind(&err, source, "is_open", "", rasql.BindOptionalColumn[TasksRow, bool]),
-		CreatedAt:  rasqlgenBind(&err, source, "created_at", "", rasql.BindOptionalColumn[TasksRow, time.Time]),
-		DueOn:      rasqlgenBind(&err, source, "due_on", "", rasql.BindOptionalColumn[TasksRow, time.Time]),
+// Optional names every column of t as it appears on the nullable side
+// of an outer join, where the whole row may be absent.
+func (t TasksTable) Optional() OptionalTasksExpressions {
+	source := rasql.Optional[TasksRow](t.tasksTableHandle)
+	return OptionalTasksExpressions{
+		ID:         rasqlgenColumn(source, "id", "", rasql.BindOptionalColumn[TasksRow, int64]),
+		ProjectID:  rasqlgenColumn(source, "project_id", "", rasql.BindOptionalColumn[TasksRow, int64]),
+		AssigneeID: rasqlgenColumn(source, "assignee_id", "", rasql.BindOptionalColumn[TasksRow, int64]),
+		Title:      rasqlgenColumn(source, "title", "", rasql.BindOptionalColumn[TasksRow, string]),
+		IsOpen:     rasqlgenColumn(source, "is_open", "", rasql.BindOptionalColumn[TasksRow, bool]),
+		CreatedAt:  rasqlgenColumn(source, "created_at", "", rasql.BindOptionalColumn[TasksRow, time.Time]),
+		DueOn:      rasqlgenColumn(source, "due_on", "", rasql.BindOptionalColumn[TasksRow, time.Time]),
 	}
-	return result, err
 }
 
 var tasksResultColumns = []rasql.ResultColumn{
@@ -165,110 +167,70 @@ func (tasksOptionalDecoder) DecodeRow(source rasql.ScanSource, row *TasksRow) er
 	return nil
 }
 
-func TasksProjection(expressions TasksExpressions) (rasql.Projection[TasksRow], error) {
+func TasksProjection(source TasksTable) (rasql.Projection[TasksRow], error) {
 	items := []rasql.ProjectionItem{
-		rasql.Item("id", expressions.ID.Expr(), schema.IntegerType{}, ""),
-		rasql.Item("project_id", expressions.ProjectID.Expr(), schema.IntegerType{}, ""),
-		rasql.NullItem("assignee_id", expressions.AssigneeID.NullExpr(), schema.IntegerType{}, ""),
-		rasql.Item("title", expressions.Title.Expr(), schema.TextType{}, ""),
-		rasql.Item("is_open", expressions.IsOpen.Expr(), schema.BooleanType{}, ""),
-		rasql.Item("created_at", expressions.CreatedAt.Expr(), schema.TimeType{}, ""),
-		rasql.NullItem("due_on", expressions.DueOn.NullExpr(), schema.TimeType{}, ""),
+		rasql.Item("id", source.ID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("project_id", source.ProjectID.Expr(), schema.IntegerType{}, ""),
+		rasql.NullItem("assignee_id", source.AssigneeID.NullExpr(), schema.IntegerType{}, ""),
+		rasql.Item("title", source.Title.Expr(), schema.TextType{}, ""),
+		rasql.Item("is_open", source.IsOpen.Expr(), schema.BooleanType{}, ""),
+		rasql.Item("created_at", source.CreatedAt.Expr(), schema.TimeType{}, ""),
+		rasql.NullItem("due_on", source.DueOn.NullExpr(), schema.TimeType{}, ""),
 	}
 	return rasql.NewProjection(items, tasksDecoder{})
 }
 
-func OptionalTasksProjection(expressions OptionalTasksExpressions) (rasql.Projection[TasksRow], error) {
+func OptionalTasksProjection(source OptionalTasksExpressions) (rasql.Projection[TasksRow], error) {
 	items := []rasql.ProjectionItem{
-		rasql.NullItem("id", expressions.ID.NullExpr(), schema.IntegerType{}, ""),
-		rasql.NullItem("project_id", expressions.ProjectID.NullExpr(), schema.IntegerType{}, ""),
-		rasql.NullItem("assignee_id", expressions.AssigneeID.NullExpr(), schema.IntegerType{}, ""),
-		rasql.NullItem("title", expressions.Title.NullExpr(), schema.TextType{}, ""),
-		rasql.NullItem("is_open", expressions.IsOpen.NullExpr(), schema.BooleanType{}, ""),
-		rasql.NullItem("created_at", expressions.CreatedAt.NullExpr(), schema.TimeType{}, ""),
-		rasql.NullItem("due_on", expressions.DueOn.NullExpr(), schema.TimeType{}, ""),
+		rasql.NullItem("id", source.ID.NullExpr(), schema.IntegerType{}, ""),
+		rasql.NullItem("project_id", source.ProjectID.NullExpr(), schema.IntegerType{}, ""),
+		rasql.NullItem("assignee_id", source.AssigneeID.NullExpr(), schema.IntegerType{}, ""),
+		rasql.NullItem("title", source.Title.NullExpr(), schema.TextType{}, ""),
+		rasql.NullItem("is_open", source.IsOpen.NullExpr(), schema.BooleanType{}, ""),
+		rasql.NullItem("created_at", source.CreatedAt.NullExpr(), schema.TimeType{}, ""),
+		rasql.NullItem("due_on", source.DueOn.NullExpr(), schema.TimeType{}, ""),
 	}
 	return rasql.NewProjection(items, tasksOptionalDecoder{})
 }
 
 func TasksGraphKey(source TasksTable) (rasql.GraphKey[TasksRow], error) {
-	expressions, err := (TasksColumns{}).Bind(source)
-	if err != nil {
-		return rasql.GraphKey[TasksRow]{}, err
-	}
-	return rasql.NewGraphKey[TasksRow](rasql.KeyPart[TasksRow, int64](expressions.ID, func(row TasksRow) int64 { return row.ID }))
+	return rasql.NewGraphKey[TasksRow](rasql.KeyPart[TasksRow, int64](source.ID, func(row TasksRow) int64 { return row.ID }))
 }
 
 func TasksIDPageKey(source TasksTable, direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
-	expressions, err := (TasksColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenPageKey(direction, expressions.ID.Expr(), func(row TasksRow) int64 { return row.ID })
+	return rasqlgenPageKey(direction, source.ID.Expr(), func(row TasksRow) int64 { return row.ID })
 }
 
 func TasksProjectIDPageKey(source TasksTable, direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
-	expressions, err := (TasksColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenPageKey(direction, expressions.ProjectID.Expr(), func(row TasksRow) int64 { return row.ProjectID })
+	return rasqlgenPageKey(direction, source.ProjectID.Expr(), func(row TasksRow) int64 { return row.ProjectID })
 }
 
 func TasksAssigneeIDPageKey(source TasksTable, direction rasql.PageDirection, nulls rasql.NullOrder) (rasql.PageKey[TasksRow], error) {
-	expressions, err := (TasksColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenNullablePageKey(direction, expressions.AssigneeID.NullExpr(), func(row TasksRow) rasql.Nullable[int64] { return row.AssigneeID }, nulls)
+	return rasqlgenNullablePageKey(direction, source.AssigneeID.NullExpr(), func(row TasksRow) rasql.Nullable[int64] { return row.AssigneeID }, nulls)
 }
 
 func TasksTitlePageKey(source TasksTable, direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
-	expressions, err := (TasksColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenPageKey(direction, expressions.Title.Expr(), func(row TasksRow) string { return row.Title })
+	return rasqlgenPageKey(direction, source.Title.Expr(), func(row TasksRow) string { return row.Title })
 }
 
 func TasksIsOpenPageKey(source TasksTable, direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
-	expressions, err := (TasksColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenPageKey(direction, expressions.IsOpen.Expr(), func(row TasksRow) bool { return row.IsOpen })
+	return rasqlgenPageKey(direction, source.IsOpen.Expr(), func(row TasksRow) bool { return row.IsOpen })
 }
 
 func TasksCreatedAtPageKey(source TasksTable, direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
-	expressions, err := (TasksColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenPageKey(direction, expressions.CreatedAt.Expr(), func(row TasksRow) time.Time { return row.CreatedAt })
+	return rasqlgenPageKey(direction, source.CreatedAt.Expr(), func(row TasksRow) time.Time { return row.CreatedAt })
 }
 
 func TasksDueOnPageKey(source TasksTable, direction rasql.PageDirection, nulls rasql.NullOrder) (rasql.PageKey[TasksRow], error) {
-	expressions, err := (TasksColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenNullablePageKey(direction, expressions.DueOn.NullExpr(), func(row TasksRow) rasql.Nullable[time.Time] { return row.DueOn }, nulls)
+	return rasqlgenNullablePageKey(direction, source.DueOn.NullExpr(), func(row TasksRow) rasql.Nullable[time.Time] { return row.DueOn }, nulls)
 }
 
 func TasksAssigneeEdge[G, CG any](parentSource TasksTable, childSource MembersTable, children rasql.GraphPlan[MembersRow, CG], options rasql.EdgeOptions, attach func(*G, rasql.LoadedOne[CG])) (rasql.GraphEdge[TasksRow, G], error) {
-	parentExpressions, err := (TasksColumns{}).Bind(parentSource)
+	parent, err := rasql.NewGraphKey[TasksRow](rasql.NullKeyPart[TasksRow, int64](parentSource.AssigneeID, func(row TasksRow) rasql.Nullable[int64] { return row.AssigneeID }))
 	if err != nil {
 		return nil, err
 	}
-	childExpressions, err := (MembersColumns{}).Bind(childSource)
-	if err != nil {
-		return nil, err
-	}
-	parent, err := rasql.NewGraphKey[TasksRow](rasql.NullKeyPart[TasksRow, int64](parentExpressions.AssigneeID, func(row TasksRow) rasql.Nullable[int64] { return row.AssigneeID }))
-	if err != nil {
-		return nil, err
-	}
-	child, err := rasql.NewGraphKey[MembersRow](rasql.KeyPart[MembersRow, int64](childExpressions.ID, func(row MembersRow) int64 { return row.ID }))
+	child, err := rasql.NewGraphKey[MembersRow](rasql.KeyPart[MembersRow, int64](childSource.ID, func(row MembersRow) int64 { return row.ID }))
 	if err != nil {
 		return nil, err
 	}
@@ -276,32 +238,18 @@ func TasksAssigneeEdge[G, CG any](parentSource TasksTable, childSource MembersTa
 }
 
 func TasksProjectEdge[G, CG any](parentSource TasksTable, childSource ProjectsTable, children rasql.GraphPlan[ProjectsRow, CG], options rasql.EdgeOptions, attach func(*G, rasql.LoadedOne[CG])) (rasql.GraphEdge[TasksRow, G], error) {
-	parentExpressions, err := (TasksColumns{}).Bind(parentSource)
+	parent, err := rasql.NewGraphKey[TasksRow](rasql.KeyPart[TasksRow, int64](parentSource.ProjectID, func(row TasksRow) int64 { return row.ProjectID }))
 	if err != nil {
 		return nil, err
 	}
-	childExpressions, err := (ProjectsColumns{}).Bind(childSource)
-	if err != nil {
-		return nil, err
-	}
-	parent, err := rasql.NewGraphKey[TasksRow](rasql.KeyPart[TasksRow, int64](parentExpressions.ProjectID, func(row TasksRow) int64 { return row.ProjectID }))
-	if err != nil {
-		return nil, err
-	}
-	child, err := rasql.NewGraphKey[ProjectsRow](rasql.KeyPart[ProjectsRow, int64](childExpressions.ID, func(row ProjectsRow) int64 { return row.ID }))
+	child, err := rasql.NewGraphKey[ProjectsRow](rasql.KeyPart[ProjectsRow, int64](childSource.ID, func(row ProjectsRow) int64 { return row.ID }))
 	if err != nil {
 		return nil, err
 	}
 	return rasql.HasOne("Project", parent, child, children, options, attach)
 }
 
-var tasksMutationColumns = func() TasksExpressions {
-	value, err := (TasksColumns{}).Bind(Tasks())
-	if err != nil {
-		panic(err)
-	}
-	return value
-}()
+var tasksMutationColumns = bindTasksExpressions(tasksTable)
 
 type TasksCreate struct {
 	table  rasql.Table[TasksRow]

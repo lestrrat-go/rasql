@@ -13,17 +13,13 @@ source, err := Tasks().As("tasks")
 if err != nil {
 	return err
 }
-expressions, err := (TasksColumns{}).Bind(source)
-if err != nil {
-	return err
-}
-projection, err := TasksProjection(expressions)
+projection, err := TasksProjection(source)
 if err != nil {
 	return err
 }
 q := rasql.Select(source, projection).
-	Where(rasql.EqualValue(expressions.IsOpen.Expr(), true)).
-	OrderBy(rasql.AscExpr(expressions.ID.Expr()))
+	Where(rasql.EqualValue(source.IsOpen.Expr(), true)).
+	OrderBy(rasql.AscExpr(source.ID.Expr()))
 rows, err := rasql.All(ctx, executor, q)
 ```
 source: [sample/taskboard/internal/store/docs_examples_test.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/docs_examples_test.go)

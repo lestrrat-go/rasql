@@ -56,18 +56,13 @@ func Example_rasql_typed_query() {
 
 	// Bind binds every users column to the table, and UsersProjection selects
 	// them in the order the generated row type scans them.
-	columns, err := (store.UsersColumns{}).Bind(users)
-	if err != nil {
-		fmt.Printf("failed to bind users columns: %s\n", err)
-		return
-	}
-	projection, err := store.UsersProjection(columns)
+	projection, err := store.UsersProjection(users)
 	if err != nil {
 		fmt.Printf("failed to build users projection: %s\n", err)
 		return
 	}
 	base := rasql.Select(users, projection)
-	q := base.OrderBy(rasql.AscExpr(columns.Email.Expr()))
+	q := base.OrderBy(rasql.AscExpr(users.Email.Expr()))
 	q, err = q.Offset(1)
 	if err != nil {
 		fmt.Printf("failed to page users query: %s\n", err)

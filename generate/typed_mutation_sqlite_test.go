@@ -157,9 +157,8 @@ func TestGeneratedCreateAndPatchMatrix(t *testing.T) {
 	executor, err := rasql.Open(ctx, sqlDB, dialect.SQLite())
 	if err != nil { t.Fatal(err) }
 
-	columns, err := (generated.ItemsColumns{}).Bind(generated.Items())
 	if err != nil { t.Fatal(err) }
-	projection, err := generated.ItemsProjection(columns)
+	projection, err := generated.ItemsProjection(generated.Items())
 	if err != nil { t.Fatal(err) }
 	returning := func(plan rasql.MutationPlan) generated.ItemsRow {
 		t.Helper()
@@ -171,7 +170,7 @@ func TestGeneratedCreateAndPatchMatrix(t *testing.T) {
 	}
 	patchOn := func(builder generated.ItemsPatch, id int64) generated.ItemsRow {
 		t.Helper()
-		plan, err := builder.Where(rasql.EqualValue(columns.ID.Expr(), id))
+		plan, err := builder.Where(rasql.EqualValue(generated.Items().ID.Expr(), id))
 		if err != nil { t.Fatal(err) }
 		return returning(plan)
 	}
@@ -234,7 +233,7 @@ func TestGeneratedCreateAndPatchMatrix(t *testing.T) {
 	patchRightRow := patchOn(patchRight, rightRow.ID)
 	if patchRightRow.Count != 2 { t.Fatalf("patch right variant: %#v", patchRightRow) }
 
-	missingPlan, err := generated.Items().Patch().Count(1).Where(rasql.EqualValue(columns.ID.Expr(), int64(-1)))
+	missingPlan, err := generated.Items().Patch().Count(1).Where(rasql.EqualValue(generated.Items().ID.Expr(), int64(-1)))
 	if err != nil { t.Fatal(err) }
 	missingQuery, err := rasql.Returning(missingPlan, projection)
 	if err != nil { t.Fatal(err) }

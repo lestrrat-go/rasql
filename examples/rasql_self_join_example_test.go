@@ -82,16 +82,6 @@ func Example_rasql_self_join() {
 		fmt.Printf("failed to alias employees: %s\n", err)
 		return
 	}
-	employeeColumns, err := (store.EmployeesColumns{}).Bind(employees)
-	if err != nil {
-		fmt.Printf("failed to bind employees columns: %s\n", err)
-		return
-	}
-	managerColumns, err := (store.EmployeesColumns{}).Bind(managerSource)
-	if err != nil {
-		fmt.Printf("failed to bind manager columns: %s\n", err)
-		return
-	}
 
 	result, err := rasql.NewResultSchema(
 		rasql.ResultColumn{Name: "name", Type: schema.TextType{}},
@@ -102,8 +92,8 @@ func Example_rasql_self_join() {
 		return
 	}
 	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
-		rasql.Item("name", employeeColumns.Name.Expr(), schema.TextType{}, ""),
-		rasql.Item("manager_name", managerColumns.Name.Expr(), schema.TextType{}, ""),
+		rasql.Item("name", employees.Name.Expr(), schema.TextType{}, ""),
+		rasql.Item("manager_name", managerSource.Name.Expr(), schema.TextType{}, ""),
 	}, managedEmployeeDecoder{result: result})
 	if err != nil {
 		fmt.Printf("failed to build projection: %s\n", err)
@@ -112,8 +102,8 @@ func Example_rasql_self_join() {
 
 	// SQL: SELECT employees.name, manager.name FROM employees INNER JOIN employees AS manager ON employees.manager_id = manager.id ORDER BY employees.id ASC
 	q := rasql.Select(employees, projection).
-		Join(managerSource, rasql.EqualOptional(managerColumns.ID.Expr(), employeeColumns.ManagerID.NullExpr())).
-		OrderBy(rasql.AscExpr(employeeColumns.ID.Expr()))
+		Join(managerSource, rasql.EqualOptional(managerSource.ID.Expr(), employees.ManagerID.NullExpr())).
+		OrderBy(rasql.AscExpr(employees.ID.Expr()))
 	rows, err := rasql.All(ctx, db, q)
 	if err != nil {
 		fmt.Printf("failed to query employees: %s\n", err)

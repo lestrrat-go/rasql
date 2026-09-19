@@ -13,13 +13,13 @@ import (
 // Example_rasqlgen_column_fields contrasts the two ways to name a column, and
 // is the one example that reaches for the weaker one on purpose.
 //
-// Generate the store, bind its columns with the generated columns struct, and
-// name each one as a field of the result. That is what every other example
-// here does, and what application code should do. rasqlgen derives one field
-// per column from the same descriptor the table is created from, so
-// `columns.ID` is a column reference the compiler checks: renaming or dropping
-// a column turns the field references into build failures, instead of leaving
-// queries that assemble happily and fail when they run.
+// Generate the store and name each column as a field of the table it belongs
+// to. That is what every other example here does, and what application code
+// should do. rasqlgen derives one field per column from the same descriptor
+// the table is created from, so `users.ID` is a column reference the compiler
+// checks: renaming or dropping a column turns the field references into build
+// failures, instead of leaving queries that assemble happily and fail when
+// they run.
 //
 // `Table.Ref().Column(name)` names a column by string, and costs a check the
 // compiler would otherwise have made. Two cases need it:
@@ -30,9 +30,9 @@ import (
 //     against the descriptor as the statement is built, or on demand through
 //     `ColumnRef.Validate`.
 //   - The statement is built with the `query` package, which takes a
-//     `query.ColumnRef` and knows nothing about Go row types. The generated
-//     columns struct binds a `rasql.Column` instead, so `Ref().Column` is the
-//     only way across.
+//     `query.ColumnRef` and knows nothing about Go row types. A column field
+//     holds a `rasql.Column` instead, so `Ref().Column` is the only way
+//     across.
 //
 // Reaching for the string where the generated field would do gives up the
 // compile-time check and gains nothing, which is why the rest of the
@@ -69,22 +69,17 @@ func Example_rasqlgen_column_fields() {
 		fmt.Println(err)
 	}
 
-	// store.UsersColumns is generated, so its columns are fields. This is the
-	// form to write wherever the table is known as it is compiled, because
-	// columns.Emial is not a field and the package does not build.
+	// store.Users() carries its columns as fields. This is the form to write
+	// wherever the table is known as it is compiled, because users.Emial is
+	// not a field and the package does not build.
 	// BEGIN(typed_column)
-	columns, err := (store.UsersColumns{}).Bind(users)
-	if err != nil {
-		fmt.Printf("failed to bind users columns: %s\n", err)
-		return
-	}
-	projection, err := store.UsersProjection(columns)
+	projection, err := store.UsersProjection(users)
 	if err != nil {
 		fmt.Printf("failed to build users projection: %s\n", err)
 		return
 	}
 	typed := rasql.Select(users, projection).
-		Where(rasql.EqualValue(columns.ID.Expr(), int64(42)))
+		Where(rasql.EqualValue(users.ID.Expr(), int64(42)))
 	built, err := rasql.Render(typed, dialect.PostgreSQL())
 	// END(typed_column)
 	if err != nil {
@@ -96,7 +91,7 @@ func Example_rasqlgen_column_fields() {
 	// Ref().Column is the escape hatch, shown here with a name a caller would have
 	// received as data. It is worth reaching for only when the name is not
 	// known as the code is written; a hard-coded "emial" like this one is a
-	// bug that columns.Email would never have compiled. Validate reports the
+	// bug that users.Email would never have compiled. Validate reports the
 	// bad name at the lookup, so the caller does not have to assemble a
 	// statement to find out.
 	// BEGIN(column_lookup)

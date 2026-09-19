@@ -16,18 +16,14 @@ import (
 // minimum total a caller asks for.
 func preparedParamOrdersQuery() (rasql.Query[store.OrdersRow], rasql.Parameter[int64], error) {
 	orders := store.Orders()
-	columns, err := (store.OrdersColumns{}).Bind(orders)
-	if err != nil {
-		return rasql.Query[store.OrdersRow]{}, rasql.Parameter[int64]{}, err
-	}
-	projection, err := store.OrdersProjection(columns)
+	projection, err := store.OrdersProjection(orders)
 	if err != nil {
 		return rasql.Query[store.OrdersRow]{}, rasql.Parameter[int64]{}, err
 	}
 	minTotal := rasql.NewParameter[int64]()
 	query := rasql.Select(orders, projection).
-		Where(rasql.GreaterOrEqualExpr(columns.Total.Expr(), minTotal.Expr())).
-		OrderBy(rasql.AscExpr(columns.ID.Expr()))
+		Where(rasql.GreaterOrEqualExpr(orders.Total.Expr(), minTotal.Expr())).
+		OrderBy(rasql.AscExpr(orders.ID.Expr()))
 	return query, minTotal, nil
 }
 

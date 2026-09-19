@@ -71,11 +71,6 @@ func Example_rasql_group_by() {
 		}
 	}
 
-	tasksColumns, err := (store.TasksColumns{}).Bind(tasks)
-	if err != nil {
-		fmt.Printf("failed to bind tasks columns: %s\n", err)
-		return
-	}
 	result, err := rasql.NewResultSchema(
 		rasql.ResultColumn{Name: "status", Type: schema.TextType{}},
 		rasql.ResultColumn{Name: "total", Type: schema.IntegerType{}},
@@ -85,7 +80,7 @@ func Example_rasql_group_by() {
 		return
 	}
 	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
-		rasql.Item("status", tasksColumns.Status.Expr(), schema.TextType{}, ""),
+		rasql.Item("status", tasks.Status.Expr(), schema.TextType{}, ""),
 		rasql.Item("total", rasql.CountRows(), schema.IntegerType{}, ""),
 	}, statusCountDecoder{result: result})
 	if err != nil {
@@ -98,9 +93,9 @@ func Example_rasql_group_by() {
 	// after aggregation, so it may call an aggregate a WHERE clause could not.
 	// SQL: SELECT tasks.status, COUNT(*) AS total FROM tasks GROUP BY tasks.status HAVING COUNT(*) > ? ORDER BY tasks.status (argument: 1)
 	q := rasql.Select(tasks, projection).
-		GroupBy(rasql.Group(tasksColumns.Status.Expr())).
+		GroupBy(rasql.Group(tasks.Status.Expr())).
 		Having(rasql.GreaterValue(rasql.CountRows(), int64(1))).
-		OrderBy(rasql.AscExpr(tasksColumns.Status.Expr()))
+		OrderBy(rasql.AscExpr(tasks.Status.Expr()))
 	rows, err := rasql.All(ctx, db, q)
 	if err != nil {
 		fmt.Printf("failed to query status counts: %s\n", err)

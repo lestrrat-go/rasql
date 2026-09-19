@@ -173,6 +173,18 @@ func rasqlgenBind[S, C any](sticky *error, source S, name, codec string, bind fu
 	return value
 }
 
+// rasqlgenColumn binds one column of a generated table and drops the error the
+// bind reports. Every caller passes a table built from the descriptor this
+// package generated beside it, which holds the name, the Go type and the
+// nullability the bind checks, so the bind fails for one input only: a zero
+// table value, which carries no columns at all. That leaves a zero column
+// whose statement reports the missing table when it builds, which is where a
+// zero table is reported anyway.
+func rasqlgenColumn[S, C any](source S, name, codec string, bind func(S, string, string) (C, error)) C {
+	value, _ := bind(source, name, codec)
+	return value
+}
+
 func rasqlgenAppendMutationField[R any](fields []rasql.MutationField[R], field rasql.MutationField[R]) []rasql.MutationField[R] {
 	return append(append([]rasql.MutationField[R](nil), fields...), field)
 }

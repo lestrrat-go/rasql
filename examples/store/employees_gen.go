@@ -31,9 +31,14 @@ type employeesTableHandle = rasql.Table[EmployeesRow]
 
 type EmployeesTable struct {
 	employeesTableHandle
+	EmployeesExpressions
 }
 
-func Employees() EmployeesTable { return EmployeesTable{employeesTableHandle: employeesTable} }
+func newEmployeesTable(handle employeesTableHandle) EmployeesTable {
+	return EmployeesTable{employeesTableHandle: handle, EmployeesExpressions: bindEmployeesExpressions(handle)}
+}
+
+func Employees() EmployeesTable { return newEmployeesTable(employeesTable) }
 
 func (t EmployeesTable) Ref() query.TableRef { return t.employeesTableHandle.Ref() }
 
@@ -42,7 +47,7 @@ func (t EmployeesTable) As(alias string) (EmployeesTable, error) {
 	if err != nil {
 		return EmployeesTable{}, err
 	}
-	return EmployeesTable{employeesTableHandle: aliased}, nil
+	return newEmployeesTable(aliased), nil
 }
 
 func (t EmployeesTable) InSchema(namespace string) (EmployeesTable, error) {
@@ -50,10 +55,8 @@ func (t EmployeesTable) InSchema(namespace string) (EmployeesTable, error) {
 	if err != nil {
 		return EmployeesTable{}, err
 	}
-	return EmployeesTable{employeesTableHandle: moved}, nil
+	return newEmployeesTable(moved), nil
 }
-
-type EmployeesColumns struct{}
 
 type EmployeesExpressions struct {
 	ID        rasql.Column[EmployeesRow, int64]
@@ -67,24 +70,23 @@ type OptionalEmployeesExpressions struct {
 	ManagerID rasql.NullColumn[EmployeesRow, int64]
 }
 
-func (EmployeesColumns) Bind(source EmployeesTable) (EmployeesExpressions, error) {
-	var err error
-	result := EmployeesExpressions{
-		ID:        rasqlgenBind(&err, source, "id", "", rasql.BindColumn[EmployeesRow, int64]),
-		Name:      rasqlgenBind(&err, source, "name", "", rasql.BindColumn[EmployeesRow, string]),
-		ManagerID: rasqlgenBind(&err, source, "manager_id", "", rasql.BindNullColumn[EmployeesRow, int64]),
+func bindEmployeesExpressions(source employeesTableHandle) EmployeesExpressions {
+	return EmployeesExpressions{
+		ID:        rasqlgenColumn(source, "id", "", rasql.BindColumn[EmployeesRow, int64]),
+		Name:      rasqlgenColumn(source, "name", "", rasql.BindColumn[EmployeesRow, string]),
+		ManagerID: rasqlgenColumn(source, "manager_id", "", rasql.BindNullColumn[EmployeesRow, int64]),
 	}
-	return result, err
 }
 
-func (EmployeesColumns) BindOptional(source rasql.OptionalRelation[EmployeesRow]) (OptionalEmployeesExpressions, error) {
-	var err error
-	result := OptionalEmployeesExpressions{
-		ID:        rasqlgenBind(&err, source, "id", "", rasql.BindOptionalColumn[EmployeesRow, int64]),
-		Name:      rasqlgenBind(&err, source, "name", "", rasql.BindOptionalColumn[EmployeesRow, string]),
-		ManagerID: rasqlgenBind(&err, source, "manager_id", "", rasql.BindOptionalColumn[EmployeesRow, int64]),
+// Optional names every column of t as it appears on the nullable side
+// of an outer join, where the whole row may be absent.
+func (t EmployeesTable) Optional() OptionalEmployeesExpressions {
+	source := rasql.Optional[EmployeesRow](t.employeesTableHandle)
+	return OptionalEmployeesExpressions{
+		ID:        rasqlgenColumn(source, "id", "", rasql.BindOptionalColumn[EmployeesRow, int64]),
+		Name:      rasqlgenColumn(source, "name", "", rasql.BindOptionalColumn[EmployeesRow, string]),
+		ManagerID: rasqlgenColumn(source, "manager_id", "", rasql.BindOptionalColumn[EmployeesRow, int64]),
 	}
-	return result, err
 }
 
 var employeesResultColumns = []rasql.ResultColumn{
@@ -131,63 +133,41 @@ func (employeesOptionalDecoder) DecodeRow(source rasql.ScanSource, row *Employee
 	return nil
 }
 
-func EmployeesProjection(expressions EmployeesExpressions) (rasql.Projection[EmployeesRow], error) {
+func EmployeesProjection(source EmployeesTable) (rasql.Projection[EmployeesRow], error) {
 	items := []rasql.ProjectionItem{
-		rasql.Item("id", expressions.ID.Expr(), schema.IntegerType{}, ""),
-		rasql.Item("name", expressions.Name.Expr(), schema.TextType{}, ""),
-		rasql.NullItem("manager_id", expressions.ManagerID.NullExpr(), schema.IntegerType{}, ""),
+		rasql.Item("id", source.ID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("name", source.Name.Expr(), schema.TextType{}, ""),
+		rasql.NullItem("manager_id", source.ManagerID.NullExpr(), schema.IntegerType{}, ""),
 	}
 	return rasql.NewProjection(items, employeesDecoder{})
 }
 
-func OptionalEmployeesProjection(expressions OptionalEmployeesExpressions) (rasql.Projection[EmployeesRow], error) {
+func OptionalEmployeesProjection(source OptionalEmployeesExpressions) (rasql.Projection[EmployeesRow], error) {
 	items := []rasql.ProjectionItem{
-		rasql.NullItem("id", expressions.ID.NullExpr(), schema.IntegerType{}, ""),
-		rasql.NullItem("name", expressions.Name.NullExpr(), schema.TextType{}, ""),
-		rasql.NullItem("manager_id", expressions.ManagerID.NullExpr(), schema.IntegerType{}, ""),
+		rasql.NullItem("id", source.ID.NullExpr(), schema.IntegerType{}, ""),
+		rasql.NullItem("name", source.Name.NullExpr(), schema.TextType{}, ""),
+		rasql.NullItem("manager_id", source.ManagerID.NullExpr(), schema.IntegerType{}, ""),
 	}
 	return rasql.NewProjection(items, employeesOptionalDecoder{})
 }
 
 func EmployeesGraphKey(source EmployeesTable) (rasql.GraphKey[EmployeesRow], error) {
-	expressions, err := (EmployeesColumns{}).Bind(source)
-	if err != nil {
-		return rasql.GraphKey[EmployeesRow]{}, err
-	}
-	return rasql.NewGraphKey[EmployeesRow](rasql.KeyPart[EmployeesRow, int64](expressions.ID, func(row EmployeesRow) int64 { return row.ID }))
+	return rasql.NewGraphKey[EmployeesRow](rasql.KeyPart[EmployeesRow, int64](source.ID, func(row EmployeesRow) int64 { return row.ID }))
 }
 
 func EmployeesIDPageKey(source EmployeesTable, direction rasql.PageDirection) (rasql.PageKey[EmployeesRow], error) {
-	expressions, err := (EmployeesColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenPageKey(direction, expressions.ID.Expr(), func(row EmployeesRow) int64 { return row.ID })
+	return rasqlgenPageKey(direction, source.ID.Expr(), func(row EmployeesRow) int64 { return row.ID })
 }
 
 func EmployeesNamePageKey(source EmployeesTable, direction rasql.PageDirection) (rasql.PageKey[EmployeesRow], error) {
-	expressions, err := (EmployeesColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenPageKey(direction, expressions.Name.Expr(), func(row EmployeesRow) string { return row.Name })
+	return rasqlgenPageKey(direction, source.Name.Expr(), func(row EmployeesRow) string { return row.Name })
 }
 
 func EmployeesManagerIDPageKey(source EmployeesTable, direction rasql.PageDirection, nulls rasql.NullOrder) (rasql.PageKey[EmployeesRow], error) {
-	expressions, err := (EmployeesColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenNullablePageKey(direction, expressions.ManagerID.NullExpr(), func(row EmployeesRow) rasql.Nullable[int64] { return row.ManagerID }, nulls)
+	return rasqlgenNullablePageKey(direction, source.ManagerID.NullExpr(), func(row EmployeesRow) rasql.Nullable[int64] { return row.ManagerID }, nulls)
 }
 
-var employeesMutationColumns = func() EmployeesExpressions {
-	value, err := (EmployeesColumns{}).Bind(Employees())
-	if err != nil {
-		panic(err)
-	}
-	return value
-}()
+var employeesMutationColumns = bindEmployeesExpressions(employeesTable)
 
 type EmployeesCreate struct {
 	table  rasql.Table[EmployeesRow]

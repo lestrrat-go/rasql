@@ -40,12 +40,7 @@ func Example_rasql_no_rows() {
 
 	// Bind binds every users column to the table, and UsersProjection selects
 	// them in the order the generated row type scans them.
-	columns, err := (store.UsersColumns{}).Bind(users)
-	if err != nil {
-		fmt.Printf("failed to bind users columns: %s\n", err)
-		return
-	}
-	projection, err := store.UsersProjection(columns)
+	projection, err := store.UsersProjection(users)
 	if err != nil {
 		fmt.Printf("failed to build users projection: %s\n", err)
 		return
@@ -53,7 +48,7 @@ func Example_rasql_no_rows() {
 	base := rasql.Select(users, projection)
 
 	// SQL: SELECT users.id, users.email, users.nickname, users.status, users.first_name, users.last_name FROM users WHERE users.id = ? (argument: 1)
-	_, err = rasql.One(ctx, db, base.Where(rasql.EqualValue(columns.ID.Expr(), int64(1))))
+	_, err = rasql.One(ctx, db, base.Where(rasql.EqualValue(users.ID.Expr(), int64(1))))
 	if errors.Is(err, rasql.ErrNoRows) {
 		fmt.Println("no such user")
 	}

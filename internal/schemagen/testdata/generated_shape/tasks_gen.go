@@ -32,9 +32,14 @@ type tasksTableHandle = rasql.Table[TasksRow]
 
 type TasksTable struct {
 	tasksTableHandle
+	TasksExpressions
 }
 
-func Tasks() TasksTable { return TasksTable{tasksTableHandle: tasksTable} }
+func newTasksTable(handle tasksTableHandle) TasksTable {
+	return TasksTable{tasksTableHandle: handle, TasksExpressions: bindTasksExpressions(handle)}
+}
+
+func Tasks() TasksTable { return newTasksTable(tasksTable) }
 
 func (t TasksTable) Ref() query.TableRef { return t.tasksTableHandle.Ref() }
 
@@ -43,7 +48,7 @@ func (t TasksTable) As(alias string) (TasksTable, error) {
 	if err != nil {
 		return TasksTable{}, err
 	}
-	return TasksTable{tasksTableHandle: aliased}, nil
+	return newTasksTable(aliased), nil
 }
 
 func (t TasksTable) InSchema(namespace string) (TasksTable, error) {
@@ -51,10 +56,8 @@ func (t TasksTable) InSchema(namespace string) (TasksTable, error) {
 	if err != nil {
 		return TasksTable{}, err
 	}
-	return TasksTable{tasksTableHandle: moved}, nil
+	return newTasksTable(moved), nil
 }
-
-type TasksColumns struct{}
 
 type TasksExpressions struct {
 	ID            rasql.Column[TasksRow, int64]
@@ -68,26 +71,25 @@ type OptionalTasksExpressions struct {
 	AssigneeID    rasql.NullColumn[TasksRow, int64]
 }
 
-func (TasksColumns) Bind(source TasksTable) (TasksExpressions, error) {
-	var err error
-	result := TasksExpressions{
-		ID:         rasqlgenBind(&err, source, "id", "", rasql.BindColumn[TasksRow, int64]),
-		Title:      rasqlgenBind(&err, source, "title", "", rasql.BindColumn[TasksRow, string]),
-		Status:     rasqlgenBind(&err, source, "status", "", rasql.BindColumn[TasksRow, string]),
-		AssigneeID: rasqlgenBind(&err, source, "assignee_id", "", rasql.BindNullColumn[TasksRow, int64]),
+func bindTasksExpressions(source tasksTableHandle) TasksExpressions {
+	return TasksExpressions{
+		ID:         rasqlgenColumn(source, "id", "", rasql.BindColumn[TasksRow, int64]),
+		Title:      rasqlgenColumn(source, "title", "", rasql.BindColumn[TasksRow, string]),
+		Status:     rasqlgenColumn(source, "status", "", rasql.BindColumn[TasksRow, string]),
+		AssigneeID: rasqlgenColumn(source, "assignee_id", "", rasql.BindNullColumn[TasksRow, int64]),
 	}
-	return result, err
 }
 
-func (TasksColumns) BindOptional(source rasql.OptionalRelation[TasksRow]) (OptionalTasksExpressions, error) {
-	var err error
-	result := OptionalTasksExpressions{
-		ID:         rasqlgenBind(&err, source, "id", "", rasql.BindOptionalColumn[TasksRow, int64]),
-		Title:      rasqlgenBind(&err, source, "title", "", rasql.BindOptionalColumn[TasksRow, string]),
-		Status:     rasqlgenBind(&err, source, "status", "", rasql.BindOptionalColumn[TasksRow, string]),
-		AssigneeID: rasqlgenBind(&err, source, "assignee_id", "", rasql.BindOptionalColumn[TasksRow, int64]),
+// Optional names every column of t as it appears on the nullable side
+// of an outer join, where the whole row may be absent.
+func (t TasksTable) Optional() OptionalTasksExpressions {
+	source := rasql.Optional[TasksRow](t.tasksTableHandle)
+	return OptionalTasksExpressions{
+		ID:         rasqlgenColumn(source, "id", "", rasql.BindOptionalColumn[TasksRow, int64]),
+		Title:      rasqlgenColumn(source, "title", "", rasql.BindOptionalColumn[TasksRow, string]),
+		Status:     rasqlgenColumn(source, "status", "", rasql.BindOptionalColumn[TasksRow, string]),
+		AssigneeID: rasqlgenColumn(source, "assignee_id", "", rasql.BindOptionalColumn[TasksRow, int64]),
 	}
-	return result, err
 }
 
 var tasksResultColumns = []rasql.ResultColumn{
@@ -134,73 +136,47 @@ func (tasksOptionalDecoder) DecodeRow(source rasql.ScanSource, row *TasksRow) er
 	return nil
 }
 
-func TasksProjection(expressions TasksExpressions) (rasql.Projection[TasksRow], error) {
+func TasksProjection(source TasksTable) (rasql.Projection[TasksRow], error) {
 	items := []rasql.ProjectionItem{
-		rasql.Item("id", expressions.ID.Expr(), schema.IntegerType{}, ""),
-		rasql.Item("title", expressions.Title.Expr(), schema.TextType{}, ""),
-		rasql.Item("status", expressions.Status.Expr(), schema.TextType{}, ""),
-		rasql.NullItem("assignee_id", expressions.AssigneeID.NullExpr(), schema.IntegerType{}, ""),
+		rasql.Item("id", source.ID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("title", source.Title.Expr(), schema.TextType{}, ""),
+		rasql.Item("status", source.Status.Expr(), schema.TextType{}, ""),
+		rasql.NullItem("assignee_id", source.AssigneeID.NullExpr(), schema.IntegerType{}, ""),
 	}
 	return rasql.NewProjection(items, tasksDecoder{})
 }
 
-func OptionalTasksProjection(expressions OptionalTasksExpressions) (rasql.Projection[TasksRow], error) {
+func OptionalTasksProjection(source OptionalTasksExpressions) (rasql.Projection[TasksRow], error) {
 	items := []rasql.ProjectionItem{
-		rasql.NullItem("id", expressions.ID.NullExpr(), schema.IntegerType{}, ""),
-		rasql.NullItem("title", expressions.Title.NullExpr(), schema.TextType{}, ""),
-		rasql.NullItem("status", expressions.Status.NullExpr(), schema.TextType{}, ""),
-		rasql.NullItem("assignee_id", expressions.AssigneeID.NullExpr(), schema.IntegerType{}, ""),
+		rasql.NullItem("id", source.ID.NullExpr(), schema.IntegerType{}, ""),
+		rasql.NullItem("title", source.Title.NullExpr(), schema.TextType{}, ""),
+		rasql.NullItem("status", source.Status.NullExpr(), schema.TextType{}, ""),
+		rasql.NullItem("assignee_id", source.AssigneeID.NullExpr(), schema.IntegerType{}, ""),
 	}
 	return rasql.NewProjection(items, tasksOptionalDecoder{})
 }
 
 func TasksGraphKey(source TasksTable) (rasql.GraphKey[TasksRow], error) {
-	expressions, err := (TasksColumns{}).Bind(source)
-	if err != nil {
-		return rasql.GraphKey[TasksRow]{}, err
-	}
-	return rasql.NewGraphKey[TasksRow](rasql.KeyPart[TasksRow, int64](expressions.ID, func(row TasksRow) int64 { return row.ID }))
+	return rasql.NewGraphKey[TasksRow](rasql.KeyPart[TasksRow, int64](source.ID, func(row TasksRow) int64 { return row.ID }))
 }
 
 func TasksIDPageKey(source TasksTable, direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
-	expressions, err := (TasksColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenPageKey(direction, expressions.ID.Expr(), func(row TasksRow) int64 { return row.ID })
+	return rasqlgenPageKey(direction, source.ID.Expr(), func(row TasksRow) int64 { return row.ID })
 }
 
 func TasksTitlePageKey(source TasksTable, direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
-	expressions, err := (TasksColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenPageKey(direction, expressions.Title.Expr(), func(row TasksRow) string { return row.Title })
+	return rasqlgenPageKey(direction, source.Title.Expr(), func(row TasksRow) string { return row.Title })
 }
 
 func TasksStatusPageKey(source TasksTable, direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
-	expressions, err := (TasksColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenPageKey(direction, expressions.Status.Expr(), func(row TasksRow) string { return row.Status })
+	return rasqlgenPageKey(direction, source.Status.Expr(), func(row TasksRow) string { return row.Status })
 }
 
 func TasksAssigneeIDPageKey(source TasksTable, direction rasql.PageDirection, nulls rasql.NullOrder) (rasql.PageKey[TasksRow], error) {
-	expressions, err := (TasksColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenNullablePageKey(direction, expressions.AssigneeID.NullExpr(), func(row TasksRow) rasql.Nullable[int64] { return row.AssigneeID }, nulls)
+	return rasqlgenNullablePageKey(direction, source.AssigneeID.NullExpr(), func(row TasksRow) rasql.Nullable[int64] { return row.AssigneeID }, nulls)
 }
 
-var tasksMutationColumns = func() TasksExpressions {
-	value, err := (TasksColumns{}).Bind(Tasks())
-	if err != nil {
-		panic(err)
-	}
-	return value
-}()
+var tasksMutationColumns = bindTasksExpressions(tasksTable)
 
 type TasksCreate struct {
 	table  rasql.Table[TasksRow]

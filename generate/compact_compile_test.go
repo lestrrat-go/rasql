@@ -26,12 +26,15 @@ func TestCompactGeneratedNegativeCallersFailAtTheirTarget(t *testing.T) {
 		require.Contains(t, string(output), want, "%s failed for an unrelated reason:\n%s", name, output)
 	}
 
+	// A column is a field of the generated table, not a method on it, so
+	// calling one is a compile error naming the field's type rather than an
+	// undefined selector.
 	compileFail("removed_accessor", `package main
 
 import generated "example.com/compactcompile/generated"
 
 func main() { _ = generated.Account().ID() }
-`, "ID undefined")
+`, "is not a function")
 	compileFail("nonnullable_clear", `package main
 
 import generated "example.com/compactcompile/generated"

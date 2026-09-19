@@ -29,9 +29,14 @@ type membersTableHandle = rasql.Table[MembersRow]
 
 type MembersTable struct {
 	membersTableHandle
+	MembersExpressions
 }
 
-func Members() MembersTable { return MembersTable{membersTableHandle: membersTable} }
+func newMembersTable(handle membersTableHandle) MembersTable {
+	return MembersTable{membersTableHandle: handle, MembersExpressions: bindMembersExpressions(handle)}
+}
+
+func Members() MembersTable { return newMembersTable(membersTable) }
 
 func (t MembersTable) Ref() query.TableRef { return t.membersTableHandle.Ref() }
 
@@ -40,7 +45,7 @@ func (t MembersTable) As(alias string) (MembersTable, error) {
 	if err != nil {
 		return MembersTable{}, err
 	}
-	return MembersTable{membersTableHandle: aliased}, nil
+	return newMembersTable(aliased), nil
 }
 
 func (t MembersTable) InSchema(namespace string) (MembersTable, error) {
@@ -48,10 +53,8 @@ func (t MembersTable) InSchema(namespace string) (MembersTable, error) {
 	if err != nil {
 		return MembersTable{}, err
 	}
-	return MembersTable{membersTableHandle: moved}, nil
+	return newMembersTable(moved), nil
 }
-
-type MembersColumns struct{}
 
 type MembersExpressions struct {
 	ID   rasql.Column[MembersRow, int64]
@@ -63,22 +66,21 @@ type OptionalMembersExpressions struct {
 	Name rasql.NullColumn[MembersRow, string]
 }
 
-func (MembersColumns) Bind(source MembersTable) (MembersExpressions, error) {
-	var err error
-	result := MembersExpressions{
-		ID:   rasqlgenBind(&err, source, "id", "", rasql.BindColumn[MembersRow, int64]),
-		Name: rasqlgenBind(&err, source, "name", "", rasql.BindColumn[MembersRow, string]),
+func bindMembersExpressions(source membersTableHandle) MembersExpressions {
+	return MembersExpressions{
+		ID:   rasqlgenColumn(source, "id", "", rasql.BindColumn[MembersRow, int64]),
+		Name: rasqlgenColumn(source, "name", "", rasql.BindColumn[MembersRow, string]),
 	}
-	return result, err
 }
 
-func (MembersColumns) BindOptional(source rasql.OptionalRelation[MembersRow]) (OptionalMembersExpressions, error) {
-	var err error
-	result := OptionalMembersExpressions{
-		ID:   rasqlgenBind(&err, source, "id", "", rasql.BindOptionalColumn[MembersRow, int64]),
-		Name: rasqlgenBind(&err, source, "name", "", rasql.BindOptionalColumn[MembersRow, string]),
+// Optional names every column of t as it appears on the nullable side
+// of an outer join, where the whole row may be absent.
+func (t MembersTable) Optional() OptionalMembersExpressions {
+	source := rasql.Optional[MembersRow](t.membersTableHandle)
+	return OptionalMembersExpressions{
+		ID:   rasqlgenColumn(source, "id", "", rasql.BindOptionalColumn[MembersRow, int64]),
+		Name: rasqlgenColumn(source, "name", "", rasql.BindOptionalColumn[MembersRow, string]),
 	}
-	return result, err
 }
 
 var membersResultColumns = []rasql.ResultColumn{
@@ -122,73 +124,47 @@ func (membersOptionalDecoder) DecodeRow(source rasql.ScanSource, row *MembersRow
 	return nil
 }
 
-func MembersProjection(expressions MembersExpressions) (rasql.Projection[MembersRow], error) {
+func MembersProjection(source MembersTable) (rasql.Projection[MembersRow], error) {
 	items := []rasql.ProjectionItem{
-		rasql.Item("id", expressions.ID.Expr(), schema.IntegerType{}, ""),
-		rasql.Item("name", expressions.Name.Expr(), schema.TextType{Width: schema.NewTextWidth(64)}, ""),
+		rasql.Item("id", source.ID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("name", source.Name.Expr(), schema.TextType{Width: schema.NewTextWidth(64)}, ""),
 	}
 	return rasql.NewProjection(items, membersDecoder{})
 }
 
-func OptionalMembersProjection(expressions OptionalMembersExpressions) (rasql.Projection[MembersRow], error) {
+func OptionalMembersProjection(source OptionalMembersExpressions) (rasql.Projection[MembersRow], error) {
 	items := []rasql.ProjectionItem{
-		rasql.NullItem("id", expressions.ID.NullExpr(), schema.IntegerType{}, ""),
-		rasql.NullItem("name", expressions.Name.NullExpr(), schema.TextType{Width: schema.NewTextWidth(64)}, ""),
+		rasql.NullItem("id", source.ID.NullExpr(), schema.IntegerType{}, ""),
+		rasql.NullItem("name", source.Name.NullExpr(), schema.TextType{Width: schema.NewTextWidth(64)}, ""),
 	}
 	return rasql.NewProjection(items, membersOptionalDecoder{})
 }
 
 func MembersGraphKey(source MembersTable) (rasql.GraphKey[MembersRow], error) {
-	expressions, err := (MembersColumns{}).Bind(source)
-	if err != nil {
-		return rasql.GraphKey[MembersRow]{}, err
-	}
-	return rasql.NewGraphKey[MembersRow](rasql.KeyPart[MembersRow, int64](expressions.ID, func(row MembersRow) int64 { return row.ID }))
+	return rasql.NewGraphKey[MembersRow](rasql.KeyPart[MembersRow, int64](source.ID, func(row MembersRow) int64 { return row.ID }))
 }
 
 func MembersIDPageKey(source MembersTable, direction rasql.PageDirection) (rasql.PageKey[MembersRow], error) {
-	expressions, err := (MembersColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenPageKey(direction, expressions.ID.Expr(), func(row MembersRow) int64 { return row.ID })
+	return rasqlgenPageKey(direction, source.ID.Expr(), func(row MembersRow) int64 { return row.ID })
 }
 
 func MembersNamePageKey(source MembersTable, direction rasql.PageDirection) (rasql.PageKey[MembersRow], error) {
-	expressions, err := (MembersColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenPageKey(direction, expressions.Name.Expr(), func(row MembersRow) string { return row.Name })
+	return rasqlgenPageKey(direction, source.Name.Expr(), func(row MembersRow) string { return row.Name })
 }
 
 func MembersTasksEdge[G, CG any](parentSource MembersTable, childSource TasksTable, children rasql.GraphPlan[TasksRow, CG], options rasql.EdgeOptions, attach func(*G, rasql.LoadedMany[CG])) (rasql.GraphEdge[MembersRow, G], error) {
-	parentExpressions, err := (MembersColumns{}).Bind(parentSource)
+	parent, err := rasql.NewGraphKey[MembersRow](rasql.KeyPart[MembersRow, int64](parentSource.ID, func(row MembersRow) int64 { return row.ID }))
 	if err != nil {
 		return nil, err
 	}
-	childExpressions, err := (TasksColumns{}).Bind(childSource)
-	if err != nil {
-		return nil, err
-	}
-	parent, err := rasql.NewGraphKey[MembersRow](rasql.KeyPart[MembersRow, int64](parentExpressions.ID, func(row MembersRow) int64 { return row.ID }))
-	if err != nil {
-		return nil, err
-	}
-	child, err := rasql.NewGraphKey[TasksRow](rasql.NullKeyPart[TasksRow, int64](childExpressions.AssigneeID, func(row TasksRow) rasql.Nullable[int64] { return row.AssigneeID }))
+	child, err := rasql.NewGraphKey[TasksRow](rasql.NullKeyPart[TasksRow, int64](childSource.AssigneeID, func(row TasksRow) rasql.Nullable[int64] { return row.AssigneeID }))
 	if err != nil {
 		return nil, err
 	}
 	return rasql.HasMany("Tasks", parent, child, children, options, attach)
 }
 
-var membersMutationColumns = func() MembersExpressions {
-	value, err := (MembersColumns{}).Bind(Members())
-	if err != nil {
-		panic(err)
-	}
-	return value
-}()
+var membersMutationColumns = bindMembersExpressions(membersTable)
 
 type MembersCreate struct {
 	table  rasql.Table[MembersRow]

@@ -35,12 +35,8 @@ caller. Build and execute it through the same mutation terminal:
 
 <!-- INCLUDE(sample/taskboard/internal/store/docs_examples_test.go#canonical_patch) -->
 ```go
-expressions, err := (TasksColumns{}).Bind(Tasks())
-if err != nil {
-	return err
-}
 plan, err := Tasks().Patch().IsOpen(false).
-	Where(rasql.EqualValue(expressions.ID.Expr(), taskID))
+	Where(rasql.EqualValue(Tasks().ID.Expr(), taskID))
 if err != nil {
 	return err
 }

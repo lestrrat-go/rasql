@@ -67,11 +67,6 @@ func Example_rasqlgen_computed_field() {
 		return
 	}
 
-	columns, err := (store.UsersColumns{}).Bind(users)
-	if err != nil {
-		fmt.Printf("failed to bind users columns: %s\n", err)
-		return
-	}
 	result, err := rasql.NewResultSchema(
 		rasql.ResultColumn{Name: "email", Type: schema.TextType{}},
 		rasql.ResultColumn{Name: "first_name", Type: schema.TextType{}},
@@ -84,9 +79,9 @@ func Example_rasqlgen_computed_field() {
 	// The projection names what the caller wants, since the result shape is
 	// not the table's row type.
 	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
-		rasql.Item("email", columns.Email.Expr(), schema.TextType{}, ""),
-		rasql.Item("first_name", columns.FirstName.Expr(), schema.TextType{}, ""),
-		rasql.Item("last_name", columns.LastName.Expr(), schema.TextType{}, ""),
+		rasql.Item("email", users.Email.Expr(), schema.TextType{}, ""),
+		rasql.Item("first_name", users.FirstName.Expr(), schema.TextType{}, ""),
+		rasql.Item("last_name", users.LastName.Expr(), schema.TextType{}, ""),
 	}, userReportDecoder{result: result})
 	if err != nil {
 		fmt.Printf("failed to build projection: %s\n", err)

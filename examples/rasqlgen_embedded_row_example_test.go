@@ -70,11 +70,6 @@ func Example_rasqlgen_embedded_row() {
 	// The generated columns are reused, but not the generated projection:
 	// store.UsersProjection decodes into store.UsersRow, and this query
 	// decodes into the wrapper instead, so it states its own decoder.
-	columns, err := (store.UsersColumns{}).Bind(users)
-	if err != nil {
-		fmt.Printf("failed to bind users columns: %s\n", err)
-		return
-	}
 	result, err := rasql.NewResultSchema(
 		rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}},
 		rasql.ResultColumn{Name: "email", Type: schema.TextType{}},
@@ -88,12 +83,12 @@ func Example_rasqlgen_embedded_row() {
 		return
 	}
 	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
-		rasql.Item("id", columns.ID.Expr(), schema.IntegerType{}, ""),
-		rasql.Item("email", columns.Email.Expr(), schema.TextType{}, ""),
-		rasql.NullItem("nickname", columns.Nickname.NullExpr(), schema.TextType{}, ""),
-		rasql.Item("status", columns.Status.Expr(), schema.TextType{}, ""),
-		rasql.Item("first_name", columns.FirstName.Expr(), schema.TextType{}, ""),
-		rasql.Item("last_name", columns.LastName.Expr(), schema.TextType{}, ""),
+		rasql.Item("id", users.ID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("email", users.Email.Expr(), schema.TextType{}, ""),
+		rasql.NullItem("nickname", users.Nickname.NullExpr(), schema.TextType{}, ""),
+		rasql.Item("status", users.Status.Expr(), schema.TextType{}, ""),
+		rasql.Item("first_name", users.FirstName.Expr(), schema.TextType{}, ""),
+		rasql.Item("last_name", users.LastName.Expr(), schema.TextType{}, ""),
 	}, userWithRoleDecoder{result: result})
 	if err != nil {
 		fmt.Printf("failed to build projection: %s\n", err)

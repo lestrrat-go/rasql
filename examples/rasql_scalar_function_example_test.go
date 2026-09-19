@@ -75,11 +75,6 @@ func Example_rasql_scalar_function() {
 		return
 	}
 
-	columns, err := (store.UsersColumns{}).Bind(users)
-	if err != nil {
-		fmt.Printf("failed to bind users columns: %s\n", err)
-		return
-	}
 
 	result, err := rasql.NewResultSchema(
 		rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}},
@@ -91,9 +86,9 @@ func Example_rasql_scalar_function() {
 	}
 	// name falls back from nickname to email with CoalesceExpr, so it is
 	// never NULL even though nickname, the column it is drawn from, is.
-	name := rasql.CoalesceExpr(columns.Nickname.NullExpr(), columns.Email.Expr())
+	name := rasql.CoalesceExpr(users.Nickname.NullExpr(), users.Email.Expr())
 	projection, err := rasql.NewProjection([]rasql.ProjectionItem{
-		rasql.Item("id", columns.ID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("id", users.ID.Expr(), schema.IntegerType{}, ""),
 		rasql.Item("name", name, schema.TextType{}, ""),
 	}, userNameDecoder{result: result})
 	if err != nil {
@@ -104,7 +99,7 @@ func Example_rasql_scalar_function() {
 
 	// LowerExpr matches "Ada@Example.com" against the lower-case literal a
 	// caller would type, regardless of how the stored value was cased.
-	byEmailQuery := base.Where(rasql.EqualValue(rasql.LowerExpr(columns.Email.Expr()), "ada@example.com"))
+	byEmailQuery := base.Where(rasql.EqualValue(rasql.LowerExpr(users.Email.Expr()), "ada@example.com"))
 	byEmailStatement, err := rasql.Render(byEmailQuery, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to render statement: %s\n", err)
@@ -123,7 +118,7 @@ func Example_rasql_scalar_function() {
 
 	// COALESCE(nickname, email) reads every user's display name, falling
 	// back to the email once nickname is NULL.
-	namesQuery := base.OrderBy(rasql.AscExpr(columns.ID.Expr()))
+	namesQuery := base.OrderBy(rasql.AscExpr(users.ID.Expr()))
 	namesStatement, err := rasql.Render(namesQuery, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to render statement: %s\n", err)
