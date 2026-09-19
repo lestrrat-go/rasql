@@ -14,21 +14,17 @@ import (
 // namedScopeUsersQuery builds the base query every scope below starts from: a
 // Query[store.UsersRow] projecting every users column, unfiltered and unordered.
 //
-// It returns the bound columns beside it because a scope needs them. A predicate
+// It returns the table beside it because a scope needs its columns. A predicate
 // is built from a column bound to one source, not from a column name, so a caller
-// that wants to filter on status has to hold the same store.UsersExpressions this
-// query was projected from.
-func namedScopeUsersQuery() (rasql.Query[store.UsersRow], store.UsersExpressions, error) {
+// that wants to filter on status has to hold the same store.UsersTable this query
+// was projected from.
+func namedScopeUsersQuery() (rasql.Query[store.UsersRow], store.UsersTable, error) {
 	users := store.Users()
-	columns, err := (store.UsersColumns{}).Bind(users)
+	projection, err := store.UsersProjection(users)
 	if err != nil {
-		return rasql.Query[store.UsersRow]{}, store.UsersExpressions{}, err
+		return rasql.Query[store.UsersRow]{}, store.UsersTable{}, err
 	}
-	projection, err := store.UsersProjection(columns)
-	if err != nil {
-		return rasql.Query[store.UsersRow]{}, store.UsersExpressions{}, err
-	}
-	return rasql.Select(users, projection), columns, nil
+	return rasql.Select(users, projection), users, nil
 }
 
 // namedScopeUsersScope is one named, reusable piece of a users query. Ruby's
@@ -47,30 +43,30 @@ type namedScopeUsersScope interface {
 }
 
 // namedScopeActive keeps the rows whose status column is "active".
-type namedScopeActive struct{ columns store.UsersExpressions }
+type namedScopeActive struct{ users store.UsersTable }
 
 func (s namedScopeActive) Apply(q rasql.Query[store.UsersRow]) rasql.Query[store.UsersRow] {
-	return q.Where(rasql.EqualValue(s.columns.Status.Expr(), "active"))
+	return q.Where(rasql.EqualValue(s.users.Status.Expr(), "active"))
 }
 
 // namedScopeSurnamed keeps the rows whose last_name column equals the surname
 // the caller gives, the way an ActiveRecord scope takes a lambda argument.
 type namedScopeSurnamed struct {
-	columns store.UsersExpressions
+	users   store.UsersTable
 	surname string
 }
 
 func (s namedScopeSurnamed) Apply(q rasql.Query[store.UsersRow]) rasql.Query[store.UsersRow] {
-	return q.Where(rasql.EqualValue(s.columns.LastName.Expr(), s.surname))
+	return q.Where(rasql.EqualValue(s.users.LastName.Expr(), s.surname))
 }
 
 // namedScopeByEmail sorts the rows by the email column, ascending. A scope adds
 // an ordering as readily as a predicate, since both are builder methods on the
 // same query.
-type namedScopeByEmail struct{ columns store.UsersExpressions }
+type namedScopeByEmail struct{ users store.UsersTable }
 
 func (s namedScopeByEmail) Apply(q rasql.Query[store.UsersRow]) rasql.Query[store.UsersRow] {
-	return q.OrderBy(rasql.AscExpr(s.columns.Email.Expr()))
+	return q.OrderBy(rasql.AscExpr(s.users.Email.Expr()))
 }
 
 // namedScopeApply applies each scope to the query in turn, left to right, which
@@ -124,24 +120,24 @@ func Example_rasql_named_scope() {
 		}
 	}
 
-	// base selects every user, with no predicate and no ordering. columns holds
-	// that query's bound columns, which is what each scope builds its predicate
-	// from.
-	base, columns, err := namedScopeUsersQuery()
+	// base selects every user, with no predicate and no ordering. scoped is the
+	// table that query was projected from, and its column fields are what each
+	// scope builds its predicate from.
+	base, scoped, err := namedScopeUsersQuery()
 	if err != nil {
 		fmt.Printf("failed to build users query: %s\n", err)
 		return
 	}
 	// Name the two scopes this example reuses. Neither has touched base yet; a
 	// scope is inert until Apply hands it a query.
-	active := namedScopeActive{columns: columns}
-	byEmail := namedScopeByEmail{columns: columns}
+	active := namedScopeActive{users: scoped}
+	byEmail := namedScopeByEmail{users: scoped}
 
 	// SQL: SELECT every users column FROM "users"
 	//      WHERE (("users"."status" = ?) AND ("users"."last_name" = ?))
 	//      ORDER BY "users"."email"   (arguments: active, Hopper)
 	hoppers, err := rasql.All(ctx, db,
-		namedScopeApply(base, active, namedScopeSurnamed{columns: columns, surname: "Hopper"}, byEmail))
+		namedScopeApply(base, active, namedScopeSurnamed{users: scoped, surname: "Hopper"}, byEmail))
 	if err != nil {
 		fmt.Printf("failed to query active Hoppers: %s\n", err)
 		return

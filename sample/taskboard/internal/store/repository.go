@@ -70,46 +70,34 @@ func openProjectsPlan(hooks *openProjectsHooks) (rasql.GraphPlan[ProjectsRow, op
 	if err != nil {
 		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, ProjectsTable{}, err
 	}
-	projectsExpressions, err := (ProjectsColumns{}).Bind(projectsSource)
-	if err != nil {
-		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, ProjectsTable{}, err
-	}
-	projectsProjection, err := ProjectsProjection(projectsExpressions)
+	projectsProjection, err := ProjectsProjection(projectsSource)
 	if err != nil {
 		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, ProjectsTable{}, err
 	}
 	projectsQuery := rasql.Select(projectsSource, projectsProjection).
-		OrderBy(rasql.AscExpr(projectsExpressions.ID.Expr()))
+		OrderBy(rasql.AscExpr(projectsSource.ID.Expr()))
 
 	tasksSource, err := Tasks().As("task")
 	if err != nil {
 		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, ProjectsTable{}, err
 	}
-	tasksExpressions, err := (TasksColumns{}).Bind(tasksSource)
-	if err != nil {
-		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, ProjectsTable{}, err
-	}
-	tasksProjection, err := TasksProjection(tasksExpressions)
+	tasksProjection, err := TasksProjection(tasksSource)
 	if err != nil {
 		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, ProjectsTable{}, err
 	}
 	tasksQuery := rasql.Select(tasksSource, tasksProjection).
-		OrderBy(rasql.AscExpr(tasksExpressions.ID.Expr()))
+		OrderBy(rasql.AscExpr(tasksSource.ID.Expr()))
 
 	membersSource, err := Members().As("assignee")
 	if err != nil {
 		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, ProjectsTable{}, err
 	}
-	membersExpressions, err := (MembersColumns{}).Bind(membersSource)
-	if err != nil {
-		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, ProjectsTable{}, err
-	}
-	membersProjection, err := MembersProjection(membersExpressions)
+	membersProjection, err := MembersProjection(membersSource)
 	if err != nil {
 		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, ProjectsTable{}, err
 	}
 	membersQuery := rasql.Select(membersSource, membersProjection).
-		OrderBy(rasql.AscExpr(membersExpressions.ID.Expr()))
+		OrderBy(rasql.AscExpr(membersSource.ID.Expr()))
 	membersPlan, err := rasql.NewGraphPlan(membersQuery, func(row MembersRow) MembersRow { return row })
 	if err != nil {
 		return rasql.GraphPlan[ProjectsRow, openProjectGraph]{}, ProjectsTable{}, err
@@ -142,8 +130,8 @@ func openProjectsPlan(hooks *openProjectsHooks) (rasql.GraphPlan[ProjectsRow, op
 		tasksSource,
 		tasksPlan,
 		rasql.EdgeOptions{
-			Where:          rasql.EqualValue(tasksExpressions.IsOpen.Expr(), true),
-			Order:          []rasql.OrderTerm{rasql.AscExpr(tasksExpressions.ID.Expr())},
+			Where:          rasql.EqualValue(tasksSource.IsOpen.Expr(), true),
+			Order:          []rasql.OrderTerm{rasql.AscExpr(tasksSource.ID.Expr())},
 			PerParentLimit: 5,
 		},
 		func(graph *openProjectGraph, loaded rasql.LoadedMany[openTaskGraph]) {
@@ -239,11 +227,7 @@ func (repository Repository) AddTask(ctx context.Context, projectID int64, assig
 // CloseTask closes the task with taskID. Closing an already closed task
 // changes nothing and reports no error.
 func (repository Repository) CloseTask(ctx context.Context, taskID int64) error {
-	tasksExpressions, err := (TasksColumns{}).Bind(Tasks())
-	if err != nil {
-		return fmt.Errorf("bind tasks columns for close %d: %w", taskID, err)
-	}
-	if _, err := Tasks().Patch().IsOpen(false).Where(rasql.EqualValue(tasksExpressions.ID.Expr(), taskID)).Exec(ctx, repository.executor); err != nil {
+	if _, err := Tasks().Patch().IsOpen(false).Where(rasql.EqualValue(Tasks().ID.Expr(), taskID)).Exec(ctx, repository.executor); err != nil {
 		return fmt.Errorf("close task %d: %w", taskID, err)
 	}
 	return nil
@@ -259,15 +243,11 @@ func (repository Repository) AllProjects(ctx context.Context) ([]ProjectsRow, er
 	if err != nil {
 		return nil, fmt.Errorf("bind projects source: %w", err)
 	}
-	expressions, err := (ProjectsColumns{}).Bind(source)
-	if err != nil {
-		return nil, fmt.Errorf("bind projects columns: %w", err)
-	}
-	projection, err := ProjectsProjection(expressions)
+	projection, err := ProjectsProjection(source)
 	if err != nil {
 		return nil, fmt.Errorf("build projects projection: %w", err)
 	}
-	q := rasql.Select(source, projection).OrderBy(rasql.AscExpr(expressions.ID.Expr()))
+	q := rasql.Select(source, projection).OrderBy(rasql.AscExpr(source.ID.Expr()))
 	sequence, err := rasql.Rows(ctx, repository.executor, q)
 	if err != nil {
 		return nil, fmt.Errorf("read projects: %w", err)
@@ -290,15 +270,11 @@ func (repository Repository) AllMembers(ctx context.Context) ([]MembersRow, erro
 	if err != nil {
 		return nil, fmt.Errorf("bind members source: %w", err)
 	}
-	expressions, err := (MembersColumns{}).Bind(source)
-	if err != nil {
-		return nil, fmt.Errorf("bind members columns: %w", err)
-	}
-	projection, err := MembersProjection(expressions)
+	projection, err := MembersProjection(source)
 	if err != nil {
 		return nil, fmt.Errorf("build members projection: %w", err)
 	}
-	q := rasql.Select(source, projection).OrderBy(rasql.AscExpr(expressions.ID.Expr()))
+	q := rasql.Select(source, projection).OrderBy(rasql.AscExpr(source.ID.Expr()))
 	sequence, err := rasql.Rows(ctx, repository.executor, q)
 	if err != nil {
 		return nil, fmt.Errorf("read members: %w", err)

@@ -34,12 +34,8 @@ the update in one call:
 
 <!-- INCLUDE(sample/taskboard/internal/store/docs_examples_test.go#canonical_patch) -->
 ```go
-expressions, err := (TasksColumns{}).Bind(Tasks())
-if err != nil {
-	return err
-}
 outcome, err := Tasks().Patch().IsOpen(false).
-	Where(rasql.EqualValue(expressions.ID.Expr(), taskID)).
+	Where(rasql.EqualValue(Tasks().ID.Expr(), taskID)).
 	Exec(ctx, executor)
 ```
 source: [sample/taskboard/internal/store/docs_examples_test.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/docs_examples_test.go)

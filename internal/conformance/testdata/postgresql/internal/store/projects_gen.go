@@ -30,9 +30,14 @@ type projectsTableHandle = rasql.Table[ProjectsRow]
 
 type ProjectsTable struct {
 	projectsTableHandle
+	ProjectsExpressions
 }
 
-func Projects() ProjectsTable { return ProjectsTable{projectsTableHandle: projectsTable} }
+func newProjectsTable(handle projectsTableHandle) ProjectsTable {
+	return ProjectsTable{projectsTableHandle: handle, ProjectsExpressions: bindProjectsExpressions(handle)}
+}
+
+func Projects() ProjectsTable { return newProjectsTable(projectsTable) }
 
 func (t ProjectsTable) Ref() query.TableRef { return t.projectsTableHandle.Ref() }
 
@@ -41,7 +46,7 @@ func (t ProjectsTable) As(alias string) (ProjectsTable, error) {
 	if err != nil {
 		return ProjectsTable{}, err
 	}
-	return ProjectsTable{projectsTableHandle: aliased}, nil
+	return newProjectsTable(aliased), nil
 }
 
 func (t ProjectsTable) InSchema(namespace string) (ProjectsTable, error) {
@@ -49,10 +54,8 @@ func (t ProjectsTable) InSchema(namespace string) (ProjectsTable, error) {
 	if err != nil {
 		return ProjectsTable{}, err
 	}
-	return ProjectsTable{projectsTableHandle: moved}, nil
+	return newProjectsTable(moved), nil
 }
-
-type ProjectsColumns struct{}
 
 type ProjectsExpressions struct {
 	ID   rasql.Column[ProjectsRow, int64]
@@ -64,22 +67,21 @@ type OptionalProjectsExpressions struct {
 	Name rasql.NullColumn[ProjectsRow, string]
 }
 
-func (ProjectsColumns) Bind(source ProjectsTable) (ProjectsExpressions, error) {
-	var err error
-	result := ProjectsExpressions{
-		ID:   rasqlgenBind(&err, source, "id", "", rasql.BindColumn[ProjectsRow, int64]),
-		Name: rasqlgenBind(&err, source, "name", "", rasql.BindColumn[ProjectsRow, string]),
+func bindProjectsExpressions(source projectsTableHandle) ProjectsExpressions {
+	return ProjectsExpressions{
+		ID:   rasqlgenColumn(source, "id", "", rasql.BindColumn[ProjectsRow, int64]),
+		Name: rasqlgenColumn(source, "name", "", rasql.BindColumn[ProjectsRow, string]),
 	}
-	return result, err
 }
 
-func (ProjectsColumns) BindOptional(source rasql.OptionalRelation[ProjectsRow]) (OptionalProjectsExpressions, error) {
-	var err error
-	result := OptionalProjectsExpressions{
-		ID:   rasqlgenBind(&err, source, "id", "", rasql.BindOptionalColumn[ProjectsRow, int64]),
-		Name: rasqlgenBind(&err, source, "name", "", rasql.BindOptionalColumn[ProjectsRow, string]),
+// Optional names every column of t as it appears on the nullable side
+// of an outer join, where the whole row may be absent.
+func (t ProjectsTable) Optional() OptionalProjectsExpressions {
+	source := rasql.Optional[ProjectsRow](t.projectsTableHandle)
+	return OptionalProjectsExpressions{
+		ID:   rasqlgenColumn(source, "id", "", rasql.BindOptionalColumn[ProjectsRow, int64]),
+		Name: rasqlgenColumn(source, "name", "", rasql.BindOptionalColumn[ProjectsRow, string]),
 	}
-	return result, err
 }
 
 var projectsResultColumns = []rasql.ResultColumn{
@@ -123,73 +125,47 @@ func (projectsOptionalDecoder) DecodeRow(source rasql.ScanSource, row *ProjectsR
 	return nil
 }
 
-func ProjectsProjection(expressions ProjectsExpressions) (rasql.Projection[ProjectsRow], error) {
+func ProjectsProjection(source ProjectsTable) (rasql.Projection[ProjectsRow], error) {
 	items := []rasql.ProjectionItem{
-		rasql.Item("id", expressions.ID.Expr(), schema.IntegerType{}, ""),
-		rasql.Item("name", expressions.Name.Expr(), schema.TextType{Width: schema.NewTextWidth(64)}, ""),
+		rasql.Item("id", source.ID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("name", source.Name.Expr(), schema.TextType{Width: schema.NewTextWidth(64)}, ""),
 	}
 	return rasql.NewProjection(items, projectsDecoder{})
 }
 
-func OptionalProjectsProjection(expressions OptionalProjectsExpressions) (rasql.Projection[ProjectsRow], error) {
+func OptionalProjectsProjection(source OptionalProjectsExpressions) (rasql.Projection[ProjectsRow], error) {
 	items := []rasql.ProjectionItem{
-		rasql.NullItem("id", expressions.ID.NullExpr(), schema.IntegerType{}, ""),
-		rasql.NullItem("name", expressions.Name.NullExpr(), schema.TextType{Width: schema.NewTextWidth(64)}, ""),
+		rasql.NullItem("id", source.ID.NullExpr(), schema.IntegerType{}, ""),
+		rasql.NullItem("name", source.Name.NullExpr(), schema.TextType{Width: schema.NewTextWidth(64)}, ""),
 	}
 	return rasql.NewProjection(items, projectsOptionalDecoder{})
 }
 
 func ProjectsGraphKey(source ProjectsTable) (rasql.GraphKey[ProjectsRow], error) {
-	expressions, err := (ProjectsColumns{}).Bind(source)
-	if err != nil {
-		return rasql.GraphKey[ProjectsRow]{}, err
-	}
-	return rasql.NewGraphKey[ProjectsRow](rasql.KeyPart[ProjectsRow, int64](expressions.ID, func(row ProjectsRow) int64 { return row.ID }))
+	return rasql.NewGraphKey[ProjectsRow](rasql.KeyPart[ProjectsRow, int64](source.ID, func(row ProjectsRow) int64 { return row.ID }))
 }
 
 func ProjectsIDPageKey(source ProjectsTable, direction rasql.PageDirection) (rasql.PageKey[ProjectsRow], error) {
-	expressions, err := (ProjectsColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenPageKey(direction, expressions.ID.Expr(), func(row ProjectsRow) int64 { return row.ID })
+	return rasqlgenPageKey(direction, source.ID.Expr(), func(row ProjectsRow) int64 { return row.ID })
 }
 
 func ProjectsNamePageKey(source ProjectsTable, direction rasql.PageDirection) (rasql.PageKey[ProjectsRow], error) {
-	expressions, err := (ProjectsColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenPageKey(direction, expressions.Name.Expr(), func(row ProjectsRow) string { return row.Name })
+	return rasqlgenPageKey(direction, source.Name.Expr(), func(row ProjectsRow) string { return row.Name })
 }
 
 func ProjectsTasksEdge[G, CG any](parentSource ProjectsTable, childSource TasksTable, children rasql.GraphPlan[TasksRow, CG], options rasql.EdgeOptions, attach func(*G, rasql.LoadedMany[CG])) (rasql.GraphEdge[ProjectsRow, G], error) {
-	parentExpressions, err := (ProjectsColumns{}).Bind(parentSource)
+	parent, err := rasql.NewGraphKey[ProjectsRow](rasql.KeyPart[ProjectsRow, int64](parentSource.ID, func(row ProjectsRow) int64 { return row.ID }))
 	if err != nil {
 		return nil, err
 	}
-	childExpressions, err := (TasksColumns{}).Bind(childSource)
-	if err != nil {
-		return nil, err
-	}
-	parent, err := rasql.NewGraphKey[ProjectsRow](rasql.KeyPart[ProjectsRow, int64](parentExpressions.ID, func(row ProjectsRow) int64 { return row.ID }))
-	if err != nil {
-		return nil, err
-	}
-	child, err := rasql.NewGraphKey[TasksRow](rasql.KeyPart[TasksRow, int64](childExpressions.ProjectID, func(row TasksRow) int64 { return row.ProjectID }))
+	child, err := rasql.NewGraphKey[TasksRow](rasql.KeyPart[TasksRow, int64](childSource.ProjectID, func(row TasksRow) int64 { return row.ProjectID }))
 	if err != nil {
 		return nil, err
 	}
 	return rasql.HasMany("Tasks", parent, child, children, options, attach)
 }
 
-var projectsMutationColumns = func() ProjectsExpressions {
-	value, err := (ProjectsColumns{}).Bind(Projects())
-	if err != nil {
-		panic(err)
-	}
-	return value
-}()
+var projectsMutationColumns = bindProjectsExpressions(projectsTable)
 
 type ProjectsCreate struct {
 	table  rasql.Table[ProjectsRow]

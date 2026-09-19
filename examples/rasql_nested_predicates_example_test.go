@@ -53,14 +53,9 @@ func Example_rasql_nested_predicates() {
 		}
 	}
 
-	// Bind binds every users column to the table, and UsersProjection selects
+	// The table carries every users column as a field, and UsersProjection selects
 	// them in the order the generated row type scans them.
-	columns, err := (store.UsersColumns{}).Bind(users)
-	if err != nil {
-		fmt.Printf("failed to bind users columns: %s\n", err)
-		return
-	}
-	projection, err := store.UsersProjection(columns)
+	projection, err := store.UsersProjection(users)
 	if err != nil {
 		fmt.Printf("failed to build users projection: %s\n", err)
 		return
@@ -71,15 +66,15 @@ func Example_rasql_nested_predicates() {
 	// Where call adds, and the whole tree is one predicate. Row 30 has id > 20
 	// but no nickname, so it shows the innermost And is not vacuous.
 	selected := base.Where(rasql.And(
-		rasql.LikeValue(columns.Email.Expr(), "%@example.com"),
+		rasql.LikeValue(users.Email.Expr(), "%@example.com"),
 		rasql.Or(
-			rasql.LessValue(columns.ID.Expr(), int64(10)),
+			rasql.LessValue(users.ID.Expr(), int64(10)),
 			rasql.And(
-				rasql.GreaterValue(columns.ID.Expr(), int64(20)),
-				rasql.IsNotNull(columns.Nickname.NullExpr()),
+				rasql.GreaterValue(users.ID.Expr(), int64(20)),
+				rasql.IsNotNull(users.Nickname.NullExpr()),
 			),
 		),
-	)).OrderBy(rasql.AscExpr(columns.ID.Expr()))
+	)).OrderBy(rasql.AscExpr(users.ID.Expr()))
 
 	// Every level of the tree renders its own parentheses, so the SQL groups
 	// the way the Go code nests rather than by the database's operator

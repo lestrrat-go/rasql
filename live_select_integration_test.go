@@ -123,8 +123,8 @@ func testAggregateOrdering(t *testing.T, database *sql.DB, test aggregateOrderin
 	}()
 	require.NoError(t, rasql.CreateTable(t.Context(), db, records))
 
-	recordID := query.TypedColumnOf[record, int64](records.Column("id"))
-	recordEmail := query.TypedColumnOf[record, string](records.Column("email"))
+	recordID := query.TypedColumnOf[record, int64](records.Ref().Column("id"))
+	recordEmail := query.TypedColumnOf[record, string](records.Ref().Column("email"))
 	for _, fixture := range []record{
 		{ID: 1, Email: "ada@example.com"},
 		{ID: 2, Email: "grace@example.com"},
@@ -303,9 +303,9 @@ func testDistinctOrder(t *testing.T, database *sql.DB, test distinctOrderCase) {
 	}()
 	require.NoError(t, rasql.CreateTable(t.Context(), db, records))
 
-	recordID := query.TypedColumnOf[record, int64](records.Column("id"))
-	recordCity := query.TypedColumnOf[record, string](records.Column("city"))
-	recordAge := query.TypedColumnOf[record, int64](records.Column("age"))
+	recordID := query.TypedColumnOf[record, int64](records.Ref().Column("id"))
+	recordCity := query.TypedColumnOf[record, string](records.Ref().Column("city"))
+	recordAge := query.TypedColumnOf[record, int64](records.Ref().Column("age"))
 	for _, fixture := range []record{
 		{ID: 1, City: "tokyo", Age: 30},
 		{ID: 2, City: "osaka", Age: 20},
@@ -442,8 +442,8 @@ func testOrderResultAlias(t *testing.T, database *sql.DB, test orderResultAliasC
 	}()
 	require.NoError(t, rasql.CreateTable(t.Context(), db, records))
 
-	recordID := query.TypedColumnOf[record, int64](records.Column("id"))
-	recordCity := query.TypedColumnOf[record, string](records.Column("city"))
+	recordID := query.TypedColumnOf[record, int64](records.Ref().Column("id"))
+	recordCity := query.TypedColumnOf[record, string](records.Ref().Column("city"))
 	for _, fixture := range []record{
 		{ID: 1, City: "tokyo"},
 		{ID: 2, City: "osaka"},

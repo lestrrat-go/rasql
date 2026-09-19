@@ -646,11 +646,11 @@ func rasqlCreatePatch(ctx context.Context, executor rasql.Executor, db rasql.DB,
 	if err != nil {
 		return parityEvidence{}, err
 	}
-	id := query.TypedColumnOf[taskRow, int64](f.tasks.Column("id"))
-	projectID := query.TypedColumnOf[taskRow, int64](f.tasks.Column("project_id"))
-	assigneeID := query.NullableColumnOf[taskRow, int64](f.tasks.Column("assignee_id"))
-	title := query.TypedColumnOf[taskRow, string](f.tasks.Column("title"))
-	isOpen := query.TypedColumnOf[taskRow, bool](f.tasks.Column("is_open"))
+	id := query.TypedColumnOf[taskRow, int64](f.tasks.Ref().Column("id"))
+	projectID := query.TypedColumnOf[taskRow, int64](f.tasks.Ref().Column("project_id"))
+	assigneeID := query.NullableColumnOf[taskRow, int64](f.tasks.Ref().Column("assignee_id"))
+	title := query.TypedColumnOf[taskRow, string](f.tasks.Ref().Column("title"))
+	isOpen := query.TypedColumnOf[taskRow, bool](f.tasks.Ref().Column("is_open"))
 	create, err := rasql.NewCreatePlan(f.tasks, rasql.SetField(id, int64(4001)), rasql.SetField(projectID, int64(1)), rasql.SetNullableField(assigneeID, int64(1)), rasql.SetField(title, "created"))
 	if err != nil {
 		return parityEvidence{}, err
@@ -789,8 +789,8 @@ func rasqlBulkWrite(ctx context.Context, executor rasql.Executor, _ rasql.DB, en
 	if err != nil {
 		return parityEvidence{}, err
 	}
-	id := query.TypedColumnOf[memberRow, int64](f.members.Column("id"))
-	name := query.TypedColumnOf[memberRow, string](f.members.Column("name"))
+	id := query.TypedColumnOf[memberRow, int64](f.members.Ref().Column("id"))
+	name := query.TypedColumnOf[memberRow, string](f.members.Ref().Column("name"))
 	plans := make([]rasql.MutationPlan, 0, 500)
 	for value := int64(4100); value < 4600; value++ {
 		plan, planErr := rasql.NewCreatePlan(f.members, rasql.SetField(id, value), rasql.SetField(name, fmt.Sprintf("bulk-%d", value)))
@@ -880,8 +880,8 @@ func rasqlRollback(ctx context.Context, executor rasql.Executor, _ rasql.DB, _ s
 	if err != nil {
 		return parityEvidence{}, err
 	}
-	id := query.TypedColumnOf[memberRow, int64](f.members.Column("id"))
-	name := query.TypedColumnOf[memberRow, string](f.members.Column("name"))
+	id := query.TypedColumnOf[memberRow, int64](f.members.Ref().Column("id"))
+	name := query.TypedColumnOf[memberRow, string](f.members.Ref().Column("name"))
 	sentinel := errors.New("rollback sentinel")
 	var mutation rasql.MutationOutcome
 	err = rasql.Within(ctx, executor, nil, func(scopeCtx context.Context, scoped rasql.Executor) error {
@@ -1035,8 +1035,8 @@ func rasqlBulkRollback(ctx context.Context, executor rasql.Executor, _ rasql.DB,
 	if err != nil {
 		return parityEvidence{}, err
 	}
-	id := query.TypedColumnOf[memberRow, int64](f.members.Column("id"))
-	name := query.TypedColumnOf[memberRow, string](f.members.Column("name"))
+	id := query.TypedColumnOf[memberRow, int64](f.members.Ref().Column("id"))
+	name := query.TypedColumnOf[memberRow, string](f.members.Ref().Column("name"))
 	plans := make([]rasql.MutationPlan, 0, 500)
 	for index := 0; index < 500; index++ {
 		value := int64(5000 + index)

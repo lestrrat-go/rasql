@@ -52,12 +52,12 @@ func Example_rasql_insert_defaults() {
 	// through the same query and render packages the typed layer builds on.
 	// query.NewSelect takes a query.ColumnRef, and Column is the generated
 	// table's only way to produce one.
-	statement, err := query.NewSelect(users.Ref(), users.Column("id"), users.Column("email"), users.Column("status"))
+	statement, err := query.NewSelect(users.Ref(), users.Ref().Column("id"), users.Ref().Column("email"), users.Ref().Column("status"))
 	if err != nil {
 		fmt.Printf("failed to build select: %s\n", err)
 		return
 	}
-	statement, err = statement.WithWhere(query.Equal(users.Column("id"), 1))
+	statement, err = statement.WithWhere(query.Equal(users.Ref().Column("id"), 1))
 	if err != nil {
 		fmt.Printf("failed to filter select: %s\n", err)
 		return

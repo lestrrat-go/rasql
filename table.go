@@ -73,20 +73,15 @@ func TableFrom[T any](definition schema.TableDef) Table[T] {
 // out of a generated wrapper that holds its Table in an unexported field, and
 // it reaches query.TableRef's own descriptor accessors, CreateTable and the
 // dynamic builders.
+//
+// Ref is also how a caller names a column by string rather than through the
+// generated table's own column fields: query.TableRef.Column returns a
+// query.ColumnRef, which is what the query package and the dynamic builders
+// take. That reference is checked when the statement carrying it builds, not
+// when Column returns, so a misspelled name survives until Build reports the
+// name it could not find, and a column field on the generated table costs
+// nothing at run time and fails to compile instead.
 func (t Table[T]) Ref() query.TableRef { return t.ref }
-
-// Column returns a reference to the named column of t.
-//
-// It reports no error, because a generated accessor returns a ColumnRef alone.
-// A zero Table gives back a ColumnRef over a source that carries no table, and
-// the statement carrying it reports query.ErrNilTable at Build rather than
-// failing at the accessor call; that is the path a generated accessor on a zero
-// wrapper takes.
-//
-// A name the table does not hold is a different case: the returned ColumnRef
-// keeps its source and its name, and the statement carrying it reports the name
-// it could not find.
-func (t Table[T]) Column(name string) ColumnRef { return t.ref.Column(name) }
 
 // As returns t under alias. A generated table's own As is this one, promoted
 // from its embedded handle, so it returns the plain Table[T] the embedded

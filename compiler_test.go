@@ -143,7 +143,7 @@ func TestCompilerMutation(t *testing.T) {
 		require.Contains(t, statement.SQL(), "INSERT")
 
 		remove, err := rasql.NewDeletePlan(table,
-			query.EqualValue(query.TypedColumnOf[compilerRow, int64](table.Column("id")), int64(1)))
+			query.EqualValue(query.TypedColumnOf[compilerRow, int64](table.Ref().Column("id")), int64(1)))
 		require.NoError(t, err)
 		statement, err = compiler.Mutation(remove)
 		require.NoError(t, err)

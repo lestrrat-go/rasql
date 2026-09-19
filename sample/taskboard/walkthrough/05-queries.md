@@ -82,11 +82,7 @@ named as a string.
 // CloseTask closes the task with taskID. Closing an already closed task
 // changes nothing and reports no error.
 func (repository Repository) CloseTask(ctx context.Context, taskID int64) error {
-	tasksExpressions, err := (TasksColumns{}).Bind(Tasks())
-	if err != nil {
-		return fmt.Errorf("bind tasks columns for close %d: %w", taskID, err)
-	}
-	if _, err := Tasks().Patch().IsOpen(false).Where(rasql.EqualValue(tasksExpressions.ID.Expr(), taskID)).Exec(ctx, repository.executor); err != nil {
+	if _, err := Tasks().Patch().IsOpen(false).Where(rasql.EqualValue(Tasks().ID.Expr(), taskID)).Exec(ctx, repository.executor); err != nil {
 		return fmt.Errorf("close task %d: %w", taskID, err)
 	}
 	return nil
@@ -106,15 +102,11 @@ func (repository Repository) AllProjects(ctx context.Context) ([]ProjectsRow, er
 	if err != nil {
 		return nil, fmt.Errorf("bind projects source: %w", err)
 	}
-	expressions, err := (ProjectsColumns{}).Bind(source)
-	if err != nil {
-		return nil, fmt.Errorf("bind projects columns: %w", err)
-	}
-	projection, err := ProjectsProjection(expressions)
+	projection, err := ProjectsProjection(source)
 	if err != nil {
 		return nil, fmt.Errorf("build projects projection: %w", err)
 	}
-	q := rasql.Select(source, projection).OrderBy(rasql.AscExpr(expressions.ID.Expr()))
+	q := rasql.Select(source, projection).OrderBy(rasql.AscExpr(source.ID.Expr()))
 	sequence, err := rasql.Rows(ctx, repository.executor, q)
 	if err != nil {
 		return nil, fmt.Errorf("read projects: %w", err)

@@ -85,7 +85,7 @@ The [documentation index](docs/) groups these pages by layer: the core layer bui
 | [Inspection-only facts](docs/core/08-inspection-facts.md) | Reference for the facts inspection reads that rasql cannot write back as DDL. |
 | **ORM layer** | |
 | [`rasql codegen`](docs/orm/01-codegen.md) | Running the generator and configuring it with `rasql.json`. |
-| [The generated store](docs/orm/02-generated-store.md) | The row types, table types, bound columns, projections, and static query functions it writes. |
+| [The generated store](docs/orm/02-generated-store.md) | The row types, table types, their column fields, projections, and static query functions it writes. |
 | [Typed queries](docs/orm/03-typed-queries.md) | Sources, typed expressions, projections, joins, and result terminals. |
 | [Writing rows](docs/orm/04-writing.md) | Create, patch, delete, native, and batch mutation plans. |
 

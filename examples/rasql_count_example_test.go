@@ -49,11 +49,6 @@ func Example_rasql_count() {
 		}
 	}
 
-	columns, err := (store.UsersColumns{}).Bind(users)
-	if err != nil {
-		fmt.Printf("failed to bind users columns: %s\n", err)
-		return
-	}
 	countProjection, err := rasql.Scalar("count", rasql.CountRows(), schema.IntegerType{}, "")
 	if err != nil {
 		fmt.Printf("failed to build count projection: %s\n", err)
@@ -71,7 +66,7 @@ func Example_rasql_count() {
 	fmt.Println("total:", total)
 
 	// SQL: SELECT COUNT(*) AS count FROM users WHERE users.id = ? (argument: 2)
-	filtered, err := rasql.One(ctx, db, base.Where(rasql.EqualValue(columns.ID.Expr(), int64(2))))
+	filtered, err := rasql.One(ctx, db, base.Where(rasql.EqualValue(users.ID.Expr(), int64(2))))
 	if err != nil {
 		fmt.Printf("failed to count filtered users: %s\n", err)
 		return

@@ -157,9 +157,8 @@ func TestGeneratedCreateAndPatchMatrix(t *testing.T) {
 	executor, err := rasql.Open(ctx, sqlDB, dialect.SQLite())
 	if err != nil { t.Fatal(err) }
 
-	columns, err := (generated.ItemsColumns{}).Bind(generated.Items())
 	if err != nil { t.Fatal(err) }
-	projection, err := generated.ItemsProjection(columns)
+	projection, err := generated.ItemsProjection(generated.Items())
 	if err != nil { t.Fatal(err) }
 	returning := func(plan rasql.MutationPlan) generated.ItemsRow {
 		t.Helper()
@@ -171,7 +170,7 @@ func TestGeneratedCreateAndPatchMatrix(t *testing.T) {
 	}
 	patchOn := func(builder generated.ItemsPatch, id int64) generated.ItemsRow {
 		t.Helper()
-		plan, err := builder.Where(rasql.EqualValue(columns.ID.Expr(), id)).Plan()
+		plan, err := builder.Where(rasql.EqualValue(generated.Items().ID.Expr(), id)).Plan()
 		if err != nil { t.Fatal(err) }
 		return returning(plan)
 	}
@@ -234,7 +233,7 @@ func TestGeneratedCreateAndPatchMatrix(t *testing.T) {
 	patchRightRow := patchOn(patchRight, rightRow.ID)
 	if patchRightRow.Count != 2 { t.Fatalf("patch right variant: %#v", patchRightRow) }
 
-	missingPlan, err := generated.Items().Patch().Count(1).Where(rasql.EqualValue(columns.ID.Expr(), int64(-1))).Plan()
+	missingPlan, err := generated.Items().Patch().Count(1).Where(rasql.EqualValue(generated.Items().ID.Expr(), int64(-1))).Plan()
 	if err != nil { t.Fatal(err) }
 	missingQuery, err := rasql.Returning(missingPlan, projection)
 	if err != nil { t.Fatal(err) }
@@ -251,13 +250,12 @@ func TestGeneratedMutationExecTerminal(t *testing.T) {
 	executor, err := rasql.Open(ctx, sqlDB, dialect.SQLite())
 	if err != nil { t.Fatal(err) }
 
-	columns, err := (generated.ItemsColumns{}).Bind(generated.Items())
 	if err != nil { t.Fatal(err) }
-	projection, err := generated.ItemsProjection(columns)
+	projection, err := generated.ItemsProjection(generated.Items())
 	if err != nil { t.Fatal(err) }
 	readByRequired := func(value string) (generated.ItemsRow, error) {
 		t.Helper()
-		q := rasql.Select(generated.Items(), projection).Where(rasql.EqualValue(columns.Required.Expr(), value))
+		q := rasql.Select(generated.Items(), projection).Where(rasql.EqualValue(generated.Items().Required.Expr(), value))
 		return rasql.One(ctx, executor, q)
 	}
 
@@ -269,7 +267,7 @@ func TestGeneratedMutationExecTerminal(t *testing.T) {
 	if err != nil { t.Fatal(err) }
 
 	// A patch builder's Where(...).Exec updates the matched row in one call.
-	outcome, err = generated.Items().Patch().Required("exec-patched").Where(rasql.EqualValue(columns.ID.Expr(), created.ID)).Exec(ctx, executor)
+	outcome, err = generated.Items().Patch().Required("exec-patched").Where(rasql.EqualValue(generated.Items().ID.Expr(), created.ID)).Exec(ctx, executor)
 	if err != nil { t.Fatal(err) }
 	if outcome.Affected != 1 { t.Fatalf("patch affected = %d", outcome.Affected) }
 	if _, err := readByRequired("exec-create"); !errors.Is(err, rasql.ErrNoRows) { t.Fatalf("pre-patch row still readable, err = %v", err) }
@@ -278,7 +276,7 @@ func TestGeneratedMutationExecTerminal(t *testing.T) {
 	if patched.ID != created.ID { t.Fatalf("patched row id = %d, want %d", patched.ID, created.ID) }
 
 	// A delete builder's Where(...).Exec removes the matched row in one call.
-	outcome, err = generated.Items().Delete().Where(rasql.EqualValue(columns.ID.Expr(), created.ID)).Exec(ctx, executor)
+	outcome, err = generated.Items().Delete().Where(rasql.EqualValue(generated.Items().ID.Expr(), created.ID)).Exec(ctx, executor)
 	if err != nil { t.Fatal(err) }
 	if outcome.Affected != 1 { t.Fatalf("delete affected = %d", outcome.Affected) }
 	if _, err := readByRequired("exec-patched"); !errors.Is(err, rasql.ErrNoRows) { t.Fatalf("deleted row still readable, err = %v", err) }

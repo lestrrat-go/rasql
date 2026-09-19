@@ -8,6 +8,6 @@ import (
 
 func main() {
 	table, _ := rasql.TableOf[struct{}](schema.TableDef{Name: "items", Columns: []schema.ColumnDef{{Name: "id", Type: schema.IntegerType{}}}})
-	id := query.TypedColumnOf[struct{}, int64](table.Column("id"))
+	id := query.TypedColumnOf[struct{}, int64](table.Ref().Column("id"))
 	_, _ = rasql.NewCreatePlan(table, rasql.SetField(id, "wrong"))
 }

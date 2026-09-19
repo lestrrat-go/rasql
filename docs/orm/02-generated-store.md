@@ -1,8 +1,8 @@
 # The generated store
 
 The store package is the ORM's schema of record: the row types, table types,
-bound columns, projections, and static query functions the rest of the typed
-layer builds on. [`rasql codegen`](01-codegen.md) writes every file described
+their column fields, projections, and static query functions the rest of the
+typed layer builds on. [`rasql codegen`](01-codegen.md) writes every file described
 here, and this page says what each one contains and which parts an application
 may rely on.
 
@@ -11,8 +11,8 @@ may rely on.
 The generated package contains one `<table>_gen.go` file per table,
 `schema_gen.go`, `schema_gen_test.go`, and `rasql.sum`. A table file contains
 the row type and its `ScanRow` method, the `schema.TableDef` descriptor, the
-table type and its package accessor, the columns struct that binds every
-column, the decoder and the projection that read a whole row, the graph and
+table type and its package accessor, the column fields that table carries, the
+decoder and the projection that read a whole row, the graph and
 page keys, and the create and patch builders. `schema_gen.go` holds the
 helpers every table file in the package calls.
 
@@ -64,9 +64,14 @@ type usersTableHandle = rasql.Table[UsersRow]
 
 type UsersTable struct {
 	usersTableHandle
+	UsersExpressions
 }
 
-func Users() UsersTable { return UsersTable{usersTableHandle: usersTable} }
+func newUsersTable(handle usersTableHandle) UsersTable {
+	return UsersTable{usersTableHandle: handle, UsersExpressions: bindUsersExpressions(handle)}
+}
+
+func Users() UsersTable { return newUsersTable(usersTable) }
 
 func (t UsersTable) Ref() query.TableRef { return t.usersTableHandle.Ref() }
 
@@ -75,7 +80,7 @@ func (t UsersTable) As(alias string) (UsersTable, error) {
 	if err != nil {
 		return UsersTable{}, err
 	}
-	return UsersTable{usersTableHandle: aliased}, nil
+	return newUsersTable(aliased), nil
 }
 
 func (t UsersTable) InSchema(namespace string) (UsersTable, error) {
@@ -83,10 +88,8 @@ func (t UsersTable) InSchema(namespace string) (UsersTable, error) {
 	if err != nil {
 		return UsersTable{}, err
 	}
-	return UsersTable{usersTableHandle: moved}, nil
+	return newUsersTable(moved), nil
 }
-
-type UsersColumns struct{}
 
 type UsersExpressions struct {
 	ID                          rasql.Column[UsersRow, int64]
@@ -100,30 +103,29 @@ type OptionalUsersExpressions struct {
 	Email, Nickname, Status, FirstName, LastName rasql.NullColumn[UsersRow, string]
 }
 
-func (UsersColumns) Bind(source UsersTable) (UsersExpressions, error) {
-	var err error
-	result := UsersExpressions{
-		ID:        rasqlgenBind(&err, source, "id", "", rasql.BindColumn[UsersRow, int64]),
-		Email:     rasqlgenBind(&err, source, "email", "", rasql.BindColumn[UsersRow, string]),
-		Nickname:  rasqlgenBind(&err, source, "nickname", "", rasql.BindNullColumn[UsersRow, string]),
-		Status:    rasqlgenBind(&err, source, "status", "", rasql.BindColumn[UsersRow, string]),
-		FirstName: rasqlgenBind(&err, source, "first_name", "", rasql.BindColumn[UsersRow, string]),
-		LastName:  rasqlgenBind(&err, source, "last_name", "", rasql.BindColumn[UsersRow, string]),
+func bindUsersExpressions(source usersTableHandle) UsersExpressions {
+	return UsersExpressions{
+		ID:        rasqlgenColumn(source, "id", "", rasql.BindColumn[UsersRow, int64]),
+		Email:     rasqlgenColumn(source, "email", "", rasql.BindColumn[UsersRow, string]),
+		Nickname:  rasqlgenColumn(source, "nickname", "", rasql.BindNullColumn[UsersRow, string]),
+		Status:    rasqlgenColumn(source, "status", "", rasql.BindColumn[UsersRow, string]),
+		FirstName: rasqlgenColumn(source, "first_name", "", rasql.BindColumn[UsersRow, string]),
+		LastName:  rasqlgenColumn(source, "last_name", "", rasql.BindColumn[UsersRow, string]),
 	}
-	return result, err
 }
 
-func (UsersColumns) BindOptional(source rasql.OptionalRelation[UsersRow]) (OptionalUsersExpressions, error) {
-	var err error
-	result := OptionalUsersExpressions{
-		ID:        rasqlgenBind(&err, source, "id", "", rasql.BindOptionalColumn[UsersRow, int64]),
-		Email:     rasqlgenBind(&err, source, "email", "", rasql.BindOptionalColumn[UsersRow, string]),
-		Nickname:  rasqlgenBind(&err, source, "nickname", "", rasql.BindOptionalColumn[UsersRow, string]),
-		Status:    rasqlgenBind(&err, source, "status", "", rasql.BindOptionalColumn[UsersRow, string]),
-		FirstName: rasqlgenBind(&err, source, "first_name", "", rasql.BindOptionalColumn[UsersRow, string]),
-		LastName:  rasqlgenBind(&err, source, "last_name", "", rasql.BindOptionalColumn[UsersRow, string]),
+// Optional names every column of t as it appears on the nullable side
+// of an outer join, where the whole row may be absent.
+func (t UsersTable) Optional() OptionalUsersExpressions {
+	source := rasql.Optional[UsersRow](t.usersTableHandle)
+	return OptionalUsersExpressions{
+		ID:        rasqlgenColumn(source, "id", "", rasql.BindOptionalColumn[UsersRow, int64]),
+		Email:     rasqlgenColumn(source, "email", "", rasql.BindOptionalColumn[UsersRow, string]),
+		Nickname:  rasqlgenColumn(source, "nickname", "", rasql.BindOptionalColumn[UsersRow, string]),
+		Status:    rasqlgenColumn(source, "status", "", rasql.BindOptionalColumn[UsersRow, string]),
+		FirstName: rasqlgenColumn(source, "first_name", "", rasql.BindOptionalColumn[UsersRow, string]),
+		LastName:  rasqlgenColumn(source, "last_name", "", rasql.BindOptionalColumn[UsersRow, string]),
 	}
-	return result, err
 }
 
 var usersResultColumns = []rasql.ResultColumn{
@@ -174,93 +176,59 @@ func (usersOptionalDecoder) DecodeRow(source rasql.ScanSource, row *UsersRow) er
 	return nil
 }
 
-func UsersProjection(expressions UsersExpressions) (rasql.Projection[UsersRow], error) {
+func UsersProjection(source UsersTable) (rasql.Projection[UsersRow], error) {
 	items := []rasql.ProjectionItem{
-		rasql.Item("id", expressions.ID.Expr(), schema.IntegerType{}, ""),
-		rasql.Item("email", expressions.Email.Expr(), schema.TextType{}, ""),
-		rasql.NullItem("nickname", expressions.Nickname.NullExpr(), schema.TextType{}, ""),
-		rasql.Item("status", expressions.Status.Expr(), schema.TextType{}, ""),
-		rasql.Item("first_name", expressions.FirstName.Expr(), schema.TextType{}, ""),
-		rasql.Item("last_name", expressions.LastName.Expr(), schema.TextType{}, ""),
+		rasql.Item("id", source.ID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("email", source.Email.Expr(), schema.TextType{}, ""),
+		rasql.NullItem("nickname", source.Nickname.NullExpr(), schema.TextType{}, ""),
+		rasql.Item("status", source.Status.Expr(), schema.TextType{}, ""),
+		rasql.Item("first_name", source.FirstName.Expr(), schema.TextType{}, ""),
+		rasql.Item("last_name", source.LastName.Expr(), schema.TextType{}, ""),
 	}
 	return rasql.NewProjection(items, usersDecoder{})
 }
 
-func OptionalUsersProjection(expressions OptionalUsersExpressions) (rasql.Projection[UsersRow], error) {
+func OptionalUsersProjection(source OptionalUsersExpressions) (rasql.Projection[UsersRow], error) {
 	items := []rasql.ProjectionItem{
-		rasql.NullItem("id", expressions.ID.NullExpr(), schema.IntegerType{}, ""),
-		rasql.NullItem("email", expressions.Email.NullExpr(), schema.TextType{}, ""),
-		rasql.NullItem("nickname", expressions.Nickname.NullExpr(), schema.TextType{}, ""),
-		rasql.NullItem("status", expressions.Status.NullExpr(), schema.TextType{}, ""),
-		rasql.NullItem("first_name", expressions.FirstName.NullExpr(), schema.TextType{}, ""),
-		rasql.NullItem("last_name", expressions.LastName.NullExpr(), schema.TextType{}, ""),
+		rasql.NullItem("id", source.ID.NullExpr(), schema.IntegerType{}, ""),
+		rasql.NullItem("email", source.Email.NullExpr(), schema.TextType{}, ""),
+		rasql.NullItem("nickname", source.Nickname.NullExpr(), schema.TextType{}, ""),
+		rasql.NullItem("status", source.Status.NullExpr(), schema.TextType{}, ""),
+		rasql.NullItem("first_name", source.FirstName.NullExpr(), schema.TextType{}, ""),
+		rasql.NullItem("last_name", source.LastName.NullExpr(), schema.TextType{}, ""),
 	}
 	return rasql.NewProjection(items, usersOptionalDecoder{})
 }
 
 func UsersGraphKey(source UsersTable) (rasql.GraphKey[UsersRow], error) {
-	expressions, err := (UsersColumns{}).Bind(source)
-	if err != nil {
-		return rasql.GraphKey[UsersRow]{}, err
-	}
-	return rasql.NewGraphKey[UsersRow](rasql.KeyPart[UsersRow, int64](expressions.ID, func(row UsersRow) int64 { return row.ID }))
+	return rasql.NewGraphKey[UsersRow](rasql.KeyPart[UsersRow, int64](source.ID, func(row UsersRow) int64 { return row.ID }))
 }
 
 func UsersIDPageKey(source UsersTable, direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
-	expressions, err := (UsersColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenPageKey(direction, expressions.ID.Expr(), func(row UsersRow) int64 { return row.ID })
+	return rasqlgenPageKey(direction, source.ID.Expr(), func(row UsersRow) int64 { return row.ID })
 }
 
 func UsersEmailPageKey(source UsersTable, direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
-	expressions, err := (UsersColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenPageKey(direction, expressions.Email.Expr(), func(row UsersRow) string { return row.Email })
+	return rasqlgenPageKey(direction, source.Email.Expr(), func(row UsersRow) string { return row.Email })
 }
 
 func UsersNicknamePageKey(source UsersTable, direction rasql.PageDirection, nulls rasql.NullOrder) (rasql.PageKey[UsersRow], error) {
-	expressions, err := (UsersColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenNullablePageKey(direction, expressions.Nickname.NullExpr(), func(row UsersRow) rasql.Nullable[string] { return row.Nickname }, nulls)
+	return rasqlgenNullablePageKey(direction, source.Nickname.NullExpr(), func(row UsersRow) rasql.Nullable[string] { return row.Nickname }, nulls)
 }
 
 func UsersStatusPageKey(source UsersTable, direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
-	expressions, err := (UsersColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenPageKey(direction, expressions.Status.Expr(), func(row UsersRow) string { return row.Status })
+	return rasqlgenPageKey(direction, source.Status.Expr(), func(row UsersRow) string { return row.Status })
 }
 
 func UsersFirstNamePageKey(source UsersTable, direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
-	expressions, err := (UsersColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenPageKey(direction, expressions.FirstName.Expr(), func(row UsersRow) string { return row.FirstName })
+	return rasqlgenPageKey(direction, source.FirstName.Expr(), func(row UsersRow) string { return row.FirstName })
 }
 
 func UsersLastNamePageKey(source UsersTable, direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
-	expressions, err := (UsersColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenPageKey(direction, expressions.LastName.Expr(), func(row UsersRow) string { return row.LastName })
+	return rasqlgenPageKey(direction, source.LastName.Expr(), func(row UsersRow) string { return row.LastName })
 }
 
-var usersMutationColumns = func() UsersExpressions {
-	value, err := (UsersColumns{}).Bind(Users())
-	if err != nil {
-		panic(err)
-	}
-	return value
-}()
+var usersMutationColumns = bindUsersExpressions(usersTable)
 
 type UsersCreate struct {
 	table  rasql.Table[UsersRow]
@@ -417,6 +385,18 @@ func rasqlgenBind[S, C any](sticky *error, source S, name, codec string, bind fu
 	return value
 }
 
+// rasqlgenColumn binds one column of a generated table and drops the error the
+// bind reports. Every caller passes a table built from the descriptor this
+// package generated beside it, which holds the name, the Go type and the
+// nullability the bind checks, so the bind fails for one input only: a zero
+// table value, which carries no columns at all. That leaves a zero column
+// whose statement reports the missing table when it builds, which is where a
+// zero table is reported anyway.
+func rasqlgenColumn[S, C any](source S, name, codec string, bind func(S, string, string) (C, error)) C {
+	value, _ := bind(source, name, codec)
+	return value
+}
+
 func rasqlgenAppendMutationField[R any](fields []rasql.MutationField[R], field rasql.MutationField[R]) []rasql.MutationField[R] {
 	return append(append([]rasql.MutationField[R](nil), fields...), field)
 }
@@ -472,13 +452,16 @@ source: [examples/store/schema_gen.go](https://github.com/lestrrat-go/rasql/blob
 
 ### The mapping and scan methods
 
-`UsersColumns{}.Bind(source)` binds every column of one appearance of the
-table and returns them as fields of a `UsersExpressions` value, so query code
-refers to compiler-checked struct fields instead of column-name strings.
+`Users()` returns a table that already carries every one of its columns as a
+field, so query code refers to compiler-checked struct fields instead of
+column-name strings. `As` and `InSchema` each return a table whose fields are
+bound against the alias or namespace that table holds, so `users.ID` always
+names the column of the appearance `users` is.
 `UsersProjection` turns those fields into the projection that selects the whole
 row, and the generated decoder scans each result column into the field it
 belongs to. `ScanRow` on the row type does the same scan from a
-`rasql.ScanSource` directly.
+`rasql.ScanSource` directly. `Optional` returns the same columns as they appear
+on the nullable side of an outer join.
 
 A hint can override generated Go names when database names do not match the
 application's preferred names.
@@ -490,38 +473,33 @@ two lines are indistinguishable until then:
 
 <!-- INCLUDE(examples/rasqlgen_column_fields_example_test.go#string_column) -->
 ```go
-correct, err := query.NewSelect(users.Ref(), users.Column("id"))
+correct, err := query.NewSelect(users.Ref(), users.Ref().Column("id"))
 if err != nil {
 	fmt.Printf("failed to create the correct select: %s\n", err)
 	return
 }
-correct, err = correct.WithWhere(query.Equal(users.Column("id"), query.Bind(42)))
+correct, err = correct.WithWhere(query.Equal(users.Ref().Column("id"), query.Bind(42)))
 if err != nil {
 	fmt.Printf("failed to add the correct predicate: %s\n", err)
 	return
 }
-typo := users.Column("emial")
+typo := users.Ref().Column("emial")
 ```
 source: [examples/rasqlgen_column_fields_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasqlgen_column_fields_example_test.go)
 <!-- END INCLUDE -->
 
-The typed builder reads the column off the generated columns struct, so the
-same typo stops at the compiler:
+The typed builder reads the column off the generated table, so the same typo
+stops at the compiler:
 
 <!-- INCLUDE(examples/rasqlgen_column_fields_example_test.go#typed_column) -->
 ```go
-columns, err := (store.UsersColumns{}).Bind(users)
-if err != nil {
-	fmt.Printf("failed to bind users columns: %s\n", err)
-	return
-}
-projection, err := store.UsersProjection(columns)
+projection, err := store.UsersProjection(users)
 if err != nil {
 	fmt.Printf("failed to build users projection: %s\n", err)
 	return
 }
 typed := rasql.Select(users, projection).
-	Where(rasql.EqualValue(columns.ID.Expr(), int64(42)))
+	Where(rasql.EqualValue(users.ID.Expr(), int64(42)))
 built, err := rasql.Render(typed, dialect.PostgreSQL())
 ```
 source: [examples/rasqlgen_column_fields_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasqlgen_column_fields_example_test.go)
@@ -555,10 +533,10 @@ source: [examples/rasqlgen_column_fields_example_test.go](https://github.com/les
 `Column` is an escape hatch rather than a second way to write a query. Reach
 for it when the name arrives as data, or when the statement is built with the
 `query` package, which takes a `query.ColumnRef` and knows nothing about Go
-row types. Reach for the bound column everywhere else: writing the string
+row types. Reach for the column field everywhere else: writing the string
 where the generated field exists costs the compiler's check and buys nothing
-back. That is why the rest of these pages name every column through the
-columns struct.
+back. That is why the rest of these pages name every column as a field of the
+generated table.
 
 The generator fails rather than emitting doubtful code when a table or column
 name cannot become a Go identifier, or when two of one table's columns produce
@@ -790,6 +768,6 @@ in row fields, scanners, writes, and descriptors.
 
 Store generation can include inspected views with
 `catalog.Options{IncludeViews: true}`. A generated view type provides the row
-fields, the bound columns, the projections, and the aliases a base table does.
+fields, the column fields, the projections, and the aliases a base table does.
 It emits no create or patch builder, so writing to a view through the
 generated surface does not compile.

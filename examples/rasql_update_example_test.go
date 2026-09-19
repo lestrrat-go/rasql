@@ -44,17 +44,12 @@ func Example_rasql_update() {
 		return
 	}
 
-	columns, err := (store.UsersColumns{}).Bind(users)
-	if err != nil {
-		fmt.Printf("failed to bind users columns: %s\n", err)
-		return
-	}
 
 	// The generated patch builder writes only the fields named, and its
 	// Where takes the typed predicate that matches the target row. Exec
 	// plans and runs the patch in one call.
 	// SQL: UPDATE users SET email = ? WHERE users.id = ? (arguments: "grace@example.com", 42)
-	if _, err := store.Users().Patch().Email("grace@example.com").Where(rasql.EqualValue(columns.ID.Expr(), int64(42))).Exec(ctx, db); err != nil {
+	if _, err := store.Users().Patch().Email("grace@example.com").Where(rasql.EqualValue(users.ID.Expr(), int64(42))).Exec(ctx, db); err != nil {
 		fmt.Printf("failed to update user: %s\n", err)
 		return
 	}
@@ -63,12 +58,12 @@ func Example_rasql_update() {
 	// packages the typed layer builds on. query.NewSelect takes a
 	// query.ColumnRef, and Column is the generated table's only way to
 	// produce one.
-	statement, err := query.NewSelect(users.Ref(), users.Column("id"), users.Column("email"))
+	statement, err := query.NewSelect(users.Ref(), users.Ref().Column("id"), users.Ref().Column("email"))
 	if err != nil {
 		fmt.Printf("failed to build select: %s\n", err)
 		return
 	}
-	statement, err = statement.WithWhere(query.Equal(users.Column("id"), 42))
+	statement, err = statement.WithWhere(query.Equal(users.Ref().Column("id"), 42))
 	if err != nil {
 		fmt.Printf("failed to filter select: %s\n", err)
 		return

@@ -168,15 +168,11 @@ func readTaskByTitle(ctx context.Context, t *testing.T, executor rasql.Executor,
 	if err != nil {
 		t.Fatalf("create task source: %s", err)
 	}
-	expressions, err := (store.TasksColumns{}).Bind(source)
-	if err != nil {
-		t.Fatalf("bind task columns: %s", err)
-	}
-	projection, err := store.TasksProjection(expressions)
+	projection, err := store.TasksProjection(source)
 	if err != nil {
 		t.Fatalf("build task projection: %s", err)
 	}
-	row, err := rasql.One(ctx, executor, rasql.Select(source, projection).Where(rasql.EqualValue(expressions.Title.Expr(), title)))
+	row, err := rasql.One(ctx, executor, rasql.Select(source, projection).Where(rasql.EqualValue(source.Title.Expr(), title)))
 	if err != nil {
 		t.Fatalf("read task %q: %s", title, err)
 	}

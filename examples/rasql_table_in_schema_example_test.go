@@ -67,18 +67,13 @@ func Example_rasql_table_in_schema() {
 		return
 	}
 
-	tenantColumns, err := (store.UsersColumns{}).Bind(tenant)
-	if err != nil {
-		fmt.Printf("failed to bind tenant columns: %s\n", err)
-		return
-	}
-	tenantProjection, err := store.UsersProjection(tenantColumns)
+	tenantProjection, err := store.UsersProjection(tenant)
 	if err != nil {
 		fmt.Printf("failed to build the tenant projection: %s\n", err)
 		return
 	}
 	tenantRow, err := rasql.One(ctx, db,
-		rasql.Select(tenant, tenantProjection).Where(rasql.EqualValue(tenantColumns.ID.Expr(), int64(1))))
+		rasql.Select(tenant, tenantProjection).Where(rasql.EqualValue(tenant.ID.Expr(), int64(1))))
 	if err != nil {
 		fmt.Printf("failed to query the tenant table: %s\n", err)
 		return
@@ -87,12 +82,7 @@ func Example_rasql_table_in_schema() {
 
 	// The point of the whole example: the identically named table where the
 	// connection is sitting never saw the insert the moved plan built.
-	homeColumns, err := (store.UsersColumns{}).Bind(home)
-	if err != nil {
-		fmt.Printf("failed to bind home columns: %s\n", err)
-		return
-	}
-	homeProjection, err := store.UsersProjection(homeColumns)
+	homeProjection, err := store.UsersProjection(home)
 	if err != nil {
 		fmt.Printf("failed to build the home projection: %s\n", err)
 		return

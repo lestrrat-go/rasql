@@ -50,8 +50,8 @@ func Example_rasql_delete_returning() {
 		{43, "grace@example.com", "Grace", "Hopper"},
 	} {
 		insert, err := query.NewInsert(users.Ref(),
-			query.Set(users.Column("id"), user.id), query.Set(users.Column("email"), user.email),
-			query.Set(users.Column("first_name"), user.firstName), query.Set(users.Column("last_name"), user.lastName))
+			query.Set(users.Ref().Column("id"), user.id), query.Set(users.Ref().Column("email"), user.email),
+			query.Set(users.Ref().Column("first_name"), user.firstName), query.Set(users.Ref().Column("last_name"), user.lastName))
 		if err != nil {
 			fmt.Printf("failed to build insert: %s\n", err)
 			return
@@ -73,12 +73,12 @@ func Example_rasql_delete_returning() {
 		fmt.Printf("failed to build delete: %s\n", err)
 		return
 	}
-	statement, err = statement.WithWhere(query.Equal(users.Column("id"), query.Bind(42)))
+	statement, err = statement.WithWhere(query.Equal(users.Ref().Column("id"), query.Bind(42)))
 	if err != nil {
 		fmt.Printf("failed to add delete predicate: %s\n", err)
 		return
 	}
-	statement, err = statement.WithReturning(users.Column("id"), users.Column("email"))
+	statement, err = statement.WithReturning(users.Ref().Column("id"), users.Ref().Column("email"))
 	if err != nil {
 		fmt.Printf("failed to add delete returning: %s\n", err)
 		return
@@ -113,17 +113,12 @@ func Example_rasql_delete_returning() {
 	// takes a typed rasql.Predicate; the generated projection names all six
 	// columns, so Returning hands One a whole decoded store.UsersRow.
 	// SQL: DELETE FROM users WHERE users.id = ? RETURNING id, email, nickname, status, first_name, last_name (argument: 43)
-	columns, err := (store.UsersColumns{}).Bind(users)
-	if err != nil {
-		fmt.Printf("failed to bind users columns: %s\n", err)
-		return
-	}
-	plan, err := users.Delete().Where(rasql.EqualValue(columns.ID.Expr(), int64(43))).Plan()
+	plan, err := users.Delete().Where(rasql.EqualValue(users.ID.Expr(), int64(43))).Plan()
 	if err != nil {
 		fmt.Printf("failed to build typed delete: %s\n", err)
 		return
 	}
-	projection, err := store.UsersProjection(columns)
+	projection, err := store.UsersProjection(users)
 	if err != nil {
 		fmt.Printf("failed to build users projection: %s\n", err)
 		return

@@ -782,7 +782,7 @@ var inlineCode = regexp.MustCompile("`[^`]*`")
 var compileOutcome = regexp.MustCompile(`(?i)\bcompiles?\b|\bcompiling\b|\bcompile-time\b`)
 
 // structField matches the word this documentation uses for a member of the
-// generated columns struct and of the row struct, which is the member kind the
+// generated table and of the row struct, which is the member kind the
 // compact emitter produces for a column.
 var structField = regexp.MustCompile(`(?i)\bfields?\b`)
 
@@ -794,7 +794,7 @@ var accessorClaim = regexp.MustCompile(`(?i)\baccessors?\b`)
 
 // boundColumnCompileProblem reports why a sentence misnames the member the
 // compiler checks, or the empty string when it does not. A column reaches a
-// builder as a FIELD of the generated columns struct, so a sentence about what
+// builder as a FIELD of the generated table, so a sentence about what
 // does or does not compile must not call that member an accessor. The section
 // also names the package accessor the generator writes per table, in sentences
 // that state no compile outcome, and those are not governed.
@@ -804,7 +804,7 @@ func boundColumnCompileProblem(sentence string) string {
 		return ""
 	}
 	if accessorClaim.MatchString(prose) {
-		return "calls the member a build checks an accessor, where a column reaches a builder as a field of the generated columns struct"
+		return "calls the member a build checks an accessor, where a column reaches a builder as a field of the generated table"
 	}
 	return ""
 }
@@ -903,7 +903,7 @@ var boundColumnCompileFixtures = []struct {
 		reject:   false,
 	},
 	{
-		name:     "invented migration payoff names the columns struct field",
+		name:     "invented migration payoff names the table column field",
 		sentence: "Drop or rename a column, regenerate, and every reference to the old field stops compiling.",
 		reject:   false,
 	},

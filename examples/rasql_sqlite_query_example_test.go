@@ -49,18 +49,13 @@ func Example_rasql_sqlite_query() {
 	// The generated projection names one column per users field, so One
 	// returns a decoded store.UsersRow.
 	// SQL: SELECT users.id, users.email, users.nickname, users.status, users.first_name, users.last_name FROM users WHERE users.id = ? (argument: 42)
-	columns, err := (store.UsersColumns{}).Bind(users)
-	if err != nil {
-		fmt.Printf("failed to bind users columns: %s\n", err)
-		return
-	}
-	projection, err := store.UsersProjection(columns)
+	projection, err := store.UsersProjection(users)
 	if err != nil {
 		fmt.Printf("failed to build users projection: %s\n", err)
 		return
 	}
 	base := rasql.Select(users, projection)
-	user, err := rasql.One(ctx, db, base.Where(rasql.EqualValue(columns.ID.Expr(), int64(42))))
+	user, err := rasql.One(ctx, db, base.Where(rasql.EqualValue(users.ID.Expr(), int64(42))))
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return

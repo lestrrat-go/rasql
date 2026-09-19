@@ -42,8 +42,8 @@ func Example_rasql_static_template() {
 	// query.ColumnRef, and Column is the generated table's only way to
 	// produce one.
 	insert, err := query.NewInsert(users.Ref(),
-		query.Set(users.Column("id"), int64(42)), query.Set(users.Column("email"), "ada@example.com"),
-		query.Set(users.Column("first_name"), "Ada"), query.Set(users.Column("last_name"), "Lovelace"))
+		query.Set(users.Ref().Column("id"), int64(42)), query.Set(users.Ref().Column("email"), "ada@example.com"),
+		query.Set(users.Ref().Column("first_name"), "Ada"), query.Set(users.Ref().Column("last_name"), "Lovelace"))
 	if err != nil {
 		fmt.Printf("failed to build insert: %s\n", err)
 		return

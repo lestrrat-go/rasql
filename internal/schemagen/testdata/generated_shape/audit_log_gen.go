@@ -31,9 +31,14 @@ type auditLogTableHandle = rasql.Table[AuditLogRow]
 
 type AuditLogTable struct {
 	auditLogTableHandle
+	AuditLogExpressions
 }
 
-func AuditLog() AuditLogTable { return AuditLogTable{auditLogTableHandle: auditLogTable} }
+func newAuditLogTable(handle auditLogTableHandle) AuditLogTable {
+	return AuditLogTable{auditLogTableHandle: handle, AuditLogExpressions: bindAuditLogExpressions(handle)}
+}
+
+func AuditLog() AuditLogTable { return newAuditLogTable(auditLogTable) }
 
 func (t AuditLogTable) Ref() query.TableRef { return t.auditLogTableHandle.Ref() }
 
@@ -42,7 +47,7 @@ func (t AuditLogTable) As(alias string) (AuditLogTable, error) {
 	if err != nil {
 		return AuditLogTable{}, err
 	}
-	return AuditLogTable{auditLogTableHandle: aliased}, nil
+	return newAuditLogTable(aliased), nil
 }
 
 func (t AuditLogTable) InSchema(namespace string) (AuditLogTable, error) {
@@ -50,10 +55,8 @@ func (t AuditLogTable) InSchema(namespace string) (AuditLogTable, error) {
 	if err != nil {
 		return AuditLogTable{}, err
 	}
-	return AuditLogTable{auditLogTableHandle: moved}, nil
+	return newAuditLogTable(moved), nil
 }
-
-type AuditLogColumns struct{}
 
 type AuditLogExpressions struct {
 	ID     rasql.Column[AuditLogRow, int64]
@@ -65,22 +68,21 @@ type OptionalAuditLogExpressions struct {
 	Action rasql.NullColumn[AuditLogRow, string]
 }
 
-func (AuditLogColumns) Bind(source AuditLogTable) (AuditLogExpressions, error) {
-	var err error
-	result := AuditLogExpressions{
-		ID:     rasqlgenBind(&err, source, "id", "", rasql.BindColumn[AuditLogRow, int64]),
-		Action: rasqlgenBind(&err, source, "action", "", rasql.BindColumn[AuditLogRow, string]),
+func bindAuditLogExpressions(source auditLogTableHandle) AuditLogExpressions {
+	return AuditLogExpressions{
+		ID:     rasqlgenColumn(source, "id", "", rasql.BindColumn[AuditLogRow, int64]),
+		Action: rasqlgenColumn(source, "action", "", rasql.BindColumn[AuditLogRow, string]),
 	}
-	return result, err
 }
 
-func (AuditLogColumns) BindOptional(source rasql.OptionalRelation[AuditLogRow]) (OptionalAuditLogExpressions, error) {
-	var err error
-	result := OptionalAuditLogExpressions{
-		ID:     rasqlgenBind(&err, source, "id", "", rasql.BindOptionalColumn[AuditLogRow, int64]),
-		Action: rasqlgenBind(&err, source, "action", "", rasql.BindOptionalColumn[AuditLogRow, string]),
+// Optional names every column of t as it appears on the nullable side
+// of an outer join, where the whole row may be absent.
+func (t AuditLogTable) Optional() OptionalAuditLogExpressions {
+	source := rasql.Optional[AuditLogRow](t.auditLogTableHandle)
+	return OptionalAuditLogExpressions{
+		ID:     rasqlgenColumn(source, "id", "", rasql.BindOptionalColumn[AuditLogRow, int64]),
+		Action: rasqlgenColumn(source, "action", "", rasql.BindOptionalColumn[AuditLogRow, string]),
 	}
-	return result, err
 }
 
 var auditLogResultColumns = []rasql.ResultColumn{
@@ -124,53 +126,35 @@ func (auditLogOptionalDecoder) DecodeRow(source rasql.ScanSource, row *AuditLogR
 	return nil
 }
 
-func AuditLogProjection(expressions AuditLogExpressions) (rasql.Projection[AuditLogRow], error) {
+func AuditLogProjection(source AuditLogTable) (rasql.Projection[AuditLogRow], error) {
 	items := []rasql.ProjectionItem{
-		rasql.Item("id", expressions.ID.Expr(), schema.IntegerType{}, ""),
-		rasql.Item("action", expressions.Action.Expr(), schema.TextType{}, ""),
+		rasql.Item("id", source.ID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("action", source.Action.Expr(), schema.TextType{}, ""),
 	}
 	return rasql.NewProjection(items, auditLogDecoder{})
 }
 
-func OptionalAuditLogProjection(expressions OptionalAuditLogExpressions) (rasql.Projection[AuditLogRow], error) {
+func OptionalAuditLogProjection(source OptionalAuditLogExpressions) (rasql.Projection[AuditLogRow], error) {
 	items := []rasql.ProjectionItem{
-		rasql.NullItem("id", expressions.ID.NullExpr(), schema.IntegerType{}, ""),
-		rasql.NullItem("action", expressions.Action.NullExpr(), schema.TextType{}, ""),
+		rasql.NullItem("id", source.ID.NullExpr(), schema.IntegerType{}, ""),
+		rasql.NullItem("action", source.Action.NullExpr(), schema.TextType{}, ""),
 	}
 	return rasql.NewProjection(items, auditLogOptionalDecoder{})
 }
 
 func AuditLogGraphKey(source AuditLogTable) (rasql.GraphKey[AuditLogRow], error) {
-	expressions, err := (AuditLogColumns{}).Bind(source)
-	if err != nil {
-		return rasql.GraphKey[AuditLogRow]{}, err
-	}
-	return rasql.NewGraphKey[AuditLogRow](rasql.KeyPart[AuditLogRow, int64](expressions.ID, func(row AuditLogRow) int64 { return row.ID }))
+	return rasql.NewGraphKey[AuditLogRow](rasql.KeyPart[AuditLogRow, int64](source.ID, func(row AuditLogRow) int64 { return row.ID }))
 }
 
 func AuditLogIDPageKey(source AuditLogTable, direction rasql.PageDirection) (rasql.PageKey[AuditLogRow], error) {
-	expressions, err := (AuditLogColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenPageKey(direction, expressions.ID.Expr(), func(row AuditLogRow) int64 { return row.ID })
+	return rasqlgenPageKey(direction, source.ID.Expr(), func(row AuditLogRow) int64 { return row.ID })
 }
 
 func AuditLogActionPageKey(source AuditLogTable, direction rasql.PageDirection) (rasql.PageKey[AuditLogRow], error) {
-	expressions, err := (AuditLogColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenPageKey(direction, expressions.Action.Expr(), func(row AuditLogRow) string { return row.Action })
+	return rasqlgenPageKey(direction, source.Action.Expr(), func(row AuditLogRow) string { return row.Action })
 }
 
-var auditLogMutationColumns = func() AuditLogExpressions {
-	value, err := (AuditLogColumns{}).Bind(AuditLog())
-	if err != nil {
-		panic(err)
-	}
-	return value
-}()
+var auditLogMutationColumns = bindAuditLogExpressions(auditLogTable)
 
 type AuditLogCreate struct {
 	table  rasql.Table[AuditLogRow]

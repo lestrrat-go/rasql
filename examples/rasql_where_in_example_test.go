@@ -46,14 +46,9 @@ func Example_rasql_where_in() {
 		}
 	}
 
-	// Bind binds every users column to the table, and UsersProjection selects
+	// The table carries every users column as a field, and UsersProjection selects
 	// them in the order the generated row type scans them.
-	columns, err := (store.UsersColumns{}).Bind(users)
-	if err != nil {
-		fmt.Printf("failed to bind users columns: %s\n", err)
-		return
-	}
-	projection, err := store.UsersProjection(columns)
+	projection, err := store.UsersProjection(users)
 	if err != nil {
 		fmt.Printf("failed to build users projection: %s\n", err)
 		return
@@ -65,8 +60,8 @@ func Example_rasql_where_in() {
 	// list, which is not legal SQL, cannot be written at all.
 	// SQL: SELECT users.id, users.email, users.nickname, users.status, users.first_name, users.last_name FROM users WHERE users.id IN (?, ?) ORDER BY users.id ASC (arguments: 1, 3)
 	rows, err := rasql.All(ctx, db,
-		base.Where(rasql.InValues(columns.ID.Expr(), int64(1), int64(3))).
-			OrderBy(rasql.AscExpr(columns.ID.Expr())))
+		base.Where(rasql.InValues(users.ID.Expr(), int64(1), int64(3))).
+			OrderBy(rasql.AscExpr(users.ID.Expr())))
 	if err != nil {
 		fmt.Printf("failed to query users: %s\n", err)
 		return

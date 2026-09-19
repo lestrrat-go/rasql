@@ -48,14 +48,9 @@ func Example_rasql_delete() {
 	// The generated table's own Delete method takes no argument and hands
 	// back a builder whose Where takes a typed rasql.Predicate; Exec plans
 	// and runs the delete in one call.
-	columns, err := (store.UsersColumns{}).Bind(users)
-	if err != nil {
-		fmt.Printf("failed to bind users columns: %s\n", err)
-		return
-	}
 
 	// SQL: DELETE FROM users WHERE users.id = ? (argument: 1)
-	outcome, err := users.Delete().Where(rasql.EqualValue(columns.ID.Expr(), int64(1))).Exec(ctx, db)
+	outcome, err := users.Delete().Where(rasql.EqualValue(users.ID.Expr(), int64(1))).Exec(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to delete user: %s\n", err)
 		return
@@ -64,7 +59,7 @@ func Example_rasql_delete() {
 
 	// Delete's Where argument is any typed rasql.Predicate.
 	// SQL: DELETE FROM users WHERE users.id > ? (argument: 2)
-	outcome, err = users.Delete().Where(rasql.GreaterValue(columns.ID.Expr(), int64(2))).Exec(ctx, db)
+	outcome, err = users.Delete().Where(rasql.GreaterValue(users.ID.Expr(), int64(2))).Exec(ctx, db)
 	if err != nil {
 		fmt.Printf("failed to delete users: %s\n", err)
 		return

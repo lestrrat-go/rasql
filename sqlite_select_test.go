@@ -282,8 +282,8 @@ func aggregatePlacementFixture(t *testing.T) (*sql.DB, schema.TableDef) {
 	users, err := rasql.TableOf[user](definition)
 	require.NoError(t, err)
 	require.NoError(t, rasql.CreateTable(t.Context(), db, users))
-	userID := query.TypedColumnOf[user, int64](users.Column("id"))
-	userEmail := query.TypedColumnOf[user, string](users.Column("email"))
+	userID := query.TypedColumnOf[user, int64](users.Ref().Column("id"))
+	userEmail := query.TypedColumnOf[user, string](users.Ref().Column("email"))
 	for _, fixture := range []user{
 		{ID: 1, Email: "ada@example.com"},
 		{ID: 2, Email: "bob@example.com"},
@@ -412,8 +412,8 @@ func TestSQLiteDistinct(t *testing.T) {
 		visits, err := rasql.TableOf[visit](definition)
 		require.NoError(t, err)
 		require.NoError(t, rasql.CreateTable(t.Context(), db, visits))
-		visitID := query.TypedColumnOf[visit, int64](visits.Column("id"))
-		visitCity := query.NullableColumnOf[visit, string](visits.Column("city"))
+		visitID := query.TypedColumnOf[visit, int64](visits.Ref().Column("id"))
+		visitCity := query.NullableColumnOf[visit, string](visits.Ref().Column("city"))
 		tokyo := "tokyo"
 		// NULL, NULL, tokyo: two distinct rows, one distinct non-NULL value.
 		for _, fixture := range []visit{
@@ -550,9 +550,9 @@ func distinctFixture(t *testing.T) (*sql.DB, schema.TableDef) {
 	users, err := rasql.TableOf[user](definition)
 	require.NoError(t, err)
 	require.NoError(t, rasql.CreateTable(t.Context(), db, users))
-	userID := query.TypedColumnOf[user, int64](users.Column("id"))
-	userCity := query.TypedColumnOf[user, string](users.Column("city"))
-	userAge := query.TypedColumnOf[user, int64](users.Column("age"))
+	userID := query.TypedColumnOf[user, int64](users.Ref().Column("id"))
+	userCity := query.TypedColumnOf[user, string](users.Ref().Column("city"))
+	userAge := query.TypedColumnOf[user, int64](users.Ref().Column("age"))
 	for _, fixture := range []user{
 		{ID: 1, City: "tokyo", Age: 30},
 		{ID: 2, City: "osaka", Age: 20},
@@ -679,8 +679,8 @@ func orderResultAliasFixture(t *testing.T) (*sql.DB, schema.TableDef) {
 	people, err := rasql.TableOf[person](definition)
 	require.NoError(t, err)
 	require.NoError(t, rasql.CreateTable(t.Context(), db, people))
-	personID := query.TypedColumnOf[person, int64](people.Column("id"))
-	personCity := query.TypedColumnOf[person, string](people.Column("city"))
+	personID := query.TypedColumnOf[person, int64](people.Ref().Column("id"))
+	personCity := query.TypedColumnOf[person, string](people.Ref().Column("city"))
 	for _, fixture := range []person{
 		{ID: 1, City: "tokyo"},
 		{ID: 2, City: "osaka"},

@@ -29,11 +29,14 @@ type activeUsersTableHandle = rasql.Table[ActiveUsersRow]
 
 type ActiveUsersTable struct {
 	activeUsersTableHandle
+	ActiveUsersExpressions
 }
 
-func ActiveUsers() ActiveUsersTable {
-	return ActiveUsersTable{activeUsersTableHandle: activeUsersTable}
+func newActiveUsersTable(handle activeUsersTableHandle) ActiveUsersTable {
+	return ActiveUsersTable{activeUsersTableHandle: handle, ActiveUsersExpressions: bindActiveUsersExpressions(handle)}
 }
+
+func ActiveUsers() ActiveUsersTable { return newActiveUsersTable(activeUsersTable) }
 
 func (t ActiveUsersTable) Ref() query.TableRef { return t.activeUsersTableHandle.Ref() }
 
@@ -42,7 +45,7 @@ func (t ActiveUsersTable) As(alias string) (ActiveUsersTable, error) {
 	if err != nil {
 		return ActiveUsersTable{}, err
 	}
-	return ActiveUsersTable{activeUsersTableHandle: aliased}, nil
+	return newActiveUsersTable(aliased), nil
 }
 
 func (t ActiveUsersTable) InSchema(namespace string) (ActiveUsersTable, error) {
@@ -50,10 +53,8 @@ func (t ActiveUsersTable) InSchema(namespace string) (ActiveUsersTable, error) {
 	if err != nil {
 		return ActiveUsersTable{}, err
 	}
-	return ActiveUsersTable{activeUsersTableHandle: moved}, nil
+	return newActiveUsersTable(moved), nil
 }
-
-type ActiveUsersColumns struct{}
 
 type ActiveUsersExpressions struct {
 	ID    rasql.Column[ActiveUsersRow, int64]
@@ -65,22 +66,21 @@ type OptionalActiveUsersExpressions struct {
 	Email rasql.NullColumn[ActiveUsersRow, string]
 }
 
-func (ActiveUsersColumns) Bind(source ActiveUsersTable) (ActiveUsersExpressions, error) {
-	var err error
-	result := ActiveUsersExpressions{
-		ID:    rasqlgenBind(&err, source, "id", "", rasql.BindColumn[ActiveUsersRow, int64]),
-		Email: rasqlgenBind(&err, source, "email", "", rasql.BindColumn[ActiveUsersRow, string]),
+func bindActiveUsersExpressions(source activeUsersTableHandle) ActiveUsersExpressions {
+	return ActiveUsersExpressions{
+		ID:    rasqlgenColumn(source, "id", "", rasql.BindColumn[ActiveUsersRow, int64]),
+		Email: rasqlgenColumn(source, "email", "", rasql.BindColumn[ActiveUsersRow, string]),
 	}
-	return result, err
 }
 
-func (ActiveUsersColumns) BindOptional(source rasql.OptionalRelation[ActiveUsersRow]) (OptionalActiveUsersExpressions, error) {
-	var err error
-	result := OptionalActiveUsersExpressions{
-		ID:    rasqlgenBind(&err, source, "id", "", rasql.BindOptionalColumn[ActiveUsersRow, int64]),
-		Email: rasqlgenBind(&err, source, "email", "", rasql.BindOptionalColumn[ActiveUsersRow, string]),
+// Optional names every column of t as it appears on the nullable side
+// of an outer join, where the whole row may be absent.
+func (t ActiveUsersTable) Optional() OptionalActiveUsersExpressions {
+	source := rasql.Optional[ActiveUsersRow](t.activeUsersTableHandle)
+	return OptionalActiveUsersExpressions{
+		ID:    rasqlgenColumn(source, "id", "", rasql.BindOptionalColumn[ActiveUsersRow, int64]),
+		Email: rasqlgenColumn(source, "email", "", rasql.BindOptionalColumn[ActiveUsersRow, string]),
 	}
-	return result, err
 }
 
 var activeUsersResultColumns = []rasql.ResultColumn{
@@ -101,26 +101,18 @@ func (row *ActiveUsersRow) ScanRow(source rasql.ScanSource) error {
 	return activeUsersDecoder{}.DecodeRow(source, row)
 }
 
-func ActiveUsersProjection(expressions ActiveUsersExpressions) (rasql.Projection[ActiveUsersRow], error) {
+func ActiveUsersProjection(source ActiveUsersTable) (rasql.Projection[ActiveUsersRow], error) {
 	items := []rasql.ProjectionItem{
-		rasql.Item("id", expressions.ID.Expr(), schema.IntegerType{}, ""),
-		rasql.Item("email", expressions.Email.Expr(), schema.TextType{}, ""),
+		rasql.Item("id", source.ID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("email", source.Email.Expr(), schema.TextType{}, ""),
 	}
 	return rasql.NewProjection(items, activeUsersDecoder{})
 }
 
 func ActiveUsersIDPageKey(source ActiveUsersTable, direction rasql.PageDirection) (rasql.PageKey[ActiveUsersRow], error) {
-	expressions, err := (ActiveUsersColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenPageKey(direction, expressions.ID.Expr(), func(row ActiveUsersRow) int64 { return row.ID })
+	return rasqlgenPageKey(direction, source.ID.Expr(), func(row ActiveUsersRow) int64 { return row.ID })
 }
 
 func ActiveUsersEmailPageKey(source ActiveUsersTable, direction rasql.PageDirection) (rasql.PageKey[ActiveUsersRow], error) {
-	expressions, err := (ActiveUsersColumns{}).Bind(source)
-	if err != nil {
-		return nil, err
-	}
-	return rasqlgenPageKey(direction, expressions.Email.Expr(), func(row ActiveUsersRow) string { return row.Email })
+	return rasqlgenPageKey(direction, source.Email.Expr(), func(row ActiveUsersRow) string { return row.Email })
 }

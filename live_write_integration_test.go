@@ -86,8 +86,8 @@ func TestGeneratedColumnWriteAgainstLiveDatabases(t *testing.T) {
 			executor, err := rasql.Open(ctx, database, test.dialect)
 			require.NoError(t, err, "build executor")
 
-			id := query.TypedColumnOf[measurement, int64](measurements.Column("id"))
-			celsius := query.TypedColumnOf[measurement, int64](measurements.Column("celsius"))
+			id := query.TypedColumnOf[measurement, int64](measurements.Ref().Column("id"))
+			celsius := query.TypedColumnOf[measurement, int64](measurements.Ref().Column("celsius"))
 
 			// The point under test: this must succeed. NewCreatePlan treats a
 			// generated column as omissible and there is no field here that
@@ -150,8 +150,8 @@ func TestIdentityColumnWriteAgainstLiveDatabases(t *testing.T) {
 		executor, err := rasql.Open(ctx, database, dialect.PostgreSQL())
 		require.NoError(t, err, "build executor")
 
-		id := query.TypedColumnOf[member, int64](members.Column("id"))
-		name := query.TypedColumnOf[member, string](members.Column("name"))
+		id := query.TypedColumnOf[member, int64](members.Ref().Column("id"))
+		name := query.TypedColumnOf[member, string](members.Ref().Column("name"))
 
 		// An ALWAYS identity column cannot be assigned at all: NewCreatePlan
 		// refuses a field naming it before any statement is built, which is a
@@ -228,8 +228,8 @@ func TestIdentityColumnWriteAgainstLiveDatabases(t *testing.T) {
 				executor, err := rasql.Open(ctx, database, test.dialect)
 				require.NoError(t, err, "build executor")
 
-				id := query.TypedColumnOf[member, int64](members.Column("id"))
-				name := query.TypedColumnOf[member, string](members.Column("name"))
+				id := query.TypedColumnOf[member, int64](members.Ref().Column("id"))
+				name := query.TypedColumnOf[member, string](members.Ref().Column("name"))
 				plan, err := rasql.NewCreatePlan(members, rasql.SetField(id, int64(7)), rasql.SetField(name, "Grace"))
 				require.NoError(t, err, "create plan for a BY DEFAULT identity column must accept an explicit value")
 				_, err = rasql.Exec(ctx, executor, plan)

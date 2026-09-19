@@ -64,14 +64,9 @@ func Example_rasql_transaction() {
 		return
 	}
 
-	// Bind binds every users column to the table, and UsersProjection selects
+	// The table carries every users column as a field, and UsersProjection selects
 	// them in the order the generated row type scans them.
-	columns, err := (store.UsersColumns{}).Bind(users)
-	if err != nil {
-		fmt.Printf("failed to bind users columns: %s\n", err)
-		return
-	}
-	projection, err := store.UsersProjection(columns)
+	projection, err := store.UsersProjection(users)
 	if err != nil {
 		fmt.Printf("failed to build users projection: %s\n", err)
 		return
@@ -81,7 +76,7 @@ func Example_rasql_transaction() {
 	// The same query shape that runs against db also runs against
 	// txExecutor: it reads the two rows written above, before they are committed.
 	// SQL: SELECT users.id, users.email, users.nickname, users.status, users.first_name, users.last_name FROM users ORDER BY users.id ASC
-	inTx, err := rasql.All(ctx, txExecutor, base.OrderBy(rasql.AscExpr(columns.ID.Expr())))
+	inTx, err := rasql.All(ctx, txExecutor, base.OrderBy(rasql.AscExpr(users.ID.Expr())))
 	if err != nil {
 		fmt.Printf("failed to query users in transaction: %s\n", err)
 		return
@@ -98,7 +93,7 @@ func Example_rasql_transaction() {
 	// connection, and the transaction holds it until Commit or Rollback
 	// releases it back to the pool.
 	// SQL: SELECT users.id, users.email, users.nickname, users.status, users.first_name, users.last_name FROM users ORDER BY users.id ASC
-	afterCommit, err := rasql.All(ctx, db, base.OrderBy(rasql.AscExpr(columns.ID.Expr())))
+	afterCommit, err := rasql.All(ctx, db, base.OrderBy(rasql.AscExpr(users.ID.Expr())))
 	if err != nil {
 		fmt.Printf("failed to query users after commit: %s\n", err)
 		return

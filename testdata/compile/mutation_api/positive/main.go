@@ -13,7 +13,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	id := query.TypedColumnOf[row, int64](table.Column("id"))
+	id := query.TypedColumnOf[row, int64](table.Ref().Column("id"))
 	_, err = rasql.NewCreatePlan(table, rasql.SetField(id, int64(1)))
 	if err != nil {
 		panic(err)

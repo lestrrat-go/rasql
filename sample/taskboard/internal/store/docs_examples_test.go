@@ -18,17 +18,13 @@ func docsReadTasks(ctx context.Context, executor rasql.Executor) error {
 	if err != nil {
 		return err
 	}
-	expressions, err := (TasksColumns{}).Bind(source)
-	if err != nil {
-		return err
-	}
-	projection, err := TasksProjection(expressions)
+	projection, err := TasksProjection(source)
 	if err != nil {
 		return err
 	}
 	q := rasql.Select(source, projection).
-		Where(rasql.EqualValue(expressions.IsOpen.Expr(), true)).
-		OrderBy(rasql.AscExpr(expressions.ID.Expr()))
+		Where(rasql.EqualValue(source.IsOpen.Expr(), true)).
+		OrderBy(rasql.AscExpr(source.ID.Expr()))
 	rows, err := rasql.All(ctx, executor, q)
 	// END(canonical_read)
 	_ = rows
@@ -51,12 +47,8 @@ func docsCreateTask(ctx context.Context, executor rasql.Executor, projectID int6
 
 func docsPatchTask(ctx context.Context, executor rasql.Executor, taskID int64) error {
 	// BEGIN(canonical_patch)
-	expressions, err := (TasksColumns{}).Bind(Tasks())
-	if err != nil {
-		return err
-	}
 	outcome, err := Tasks().Patch().IsOpen(false).
-		Where(rasql.EqualValue(expressions.ID.Expr(), taskID)).
+		Where(rasql.EqualValue(Tasks().ID.Expr(), taskID)).
 		Exec(ctx, executor)
 	// END(canonical_patch)
 	_ = outcome
@@ -67,8 +59,8 @@ func docsStatementPlan(ctx context.Context, executor rasql.Executor) error {
 	// BEGIN(statement_plan)
 	tasks := Tasks()
 	statement, err := query.NewInsert(tasks.Ref(),
-		query.Set(tasks.Column("project_id"), int64(1)),
-		query.Set(tasks.Column("title"), "write the guide"),
+		query.Set(tasks.Ref().Column("project_id"), int64(1)),
+		query.Set(tasks.Ref().Column("title"), "write the guide"),
 	)
 	if err != nil {
 		return err
@@ -84,11 +76,7 @@ func docsStatementPlan(ctx context.Context, executor rasql.Executor) error {
 }
 
 func docsReturning(ctx context.Context, executor rasql.Executor, plan rasql.MutationPlan) error {
-	expressions, err := (TasksColumns{}).Bind(Tasks())
-	if err != nil {
-		return err
-	}
-	projection, err := TasksProjection(expressions)
+	projection, err := TasksProjection(Tasks())
 	if err != nil {
 		return err
 	}

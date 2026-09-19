@@ -831,7 +831,7 @@ func taskboardCanonicalMutation(ctx context.Context, executor rasql.Executor) (t
 			return err
 		}
 		result.Created = created.Affected
-		id := query.TypedColumnOf[taskboardTask, int64](taskboardTasks().Column("id"))
+		id := query.TypedColumnOf[taskboardTask, int64](taskboardTasks().Ref().Column("id"))
 		patch, err := rasql.NewPatchPlan(taskboardTasks().Table, query.EqualValue(id, int64(9001)), rasql.SetField(columns.Title, "patched"), rasql.ClearField(columns.AssigneeID))
 		if err != nil {
 			return err
