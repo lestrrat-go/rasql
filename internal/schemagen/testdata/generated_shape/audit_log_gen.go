@@ -3,6 +3,7 @@
 package generated
 
 import (
+	"context"
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
@@ -170,6 +171,14 @@ func (v AuditLogCreate) Action(value string) AuditLogCreate {
 }
 func (v AuditLogCreate) Plan() (rasql.CreatePlan[AuditLogRow], error) {
 	return rasql.NewCreatePlan(v.table, v.fields...)
+}
+
+func (v AuditLogCreate) Exec(ctx context.Context, executor rasql.Executor) (rasql.MutationOutcome, error) {
+	plan, err := v.Plan()
+	if err != nil {
+		return rasql.MutationOutcome{}, err
+	}
+	return rasql.Exec(ctx, executor, plan)
 }
 
 func (t AuditLogTable) Create() AuditLogCreate { return AuditLogCreate{table: t.auditLogTableHandle} }

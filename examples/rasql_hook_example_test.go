@@ -72,17 +72,12 @@ func Example_rasql_hook() {
 		fmt.Printf("failed to adapt delete: %s\n", err)
 		return
 	}
-	if _, err := rasql.ExecMutation(ctx, executor, unfiltered); err != nil {
+	if _, err := rasql.Exec(ctx, executor, unfiltered); err != nil {
 		fmt.Println("refused:", err)
 	}
 
 	// A delete carrying a predicate renders different SQL, so the hook lets it through.
-	filtered, err := users.Delete(rasql.EqualValue(users.ID.Expr(), int64(1)))
-	if err != nil {
-		fmt.Printf("failed to build delete: %s\n", err)
-		return
-	}
-	if _, err := rasql.ExecMutation(ctx, executor, filtered); err != nil {
+	if _, err := users.Delete().Where(rasql.EqualValue(users.ID.Expr(), int64(1))).Exec(ctx, executor); err != nil {
 		fmt.Printf("failed to delete user: %s\n", err)
 		return
 	}

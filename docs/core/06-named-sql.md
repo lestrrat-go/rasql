@@ -42,7 +42,7 @@ row, err := rasql.One(ctx, executor, q)
 source: [sample/taskboard/internal/store/docs_examples_test.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/docs_examples_test.go)
 <!-- END INCLUDE -->
 
-Generated mutations use `NativeMutation` and execute through `ExecMutation`. Native statements state their engine, so an
+Generated mutations use `NativeMutation` and execute through `Exec`. Native statements state their engine, so an
 executor for another engine fails before database access.
 
 ## Direct native SQL

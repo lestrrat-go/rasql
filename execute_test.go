@@ -66,17 +66,17 @@ func TestExecution(t *testing.T) {
 	plan, err := rasql.NewCreatePlan(table, rasql.SetField(id, int64(1)), rasql.SetField(email, "ada@example.com"))
 	require.NoError(t, err)
 	mock.ExpectExec("INSERT INTO \"users\" (\"id\", \"email\") VALUES ($1, $2)").WithArgs(int64(1), "ada@example.com").WillReturnResult(sqlmock.NewResult(1, 1))
-	outcome, err := rasql.ExecMutation(t.Context(), executor, plan)
+	outcome, err := rasql.Exec(t.Context(), executor, plan)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), outcome.Affected)
 }
 
-// This proves that ExecMutation preserves the driver's rows-affected count
+// This proves that Exec preserves the driver's rows-affected count
 // even when an after-hook fails: the write already reached the server, so a
 // hook failing afterward must not turn that outcome into zero rows and an
 // unknown durability. It exercises both a mutation built directly against a
 // query.WriteStatement and one built through the typed CreatePlan
-// constructor, since either path reaches the same ExecMutation.
+// constructor, since either path reaches the same Exec.
 func TestExecPreservesResultAfterHookError(t *testing.T) {
 	database, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
@@ -103,7 +103,7 @@ func TestExecPreservesResultAfterHookError(t *testing.T) {
 	mock.ExpectExec("INSERT INTO \"users\" (\"email\") VALUES (?)").WithArgs("ada@example.com").WillReturnResult(sqlmock.NewResult(1, 1))
 	plan, err := rasql.NewStatementPlan(statement)
 	require.NoError(t, err)
-	outcome, err := rasql.ExecMutation(t.Context(), executor, plan)
+	outcome, err := rasql.Exec(t.Context(), executor, plan)
 	require.Error(t, err)
 	var extensionErr *rasql.ExtensionError
 	require.ErrorAs(t, err, &extensionErr)
@@ -125,7 +125,7 @@ func TestExecPreservesResultAfterHookError(t *testing.T) {
 	mock.ExpectExec("INSERT INTO \"users\" (\"email\") VALUES (?)").WithArgs("grace@example.com").WillReturnResult(sqlmock.NewResult(2, 1))
 	createPlan, err := rasql.NewCreatePlan(users, rasql.SetField(email, "grace@example.com"))
 	require.NoError(t, err)
-	outcome, err = rasql.ExecMutation(t.Context(), executor, createPlan)
+	outcome, err = rasql.Exec(t.Context(), executor, createPlan)
 	require.Error(t, err)
 	require.ErrorAs(t, err, &extensionErr)
 	require.True(t, extensionErr.ExecutionSucceeded())

@@ -291,7 +291,7 @@ func aggregatePlacementFixture(t *testing.T) (*sql.DB, schema.TableDef) {
 	} {
 		plan, err := rasql.NewCreatePlan(users, rasql.SetField(userID, fixture.ID), rasql.SetField(userEmail, fixture.Email))
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), db, plan)
+		_, err = rasql.Exec(t.Context(), db, plan)
 		require.NoError(t, err)
 	}
 	return database, definition
@@ -429,7 +429,7 @@ func TestSQLiteDistinct(t *testing.T) {
 			}
 			plan, err := rasql.NewCreatePlan(visits, fields...)
 			require.NoError(t, err)
-			_, err = rasql.ExecMutation(t.Context(), db, plan)
+			_, err = rasql.Exec(t.Context(), db, plan)
 			require.NoError(t, err)
 		}
 
@@ -564,7 +564,7 @@ func distinctFixture(t *testing.T) (*sql.DB, schema.TableDef) {
 			rasql.SetField(userAge, fixture.Age),
 		)
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), db, plan)
+		_, err = rasql.Exec(t.Context(), db, plan)
 		require.NoError(t, err)
 	}
 	return database, definition
@@ -688,7 +688,7 @@ func orderResultAliasFixture(t *testing.T) (*sql.DB, schema.TableDef) {
 	} {
 		plan, err := rasql.NewCreatePlan(people, rasql.SetField(personID, fixture.ID), rasql.SetField(personCity, fixture.City))
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), db, plan)
+		_, err = rasql.Exec(t.Context(), db, plan)
 		require.NoError(t, err)
 	}
 	return database, definition
@@ -914,7 +914,7 @@ func TestSQLiteRejectsCaseOnlyCorrelationAlias(t *testing.T) {
 	require.NoError(t, err)
 	deletePlan, err := rasql.NewStatementPlan(deleteStatement)
 	require.NoError(t, err)
-	outcome, err := rasql.ExecMutation(t.Context(), executor, deletePlan)
+	outcome, err := rasql.Exec(t.Context(), executor, deletePlan)
 	require.ErrorContains(t, err, "distinct alias")
 	require.Zero(t, outcome)
 	var count int

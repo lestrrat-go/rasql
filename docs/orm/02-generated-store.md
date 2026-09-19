@@ -30,6 +30,7 @@ This is the generated surface for a `users` table:
 package store
 
 import (
+	"context"
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
@@ -270,11 +271,20 @@ func (v UsersCreate) Plan() (rasql.CreatePlan[UsersRow], error) {
 	return rasql.NewCreatePlan(v.table, v.fields...)
 }
 
+func (v UsersCreate) Exec(ctx context.Context, executor rasql.Executor) (rasql.MutationOutcome, error) {
+	plan, err := v.Plan()
+	if err != nil {
+		return rasql.MutationOutcome{}, err
+	}
+	return rasql.Exec(ctx, executor, plan)
+}
+
 func (t UsersTable) Create() UsersCreate { return UsersCreate{table: t.usersTableHandle} }
 
 type UsersPatch struct {
 	table  rasql.Table[UsersRow]
 	fields []rasql.MutationField[UsersRow]
+	where  rasql.Predicate
 }
 
 func (v UsersPatch) ID(value int64) UsersPatch {
@@ -309,14 +319,41 @@ func (v UsersPatch) LastName(value string) UsersPatch {
 	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(usersMutationColumns.LastName, value))
 	return v
 }
-func (v UsersPatch) Where(value rasql.Predicate) (rasql.PatchPlan[UsersRow], error) {
-	return rasql.NewPatchPlan(v.table, value, v.fields...)
+func (v UsersPatch) Where(value rasql.Predicate) UsersPatch { v.where = value; return v }
+
+func (v UsersPatch) Plan() (rasql.PatchPlan[UsersRow], error) {
+	return rasql.NewPatchPlan(v.table, v.where, v.fields...)
+}
+
+func (v UsersPatch) Exec(ctx context.Context, executor rasql.Executor) (rasql.MutationOutcome, error) {
+	plan, err := v.Plan()
+	if err != nil {
+		return rasql.MutationOutcome{}, err
+	}
+	return rasql.Exec(ctx, executor, plan)
 }
 
 func (t UsersTable) Patch() UsersPatch { return UsersPatch{table: t.usersTableHandle} }
 
-func (t UsersTable) Delete(where rasql.Predicate) (rasql.DeletePlan[UsersRow], error) {
-	return rasql.NewDeletePlan(t.usersTableHandle, where)
+type UsersDelete struct {
+	table rasql.Table[UsersRow]
+	where rasql.Predicate
+}
+
+func (t UsersTable) Delete() UsersDelete { return UsersDelete{table: t.usersTableHandle} }
+
+func (v UsersDelete) Where(value rasql.Predicate) UsersDelete { v.where = value; return v }
+
+func (v UsersDelete) Plan() (rasql.DeletePlan[UsersRow], error) {
+	return rasql.NewDeletePlan(v.table, v.where)
+}
+
+func (v UsersDelete) Exec(ctx context.Context, executor rasql.Executor) (rasql.MutationOutcome, error) {
+	plan, err := v.Plan()
+	if err != nil {
+		return rasql.MutationOutcome{}, err
+	}
+	return rasql.Exec(ctx, executor, plan)
 }
 ```
 source: [examples/store/users_gen.go](https://github.com/lestrrat-go/rasql/blob/main/examples/store/users_gen.go)
@@ -683,11 +720,11 @@ source is stale.
 Generated tables also expose immutable typed create and patch builders. Create
 setters distinguish omitted defaulted columns, explicit zero values, and NULL
 through `Clear` methods on nullable columns. Patch builders require a typed
-predicate and omit primary-key setters. Execute their plans with `ExecMutation`,
+predicate and omit primary-key setters. Execute their plans with `Exec`,
 or attach a projection with `Returning` and read saved rows through the normal
 `Rows`, `All`, `One`, or `Maybe` terminals when the dialect supports `RETURNING`.
 
-Multiple generated create plans can be submitted through `ExecMutationBatch`.
+Multiple generated create plans can be submitted through `ExecBatch`.
 The executor groups only consecutive plans with the same inserted-column mask,
 respects row and actual bind limits, and reports each input as applied,
 rejected, rolled back, unknown, or unattempted. Use `Atomic: true` when the
@@ -705,7 +742,7 @@ if err != nil {
 	fmt.Println(err)
 	return
 }
-outcome, err := rasql.ExecMutationBatch(context.Background(), executor,
+outcome, err := rasql.ExecBatch(context.Background(), executor,
 	[]rasql.MutationPlan{first, second}, rasql.BulkOptions{MaxRows: 100})
 if err != nil {
 	fmt.Println(err)

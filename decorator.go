@@ -16,7 +16,7 @@ import (
 // decoratedExecutor, the way wrapping it with more than one trait always did.
 //
 // It implements every optional interface a caller or this package's own
-// Within and ExecMutationBatch look for, unconditionally: CodecProvider,
+// Within and ExecBatch look for, unconditionally: CodecProvider,
 // ScopeBeginner, SavepointBeginner, ScopeState, compilerProvider,
 // logicalInvocationProvider, scopeContextProvider. Each method answers from
 // its own field first and falls back to the executor it wraps, so a single
@@ -24,7 +24,7 @@ import (
 // right answer, the same one an equivalent chain of the old per-trait
 // wrapper types would have. A decorator that always implements ScopeBeginner
 // and SavepointBeginner is the one place this changes what a caller sees:
-// Within and ExecMutationBatch used to read an executor's capability off a
+// Within and ExecBatch used to read an executor's capability off a
 // type assertion that could fail; now it always succeeds, and
 // transaction_scope_unsupported or savepoint_unsupported comes back from a
 // BeginScope or BeginSavepoint call that exists, instead.

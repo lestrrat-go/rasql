@@ -16,7 +16,7 @@ import (
 // real database to show how many rows it returns.
 func Example_rasql_debug_query() {
 	users := store.Users()
-	// Bind binds every users column to the table, and UsersProjection selects
+	// The table carries every users column as a field, and UsersProjection selects
 	// them in the order the generated row type scans them.
 	projection, err := store.UsersProjection(users)
 	if err != nil {

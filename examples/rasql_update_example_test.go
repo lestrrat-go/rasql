@@ -37,27 +37,19 @@ func Example_rasql_update() {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
-	// Insert one row so the update has a persistent target.
-	createPlan, err := store.Users().Create().ID(42).Email("ada@example.com").FirstName("First").LastName("Last").Plan()
-	if err != nil {
-		fmt.Printf("failed to build insert: %s\n", err)
-		return
-	}
-	if _, err := rasql.ExecMutation(ctx, db, createPlan); err != nil {
+	// Insert one row so the update has a persistent target. Exec plans and
+	// runs the create in one call.
+	if _, err := store.Users().Create().ID(42).Email("ada@example.com").FirstName("First").LastName("Last").Exec(ctx, db); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
 
 
 	// The generated patch builder writes only the fields named, and its
-	// Where takes the typed predicate that matches the target row.
+	// Where takes the typed predicate that matches the target row. Exec
+	// plans and runs the patch in one call.
 	// SQL: UPDATE users SET email = ? WHERE users.id = ? (arguments: "grace@example.com", 42)
-	patchPlan, err := store.Users().Patch().Email("grace@example.com").Where(rasql.EqualValue(users.ID.Expr(), int64(42)))
-	if err != nil {
-		fmt.Printf("failed to build patch: %s\n", err)
-		return
-	}
-	if _, err := rasql.ExecMutation(ctx, db, patchPlan); err != nil {
+	if _, err := store.Users().Patch().Email("grace@example.com").Where(rasql.EqualValue(users.ID.Expr(), int64(42))).Exec(ctx, db); err != nil {
 		fmt.Printf("failed to update user: %s\n", err)
 		return
 	}

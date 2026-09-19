@@ -119,7 +119,7 @@ func runGeneratedInSchemaConsumer(t *testing.T, dialectConfig, dsn, namespace, d
 		"\tif err := rasql.CreateTable(ctx, executor, moved); err != nil { t.Fatal(err) }\n" +
 		"\tplan, err := moved.Create().ID(1).Name(\"ada\").Plan()\n" +
 		"\tif err != nil { t.Fatal(err) }\n" +
-		"\tif _, err := rasql.ExecMutation(ctx, executor, plan); err != nil { t.Fatal(err) }\n" +
+		"\tif _, err := rasql.Exec(ctx, executor, plan); err != nil { t.Fatal(err) }\n" +
 		"\tprojection, err := store.WidgetsProjection(moved)\n" +
 		"\tif err != nil { t.Fatal(err) }\n" +
 		"\trow, err := rasql.One(ctx, executor, rasql.Select(moved, projection).Where(rasql.EqualValue(moved.ID.Expr(), int64(1))))\n" +

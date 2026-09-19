@@ -116,7 +116,7 @@ func correlatedExecStatement(t *testing.T, executor rasql.Executor, statement qu
 
 	plan, err := rasql.NewStatementPlan(statement)
 	require.NoError(t, err)
-	_, err = rasql.ExecMutation(t.Context(), executor, plan)
+	_, err = rasql.Exec(t.Context(), executor, plan)
 	require.NoError(t, err)
 }
 
@@ -369,7 +369,7 @@ func createCorrelatedFixture(t *testing.T, db rasql.DB) (rasql.Table[correlatedU
 			rasql.SetField(usersOrderCount, user.OrderCount),
 		)
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), db, plan)
+		_, err = rasql.Exec(t.Context(), db, plan)
 		require.NoError(t, err)
 	}
 	_, ordersID, ordersUserID, ordersAmount := correlatedOrderColumns(t, orders)
@@ -384,7 +384,7 @@ func createCorrelatedFixture(t *testing.T, db rasql.DB) (rasql.Table[correlatedU
 			rasql.SetField(ordersAmount, order.Amount),
 		)
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), db, plan)
+		_, err = rasql.Exec(t.Context(), db, plan)
 		require.NoError(t, err)
 	}
 	return users, orders

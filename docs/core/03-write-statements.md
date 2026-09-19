@@ -32,8 +32,8 @@ Adapt any validated `query.WriteStatement` to the canonical mutation API:
 ```go
 tasks := Tasks()
 statement, err := query.NewInsert(tasks.Ref(),
-	query.Set(tasks.Ref().Column("project_id"), int64(1)),
-	query.Set(tasks.Ref().Column("title"), "write the guide"),
+	query.Set(tasks.Column("project_id"), int64(1)),
+	query.Set(tasks.Column("title"), "write the guide"),
 )
 if err != nil {
 	return err
@@ -42,12 +42,12 @@ plan, err := rasql.NewStatementPlan(statement)
 if err != nil {
 	return err
 }
-outcome, err := rasql.ExecMutation(ctx, executor, plan)
+outcome, err := rasql.Exec(ctx, executor, plan)
 ```
 source: [sample/taskboard/internal/store/docs_examples_test.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/docs_examples_test.go)
 <!-- END INCLUDE -->
 
-`ExecMutation` rejects a statement that already contains raw returning projections. Attach a typed rasql projection
+`Exec` rejects a statement that already contains raw returning projections. Attach a typed rasql projection
 through `rasql.Returning` instead, then use `Rows`, `All`, `One`, or `Maybe`:
 
 <!-- INCLUDE(sample/taskboard/internal/store/docs_examples_test.go#mutation_returning) -->
@@ -69,7 +69,7 @@ Use `render.Write(dialect, statement)` when a tool needs SQL text and ordered ar
 engine-specific SQL uses `rasql.NativeMutation` instead of passing unvalidated SQL through the portable builder.
 
 `Executor.Exec` is the low-level boundary for an already compiled `stmt.Statement`. Application writes normally use
-`ExecMutation`, which validates the plan and rejects raw `RETURNING` projections so callers decode them with `Returning`.
+`Exec`, which validates the plan and rejects raw `RETURNING` projections so callers decode them with `Returning`.
 
 ## Safety and errors
 

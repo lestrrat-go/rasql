@@ -40,18 +40,13 @@ func Example_rasql_where_in() {
 		{ID: 2, Email: "bob@example.com"},
 		{ID: 3, Email: "cyd@example.com"},
 	} {
-		plan, err := store.Users().Create().ID(user.ID).Email(user.Email).FirstName("First").LastName("Last").Plan()
-		if err != nil {
-			fmt.Printf("failed to build insert: %s\n", err)
-			return
-		}
-		if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
+		if _, err := store.Users().Create().ID(user.ID).Email(user.Email).FirstName("First").LastName("Last").Exec(ctx, db); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
 	}
 
-	// Bind binds every users column to the table, and UsersProjection selects
+	// The table carries every users column as a field, and UsersProjection selects
 	// them in the order the generated row type scans them.
 	projection, err := store.UsersProjection(users)
 	if err != nil {

@@ -171,7 +171,7 @@ states `name`, `scalar`, and `nullable`.
 `select` queries generate constructors returning `rasql.Query[R]`; use
 `rasql.All`, `rasql.Maybe`, or `rasql.One` according to the declared
 cardinality. DML with `exec` generates a `(rasql.MutationPlan, error)`
-constructor for `rasql.ExecMutation`.
+constructor for `rasql.Exec`.
 
 ## What stays on the command line
 

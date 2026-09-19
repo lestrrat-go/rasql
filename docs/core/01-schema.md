@@ -335,7 +335,7 @@ func Example_schema_qualified_table() {
 		fmt.Printf("failed to build create plan: %s\n", err)
 		return
 	}
-	if _, err := rasql.ExecMutation(ctx, db, createPlan); err != nil {
+	if _, err := rasql.Exec(ctx, db, createPlan); err != nil {
 		fmt.Printf("failed to insert event: %s\n", err)
 		return
 	}
@@ -541,7 +541,7 @@ func Example_schema_decimal_column() {
 		fmt.Printf("failed to build create plan: %s\n", err)
 		return
 	}
-	if _, err := rasql.ExecMutation(ctx, db, createPlan); err != nil {
+	if _, err := rasql.Exec(ctx, db, createPlan); err != nil {
 		fmt.Printf("failed to insert invoice: %s\n", err)
 		return
 	}

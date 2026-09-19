@@ -826,7 +826,7 @@ func taskboardCanonicalMutation(ctx context.Context, executor rasql.Executor) (t
 		if err != nil {
 			return err
 		}
-		created, err := rasql.ExecMutation(ctx, tx, create)
+		created, err := rasql.Exec(ctx, tx, create)
 		if err != nil {
 			return err
 		}
@@ -836,7 +836,7 @@ func taskboardCanonicalMutation(ctx context.Context, executor rasql.Executor) (t
 		if err != nil {
 			return err
 		}
-		patched, err := rasql.ExecMutation(ctx, tx, patch)
+		patched, err := rasql.Exec(ctx, tx, patch)
 		if err != nil {
 			return err
 		}
@@ -931,7 +931,7 @@ func taskboardBatchPlans() []rasql.MutationPlan {
 func taskboardCanonicalBatch(ctx context.Context, executor rasql.Executor, plans []rasql.MutationPlan) (taskboardBatchResult, error) {
 	result := taskboardBatchResult{}
 	err := rasql.Within(ctx, executor, nil, func(ctx context.Context, tx rasql.Executor) error {
-		outcome, err := rasql.ExecMutationBatch(ctx, tx, plans, rasql.BulkOptions{MaxRows: 500, MaxBindParameters: 999})
+		outcome, err := rasql.ExecBatch(ctx, tx, plans, rasql.BulkOptions{MaxRows: 500, MaxBindParameters: 999})
 		if err != nil {
 			return err
 		}

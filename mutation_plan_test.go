@@ -104,16 +104,16 @@ func TestMutationPlanValidation(t *testing.T) {
 	})
 }
 
-func TestExecMutation(t *testing.T) {
-	// TestExecMutation/"rows affected survives a hook failure" pins the third
-	// defect: ExecMutation discarded executor.Exec's sql.Result whenever it
+func TestExec(t *testing.T) {
+	// TestExec/"rows affected survives a hook failure" pins the third
+	// defect: Exec discarded executor.Exec's sql.Result whenever it
 	// returned a non-nil error at all, even though *ExtensionError reports that
 	// the driver call underneath it succeeded. A hook failing after a write that
 	// really happened should still let the caller learn how many rows it
 	// affected, the same way DB.Exec already hands the result back alongside a
 	// joined hook error.
 	//
-	// Confirmed by running this test against the unmodified ExecMutation: it
+	// Confirmed by running this test against the unmodified Exec: it
 	// returned MutationOutcome{Durability: DurabilityUnknown} (Affected: 0)
 	// alongside the hook error, instead of the affected row count below.
 	t.Run("rows affected survives a hook failure", func(t *testing.T) {
@@ -144,7 +144,7 @@ func TestExecMutation(t *testing.T) {
 		plan, err := rasql.NewStatementPlan(insert)
 		require.NoError(t, err)
 
-		outcome, err := rasql.ExecMutation(t.Context(), executor, plan)
+		outcome, err := rasql.Exec(t.Context(), executor, plan)
 		require.Error(t, err)
 		var extensionErr *rasql.ExtensionError
 		require.ErrorAs(t, err, &extensionErr)
@@ -230,7 +230,7 @@ func TestUpdateDefault(t *testing.T) {
 		table, id, name := g5MutationTable(t)
 		plan, err := rasql.NewPatchPlan(table, rasql.EqualValue(id.Expr(), int64(1)), rasql.DefaultField(name))
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), executor, plan)
+		_, err = rasql.Exec(t.Context(), executor, plan)
 		require.ErrorIs(t, err, rasql.ErrUnsupportedEngineFeature)
 	})
 

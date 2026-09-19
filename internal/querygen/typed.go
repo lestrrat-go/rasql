@@ -33,7 +33,7 @@ func (b *sourceBuilder) WriteString(value string) *sourceBuilder {
 func (b *sourceBuilder) Byte(value byte) *sourceBuilder { _ = b.WriteByte(value); return b }
 
 // TypedGoSource emits a lock-backed constructor. It deliberately emits only
-// plan construction; callers choose All, Maybe, One, Rows, or ExecMutation.
+// plan construction; callers choose All, Maybe, One, Rows, or Exec.
 func TypedGoSource(in TypedInput) ([]byte, error) {
 	if in.Package == "" || in.Function == "" || strings.TrimSpace(in.SQL) == "" || in.Engine == "" {
 		return nil, fmt.Errorf("querygen: incomplete typed query")

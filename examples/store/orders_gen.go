@@ -3,6 +3,7 @@
 package store
 
 import (
+	"context"
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
@@ -182,11 +183,20 @@ func (v OrdersCreate) Plan() (rasql.CreatePlan[OrdersRow], error) {
 	return rasql.NewCreatePlan(v.table, v.fields...)
 }
 
+func (v OrdersCreate) Exec(ctx context.Context, executor rasql.Executor) (rasql.MutationOutcome, error) {
+	plan, err := v.Plan()
+	if err != nil {
+		return rasql.MutationOutcome{}, err
+	}
+	return rasql.Exec(ctx, executor, plan)
+}
+
 func (t OrdersTable) Create() OrdersCreate { return OrdersCreate{table: t.ordersTableHandle} }
 
 type OrdersPatch struct {
 	table  rasql.Table[OrdersRow]
 	fields []rasql.MutationField[OrdersRow]
+	where  rasql.Predicate
 }
 
 func (v OrdersPatch) ID(value int64) OrdersPatch {
@@ -201,12 +211,39 @@ func (v OrdersPatch) Total(value int64) OrdersPatch {
 	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(ordersMutationColumns.Total, value))
 	return v
 }
-func (v OrdersPatch) Where(value rasql.Predicate) (rasql.PatchPlan[OrdersRow], error) {
-	return rasql.NewPatchPlan(v.table, value, v.fields...)
+func (v OrdersPatch) Where(value rasql.Predicate) OrdersPatch { v.where = value; return v }
+
+func (v OrdersPatch) Plan() (rasql.PatchPlan[OrdersRow], error) {
+	return rasql.NewPatchPlan(v.table, v.where, v.fields...)
+}
+
+func (v OrdersPatch) Exec(ctx context.Context, executor rasql.Executor) (rasql.MutationOutcome, error) {
+	plan, err := v.Plan()
+	if err != nil {
+		return rasql.MutationOutcome{}, err
+	}
+	return rasql.Exec(ctx, executor, plan)
 }
 
 func (t OrdersTable) Patch() OrdersPatch { return OrdersPatch{table: t.ordersTableHandle} }
 
-func (t OrdersTable) Delete(where rasql.Predicate) (rasql.DeletePlan[OrdersRow], error) {
-	return rasql.NewDeletePlan(t.ordersTableHandle, where)
+type OrdersDelete struct {
+	table rasql.Table[OrdersRow]
+	where rasql.Predicate
+}
+
+func (t OrdersTable) Delete() OrdersDelete { return OrdersDelete{table: t.ordersTableHandle} }
+
+func (v OrdersDelete) Where(value rasql.Predicate) OrdersDelete { v.where = value; return v }
+
+func (v OrdersDelete) Plan() (rasql.DeletePlan[OrdersRow], error) {
+	return rasql.NewDeletePlan(v.table, v.where)
+}
+
+func (v OrdersDelete) Exec(ctx context.Context, executor rasql.Executor) (rasql.MutationOutcome, error) {
+	plan, err := v.Plan()
+	if err != nil {
+		return rasql.MutationOutcome{}, err
+	}
+	return rasql.Exec(ctx, executor, plan)
 }

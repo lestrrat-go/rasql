@@ -3,6 +3,7 @@
 package store
 
 import (
+	"context"
 	"github.com/lestrrat-go/rasql"
 	"github.com/lestrrat-go/rasql/query"
 	"github.com/lestrrat-go/rasql/schema"
@@ -179,23 +180,59 @@ func (v MembersCreate) Plan() (rasql.CreatePlan[MembersRow], error) {
 	return rasql.NewCreatePlan(v.table, v.fields...)
 }
 
+func (v MembersCreate) Exec(ctx context.Context, executor rasql.Executor) (rasql.MutationOutcome, error) {
+	plan, err := v.Plan()
+	if err != nil {
+		return rasql.MutationOutcome{}, err
+	}
+	return rasql.Exec(ctx, executor, plan)
+}
+
 func (t MembersTable) Create() MembersCreate { return MembersCreate{table: t.membersTableHandle} }
 
 type MembersPatch struct {
 	table  rasql.Table[MembersRow]
 	fields []rasql.MutationField[MembersRow]
+	where  rasql.Predicate
 }
 
 func (v MembersPatch) Name(value string) MembersPatch {
 	v.fields = rasqlgenAppendMutationField(v.fields, rasql.SetField(membersMutationColumns.Name, value))
 	return v
 }
-func (v MembersPatch) Where(value rasql.Predicate) (rasql.PatchPlan[MembersRow], error) {
-	return rasql.NewPatchPlan(v.table, value, v.fields...)
+func (v MembersPatch) Where(value rasql.Predicate) MembersPatch { v.where = value; return v }
+
+func (v MembersPatch) Plan() (rasql.PatchPlan[MembersRow], error) {
+	return rasql.NewPatchPlan(v.table, v.where, v.fields...)
+}
+
+func (v MembersPatch) Exec(ctx context.Context, executor rasql.Executor) (rasql.MutationOutcome, error) {
+	plan, err := v.Plan()
+	if err != nil {
+		return rasql.MutationOutcome{}, err
+	}
+	return rasql.Exec(ctx, executor, plan)
 }
 
 func (t MembersTable) Patch() MembersPatch { return MembersPatch{table: t.membersTableHandle} }
 
-func (t MembersTable) Delete(where rasql.Predicate) (rasql.DeletePlan[MembersRow], error) {
-	return rasql.NewDeletePlan(t.membersTableHandle, where)
+type MembersDelete struct {
+	table rasql.Table[MembersRow]
+	where rasql.Predicate
+}
+
+func (t MembersTable) Delete() MembersDelete { return MembersDelete{table: t.membersTableHandle} }
+
+func (v MembersDelete) Where(value rasql.Predicate) MembersDelete { v.where = value; return v }
+
+func (v MembersDelete) Plan() (rasql.DeletePlan[MembersRow], error) {
+	return rasql.NewDeletePlan(v.table, v.where)
+}
+
+func (v MembersDelete) Exec(ctx context.Context, executor rasql.Executor) (rasql.MutationOutcome, error) {
+	plan, err := v.Plan()
+	if err != nil {
+		return rasql.MutationOutcome{}, err
+	}
+	return rasql.Exec(ctx, executor, plan)
 }

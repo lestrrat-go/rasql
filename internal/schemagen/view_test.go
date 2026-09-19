@@ -29,7 +29,7 @@ func TestPackageSourceGeneratesReadOnlyViewSurface(t *testing.T) {
 	require.NotContains(t, text, "activeUsersMutationColumns")
 	require.NotContains(t, text, ") Create() ")
 	require.NotContains(t, text, ") Patch() ")
-	require.NotContains(t, text, ") Delete(where rasql.Predicate)")
+	require.NotContains(t, text, ") Delete() ")
 }
 
 // TestPackageSourceSelectsMutationsPerOperation pins that the mutation
@@ -57,8 +57,8 @@ func TestPackageSourceSelectsMutationsPerOperation(t *testing.T) {
 	text = compactRenderedSource(t, updateOnly)
 	require.NotContains(t, text, "type AuditLogCreate struct")
 	require.Contains(t, text, "type AuditLogPatch struct")
-	require.Contains(t, text, "func (v AuditLogPatch) Where(value rasql.Predicate) (rasql.PatchPlan[AuditLogRow], error)")
-	require.NotContains(t, text, ") Delete(where rasql.Predicate)")
+	require.Contains(t, text, "func (v AuditLogPatch) Where(value rasql.Predicate) AuditLogPatch")
+	require.NotContains(t, text, ") Delete() ")
 
 	deleteOnly := appendOnly
 	deleteOnly.Operations = schema.OperationRead | schema.OperationDelete
@@ -66,5 +66,7 @@ func TestPackageSourceSelectsMutationsPerOperation(t *testing.T) {
 	require.NotContains(t, text, "type AuditLogCreate struct")
 	require.NotContains(t, text, "type AuditLogPatch struct")
 	require.NotContains(t, text, "auditLogMutationColumns")
-	require.Contains(t, text, "func (t AuditLogTable) Delete(where rasql.Predicate) (rasql.DeletePlan[AuditLogRow], error)")
+	require.Contains(t, text, "func (t AuditLogTable) Delete() AuditLogDelete")
+	require.Contains(t, text, "func (v AuditLogDelete) Where(value rasql.Predicate) AuditLogDelete")
+	require.Contains(t, text, "func (v AuditLogDelete) Plan() (rasql.DeletePlan[AuditLogRow], error)")
 }

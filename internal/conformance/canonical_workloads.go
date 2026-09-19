@@ -655,7 +655,7 @@ func rasqlCreatePatch(ctx context.Context, executor rasql.Executor, db rasql.DB,
 	if err != nil {
 		return parityEvidence{}, err
 	}
-	createOutcome, err := rasql.ExecMutation(ctx, executor, create)
+	createOutcome, err := rasql.Exec(ctx, executor, create)
 	if err != nil {
 		return parityEvidence{}, err
 	}
@@ -663,7 +663,7 @@ func rasqlCreatePatch(ctx context.Context, executor rasql.Executor, db rasql.DB,
 	if err != nil {
 		return parityEvidence{}, err
 	}
-	patchOutcome, err := rasql.ExecMutation(ctx, executor, patch)
+	patchOutcome, err := rasql.Exec(ctx, executor, patch)
 	if err != nil {
 		return parityEvidence{}, err
 	}
@@ -799,7 +799,7 @@ func rasqlBulkWrite(ctx context.Context, executor rasql.Executor, _ rasql.DB, en
 		}
 		plans = append(plans, plan)
 	}
-	outcome, err := rasql.ExecMutationBatch(ctx, executor, plans, rasql.BulkOptions{MaxRows: 500, Atomic: true})
+	outcome, err := rasql.ExecBatch(ctx, executor, plans, rasql.BulkOptions{MaxRows: 500, Atomic: true})
 	if err != nil {
 		return parityEvidence{}, err
 	}
@@ -890,7 +890,7 @@ func rasqlRollback(ctx context.Context, executor rasql.Executor, _ rasql.DB, _ s
 			return planErr
 		}
 		var execErr error
-		mutation, execErr = rasql.ExecMutation(scopeCtx, scoped, plan)
+		mutation, execErr = rasql.Exec(scopeCtx, scoped, plan)
 		if execErr != nil {
 			return execErr
 		}
@@ -1054,7 +1054,7 @@ func rasqlBulkRollback(ctx context.Context, executor rasql.Executor, _ rasql.DB,
 	var sentinelOutcome rasql.MutationOutcome
 	err = rasql.Within(ctx, executor, nil, func(scopeCtx context.Context, scoped rasql.Executor) error {
 		var execErr error
-		batch, execErr = rasql.ExecMutationBatch(scopeCtx, scoped, plans, rasql.BulkOptions{MaxRows: 200, Atomic: true, Classifier: classifier})
+		batch, execErr = rasql.ExecBatch(scopeCtx, scoped, plans, rasql.BulkOptions{MaxRows: 200, Atomic: true, Classifier: classifier})
 		if execErr == nil {
 			return errors.New("bulk rollback duplicate unexpectedly succeeded")
 		}
@@ -1080,7 +1080,7 @@ func rasqlBulkRollback(ctx context.Context, executor rasql.Executor, _ rasql.DB,
 		if planErr != nil {
 			return planErr
 		}
-		sentinelOutcome, planErr = rasql.ExecMutation(scopeCtx, scoped, sentinelPlan)
+		sentinelOutcome, planErr = rasql.Exec(scopeCtx, scoped, sentinelPlan)
 		if planErr != nil {
 			return planErr
 		}

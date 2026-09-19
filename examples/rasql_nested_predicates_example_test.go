@@ -47,18 +47,13 @@ func Example_rasql_nested_predicates() {
 		if user.Nickname.Valid {
 			create = create.Nickname(user.Nickname.Value)
 		}
-		plan, err := create.Plan()
-		if err != nil {
-			fmt.Printf("failed to build insert: %s\n", err)
-			return
-		}
-		if _, err := rasql.ExecMutation(ctx, db, plan); err != nil {
+		if _, err := create.Exec(ctx, db); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
 			return
 		}
 	}
 
-	// Bind binds every users column to the table, and UsersProjection selects
+	// The table carries every users column as a field, and UsersProjection selects
 	// them in the order the generated row type scans them.
 	projection, err := store.UsersProjection(users)
 	if err != nil {

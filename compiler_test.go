@@ -124,7 +124,7 @@ func TestCompilerMutation(t *testing.T) {
 		rendered, err := compiler.Mutation(plan)
 		require.NoError(t, err)
 
-		outcome, err := rasql.ExecMutation(t.Context(), executor, plan)
+		outcome, err := rasql.Exec(t.Context(), executor, plan)
 		require.NoError(t, err)
 		require.Equal(t, int64(1), outcome.Affected)
 
@@ -195,7 +195,7 @@ func TestCompilerMutation(t *testing.T) {
 	})
 
 	// A zero plan never came from a constructor and carries no table. Before
-	// this was guarded, both Mutation and ExecMutation dereferenced it and
+	// this was guarded, both Mutation and Exec dereferenced it and
 	// crashed, so each family is checked here rather than only the one that
 	// happened to be noticed.
 	t.Run("reports a plan that was never built", func(t *testing.T) {

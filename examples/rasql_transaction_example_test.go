@@ -54,27 +54,17 @@ func Example_rasql_transaction() {
 	txExecutor := tx
 
 	// SQL: INSERT INTO users (id, email) VALUES (?, ?) (arguments: 1, "ada@example.com")
-	first, err := store.Users().Create().ID(1).Email("ada@example.com").FirstName("First").LastName("Last").Plan()
-	if err != nil {
-		fmt.Printf("failed to build insert: %s\n", err)
-		return
-	}
-	if _, err := rasql.ExecMutation(ctx, txExecutor, first); err != nil {
+	if _, err := store.Users().Create().ID(1).Email("ada@example.com").FirstName("First").LastName("Last").Exec(ctx, txExecutor); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
 	// SQL: INSERT INTO users (id, email) VALUES (?, ?) (arguments: 2, "grace@example.com")
-	second, err := store.Users().Create().ID(2).Email("grace@example.com").FirstName("First").LastName("Last").Plan()
-	if err != nil {
-		fmt.Printf("failed to build insert: %s\n", err)
-		return
-	}
-	if _, err := rasql.ExecMutation(ctx, txExecutor, second); err != nil {
+	if _, err := store.Users().Create().ID(2).Email("grace@example.com").FirstName("First").LastName("Last").Exec(ctx, txExecutor); err != nil {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
 
-	// Bind binds every users column to the table, and UsersProjection selects
+	// The table carries every users column as a field, and UsersProjection selects
 	// them in the order the generated row type scans them.
 	projection, err := store.UsersProjection(users)
 	if err != nil {

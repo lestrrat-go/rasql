@@ -12,7 +12,7 @@ import (
 )
 
 // Example_rasql_returning reads the row a RETURNING clause produces, which a
-// mutation plan executed through ExecMutation cannot do because ExecMutation
+// mutation plan executed through Exec cannot do because Exec
 // rejects a statement carrying RETURNING projections outright.
 func Example_rasql_returning() {
 	ctx := context.Background()

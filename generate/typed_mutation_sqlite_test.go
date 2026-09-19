@@ -170,7 +170,7 @@ func TestGeneratedCreateAndPatchMatrix(t *testing.T) {
 	}
 	patchOn := func(builder generated.ItemsPatch, id int64) generated.ItemsRow {
 		t.Helper()
-		plan, err := builder.Where(rasql.EqualValue(generated.Items().ID.Expr(), id))
+		plan, err := builder.Where(rasql.EqualValue(generated.Items().ID.Expr(), id)).Plan()
 		if err != nil { t.Fatal(err) }
 		return returning(plan)
 	}
@@ -233,10 +233,66 @@ func TestGeneratedCreateAndPatchMatrix(t *testing.T) {
 	patchRightRow := patchOn(patchRight, rightRow.ID)
 	if patchRightRow.Count != 2 { t.Fatalf("patch right variant: %#v", patchRightRow) }
 
-	missingPlan, err := generated.Items().Patch().Count(1).Where(rasql.EqualValue(generated.Items().ID.Expr(), int64(-1)))
+	missingPlan, err := generated.Items().Patch().Count(1).Where(rasql.EqualValue(generated.Items().ID.Expr(), int64(-1))).Plan()
 	if err != nil { t.Fatal(err) }
 	missingQuery, err := rasql.Returning(missingPlan, projection)
 	if err != nil { t.Fatal(err) }
 	if _, err := rasql.One(ctx, executor, missingQuery); !errors.Is(err, rasql.ErrNoRows) { t.Fatalf("missing patch error = %v", err) }
+}
+
+func TestGeneratedMutationExecTerminal(t *testing.T) {
+	ctx := context.Background()
+	sqlDB, err := sql.Open("sqlite", ":memory:")
+	if err != nil { t.Fatal(err) }
+	defer func() { _ = sqlDB.Close() }()
+	sqlDB.SetMaxOpenConns(1)
+	if _, err := sqlDB.ExecContext(ctx, "CREATE TABLE items (\n\t\tid INTEGER PRIMARY KEY AUTOINCREMENT,\n\t\trequired TEXT NOT NULL,\n\t\tcount INTEGER NOT NULL DEFAULT 7,\n\t\tenabled INTEGER NOT NULL DEFAULT 0,\n\t\tlabel TEXT,\n\t\tnote TEXT\n\t)"); err != nil { t.Fatal(err) }
+	executor, err := rasql.Open(ctx, sqlDB, dialect.SQLite())
+	if err != nil { t.Fatal(err) }
+
+	if err != nil { t.Fatal(err) }
+	projection, err := generated.ItemsProjection(generated.Items())
+	if err != nil { t.Fatal(err) }
+	readByRequired := func(value string) (generated.ItemsRow, error) {
+		t.Helper()
+		q := rasql.Select(generated.Items(), projection).Where(rasql.EqualValue(generated.Items().Required.Expr(), value))
+		return rasql.One(ctx, executor, q)
+	}
+
+	// A create builder's terminal Exec plans and runs the insert in one call.
+	outcome, err := generated.Items().Create().Required("exec-create").Exec(ctx, executor)
+	if err != nil { t.Fatal(err) }
+	if outcome.Affected != 1 { t.Fatalf("create affected = %d", outcome.Affected) }
+	created, err := readByRequired("exec-create")
+	if err != nil { t.Fatal(err) }
+
+	// A patch builder's Where(...).Exec updates the matched row in one call.
+	outcome, err = generated.Items().Patch().Required("exec-patched").Where(rasql.EqualValue(generated.Items().ID.Expr(), created.ID)).Exec(ctx, executor)
+	if err != nil { t.Fatal(err) }
+	if outcome.Affected != 1 { t.Fatalf("patch affected = %d", outcome.Affected) }
+	if _, err := readByRequired("exec-create"); !errors.Is(err, rasql.ErrNoRows) { t.Fatalf("pre-patch row still readable, err = %v", err) }
+	patched, err := readByRequired("exec-patched")
+	if err != nil { t.Fatal(err) }
+	if patched.ID != created.ID { t.Fatalf("patched row id = %d, want %d", patched.ID, created.ID) }
+
+	// A delete builder's Where(...).Exec removes the matched row in one call.
+	outcome, err = generated.Items().Delete().Where(rasql.EqualValue(generated.Items().ID.Expr(), created.ID)).Exec(ctx, executor)
+	if err != nil { t.Fatal(err) }
+	if outcome.Affected != 1 { t.Fatalf("delete affected = %d", outcome.Affected) }
+	if _, err := readByRequired("exec-patched"); !errors.Is(err, rasql.ErrNoRows) { t.Fatalf("deleted row still readable, err = %v", err) }
+
+	// An error raised anywhere in the chain is reported by Exec rather than
+	// swallowed: a duplicate setter is a sticky error on the create builder, a
+	// patch with no predicate is refused at plan time, and so is a delete with
+	// no predicate.
+	if _, err := generated.Items().Create().Required("dup").Required("dup-again").Exec(ctx, executor); err == nil {
+		t.Fatal("duplicate setter unexpectedly succeeded through Exec")
+	}
+	if _, err := generated.Items().Patch().Required("no-predicate").Exec(ctx, executor); err == nil {
+		t.Fatal("patch with no predicate unexpectedly succeeded through Exec")
+	}
+	if _, err := generated.Items().Delete().Exec(ctx, executor); err == nil {
+		t.Fatal("delete with no predicate unexpectedly succeeded through Exec")
+	}
 }
 `

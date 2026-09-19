@@ -99,7 +99,7 @@ func rasqlExec(t *testing.T, executor rasql.Executor, statement query.WriteState
 	if err != nil {
 		return err
 	}
-	_, err = rasql.ExecMutation(t.Context(), executor, plan)
+	_, err = rasql.Exec(t.Context(), executor, plan)
 	return err
 }
 
@@ -273,7 +273,7 @@ func TestSQLiteConditionalUpsert(t *testing.T) {
 	require.NoError(t, err)
 	seedPlan, err := rasql.NewStatementPlan(seed)
 	require.NoError(t, err)
-	_, err = rasql.ExecMutation(t.Context(), executor, seedPlan)
+	_, err = rasql.Exec(t.Context(), executor, seedPlan)
 	require.NoError(t, err)
 
 	upsert := func(versionValue int, payloadValue string) {
@@ -289,7 +289,7 @@ func TestSQLiteConditionalUpsert(t *testing.T) {
 		require.NoError(t, buildErr)
 		plan, planErr := rasql.NewStatementPlan(statement)
 		require.NoError(t, planErr)
-		_, execErr := rasql.ExecMutation(t.Context(), executor, plan)
+		_, execErr := rasql.Exec(t.Context(), executor, plan)
 		require.NoError(t, execErr)
 	}
 	upsert(1, "v1")

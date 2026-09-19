@@ -699,7 +699,7 @@ func TestDocsDescribeExecutorExecAsLowLevel(t *testing.T) {
 			passages++
 			require.Contains(t, paragraph, "low-level", "%s must describe Executor.Exec as a low-level boundary", page)
 			require.Contains(t, paragraph, "`stmt.Statement`", "%s must name the input accepted by Executor.Exec", page)
-			require.Contains(t, paragraph, "`ExecMutation`", "%s must direct application writes to ExecMutation", page)
+			require.Contains(t, paragraph, "`Exec`", "%s must direct application writes to Exec", page)
 		}
 	}
 	require.NotZero(t, passages, "no Executor.Exec passage found in the documentation")

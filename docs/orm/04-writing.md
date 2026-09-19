@@ -1,26 +1,24 @@
 # Writing rows
 
-Rasql writes through immutable `MutationPlan` values and an `Executor`. Generated create and patch builders validate
-required fields, writable columns, NULL state, database defaults, and predicates before any database call.
+Rasql writes through immutable `MutationPlan` values and an `Executor`. Generated create, patch and delete builders
+validate required fields, writable columns, NULL state, database defaults, and predicates before any database call.
+Each one carries a terminal `Exec` method that builds the plan and runs it in one call, so the common path costs one
+error check instead of two.
 
 ## Create
 
 A generated create builder distinguishes four states: omitted, explicit value including a zero value, SQL NULL for a
-nullable column, and database default. Its `Plan` method returns a `CreatePlan[R]`.
+nullable column, and database default. Its `Exec` method plans and runs the insert in one call.
 
 <!-- INCLUDE(sample/taskboard/internal/store/docs_examples_test.go#canonical_create) -->
 ```go
-plan, err := Tasks().Create().
+outcome, err := Tasks().Create().
 	ProjectID(projectID).
 	ClearAssigneeID().
 	Title("document canonical mutations").
 	DefaultIsOpen().
 	DefaultCreatedAt().
-	Plan()
-if err != nil {
-	return err
-}
-outcome, err := rasql.ExecMutation(ctx, executor, plan)
+	Exec(ctx, executor)
 ```
 source: [sample/taskboard/internal/store/docs_examples_test.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/docs_examples_test.go)
 <!-- END INCLUDE -->
@@ -31,16 +29,14 @@ pending inside a caller-owned transaction or savepoint, and unknown when the exe
 ## Patch
 
 A generated patch builder requires a typed predicate and emits assignments only for fields explicitly selected by the
-caller. Build and execute it through the same mutation terminal:
+caller. `Where` stores the predicate and returns the builder, so it chains like any other step; `Exec` plans and runs
+the update in one call:
 
 <!-- INCLUDE(sample/taskboard/internal/store/docs_examples_test.go#canonical_patch) -->
 ```go
-plan, err := Tasks().Patch().IsOpen(false).
-	Where(rasql.EqualValue(Tasks().ID.Expr(), taskID))
-if err != nil {
-	return err
-}
-outcome, err := rasql.ExecMutation(ctx, executor, plan)
+outcome, err := Tasks().Patch().IsOpen(false).
+	Where(rasql.EqualValue(Tasks().ID.Expr(), taskID)).
+	Exec(ctx, executor)
 ```
 source: [sample/taskboard/internal/store/docs_examples_test.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/docs_examples_test.go)
 <!-- END INCLUDE -->
@@ -50,9 +46,17 @@ source: [sample/taskboard/internal/store/docs_examples_test.go](https://github.c
 
 ## Delete and portable statements
 
-Use `NewDeletePlan` with a table and typed predicate. Use `NewStatementPlan` to adapt an already validated portable
-`query.Insert`, `query.Update`, `query.Delete`, or `query.Upsert`. Use `NativeMutation` for engine-specific SQL and state
-the engine explicitly. Every form executes through `ExecMutation`.
+A generated table's `Delete` method takes no argument and hands back a delete builder; its `Where` stores a typed
+predicate and returns the builder, matching the patch builder's shape, and its `Exec` plans and runs the delete in
+one call: `Tasks().Delete().Where(predicate).Exec(ctx, executor)`.
+
+Use `NewStatementPlan` to adapt an already validated portable `query.Insert`, `query.Update`, `query.Delete`, or
+`query.Upsert`. Use `NativeMutation` for engine-specific SQL and state the engine explicitly. Every form executes
+through `rasql.Exec`.
+
+Every builder also keeps a `Plan` method that returns the plan without running it. It stays the way to reach
+`rasql.ExecBatch`, `rasql.Returning`, or `render` without executing, and every builder carries an error raised by any
+of its steps through to whichever of `Plan` or `Exec` is called.
 
 ## Returning rows
 
@@ -74,13 +78,13 @@ fail during planning rather than starting a second write-and-read workflow.
 
 ## Batches
 
-`ExecMutationBatch` accepts ordered mutation plans and `BulkOptions`. Consecutive compatible creates may share one
+`ExecBatch` accepts ordered mutation plans and `BulkOptions`. Consecutive compatible creates may share one
 insert statement while row and bind limits remain enforced. The outcome reports each input separately as unattempted,
 applied, rolled back, rejected, or unknown, plus the failed batch indexes and overall durability.
 
 <!-- INCLUDE(sample/taskboard/internal/store/docs_examples_test.go#mutation_batch) -->
 ```go
-outcome, err := rasql.ExecMutationBatch(ctx, executor, plans, rasql.BulkOptions{
+outcome, err := rasql.ExecBatch(ctx, executor, plans, rasql.BulkOptions{
 	MaxRows:           500,
 	MaxBindParameters: 32000,
 	Atomic:            true,

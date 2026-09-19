@@ -76,27 +76,23 @@ share one lifecycle path.
 
 ## Write rows
 
-Generated mutation builders create immutable plans:
+Generated mutation builders carry a terminal `Exec` that plans and runs the write in one call:
 
 <!-- INCLUDE(sample/taskboard/internal/store/docs_examples_test.go#canonical_create) -->
 ```go
-plan, err := Tasks().Create().
+outcome, err := Tasks().Create().
 	ProjectID(projectID).
 	ClearAssigneeID().
 	Title("document canonical mutations").
 	DefaultIsOpen().
 	DefaultCreatedAt().
-	Plan()
-if err != nil {
-	return err
-}
-outcome, err := rasql.ExecMutation(ctx, executor, plan)
+	Exec(ctx, executor)
 ```
 source: [sample/taskboard/internal/store/docs_examples_test.go](https://github.com/lestrrat-go/rasql/blob/main/sample/taskboard/internal/store/docs_examples_test.go)
 <!-- END INCLUDE -->
 
 Use `Returning(plan, projection)` to read inserted, updated, or deleted rows with the normal query terminals. Use
-`ExecMutationBatch` with `BulkOptions` for ordered batches and per-input outcomes.
+`ExecBatch` with `BulkOptions` for ordered batches and per-input outcomes.
 
 ## Native and runtime-defined results
 

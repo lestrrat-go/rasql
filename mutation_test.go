@@ -57,16 +57,16 @@ func TestMutation(t *testing.T) {
 		require.NoError(t, err)
 		create, err := rasql.NewCreatePlan(table, rasql.SetField(id, int64(10)), rasql.SetField(value, "before"))
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), executor, create)
+		_, err = rasql.Exec(t.Context(), executor, create)
 		require.NoError(t, err)
 		patch, err := rasql.NewPatchPlan(table, query.EqualValue(id, int64(10)), rasql.SetField(value, "after"))
 		require.NoError(t, err)
 		versioned, err := patch.WithVersion(version, 1)
 		require.NoError(t, err)
-		outcome, err := rasql.ExecMutation(t.Context(), executor, versioned)
+		outcome, err := rasql.Exec(t.Context(), executor, versioned)
 		require.NoError(t, err)
 		require.Equal(t, int64(1), outcome.Affected)
-		outcome, err = rasql.ExecMutation(t.Context(), executor, versioned)
+		outcome, err = rasql.Exec(t.Context(), executor, versioned)
 		require.ErrorIs(t, err, rasql.ErrPrecondition)
 		require.Zero(t, outcome.Affected)
 	})
@@ -76,7 +76,7 @@ func TestMutation(t *testing.T) {
 		value := query.TypedColumnOf[mutationRow, string](table.Ref().Column("value"))
 		create, err := rasql.NewCreatePlan(table, rasql.SetField(id, int64(7)), rasql.SetField(value, "before"))
 		require.NoError(t, err)
-		outcome, err := rasql.ExecMutation(t.Context(), executor, create)
+		outcome, err := rasql.Exec(t.Context(), executor, create)
 		require.NoError(t, err)
 		require.Equal(t, int64(1), outcome.Affected)
 		require.Equal(t, rasql.DurabilityCommitted, outcome.Durability)
@@ -92,7 +92,7 @@ func TestMutation(t *testing.T) {
 
 		deletePlan, err := rasql.NewDeletePlan(table, query.EqualValue(id, int64(7)))
 		require.NoError(t, err)
-		deleteOutcome, err := rasql.ExecMutation(t.Context(), executor, deletePlan)
+		deleteOutcome, err := rasql.Exec(t.Context(), executor, deletePlan)
 		require.NoError(t, err)
 		require.Equal(t, int64(1), deleteOutcome.Affected)
 	})
@@ -151,7 +151,7 @@ func TestMutation(t *testing.T) {
 
 		create, err = rasql.NewCreatePlan(f.table, rasql.SetField(f.required, "non-returning"))
 		require.NoError(t, err)
-		outcome, err := rasql.ExecMutation(t.Context(), f.executor, create)
+		outcome, err := rasql.Exec(t.Context(), f.executor, create)
 		require.NoError(t, err)
 		require.Equal(t, int64(1), outcome.Affected)
 		require.Equal(t, rasql.DurabilityCommitted, outcome.Durability)
@@ -175,7 +175,7 @@ func TestMutation(t *testing.T) {
 		value := query.TypedColumnOf[mutationRow, string](table.Ref().Column("value"))
 		plan, err := rasql.NewCreatePlan(table, rasql.SetField(id, int64(1)), rasql.SetField(value, "pending"))
 		require.NoError(t, err)
-		outcome, err := rasql.ExecMutation(t.Context(), executor, plan)
+		outcome, err := rasql.Exec(t.Context(), executor, plan)
 		require.NoError(t, err)
 		require.Equal(t, rasql.DurabilityPending, outcome.Durability)
 	})
@@ -213,7 +213,7 @@ func mutationProjection(t *testing.T, table rasql.Table[mutationRow]) rasql.Proj
 }
 
 // A mutation carries no prepared form to bind a parameter into later, so
-// ExecMutation refuses one outright rather than sending NULL at its position.
+// Exec refuses one outright rather than sending NULL at its position.
 func TestMutationParameterUnsupported(t *testing.T) {
 	executor, table, idTyped := mutationFixture(t)
 	id, err := rasql.BindTypedColumn[mutationRow, int64](idTyped)
@@ -223,7 +223,7 @@ func TestMutationParameterUnsupported(t *testing.T) {
 	patch, err := rasql.NewPatchPlan(table, rasql.EqualExpr(id.Expr(), param.Expr()), rasql.SetField(value, "after"))
 	require.NoError(t, err)
 
-	_, err = rasql.ExecMutation(t.Context(), executor, patch)
+	_, err = rasql.Exec(t.Context(), executor, patch)
 	var planErr *rasql.PlanError
 	require.ErrorAs(t, err, &planErr)
 	require.Equal(t, "parameter_unsupported", planErr.Code)
@@ -239,7 +239,7 @@ func TestMutationBatch(t *testing.T) {
 			require.NoError(t, err)
 			plans = append(plans, plan)
 		}
-		outcome, err := rasql.ExecMutationBatch(t.Context(), executor, plans, rasql.BulkOptions{MaxRows: 3})
+		outcome, err := rasql.ExecBatch(t.Context(), executor, plans, rasql.BulkOptions{MaxRows: 3})
 		require.NoError(t, err)
 		require.Equal(t, []rasql.InputOutcome{rasql.InputApplied, rasql.InputApplied, rasql.InputApplied, rasql.InputApplied, rasql.InputApplied, rasql.InputApplied}, outcome.Inputs)
 	})
@@ -267,7 +267,7 @@ func TestMutationBatch(t *testing.T) {
 			})
 		}))
 		require.NoError(t, err)
-		_, err = rasql.ExecMutationBatch(t.Context(), executor, plans, rasql.BulkOptions{MaxRows: 3})
+		_, err = rasql.ExecBatch(t.Context(), executor, plans, rasql.BulkOptions{MaxRows: 3})
 		require.NoError(t, err)
 		mu.Lock()
 		defer mu.Unlock()
@@ -297,7 +297,7 @@ func TestMutationBatch(t *testing.T) {
 			require.NoError(t, err)
 			plans = append(plans, plan)
 		}
-		outcome, err := rasql.ExecMutationBatch(t.Context(), executor, plans, rasql.BulkOptions{MaxRows: 3, Classifier: mutationRejectClassifier{}})
+		outcome, err := rasql.ExecBatch(t.Context(), executor, plans, rasql.BulkOptions{MaxRows: 3, Classifier: mutationRejectClassifier{}})
 		require.Error(t, err)
 		require.Equal(t, []rasql.InputOutcome{
 			rasql.InputApplied, rasql.InputApplied, rasql.InputApplied,
@@ -313,7 +313,7 @@ func TestMutationBatch(t *testing.T) {
 		require.NoError(t, err)
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
-		outcome, err := rasql.ExecMutationBatch(ctx, executor, []rasql.MutationPlan{plan}, rasql.BulkOptions{})
+		outcome, err := rasql.ExecBatch(ctx, executor, []rasql.MutationPlan{plan}, rasql.BulkOptions{})
 		require.ErrorIs(t, err, context.Canceled)
 		require.Equal(t, []rasql.InputOutcome{rasql.InputUnattempted}, outcome.Inputs)
 	})
@@ -325,7 +325,7 @@ func TestMutationBatch(t *testing.T) {
 		require.NoError(t, err)
 		second, err := rasql.NewCreatePlan(table, rasql.SetField(id, int64(1)), rasql.SetField(value, "duplicate"))
 		require.NoError(t, err)
-		outcome, err := rasql.ExecMutationBatch(t.Context(), executor, []rasql.MutationPlan{first, second}, rasql.BulkOptions{
+		outcome, err := rasql.ExecBatch(t.Context(), executor, []rasql.MutationPlan{first, second}, rasql.BulkOptions{
 			MaxRows: 1, Atomic: true, Classifier: mutationRejectClassifier{},
 		})
 		require.Error(t, err)
@@ -341,7 +341,7 @@ func TestMutationBatch(t *testing.T) {
 			require.NoError(t, planErr)
 			plans = append(plans, plan)
 		}
-		outcome, err := rasql.ExecMutationBatch(t.Context(), f.executor, plans, rasql.BulkOptions{MaxRows: 2, MaxBindParameters: 1})
+		outcome, err := rasql.ExecBatch(t.Context(), f.executor, plans, rasql.BulkOptions{MaxRows: 2, MaxBindParameters: 1})
 		require.NoError(t, err)
 		require.Equal(t, []rasql.InputOutcome{rasql.InputApplied, rasql.InputApplied}, outcome.Inputs)
 	})
@@ -358,7 +358,7 @@ func TestMutationBatch(t *testing.T) {
 			require.NoError(t, planErr)
 			plans = append(plans, plan)
 		}
-		outcome, err := rasql.ExecMutationBatch(t.Context(), executor, plans, rasql.BulkOptions{MaxRows: 6, MaxBindParameters: 5, Classifier: mutationRejectClassifier{}})
+		outcome, err := rasql.ExecBatch(t.Context(), executor, plans, rasql.BulkOptions{MaxRows: 6, MaxBindParameters: 5, Classifier: mutationRejectClassifier{}})
 		require.Error(t, err)
 		require.Equal(t, []int{2, 3}, outcome.FailedBatch)
 		require.Equal(t, []rasql.InputOutcome{
@@ -511,7 +511,7 @@ func TestMutationAtomic(t *testing.T) {
 					})
 				}))
 				require.NoError(t, err)
-				outcome, executionErr := rasql.ExecMutationBatch(t.Context(), executor, plans, rasql.BulkOptions{Atomic: true, MaxRows: 1, Classifier: mutationRejectClassifier{}})
+				outcome, executionErr := rasql.ExecBatch(t.Context(), executor, plans, rasql.BulkOptions{Atomic: true, MaxRows: 1, Classifier: mutationRejectClassifier{}})
 				if test.failure {
 					require.Error(t, executionErr)
 					require.Equal(t, []rasql.InputOutcome{rasql.InputRolledBack, rasql.InputRejected}, outcome.Inputs)
@@ -545,13 +545,13 @@ func TestMutationAtomic(t *testing.T) {
 		plan, err := rasql.NewCreatePlan(table, rasql.SetField(id, int64(1)), rasql.SetField(value, "one"))
 		require.NoError(t, err)
 		for _, options := range []rasql.BulkOptions{{Atomic: true, MaxRows: -1}, {Atomic: true, MaxBindParameters: -1}} {
-			outcome, executionErr := rasql.ExecMutationBatch(t.Context(), executor, []rasql.MutationPlan{plan}, options)
+			outcome, executionErr := rasql.ExecBatch(t.Context(), executor, []rasql.MutationPlan{plan}, options)
 			require.Error(t, executionErr)
 			require.Equal(t, []rasql.InputOutcome{rasql.InputUnattempted}, outcome.Inputs)
 		}
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
-		outcome, executionErr := rasql.ExecMutationBatch(ctx, executor, []rasql.MutationPlan{plan}, rasql.BulkOptions{Atomic: true})
+		outcome, executionErr := rasql.ExecBatch(ctx, executor, []rasql.MutationPlan{plan}, rasql.BulkOptions{Atomic: true})
 		require.ErrorIs(t, executionErr, context.Canceled)
 		require.Equal(t, []rasql.InputOutcome{rasql.InputUnattempted}, outcome.Inputs)
 	})
@@ -600,7 +600,7 @@ func TestMutationCodec(t *testing.T) {
 		require.NoError(t, err)
 		create, err := rasql.NewCreatePlan(table, rasql.SetField(id, int64(1)), rasql.SetField(value, "one"), rasql.ClearField(nullable))
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), executor, create)
+		_, err = rasql.Exec(t.Context(), executor, create)
 		require.NoError(t, err)
 		require.Equal(t, 1, count)
 		var stored string
@@ -609,7 +609,7 @@ func TestMutationCodec(t *testing.T) {
 
 		patch, err := rasql.NewPatchPlan(table, query.EqualValue(query.TypedColumnOf[mutationCodecRow, int64](table.Ref().Column("id")), int64(1)), rasql.SetField(value, "two"), rasql.ClearField(nullable))
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), executor, patch)
+		_, err = rasql.Exec(t.Context(), executor, patch)
 		require.NoError(t, err)
 		require.Equal(t, 2, count)
 	})
@@ -625,7 +625,7 @@ func TestMutationCodec(t *testing.T) {
 		require.NoError(t, err)
 		executor, err = rasql.WithCodecs(executor, registry)
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(context.Background(), executor, plan)
+		_, err = rasql.Exec(context.Background(), executor, plan)
 		require.Error(t, err)
 	})
 }
@@ -727,13 +727,13 @@ func TestMutationVersioned(t *testing.T) {
 		require.NoError(t, err)
 		create, err := rasql.NewCreatePlan(table, rasql.SetField(id, int64(10)), rasql.SetField(value, "before"))
 		require.NoError(t, err)
-		_, err = rasql.ExecMutation(t.Context(), executor, create)
+		_, err = rasql.Exec(t.Context(), executor, create)
 		require.NoError(t, err)
 		patch, err := rasql.NewPatchPlan(table, query.EqualValue(id, int64(10)), rasql.SetField(value, "after"))
 		require.NoError(t, err)
 		patch, err = patch.WithVersion(version, 1)
 		require.NoError(t, err)
-		outcome, err := rasql.ExecMutation(t.Context(), executor, patch)
+		outcome, err := rasql.Exec(t.Context(), executor, patch)
 		require.NoError(t, err)
 		require.Equal(t, int64(1), outcome.Affected)
 	})
@@ -749,7 +749,7 @@ func newVersionedReturningAcceptance(t *testing.T, rows int) (rasql.Executor, ra
 	for i := int64(1); i <= 2; i++ {
 		create, createErr := rasql.NewCreatePlan(table, rasql.SetField(id, i), rasql.SetField(value, "before"))
 		require.NoError(t, createErr)
-		_, createErr = rasql.ExecMutation(t.Context(), executor, create)
+		_, createErr = rasql.Exec(t.Context(), executor, create)
 		require.NoError(t, createErr)
 	}
 	where := query.EqualValue(id, int64(99))
