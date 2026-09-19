@@ -32,8 +32,8 @@ Adapt any validated `query.WriteStatement` to the canonical mutation API:
 ```go
 tasks := Tasks()
 statement, err := query.NewInsert(tasks.Ref(),
-	query.Set(tasks.Column("project_id"), int64(1)),
-	query.Set(tasks.Column("title"), "write the guide"),
+	query.Set(tasks.Ref().Column("project_id"), int64(1)),
+	query.Set(tasks.Ref().Column("title"), "write the guide"),
 )
 if err != nil {
 	return err
