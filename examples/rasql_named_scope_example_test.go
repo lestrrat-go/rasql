@@ -58,25 +58,36 @@ func Example_rasql_named_scope() {
 	base := rasql.Select(users, projection)
 
 	// ActiveRecord registers a named scope such as
-	// `scope :active, -> { where(status: "active") }`. In Go, an ordinary
-	// function can make the same reusable change to a query.
+	// `scope :active, -> { where(status: "active") }`. In Go, each scope below
+	// is a function that receives a users query and returns a new users query.
+	// Naming that function signature usersScope lets applyScopes accept several
+	// scopes and lets surnamed declare that it returns one, without repeating the
+	// full signature. rasql does not require or register this local type, and it
+	// is unrelated to rasql.Scope, which rasql.Within uses for transaction work.
 	type usersScope func(rasql.Query[store.UsersRow]) rasql.Query[store.UsersRow]
-	// This local type is unrelated to rasql.Scope, the callback type used by
-	// rasql.Within for transactions and savepoints.
+
+	// active adds WHERE users.status = ? and binds "active". Where returns the
+	// changed query without modifying the query passed to the scope.
 	active := usersScope(func(q rasql.Query[store.UsersRow]) rasql.Query[store.UsersRow] {
 		return q.Where(rasql.EqualValue(users.Status.Expr(), "active"))
 	})
+
+	// surnamed is a parameterized scope. Calling surnamed("Hopper") returns a
+	// scope that adds WHERE users.last_name = ? and binds "Hopper".
 	surnamed := func(surname string) usersScope {
 		return func(q rasql.Query[store.UsersRow]) rasql.Query[store.UsersRow] {
 			return q.Where(rasql.EqualValue(users.LastName.Expr(), surname))
 		}
 	}
+
+	// byEmail orders by users.email in ascending order without adding a filter.
 	byEmail := usersScope(func(q rasql.Query[store.UsersRow]) rasql.Query[store.UsersRow] {
 		return q.OrderBy(rasql.AscExpr(users.Email.Expr()))
 	})
 
-	// Apply each scope from left to right. Each call returns a new query, so base
-	// remains unchanged. Repeated Where calls combine their predicates with AND.
+	// applyScopes passes the result of each scope to the next scope. Applying
+	// active, surnamed("Hopper"), and byEmail therefore adds both WHERE
+	// predicates with AND and then adds the email ordering. base remains unchanged.
 	applyScopes := func(q rasql.Query[store.UsersRow], scopes ...usersScope) rasql.Query[store.UsersRow] {
 		for _, scope := range scopes {
 			q = scope(q)
