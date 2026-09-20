@@ -562,15 +562,15 @@ A column called `ref`, `as`, `in_schema`, `optional`, `create`, `patch` or
 still generated, the row type still carries it, both builders still set it, and
 nothing is reported.
 
-The one difference is that `reserved.Ref` means the table's `Ref` method, not
+The one difference is that `widgets.Ref` means the table's `Ref` method, not
 your column, because a method one level up wins over an embedded field. Name the
 embedded expressions struct to reach the column:
 
 ```go
-reserved.ReservedExpressions.Ref.Expr()
+widgets.WidgetsExpressions.Ref.Expr()
 ```
 
-`reserved.Ref().Column("ref")` reaches the same column the untyped way.
+`widgets.Ref().Column("ref")` reaches the same column the untyped way.
 
 #### A column called `scan_row`
 
@@ -594,20 +594,20 @@ Write it with `rasql.SetField`, which is what the setter would have called.
 `rasql.NewCreatePlan` and `rasql.NewPatchPlan` take the typed table, and the
 generated `<Table>Handle` function hands it over:
 
-<!-- INCLUDE(examples/rasqlgen_reserved_column_names_example_test.go#reserved_write) -->
+<!-- INCLUDE(examples/rasqlgen_widgets_column_names_example_test.go#widgets_write) -->
 ```go
 // "plan" has no setter on the create builder, because the builder's own
 // Plan method already has that name. rasql.SetField writes it instead,
 // against the same column field the setter would have used, and
-// ReservedHandle hands the typed table to the constructor.
+// WidgetsHandle hands the typed table to the constructor.
 //
-// reserved.Ref is the table's own Ref method, so the column behind it is
-// named through the embedded ReservedExpressions struct. ScanRow and Plan
+// widgets.Ref is the table's own Ref method, so the column behind it is
+// named through the embedded WidgetsExpressions struct. ScanRow and Plan
 // are not methods of the table, so those need no such qualifying.
-create, err := rasql.NewCreatePlan(store.ReservedHandle(reserved),
-	rasql.SetField(reserved.ReservedExpressions.Ref, "first"),
-	rasql.SetField(reserved.ScanRow, "scanned"),
-	rasql.SetField(reserved.Plan, "annual"),
+create, err := rasql.NewCreatePlan(store.WidgetsHandle(widgets),
+	rasql.SetField(widgets.WidgetsExpressions.Ref, "first"),
+	rasql.SetField(widgets.ScanRow, "scanned"),
+	rasql.SetField(widgets.Plan, "annual"),
 )
 if err != nil {
 	fmt.Printf("failed to build the insert: %s\n", err)
@@ -618,36 +618,36 @@ if _, err := rasql.Exec(ctx, db, create); err != nil {
 	return
 }
 ```
-source: [examples/rasqlgen_reserved_column_names_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasqlgen_reserved_column_names_example_test.go)
+source: [examples/rasqlgen_widgets_column_names_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasqlgen_widgets_column_names_example_test.go)
 <!-- END INCLUDE -->
 
 Reading needs nothing special:
 
-<!-- INCLUDE(examples/rasqlgen_reserved_column_names_example_test.go#reserved_read) -->
+<!-- INCLUDE(examples/rasqlgen_widgets_column_names_example_test.go#widgets_read) -->
 ```go
 // Reading is unaffected. Every column is a field of the row type, so the
 // generated projection selects all three and rasql.All returns them.
 //
 // A predicate needs the column rather than the value, and naming the
-// embedded ReservedExpressions struct is what reaches it: reserved.Ref on
+// embedded WidgetsExpressions struct is what reaches it: widgets.Ref on
 // its own would be the table's own Ref method.
-projection, err := store.ReservedProjection(reserved)
+projection, err := store.WidgetsProjection(widgets)
 if err != nil {
 	fmt.Printf("failed to build the projection: %s\n", err)
 	return
 }
-// SQL: SELECT reserved.id, reserved.ref, reserved.scan_row, reserved.plan FROM reserved WHERE reserved.ref = ? (argument: "first")
-rows, err := rasql.All(ctx, db, rasql.Select(reserved, projection).
-	Where(rasql.EqualValue(reserved.ReservedExpressions.Ref.Expr(), "first")))
+// SQL: SELECT widgets.id, widgets.ref, widgets.scan_row, widgets.plan FROM widgets WHERE widgets.ref = ? (argument: "first")
+rows, err := rasql.All(ctx, db, rasql.Select(widgets, projection).
+	Where(rasql.EqualValue(widgets.WidgetsExpressions.Ref.Expr(), "first")))
 if err != nil {
-	fmt.Printf("failed to query the reserved table: %s\n", err)
+	fmt.Printf("failed to query the widgets table: %s\n", err)
 	return
 }
 for _, row := range rows {
 	fmt.Printf("ref=%s scan_row=%s plan=%s\n", row.Ref, row.ScanRow, row.Plan)
 }
 ```
-source: [examples/rasqlgen_reserved_column_names_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasqlgen_reserved_column_names_example_test.go)
+source: [examples/rasqlgen_widgets_column_names_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasqlgen_widgets_column_names_example_test.go)
 <!-- END INCLUDE -->
 
 #### Two columns with one Go name
@@ -668,8 +668,8 @@ the two columns in the database is the fix worth making.
 error stream, before it reports what it wrote:
 
 ```
-warning: reserved.scan_row: column "scan_row" is named ScanRow in Go, so the generated row type carries the column and not rasql's own ScanRow method; the column is read and written as usual
-warning: reserved.plan: column "plan" would give its builder a Plan method, which is already the builder's own Plan method; the setter is left out and rasql.SetField(reserved.Plan, value) writes the column instead
+warning: widgets.scan_row: column "scan_row" is named ScanRow in Go, so the generated row type carries the column and not rasql's own ScanRow method; the column is read and written as usual
+warning: widgets.plan: column "plan" would give its builder a Plan method, which is already the builder's own Plan method; the setter is left out and rasql.SetField(widgets.Plan, value) writes the column instead
 ```
 
 A column that cost nothing is not reported. `generate.Plan.Warnings` carries the
