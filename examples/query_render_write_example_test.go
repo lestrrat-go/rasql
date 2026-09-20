@@ -9,6 +9,9 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 )
 
+// Example_query_render_write solves the need to produce DDL and write SQL from
+// one schema description without opening a database. It builds each statement
+// as typed data, then renders SQL and arguments for PostgreSQL.
 func Example_query_render_write() {
 	// A table description carries everything the DDL and the write
 	// statements need. No row type and no database handle appear here.

@@ -11,8 +11,10 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
+// Example_rasql_insert solves the routine case of inserting one generated row
+// without manually pairing columns with values. The generated create builder
+// exposes one typed method per field, then plans and executes the insert.
 func Example_rasql_insert() {
-	// This example inserts one generated row without constructing query.Insert.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {

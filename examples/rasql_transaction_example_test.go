@@ -11,9 +11,11 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
+// Example_rasql_transaction solves the need to run the same typed mutations
+// and queries both inside and outside a transaction. Begin returns another
+// rasql.DB, so callers pass the transactional value to existing operations and
+// switch back to the original DB after Commit.
 func Example_rasql_transaction() {
-	// This example writes two rows and reads them back inside one transaction,
-	// then reads them again through the plain db after it commits.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {

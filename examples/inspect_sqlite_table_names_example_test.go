@@ -10,9 +10,11 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
+// Example_inspect_sqlite_table_names solves the case where listing bare table
+// names would collapse identical names from different SQLite databases. It
+// retains one connection, enumerates every base table, and prints each result
+// with its database name.
 func Example_inspect_sqlite_table_names() {
-	// This example enumerates the base tables across main and an attached
-	// database, including a table name that exists in both.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -26,6 +28,8 @@ func Example_inspect_sqlite_table_names() {
 		return
 	}
 	defer func() { _ = connection.Close() }()
+	// Attached databases belong to a SQLite connection, so inspection must use
+	// the same retained connection that performs the attachment.
 	if _, err := connection.ExecContext(ctx, "ATTACH DATABASE ':memory:' AS tenant"); err != nil {
 		fmt.Printf("failed to attach tenant database: %s\n", err)
 		return

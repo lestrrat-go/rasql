@@ -6,9 +6,12 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 )
 
+// Example_schema_table_definition solves the need for one reusable schema
+// description that can drive validation, SQL rendering, and code generation.
+// Table options declare columns, constraints, indexes, and the generated row
+// name without embedding any dialect-specific SQL.
 func Example_schema_table_definition() {
-	// This example defines two reusable table descriptors in Go code, built
-	// with schema.MustTableDef. A column constructor such as schema.Integer and
+	// A column constructor such as schema.Integer and
 	// a constraint constructor such as schema.PrimaryKey each return a
 	// schema.TableOption, so they may appear in any order: PrimaryKey names
 	// "id" below before Integer declares it, and the assembled descriptor is

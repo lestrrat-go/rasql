@@ -37,14 +37,14 @@ func (d eventDecoder) DecodeRow(src rasql.ScanSource, row *EventRow) error {
 	return src.Scan(&row.ID, &row.Action)
 }
 
+// Example_schema_qualified_table solves the case where a descriptor must
+// always address a table outside the default namespace. InSchema records the
+// namespace once, and every generated DDL, mutation, and query qualifies both
+// identifiers from that descriptor.
 func Example_schema_qualified_table() {
-	// This example creates and queries a table through a schema-qualified
-	// descriptor. Schema names a PostgreSQL schema, a MySQL database, or, as
-	// here, a SQLite attached-database name. rasql never creates the
-	// namespace itself, so the ATTACH DATABASE below stands in for a
-	// reviewed native migration, which is the only way rasql creates a
-	// namespace in production; rasql.CreateTable then renders CREATE TABLE
-	// "audit"."events" into the namespace that migration already created.
+	// Schema names a PostgreSQL schema, a MySQL database, or, as here, a
+	// SQLite attached-database name. rasql never creates the namespace itself,
+	// so ATTACH stands in for a reviewed native migration.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -80,6 +80,8 @@ func Example_schema_qualified_table() {
 		return
 	}
 
+	// Bind descriptor columns to Go field types once, then reuse those bindings
+	// in both the mutation and projection below.
 	id, err := rasql.BindColumn[EventRow, int64](events, "id", "")
 	if err != nil {
 		fmt.Printf("failed to bind id column: %s\n", err)
@@ -105,6 +107,8 @@ func Example_schema_qualified_table() {
 		return
 	}
 
+	// Match the result schema and decoder to projection order because scanning
+	// is positional even though each SQL expression is typed.
 	result, err := rasql.NewResultSchema(
 		rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}},
 		rasql.ResultColumn{Name: "action", Type: schema.TextType{}},

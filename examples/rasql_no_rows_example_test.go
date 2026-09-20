@@ -12,9 +12,10 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
+// Example_rasql_no_rows solves the common one-row lookup where absence is an
+// expected branch rather than a generic failure. rasql.One returns
+// rasql.ErrNoRows while preserving compatibility with database/sql.ErrNoRows.
 func Example_rasql_no_rows() {
-	// This example queries an empty users table and shows how to branch on a
-	// missing row.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {

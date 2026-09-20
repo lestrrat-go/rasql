@@ -8,10 +8,11 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 )
 
+// Example_schema_unsigned_column solves the portability check for a uint64
+// column before DDL reaches a database. MySQL renders an unsigned integer,
+// while PostgreSQL and SQLite return an error because their signed storage
+// would narrow the descriptor's allowed values.
 func Example_schema_unsigned_column() {
-	// This example declares an unsigned integer column and renders its DDL for
-	// each dialect. MySQL is the only supported engine with an unsigned
-	// integer type, so it is the only one that renders the table.
 	events := schema.MustTableDef("events",
 		// An unsigned column reaches 18446744073709551615, where a signed one
 		// stops at 9223372036854775807. rasqlgen generates a uint64 field for

@@ -11,8 +11,10 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
+// Example_rasql_sqlite_query solves the full typed path from a generated table
+// to a decoded row. The same descriptor creates the table, builds the insert,
+// supplies the projection, and binds the lookup predicate.
 func Example_rasql_sqlite_query() {
-	// This example creates, inserts, and reads one generated row with SQLite.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {

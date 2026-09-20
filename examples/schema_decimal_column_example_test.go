@@ -42,9 +42,11 @@ func (d invoiceDecoder) DecodeRow(src rasql.ScanSource, row *InvoiceRow) error {
 	return src.Scan(&row.ID, &row.Amount)
 }
 
+// Example_schema_decimal_column solves exact decimal storage without routing
+// the value through binary floating point. The descriptor declares precision
+// and scale, SQLite renders the column as TEXT, and a string value round-trips
+// through typed create and query plans.
 func Example_schema_decimal_column() {
-	// This example declares a schema.DecimalType column, creates its table in
-	// SQLite, and shows that the inserted string round-trips unchanged there.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -79,6 +81,8 @@ func Example_schema_decimal_column() {
 		return
 	}
 
+	// Bind each descriptor column to its Go field type so typed plans can reject
+	// values of the wrong Go type before rendering SQL.
 	id, err := rasql.BindColumn[InvoiceRow, int64](invoices, "id", "")
 	if err != nil {
 		fmt.Printf("failed to bind id column: %s\n", err)
@@ -104,6 +108,8 @@ func Example_schema_decimal_column() {
 		return
 	}
 
+	// Describe and decode both selected columns in projection order so the
+	// result reconstructs an InvoiceRow.
 	result, err := rasql.NewResultSchema(
 		rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}},
 		rasql.ResultColumn{Name: "amount", Type: schema.TextType{}},

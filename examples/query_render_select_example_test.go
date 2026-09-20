@@ -11,6 +11,9 @@ import (
 
 // BEGIN(render_select)
 
+// Example_query_render_select solves the need to inspect or log portable SQL
+// before a database exists. It builds one validated select and renders that
+// same statement for PostgreSQL and MySQL.
 func Example_query_render_select() {
 	// The query and render packages need no database handle and no Go row
 	// type. A table description is the only input.

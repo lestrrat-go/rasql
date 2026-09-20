@@ -11,8 +11,10 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
+// Example_rasql_where_in solves a lookup against several known IDs without
+// concatenating an IN list into SQL. InValues binds one placeholder per value
+// and requires at least one value, while OrderBy makes the output deterministic.
 func Example_rasql_where_in() {
-	// This example selects rows whose id is one of a fixed set of values.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {

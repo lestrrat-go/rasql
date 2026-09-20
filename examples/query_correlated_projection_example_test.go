@@ -11,7 +11,12 @@ import (
 
 // BEGIN(correlated_projection)
 
+// Example_query_correlated_projection solves the case where a scalar subquery
+// must use an outer row inside both its predicate and its selected expression.
+// NewCorrelatedSelect declares that outer source before validating either use.
 func Example_query_correlated_projection() {
+	// Separate table references let the validator distinguish the outer users
+	// source from the inner orders source.
 	users := query.MustTableRef(schema.MustTableDef("users", schema.Integer("id")))
 	orders := query.MustTableRef(schema.MustTableDef(
 		"orders",
@@ -33,6 +38,8 @@ func Example_query_correlated_projection() {
 		fmt.Printf("failed to add correlation predicate: %s\n", err)
 		return
 	}
+	// Scalar turns the correlated select into one expression so the outer
+	// statement can project its single value beside the user id.
 	statement, err := query.NewSelect(users, users.Column("id"), query.Project(query.Scalar(ordersForUser)).As("value"))
 	if err != nil {
 		fmt.Printf("failed to build outer select: %s\n", err)

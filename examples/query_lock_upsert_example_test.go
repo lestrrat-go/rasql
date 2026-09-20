@@ -9,8 +9,12 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 )
 
+// Example_query_rowLock solves concurrent workers choosing the same pending
+// queue row. It orders candidates, takes one row, and adds FOR UPDATE SKIP
+// LOCKED so another worker can move past a row already claimed by a peer.
 func Example_query_rowLock() {
 	queue := query.MustTableRef(schema.MustTableDef("queue", schema.Integer("id"), schema.Integer("claimed")))
+	// Filter before locking so the database considers only unclaimed work.
 	statement, err := query.NewSelect(queue, queue.Column("id"))
 	if err != nil {
 		fmt.Println(err)
@@ -21,6 +25,8 @@ func Example_query_rowLock() {
 		fmt.Println(err)
 		return
 	}
+	// Stable ordering and a one-row limit make each worker choose one
+	// predictable candidate.
 	statement, err = statement.WithOrder(query.Asc(queue.Column("id")))
 	if err != nil {
 		fmt.Println(err)
@@ -31,6 +37,8 @@ func Example_query_rowLock() {
 		fmt.Println(err)
 		return
 	}
+	// LockUpdate reserves the selected row for a write. SkipLocked prevents a
+	// worker from waiting behind another worker's reservation.
 	statement, err = statement.WithLock(query.RowLock(query.LockUpdate).Wait(query.LockWaitSkipLocked))
 	if err != nil {
 		fmt.Println(err)
@@ -48,6 +56,9 @@ func Example_query_rowLock() {
 	// 0 1
 }
 
+// Example_query_conditionalUpsert solves stale updates during an upsert. The
+// conflict branch copies excluded values only when the incoming version is
+// newer than the stored version.
 func Example_query_conditionalUpsert() {
 	items := query.MustTableRef(schema.MustTableDef("items", schema.Integer("id"), schema.Integer("version"), schema.Text("payload")))
 	id, version, payload := items.Column("id"), items.Column("version"), items.Column("payload")
@@ -56,6 +67,8 @@ func Example_query_conditionalUpsert() {
 		fmt.Println(err)
 		return
 	}
+	// The id column chooses the conflict, and Excluded reads the row that the
+	// insert attempted to write.
 	statement, err := query.NewUpsert(insert, []query.ColumnRef{id}, []query.Assignment{
 		query.Set(version, query.Excluded(version)), query.Set(payload, query.Excluded(payload)),
 	})
@@ -63,6 +76,8 @@ func Example_query_conditionalUpsert() {
 		fmt.Println(err)
 		return
 	}
+	// Restrict the update branch so an older version leaves the current row
+	// unchanged instead of overwriting it.
 	statement, err = statement.WithUpdateWhere(query.LessThan(version, query.Excluded(version)))
 	if err != nil {
 		fmt.Println(err)

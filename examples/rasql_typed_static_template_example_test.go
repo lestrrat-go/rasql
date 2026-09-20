@@ -32,10 +32,11 @@ func (d rankedUserDecoder) DecodeRow(src rasql.ScanSource, row *rankedUser) erro
 	return src.Scan(&row.ID, &row.Email, &row.Rank)
 }
 
+// Example_rasql_typed_static_template solves the case where complex SQL is
+// clearer as a reviewed template but callers still need typed results. It
+// compiles and binds the template, attaches a decoder to the native statement,
+// and returns rankedUser values through rasql.All.
 func Example_rasql_typed_static_template() {
-	// A static template keeps complex SQL readable while rasql.Native maps its
-	// result into a normal Go type through the same typed decode path every
-	// other query uses.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -66,6 +67,8 @@ func Example_rasql_typed_static_template() {
 		}
 	}
 
+	// Keep the window function in SQL because the portable query builder does
+	// not need to reproduce every engine expression.
 	parsed, err := namedsql.Parse("ranked_users", `WITH ranked_users AS (
 		SELECT id, email, ROW_NUMBER() OVER (ORDER BY id) AS rank
 		FROM users
@@ -75,6 +78,8 @@ func Example_rasql_typed_static_template() {
 		fmt.Printf("failed to parse template: %s\n", err)
 		return
 	}
+	// Compile chooses SQLite placeholders, then Bind supplies the named value
+	// without changing the reviewed SQL text.
 	compiled, err := parsed.Compile(dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to compile template: %s\n", err)
@@ -85,10 +90,14 @@ func Example_rasql_typed_static_template() {
 		fmt.Printf("failed to bind template: %s\n", err)
 		return
 	}
+	// NativeStatement records argument metadata explicitly, so adapt the
+	// compiled template's plain argument slice before constructing the query.
 	nativeArgs := make([]rasql.NativeArgument, len(bound.Args()))
 	for i, arg := range bound.Args() {
 		nativeArgs[i] = rasql.NativeArgument{Value: arg}
 	}
+	// The schema and decoder repeat the template's projection order because
+	// database/sql scans result columns positionally.
 	result, err := rasql.NewResultSchema(
 		rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}},
 		rasql.ResultColumn{Name: "email", Type: schema.TextType{}},
@@ -103,6 +112,8 @@ func Example_rasql_typed_static_template() {
 		fmt.Printf("failed to build projection: %s\n", err)
 		return
 	}
+	// Mark the statement as SQLite-specific and many-row so rasql can check the
+	// engine and let All consume every decoded result.
 	q, err := rasql.Native(rasql.NativeStatement{
 		Engine: "sqlite",
 		SQL:    bound.SQL(),

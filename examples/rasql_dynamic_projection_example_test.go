@@ -28,8 +28,10 @@ func (d orderSummaryDecoder) DecodeRow(src rasql.ScanSource, row *orderSummary) 
 	return src.Scan(&row.UserID, &row.Email)
 }
 
+// Example_rasql_dynamic_projection solves the case where a join returns fields
+// from several tables and no generated row type fits. A local result schema,
+// projection, and decoder describe only the two selected values.
 func Example_rasql_dynamic_projection() {
-	// This example joins users and orders, then reads an ad hoc result shape.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -72,7 +74,8 @@ func Example_rasql_dynamic_projection() {
 		}
 	}
 
-
+	// Keep the schema, projection items, and decoder in the same order because
+	// row scanning is positional.
 	result, err := rasql.NewResultSchema(
 		rasql.ResultColumn{Name: "user_id", Type: schema.IntegerType{}},
 		rasql.ResultColumn{Name: "email", Type: schema.TextType{}},
@@ -90,6 +93,8 @@ func Example_rasql_dynamic_projection() {
 		return
 	}
 
+	// Join through typed column expressions, then filter and sort by an orders
+	// column that does not need to appear in the result.
 	// SQL: SELECT users.id AS user_id, users.email FROM users INNER JOIN orders ON users.id = orders.user_id WHERE orders.total > ? ORDER BY orders.total DESC (argument: 20)
 	q := rasql.Select(users, projection).
 		Join(orders, rasql.EqualExpr(users.ID.Expr(), orders.UserID.Expr())).

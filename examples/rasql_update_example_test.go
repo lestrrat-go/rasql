@@ -13,8 +13,10 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
+// Example_rasql_update solves a partial update where only one stored field
+// should change. The generated patch builder emits that assignment with a
+// typed predicate, and a low-level select reads the row back to verify it.
 func Example_rasql_update() {
-	// This example changes a generated row by using its primary-key field.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -43,8 +45,6 @@ func Example_rasql_update() {
 		fmt.Printf("failed to insert user: %s\n", err)
 		return
 	}
-
-
 	// The generated patch builder writes only the fields named, and its
 	// Where takes the typed predicate that matches the target row. Exec
 	// plans and runs the patch in one call.

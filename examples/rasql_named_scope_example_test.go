@@ -80,9 +80,11 @@ func namedScopeApply(q rasql.Query[store.UsersRow], scopes ...namedScopeUsersSco
 	return q
 }
 
+// Example_rasql_named_scope solves the need to reuse named filters and
+// orderings without mutating a shared base query. Small Apply implementations
+// transform immutable rasql.Query values, so callers can compose only the
+// scopes each request needs.
 func Example_rasql_named_scope() {
-	// This example names two filters and one ordering, then combines them two
-	// ways against a single base query.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
