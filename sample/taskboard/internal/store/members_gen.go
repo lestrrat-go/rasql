@@ -57,6 +57,12 @@ func (t MembersTable) InSchema(namespace string) (MembersTable, error) {
 	return newMembersTable(moved), nil
 }
 
+// MembersHandle returns the typed table inside t, which the constructors in
+// the rasql package take: rasql.NewCreatePlan, rasql.NewPatchPlan and
+// rasql.NewDeletePlan. Reach for it to write a column whose builder setter
+// this package could not generate.
+func MembersHandle(t MembersTable) rasql.Table[MembersRow] { return t.membersTableHandle }
+
 type MembersExpressions struct {
 	ID   rasql.Column[MembersRow, int64]
 	Name rasql.Column[MembersRow, string]
@@ -127,8 +133,8 @@ func (membersOptionalDecoder) DecodeRow(source rasql.ScanSource, row *MembersRow
 
 func MembersProjection(source MembersTable) (rasql.Projection[MembersRow], error) {
 	items := []rasql.ProjectionItem{
-		rasql.Item("id", source.ID.Expr(), schema.IntegerType{}, ""),
-		rasql.Item("name", source.Name.Expr(), schema.TextType{}, ""),
+		rasql.Item("id", source.MembersExpressions.ID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("name", source.MembersExpressions.Name.Expr(), schema.TextType{}, ""),
 	}
 	return rasql.NewProjection(items, membersDecoder{})
 }
@@ -142,23 +148,23 @@ func OptionalMembersProjection(source OptionalMembersExpressions) (rasql.Project
 }
 
 func MembersGraphKey(source MembersTable) (rasql.GraphKey[MembersRow], error) {
-	return rasql.NewGraphKey[MembersRow](rasql.KeyPart[MembersRow, int64](source.ID, func(row MembersRow) int64 { return row.ID }))
+	return rasql.NewGraphKey[MembersRow](rasql.KeyPart[MembersRow, int64](source.MembersExpressions.ID, func(row MembersRow) int64 { return row.ID }))
 }
 
 func MembersIDPageKey(source MembersTable, direction rasql.PageDirection) (rasql.PageKey[MembersRow], error) {
-	return rasqlgenPageKey(direction, source.ID.Expr(), func(row MembersRow) int64 { return row.ID })
+	return rasqlgenPageKey(direction, source.MembersExpressions.ID.Expr(), func(row MembersRow) int64 { return row.ID })
 }
 
 func MembersNamePageKey(source MembersTable, direction rasql.PageDirection) (rasql.PageKey[MembersRow], error) {
-	return rasqlgenPageKey(direction, source.Name.Expr(), func(row MembersRow) string { return row.Name })
+	return rasqlgenPageKey(direction, source.MembersExpressions.Name.Expr(), func(row MembersRow) string { return row.Name })
 }
 
 func MembersTasksEdge[G, CG any](parentSource MembersTable, childSource TasksTable, children rasql.GraphPlan[TasksRow, CG], options rasql.EdgeOptions, attach func(*G, rasql.LoadedMany[CG])) (rasql.GraphEdge[MembersRow, G], error) {
-	parent, err := rasql.NewGraphKey[MembersRow](rasql.KeyPart[MembersRow, int64](parentSource.ID, func(row MembersRow) int64 { return row.ID }))
+	parent, err := rasql.NewGraphKey[MembersRow](rasql.KeyPart[MembersRow, int64](parentSource.MembersExpressions.ID, func(row MembersRow) int64 { return row.ID }))
 	if err != nil {
 		return nil, err
 	}
-	child, err := rasql.NewGraphKey[TasksRow](rasql.NullKeyPart[TasksRow, int64](childSource.AssigneeID, func(row TasksRow) rasql.Nullable[int64] { return row.AssigneeID }))
+	child, err := rasql.NewGraphKey[TasksRow](rasql.NullKeyPart[TasksRow, int64](childSource.TasksExpressions.AssigneeID, func(row TasksRow) rasql.Nullable[int64] { return row.AssigneeID }))
 	if err != nil {
 		return nil, err
 	}

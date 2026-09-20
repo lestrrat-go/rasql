@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -121,32 +122,142 @@ func TestCompactPlanRejectsTypedQuerySelfCollision(t *testing.T) {
 	require.Contains(t, err.Error(), "collides with its function declaration")
 }
 
-func TestCompactRejectsGeneratedSymbolCollisions(t *testing.T) {
-	cases := []struct {
-		name, want string
-		columns    []compilerir.PhysicalColumn
-	}{
-		{name: "scan row", columns: []compilerir.PhysicalColumn{{Name: "scan_row", Ordinal: 1, LogicalKind: "text"}}, want: "ScanRow"},
-		{name: "create plan", columns: []compilerir.PhysicalColumn{{Name: "plan", Ordinal: 1, LogicalKind: "text"}}, want: "Plan"},
-		{name: "patch where", columns: []compilerir.PhysicalColumn{{Name: "where", Ordinal: 1, LogicalKind: "text"}}, want: "Where"},
-		{name: "reverse clear", columns: []compilerir.PhysicalColumn{{Name: "clear_name", Ordinal: 1, LogicalKind: "text"}, {Name: "name", Ordinal: 2, LogicalKind: "text", Nullable: true}}, want: "ClearName"},
-		{name: "reverse default", columns: []compilerir.PhysicalColumn{{Name: "default_name", Ordinal: 1, LogicalKind: "text", DefaultSQL: "'default'"}, {Name: "name", Ordinal: 2, LogicalKind: "text", DefaultSQL: "'default'"}}, want: "DefaultName"},
-	}
-	for _, test := range cases {
-		t.Run(test.name, func(t *testing.T) {
-			columns := append([]compilerir.PhysicalColumn{{Name: "id", LogicalKind: "integer"}}, test.columns...)
-			catalog := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "sqlite", Version: "3"}, Objects: []compilerir.PhysicalObject{{
-				ID: "users", Kind: "table", Name: "users", Columns: columns,
-				Constraints: []compilerir.PhysicalConstraint{{Kind: "primary_key", Columns: []string{"id"}}},
-			}}}
-			config := compilerir.GoConfig{Package: "store", Output: "generated", Emitter: "compact", Objects: []compilerir.ObjectGoName{{ID: "users", File: "users_gen.go"}}}
-			input, err := generate.NewEmitterInput(catalog, compilerir.MappingConfig{}, config)
-			require.NoError(t, err)
-			_, err = generate.RenderCompact(input)
-			require.Error(t, err)
-			require.Contains(t, err.Error(), test.want)
+// TestCompactTableMethodNamesCostNothing pins the common collision to costing
+// nothing at all. A column named like one of the generated table's own methods
+// is a legal field; only a selector written against the table would find the
+// method first, and every generated reference names the embedded expressions
+// struct so it does not.
+func TestCompactTableMethodNamesCostNothing(t *testing.T) {
+	for _, column := range []string{"ref", "as", "in_schema", "optional", "create", "patch", "delete"} {
+		t.Run(column, func(t *testing.T) {
+			plan := renameFixturePlan(t, []compilerir.PhysicalColumn{{Name: column, Ordinal: 1, LogicalKind: "text"}})
+			require.Empty(t, plan.Warnings(), "the column is generated in full, so there is nothing to report")
+
+			source := planFileSource(t, plan, "users_gen.go")
+			field := exportedFieldName(column)
+			require.True(t, strings.Contains(source, "\t"+field+" string"), "the row type carries the column")
+			require.True(t, strings.Contains(source, "\t"+field+" rasql.Column[UsersRow, string]"), "the table carries the column")
+			require.True(t, strings.Contains(source, "source.UsersExpressions."+field), "generated references reach past the method to the field")
+			require.True(t, strings.Contains(source, ") "+field+"(value string) UsersCreate"), "the create builder still sets it")
 		})
 	}
+}
+
+// TestCompactScanRowColumnKeepsTheName holds the generator to giving up its own
+// convenience rather than the caller's column. Go allows one member named
+// ScanRow, and nothing inside rasql reaches the decoder through the row.
+func TestCompactScanRowColumnKeepsTheName(t *testing.T) {
+	plan := renameFixturePlan(t, []compilerir.PhysicalColumn{{Name: "scan_row", Ordinal: 1, LogicalKind: "text"}})
+	warnings := plan.Warnings()
+	require.Len(t, warnings, 1)
+	require.Equal(t, "users.scan_row", warnings[0].Path)
+	require.Contains(t, warnings[0].Message, "not rasql's own ScanRow method")
+
+	source := planFileSource(t, plan, "users_gen.go")
+	require.True(t, strings.Contains(source, "\tScanRow string"), "the row type carries the column")
+	require.True(t, strings.Contains(source, "&row.ScanRow"), "the decoder reads it")
+	require.False(t, strings.Contains(source, "func (row *UsersRow) ScanRow("), "rasql's own method gives way")
+}
+
+// TestCompactBuilderTerminalNamesLoseOneSetter holds a column named like a
+// builder's terminal to losing that one setter and nothing else.
+func TestCompactBuilderTerminalNamesLoseOneSetter(t *testing.T) {
+	for _, test := range []struct{ column, field string }{
+		{"plan", "Plan"},
+		{"exec", "Exec"},
+		{"where", "Where"},
+	} {
+		t.Run(test.column, func(t *testing.T) {
+			plan := renameFixturePlan(t, []compilerir.PhysicalColumn{{Name: test.column, Ordinal: 1, LogicalKind: "text"}})
+			warnings := plan.Warnings()
+			require.NotEmpty(t, warnings)
+			require.Equal(t, "users."+test.column, warnings[0].Path)
+			require.Contains(t, warnings[0].Message, "rasql.SetField")
+
+			source := planFileSource(t, plan, "users_gen.go")
+			require.True(t, strings.Contains(source, "\t"+test.field+" string"), "the row type carries the column")
+			require.True(t, strings.Contains(source, "\t"+test.field+" rasql.Column[UsersRow, string]"), "the table carries the column")
+			require.True(t, strings.Contains(source, "has no "+test.field+" setter"), "the generated file says where the setter went")
+		})
+	}
+}
+
+// TestCompactTwoColumnsOneGoName is the one collision that costs a column its
+// whole place in the generated package, because the name it wants is the only
+// one it has and an earlier column already holds it.
+func TestCompactTwoColumnsOneGoName(t *testing.T) {
+	plan := renameFixturePlan(t, []compilerir.PhysicalColumn{
+		{Name: "user_id", Ordinal: 1, LogicalKind: "integer"},
+		{Name: "user__id", Ordinal: 2, LogicalKind: "integer"},
+	})
+	warnings := plan.Warnings()
+	require.Len(t, warnings, 1)
+	require.Equal(t, "users.user__id", warnings[0].Path)
+	require.Contains(t, warnings[0].Message, `Ref().Column("user__id")`)
+
+	source := planFileSource(t, plan, "users_gen.go")
+	require.True(t, strings.Contains(source, `rasqlgenColumn(source, "user_id"`), "the first column keeps the name")
+	require.False(t, strings.Contains(source, `rasqlgenColumn(source, "user__id"`), "the second is left out")
+	require.True(t, strings.Contains(source, `Name: "user__id"`), "the descriptor still declares it")
+}
+
+// exportedFieldName spells a column the way the generator does, for the tests
+// above that check one field by name.
+func exportedFieldName(column string) string {
+	upper, out := true, ""
+	for _, r := range column {
+		if r == '_' {
+			upper = true
+			continue
+		}
+		if upper {
+			out += strings.ToUpper(string(r))
+			upper = false
+			continue
+		}
+		out += string(r)
+	}
+	return out
+}
+
+// TestCompactReportsNoWarningWithoutACollision keeps the warning list empty for
+// the ordinary table, so a caller printing warnings prints nothing on a normal
+// run.
+func TestCompactReportsNoWarningWithoutACollision(t *testing.T) {
+	plan := renameFixturePlan(t, []compilerir.PhysicalColumn{{Name: "email", Ordinal: 1, LogicalKind: "text"}})
+	require.Empty(t, plan.Warnings())
+}
+
+// renameFixturePlan renders a one-table store whose columns are the given ones
+// behind an "id" primary key, and plans it into a scratch directory.
+func renameFixturePlan(t *testing.T, columns []compilerir.PhysicalColumn) generate.Plan {
+	t.Helper()
+	all := append([]compilerir.PhysicalColumn{{Name: "id", LogicalKind: "integer"}}, columns...)
+	catalog := compilerir.PhysicalCatalog{Engine: compilerir.EngineIdentity{Dialect: "sqlite", Version: "3"}, Objects: []compilerir.PhysicalObject{{
+		ID: "users", Kind: "table", Name: "users", Columns: all,
+		Constraints: []compilerir.PhysicalConstraint{{Kind: "primary_key", Columns: []string{"id"}}},
+	}}}
+	config := compilerir.GoConfig{Package: "store", Output: "generated", Emitter: "compact", Objects: []compilerir.ObjectGoName{{ID: "users", File: "users_gen.go"}}}
+	input, err := generate.NewEmitterInput(catalog, compilerir.MappingConfig{}, config)
+	require.NoError(t, err)
+	store, err := generate.RenderCompact(input)
+	require.NoError(t, err, "a name collision renames rather than refusing to render")
+	store.Root, store.Dir = t.TempDir(), "generated"
+	plan, err := store.Plan()
+	require.NoError(t, err)
+	return plan
+}
+
+// planFileSource returns the source the plan writes to the named file.
+func planFileSource(t *testing.T, plan generate.Plan, name string) string {
+	t.Helper()
+	for _, file := range plan.Files() {
+		if filepath.Base(file.Path) == name {
+			return string(file.Source)
+		}
+	}
+	t.Fatalf("plan writes no %s", name)
+	return ""
 }
 
 func TestCompactImportsOnlyUsedMappings(t *testing.T) {

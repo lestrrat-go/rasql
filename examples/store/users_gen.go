@@ -64,6 +64,12 @@ func (t UsersTable) InSchema(namespace string) (UsersTable, error) {
 	return newUsersTable(moved), nil
 }
 
+// UsersHandle returns the typed table inside t, which the constructors in
+// the rasql package take: rasql.NewCreatePlan, rasql.NewPatchPlan and
+// rasql.NewDeletePlan. Reach for it to write a column whose builder setter
+// this package could not generate.
+func UsersHandle(t UsersTable) rasql.Table[UsersRow] { return t.usersTableHandle }
+
 type UsersExpressions struct {
 	ID                          rasql.Column[UsersRow, int64]
 	Email                       rasql.Column[UsersRow, string]
@@ -151,12 +157,12 @@ func (usersOptionalDecoder) DecodeRow(source rasql.ScanSource, row *UsersRow) er
 
 func UsersProjection(source UsersTable) (rasql.Projection[UsersRow], error) {
 	items := []rasql.ProjectionItem{
-		rasql.Item("id", source.ID.Expr(), schema.IntegerType{}, ""),
-		rasql.Item("email", source.Email.Expr(), schema.TextType{}, ""),
-		rasql.NullItem("nickname", source.Nickname.NullExpr(), schema.TextType{}, ""),
-		rasql.Item("status", source.Status.Expr(), schema.TextType{}, ""),
-		rasql.Item("first_name", source.FirstName.Expr(), schema.TextType{}, ""),
-		rasql.Item("last_name", source.LastName.Expr(), schema.TextType{}, ""),
+		rasql.Item("id", source.UsersExpressions.ID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("email", source.UsersExpressions.Email.Expr(), schema.TextType{}, ""),
+		rasql.NullItem("nickname", source.UsersExpressions.Nickname.NullExpr(), schema.TextType{}, ""),
+		rasql.Item("status", source.UsersExpressions.Status.Expr(), schema.TextType{}, ""),
+		rasql.Item("first_name", source.UsersExpressions.FirstName.Expr(), schema.TextType{}, ""),
+		rasql.Item("last_name", source.UsersExpressions.LastName.Expr(), schema.TextType{}, ""),
 	}
 	return rasql.NewProjection(items, usersDecoder{})
 }
@@ -174,31 +180,31 @@ func OptionalUsersProjection(source OptionalUsersExpressions) (rasql.Projection[
 }
 
 func UsersGraphKey(source UsersTable) (rasql.GraphKey[UsersRow], error) {
-	return rasql.NewGraphKey[UsersRow](rasql.KeyPart[UsersRow, int64](source.ID, func(row UsersRow) int64 { return row.ID }))
+	return rasql.NewGraphKey[UsersRow](rasql.KeyPart[UsersRow, int64](source.UsersExpressions.ID, func(row UsersRow) int64 { return row.ID }))
 }
 
 func UsersIDPageKey(source UsersTable, direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
-	return rasqlgenPageKey(direction, source.ID.Expr(), func(row UsersRow) int64 { return row.ID })
+	return rasqlgenPageKey(direction, source.UsersExpressions.ID.Expr(), func(row UsersRow) int64 { return row.ID })
 }
 
 func UsersEmailPageKey(source UsersTable, direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
-	return rasqlgenPageKey(direction, source.Email.Expr(), func(row UsersRow) string { return row.Email })
+	return rasqlgenPageKey(direction, source.UsersExpressions.Email.Expr(), func(row UsersRow) string { return row.Email })
 }
 
 func UsersNicknamePageKey(source UsersTable, direction rasql.PageDirection, nulls rasql.NullOrder) (rasql.PageKey[UsersRow], error) {
-	return rasqlgenNullablePageKey(direction, source.Nickname.NullExpr(), func(row UsersRow) rasql.Nullable[string] { return row.Nickname }, nulls)
+	return rasqlgenNullablePageKey(direction, source.UsersExpressions.Nickname.NullExpr(), func(row UsersRow) rasql.Nullable[string] { return row.Nickname }, nulls)
 }
 
 func UsersStatusPageKey(source UsersTable, direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
-	return rasqlgenPageKey(direction, source.Status.Expr(), func(row UsersRow) string { return row.Status })
+	return rasqlgenPageKey(direction, source.UsersExpressions.Status.Expr(), func(row UsersRow) string { return row.Status })
 }
 
 func UsersFirstNamePageKey(source UsersTable, direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
-	return rasqlgenPageKey(direction, source.FirstName.Expr(), func(row UsersRow) string { return row.FirstName })
+	return rasqlgenPageKey(direction, source.UsersExpressions.FirstName.Expr(), func(row UsersRow) string { return row.FirstName })
 }
 
 func UsersLastNamePageKey(source UsersTable, direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
-	return rasqlgenPageKey(direction, source.LastName.Expr(), func(row UsersRow) string { return row.LastName })
+	return rasqlgenPageKey(direction, source.UsersExpressions.LastName.Expr(), func(row UsersRow) string { return row.LastName })
 }
 
 var usersMutationColumns = bindUsersExpressions(usersTable)

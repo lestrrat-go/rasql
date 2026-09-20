@@ -39,13 +39,18 @@ type CompactObjectRef struct {
 // CompactObjectSource emits the compact table or view declarations for one
 // object. It returns one formatted source file and never performs database
 // work or retains mutable input state.
-func CompactObjectSource(packageName string, object CompactObject) ([]byte, error) {
+//
+// It also returns one warning per column it left out because the Go name that
+// column wants is already spent. Leaving one out never stops generation: the
+// table is still created with the column, and Table.Ref().Column(name) still
+// reaches it under its database name.
+func CompactObjectSource(packageName string, object CompactObject) ([]byte, []compilerir.Diagnostic, error) {
 	if packageName == "" || object.Generation.File == "" {
-		return nil, fmt.Errorf("compact: package and output file are required")
+		return nil, nil, fmt.Errorf("compact: package and output file are required")
 	}
 	definition, err := TableDefinitionLiteral(object.Table)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	row := object.Generation.Row
 	if row == "" {
@@ -56,11 +61,9 @@ func CompactObjectSource(packageName string, object CompactObject) ([]byte, erro
 		accessor = exportedCompact(object.Catalog.Name)
 	}
 	if row == "" || accessor == "" {
-		return nil, fmt.Errorf("compact: object %q has incomplete generated names", object.Catalog.ID)
+		return nil, nil, fmt.Errorf("compact: object %q has incomplete generated names", object.Catalog.ID)
 	}
-	if err := validateCompactSymbols(object, accessor, row); err != nil {
-		return nil, err
-	}
+	omissions, warnings := resolveCompactColumns(object, accessor)
 	hasMutations := object.Table.Supports(schema.OperationInsert) ||
 		object.Table.Supports(schema.OperationUpdate) ||
 		object.Table.Supports(schema.OperationDelete)
@@ -87,7 +90,7 @@ func CompactObjectSource(packageName string, object CompactObject) ([]byte, erro
 	b.WriteString("type ")
 	b.WriteString(row)
 	b.WriteString(" struct {\n")
-	for _, group := range compactFieldGroups(object.Go.Row.Fields) {
+	for _, group := range compactFieldGroups(omissions, object.Go.Row.Fields) {
 		b.WriteString("\t")
 		b.WriteString(strings.Join(group.Names, ", "))
 		b.WriteByte(' ')
@@ -185,85 +188,44 @@ func CompactObjectSource(packageName string, object CompactObject) ([]byte, erro
 	b.WriteString("Table{}, err\n\t}\n\treturn new")
 	b.WriteString(accessor)
 	b.WriteString("Table(moved), nil\n}\n\n")
+	// The wrapper keeps its rasql.Table in an unexported field, so nothing
+	// outside this package could otherwise hand one to rasql.NewCreatePlan,
+	// rasql.NewPatchPlan or any other core constructor that takes the typed
+	// table. This function is the way through. It is package-level rather
+	// than a method because a method would be one more name a column of this
+	// table could collide with, and the column that needs this function most
+	// is exactly the one whose name already collided.
+	b.WriteString("// ")
+	b.WriteString(accessor)
+	b.WriteString("Handle returns the typed table inside t, which the constructors in\n")
+	b.WriteString("// the rasql package take: rasql.NewCreatePlan, rasql.NewPatchPlan and\n")
+	b.WriteString("// rasql.NewDeletePlan. Reach for it to write a column whose builder setter\n")
+	b.WriteString("// this package could not generate.\n")
+	b.WriteString("func ")
+	b.WriteString(accessor)
+	b.WriteString("Handle(t ")
+	b.WriteString(accessor)
+	b.WriteString("Table) rasql.Table[")
+	b.WriteString(row)
+	b.WriteString("] { return t.")
+	b.WriteString(handleName)
+	b.WriteString(" }\n\n")
 
-	writeCompactColumns(&b, object, accessor, row)
-	writeCompactDecoder(&b, object, accessor, row, false)
+	writeCompactColumns(&b, object, omissions, accessor, row)
+	writeCompactDecoder(&b, object, omissions, accessor, row, false)
 	marker := compactMarker(object.Table)
 	if len(marker) > 0 {
-		writeCompactDecoder(&b, object, accessor, row, true)
+		writeCompactDecoder(&b, object, omissions, accessor, row, true)
 	}
-	writeCompactProjections(&b, object, accessor, row, len(marker) > 0)
-	writeCompactKeys(&b, object, accessor, row, marker)
-	writeCompactRelations(&b, object, accessor, row)
-	writeCompactMutations(&b, object, accessor, row, handleName)
+	writeCompactProjections(&b, object, omissions, accessor, row, len(marker) > 0)
+	writeCompactKeys(&b, object, omissions, accessor, row, marker)
+	writeCompactRelations(&b, object, omissions, accessor, row)
+	writeCompactMutations(&b, object, omissions, accessor, row, handleName)
 	formatted, err := format.Source(b.Bytes())
 	if err != nil {
-		return nil, fmt.Errorf("compact %s: format source: %w", object.Catalog.ID, err)
+		return nil, nil, fmt.Errorf("compact %s: format source: %w", object.Catalog.ID, err)
 	}
-	return formatted, nil
-}
-
-func validateCompactSymbols(object CompactObject, accessor, row string) error {
-	fields := make(map[string]string, len(object.Go.Columns)+1)
-	for _, column := range object.Go.Columns {
-		if !columnReadable(object.Semantic, column.Name) {
-			continue
-		}
-		name := exportedCompact(column.Name)
-		if previous, exists := fields[name]; exists {
-			return fmt.Errorf("compact %s: row field %q from %s collides with %s", object.Catalog.ID, name, column.Name, previous)
-		}
-		fields[name] = column.Name
-	}
-	if previous, exists := fields["ScanRow"]; exists {
-		return fmt.Errorf("compact %s: row field %q from %s collides with generated ScanRow", object.Catalog.ID, "ScanRow", previous)
-	}
-	checkMethods := func(shape *compilerir.GoShape, receiver string, terminals ...string) error {
-		if shape == nil {
-			return nil
-		}
-		methods := make(map[string]string, len(shape.Fields)+3)
-		addMethod := func(name, source string) error {
-			if previous, exists := methods[name]; exists {
-				return fmt.Errorf("compact %s: %s method %q from %s collides with %s", object.Catalog.ID, receiver, name, source, previous)
-			}
-			methods[name] = source
-			return nil
-		}
-		for _, field := range shape.Fields {
-			name := exportedCompact(field.Name)
-			if err := addMethod(name, field.Name); err != nil {
-				return err
-			}
-			if column, ok := goColumnByName(object.Go, field.Name); ok && column.Nullable {
-				if err := addMethod("Clear"+name, field.Name); err != nil {
-					return err
-				}
-			}
-			if columnHasDefault(object.Table, field.Name) {
-				if err := addMethod("Default"+name, field.Name); err != nil {
-					return err
-				}
-			}
-		}
-		for _, terminal := range terminals {
-			if previous, exists := methods[terminal]; exists {
-				return fmt.Errorf("compact %s: %s method %q from %s collides with generated %s", object.Catalog.ID, receiver, terminal, previous, terminal)
-			}
-		}
-		return nil
-	}
-	if object.Table.Supports(schema.OperationInsert) {
-		if err := checkMethods(object.Go.Create, "create", "Plan", "Exec"); err != nil {
-			return err
-		}
-	}
-	if object.Table.Supports(schema.OperationUpdate) {
-		if err := checkMethods(object.Go.Patch, "patch", "Where", "Plan", "Exec"); err != nil {
-			return err
-		}
-	}
-	return nil
+	return formatted, warnings, nil
 }
 
 type compactImport struct{ Path, Alias string }
@@ -281,9 +243,12 @@ func appendCompactFieldGroup(groups []compactFieldGroup, name, typ string) []com
 	return append(groups, compactFieldGroup{Names: []string{name}, Type: typ})
 }
 
-func compactFieldGroups(fields []compilerir.GoField) []compactFieldGroup {
+func compactFieldGroups(omissions compactOmissions, fields []compilerir.GoField) []compactFieldGroup {
 	groups := make([]compactFieldGroup, 0, len(fields))
 	for _, field := range fields {
+		if omissions.SkipsColumn(field.Name) {
+			continue
+		}
 		groups = appendCompactFieldGroup(groups, exportedCompact(field.Name), field.Type)
 	}
 	return groups
@@ -334,13 +299,13 @@ func slicesSortImports(values []compactImport) {
 	}
 }
 
-func writeCompactColumns(b *bytes.Buffer, object CompactObject, accessor, row string) {
+func writeCompactColumns(b *bytes.Buffer, object CompactObject, omissions compactOmissions, accessor, row string) {
 	b.WriteString("type ")
 	b.WriteString(accessor)
 	b.WriteString("Expressions struct {\n")
 	groups := make([]compactFieldGroup, 0, len(object.Go.Columns))
 	for _, column := range object.Go.Columns {
-		if !columnReadable(object.Semantic, column.Name) {
+		if !columnReadable(object.Semantic, column.Name) || omissions.SkipsColumn(column.Name) {
 			continue
 		}
 		typ := "rasql.Column[" + row + "," + compactColumnValueType(object, column) + "]"
@@ -361,7 +326,7 @@ func writeCompactColumns(b *bytes.Buffer, object CompactObject, accessor, row st
 	b.WriteString("Expressions struct {\n")
 	groups = groups[:0]
 	for _, column := range object.Go.Columns {
-		if !columnReadable(object.Semantic, column.Name) {
+		if !columnReadable(object.Semantic, column.Name) || omissions.SkipsColumn(column.Name) {
 			continue
 		}
 		groups = appendCompactFieldGroup(groups, exportedCompact(column.Name), "rasql.NullColumn["+row+","+compactColumnValueType(object, column)+"]")
@@ -375,8 +340,8 @@ func writeCompactColumns(b *bytes.Buffer, object CompactObject, accessor, row st
 	}
 	b.WriteString("}\n\n")
 
-	writeCompactBinder(b, object, accessor, row, false)
-	writeCompactBinder(b, object, accessor, row, true)
+	writeCompactBinder(b, object, omissions, accessor, row, false)
+	writeCompactBinder(b, object, omissions, accessor, row, true)
 }
 
 // writeCompactBinder writes the function that names every column of one table.
@@ -388,7 +353,7 @@ func writeCompactColumns(b *bytes.Buffer, object CompactObject, accessor, row st
 // side is asked for one appearance at a time.
 //
 // Neither reports an error. rasqlgenColumn in schema_gen.go states why.
-func writeCompactBinder(b *bytes.Buffer, object CompactObject, accessor, row string, optional bool) {
+func writeCompactBinder(b *bytes.Buffer, object CompactObject, omissions compactOmissions, accessor, row string, optional bool) {
 	result := accessor + "Expressions"
 	handle := compactLowerFirst(accessor) + "TableHandle"
 	if optional {
@@ -418,7 +383,7 @@ func writeCompactBinder(b *bytes.Buffer, object CompactObject, accessor, row str
 	b.WriteString(result)
 	b.WriteString("{\n")
 	for _, column := range object.Go.Columns {
-		if !columnReadable(object.Semantic, column.Name) {
+		if !columnReadable(object.Semantic, column.Name) || omissions.SkipsColumn(column.Name) {
 			continue
 		}
 		b.WriteString("\t\t")
@@ -443,7 +408,7 @@ func writeCompactBinder(b *bytes.Buffer, object CompactObject, accessor, row str
 	b.WriteString("\t}\n}\n\n")
 }
 
-func writeCompactDecoder(b *bytes.Buffer, object CompactObject, accessor, row string, optional bool) {
+func writeCompactDecoder(b *bytes.Buffer, object CompactObject, omissions compactOmissions, accessor, row string, optional bool) {
 	name := compactLowerFirst(accessor) + "Decoder"
 	if optional {
 		name = compactLowerFirst(accessor) + "OptionalDecoder"
@@ -458,7 +423,7 @@ func writeCompactDecoder(b *bytes.Buffer, object CompactObject, accessor, row st
 		b.WriteString(baseColumnsName)
 		b.WriteString(" = []rasql.ResultColumn{\n")
 		for _, column := range object.Go.Columns {
-			if !columnReadable(object.Semantic, column.Name) {
+			if !columnReadable(object.Semantic, column.Name) || omissions.SkipsColumn(column.Name) {
 				continue
 			}
 			b.WriteString("\t{Name: ")
@@ -515,7 +480,7 @@ func writeCompactDecoder(b *bytes.Buffer, object CompactObject, accessor, row st
 	if optional {
 		valueGroups := make([]compactFieldGroup, 0, len(object.Go.Columns))
 		for _, column := range object.Go.Columns {
-			if !columnReadable(object.Semantic, column.Name) {
+			if !columnReadable(object.Semantic, column.Name) || omissions.SkipsColumn(column.Name) {
 				continue
 			}
 			if compactNullableDirect(object, column) {
@@ -538,7 +503,7 @@ func writeCompactDecoder(b *bytes.Buffer, object CompactObject, accessor, row st
 	}
 	first := true
 	for _, column := range object.Go.Columns {
-		if !columnReadable(object.Semantic, column.Name) {
+		if !columnReadable(object.Semantic, column.Name) || omissions.SkipsColumn(column.Name) {
 			continue
 		}
 		if !first {
@@ -563,16 +528,22 @@ func writeCompactDecoder(b *bytes.Buffer, object CompactObject, accessor, row st
 		b.WriteString("); err != nil { return err }\n")
 	} else {
 		b.WriteString(")\n}\n\n")
-		b.WriteString("func (row *")
-		b.WriteString(row)
-		b.WriteString(") ScanRow(source rasql.ScanSource) error { return ")
-		b.WriteString(name)
-		b.WriteString("{}.DecodeRow(source, row) }\n\n")
+		// A column of this table is named ScanRow, and Go allows a type one
+		// member of that name. The column is the caller's and this method is
+		// only a convenience over the decoder above, which nothing inside
+		// rasql reaches through the row, so the column keeps the name.
+		if !omissions.ScanRow {
+			b.WriteString("func (row *")
+			b.WriteString(row)
+			b.WriteString(") ScanRow(source rasql.ScanSource) error { return ")
+			b.WriteString(name)
+			b.WriteString("{}.DecodeRow(source, row) }\n\n")
+		}
 		return
 	}
 	if optional {
 		for _, column := range object.Go.Columns {
-			if !columnReadable(object.Semantic, column.Name) {
+			if !columnReadable(object.Semantic, column.Name) || omissions.SkipsColumn(column.Name) {
 				continue
 			}
 			if compactNullableDirect(object, column) {
@@ -588,7 +559,7 @@ func writeCompactDecoder(b *bytes.Buffer, object CompactObject, accessor, row st
 	b.WriteString("\treturn nil\n}\n\n")
 }
 
-func writeCompactProjections(b *bytes.Buffer, object CompactObject, accessor, row string, optional bool) {
+func writeCompactProjections(b *bytes.Buffer, object CompactObject, omissions compactOmissions, accessor, row string, optional bool) {
 	writeProjection := func(name string, optionalProjection bool) {
 		b.WriteString("func ")
 		b.WriteString(name)
@@ -607,7 +578,7 @@ func writeCompactProjections(b *bytes.Buffer, object CompactObject, accessor, ro
 		b.WriteString(row)
 		b.WriteString("], error) {\n\titems := []rasql.ProjectionItem{\n")
 		for _, column := range object.Go.Columns {
-			if !columnReadable(object.Semantic, column.Name) {
+			if !columnReadable(object.Semantic, column.Name) || omissions.SkipsColumn(column.Name) {
 				continue
 			}
 			field := exportedCompact(column.Name)
@@ -619,13 +590,14 @@ func writeCompactProjections(b *bytes.Buffer, object CompactObject, accessor, ro
 			}
 			b.WriteString(strconv.Quote(column.PhysicalName))
 			b.WriteString(", ")
+			selector := compactColumnSelector("source", accessor, field)
+			if optionalProjection {
+				selector = "source." + field
+			}
+			b.WriteString(selector)
 			if optionalProjection || column.Nullable {
-				b.WriteString("source.")
-				b.WriteString(field)
 				b.WriteString(".NullExpr()")
 			} else {
-				b.WriteString("source.")
-				b.WriteString(field)
 				b.WriteString(".Expr()")
 			}
 			b.WriteString(", ")
@@ -648,9 +620,12 @@ func writeCompactProjections(b *bytes.Buffer, object CompactObject, accessor, ro
 	}
 }
 
-func compactPageColumns(object CompactObject) []compilerir.GoColumn {
+func compactPageColumns(object CompactObject, omissions compactOmissions) []compilerir.GoColumn {
 	result := make([]compilerir.GoColumn, 0, len(object.Go.Columns))
 	for _, column := range object.Go.Columns {
+		if omissions.SkipsColumn(column.Name) {
+			continue
+		}
 		if columnReadable(object.Semantic, column.Name) && compactPlainNullableRowType(object, column) {
 			result = append(result, column)
 		}
@@ -692,7 +667,7 @@ func compactRelations(object CompactObject) []compilerir.GoRelation {
 	return result
 }
 
-func writeCompactKeys(b *bytes.Buffer, object CompactObject, accessor, row string, marker []string) {
+func writeCompactKeys(b *bytes.Buffer, object CompactObject, omissions compactOmissions, accessor, row string, marker []string) {
 	if len(marker) > 0 {
 		b.WriteString("func ")
 		b.WriteString(accessor)
@@ -703,10 +678,10 @@ func writeCompactKeys(b *bytes.Buffer, object CompactObject, accessor, row strin
 		b.WriteString("], error) {\n\treturn rasql.NewGraphKey[")
 		b.WriteString(row)
 		b.WriteString("](")
-		writeCompactGraphParts(b, object, accessor, row, marker, "source")
+		writeCompactGraphParts(b, object, omissions, accessor, row, marker, "source")
 		b.WriteString(")\n}\n\n")
 	}
-	for _, column := range compactPageColumns(object) {
+	for _, column := range compactPageColumns(object, omissions) {
 		field := exportedCompact(column.Name)
 		valueType := compactColumnValueType(object, column)
 		b.WriteString("func ")
@@ -726,9 +701,7 @@ func writeCompactKeys(b *bytes.Buffer, object CompactObject, accessor, row strin
 		} else {
 			b.WriteString("PageKey(direction, ")
 		}
-		b.WriteString("source")
-		b.WriteString(".")
-		b.WriteString(field)
+		b.WriteString(compactColumnSelector("source", accessor, field))
 		if column.Nullable {
 			b.WriteString(".NullExpr(), func(row ")
 			b.WriteString(row)
@@ -750,13 +723,13 @@ func writeCompactKeys(b *bytes.Buffer, object CompactObject, accessor, row strin
 	}
 }
 
-func writeCompactGraphParts(b *bytes.Buffer, object CompactObject, accessor, row string, columns []string, expressions string) {
+func writeCompactGraphParts(b *bytes.Buffer, object CompactObject, omissions compactOmissions, accessor, row string, columns []string, source string) {
 	for i, name := range columns {
 		if i > 0 {
 			b.WriteString(", ")
 		}
 		column, ok := goColumnByName(object.Go, name)
-		if !ok || !compactPlainNullableRowType(object, column) {
+		if !ok || omissions.SkipsColumn(name) || !compactPlainNullableRowType(object, column) {
 			// A column whose nullable row field is not itself
 			// rasql.Nullable[T] cannot be returned from the
 			// "func(row R) rasql.Nullable[T]" this function otherwise
@@ -780,9 +753,7 @@ func writeCompactGraphParts(b *bytes.Buffer, object CompactObject, accessor, row
 		b.WriteByte(',')
 		b.WriteString(valueType)
 		b.WriteString("](")
-		b.WriteString(expressions)
-		b.WriteByte('.')
-		b.WriteString(field)
+		b.WriteString(compactColumnSelector(source, accessor, field))
 		if column.Nullable {
 			b.WriteString(", func(row ")
 			b.WriteString(row)
@@ -803,7 +774,7 @@ func writeCompactGraphParts(b *bytes.Buffer, object CompactObject, accessor, row
 	}
 }
 
-func writeCompactRelations(b *bytes.Buffer, object CompactObject, accessor, row string) {
+func writeCompactRelations(b *bytes.Buffer, object CompactObject, omissions compactOmissions, accessor, row string) {
 	for _, relation := range compactRelations(object) {
 		target := object.Targets[relation.Target]
 		targetAccessor := target.Generation.Source
@@ -846,7 +817,7 @@ func writeCompactRelations(b *bytes.Buffer, object CompactObject, accessor, row 
 		b.WriteString("\tparent, err := rasql.NewGraphKey[")
 		b.WriteString(row)
 		b.WriteString("](")
-		writeCompactGraphParts(b, object, accessor, row, relation.From, "parentSource")
+		writeCompactGraphParts(b, object, omissions, accessor, row, relation.From, "parentSource")
 		b.WriteString(")\n\tif err != nil { return nil, err }\n")
 		if relation.Kind == "many_through" && relation.Through != nil {
 			through, ok := object.Targets[relation.Through.Object]
@@ -864,17 +835,17 @@ func writeCompactRelations(b *bytes.Buffer, object CompactObject, accessor, row 
 			b.WriteString("\tjunctionParent, err := rasql.NewGraphKey[")
 			b.WriteString(throughRow)
 			b.WriteString("](")
-			writeCompactGraphParts(b, CompactObject{Catalog: through.Catalog, Go: through.Go, Mappings: object.Mappings, ColumnBindings: through.ColumnBindings}, throughAccessor, throughRow, relation.Through.SourceFrom, "junctionSource")
+			writeCompactGraphParts(b, compactTargetObject(through, object), compactTargetOmissions(through, object), throughAccessor, throughRow, relation.Through.SourceFrom, "junctionSource")
 			b.WriteString(")\n\tif err != nil { return nil, err }\n")
 			b.WriteString("\tjunctionChild, err := rasql.NewGraphKey[")
 			b.WriteString(throughRow)
 			b.WriteString("](")
-			writeCompactGraphParts(b, CompactObject{Catalog: through.Catalog, Go: through.Go, Mappings: object.Mappings, ColumnBindings: through.ColumnBindings}, throughAccessor, throughRow, relation.Through.TargetFrom, "junctionSource")
+			writeCompactGraphParts(b, compactTargetObject(through, object), compactTargetOmissions(through, object), throughAccessor, throughRow, relation.Through.TargetFrom, "junctionSource")
 			b.WriteString(")\n\tif err != nil { return nil, err }\n")
 			b.WriteString("\tchild, err := rasql.NewGraphKey[")
 			b.WriteString(targetRow)
 			b.WriteString("](")
-			writeCompactGraphParts(b, CompactObject{Catalog: target.Catalog, Go: target.Go, Mappings: object.Mappings, ColumnBindings: target.ColumnBindings}, targetAccessor, targetRow, relation.To, "childSource")
+			writeCompactGraphParts(b, compactTargetObject(target, object), compactTargetOmissions(target, object), targetAccessor, targetRow, relation.To, "childSource")
 			b.WriteString(")\n\tif err != nil { return nil, err }\n")
 			b.WriteString("\treturn rasql.ManyThrough(\"")
 			b.WriteString(relation.Name)
@@ -884,7 +855,7 @@ func writeCompactRelations(b *bytes.Buffer, object CompactObject, accessor, row 
 		b.WriteString("\tchild, err := rasql.NewGraphKey[")
 		b.WriteString(targetRow)
 		b.WriteString("](")
-		writeCompactGraphParts(b, CompactObject{Catalog: target.Catalog, Go: target.Go, Mappings: object.Mappings, ColumnBindings: target.ColumnBindings}, targetAccessor, targetRow, relation.To, "childSource")
+		writeCompactGraphParts(b, compactTargetObject(target, object), compactTargetOmissions(target, object), targetAccessor, targetRow, relation.To, "childSource")
 		b.WriteString(")\n\tif err != nil { return nil, err }\n\treturn rasql.")
 		if relation.Kind == "belongs_to" || relation.Kind == "has_one" {
 			b.WriteString("HasOne")
@@ -917,7 +888,7 @@ func writeCompactRelations(b *bytes.Buffer, object CompactObject, accessor, row 
 //
 // An object permitting neither insert nor update skips the shared
 // mutation-columns variable too, since nothing left in the file reads it.
-func writeCompactMutations(b *bytes.Buffer, object CompactObject, accessor, row, handleName string) {
+func writeCompactMutations(b *bytes.Buffer, object CompactObject, omissions compactOmissions, accessor, row, handleName string) {
 	insert := object.Table.Supports(schema.OperationInsert)
 	update := object.Table.Supports(schema.OperationUpdate)
 	remove := object.Table.Supports(schema.OperationDelete)
@@ -939,7 +910,7 @@ func writeCompactMutations(b *bytes.Buffer, object CompactObject, accessor, row,
 		b.WriteString(compactLowerFirst(accessor))
 		b.WriteString("Table)\n\n")
 		if insert {
-			writeMutationType(b, object, row, create, false, mutationColumns)
+			writeMutationType(b, object, omissions, row, create, false, mutationColumns)
 			b.WriteString("func (t ")
 			b.WriteString(accessor)
 			b.WriteString("Table) Create() ")
@@ -951,7 +922,7 @@ func writeCompactMutations(b *bytes.Buffer, object CompactObject, accessor, row,
 			b.WriteString("} }\n\n")
 		}
 		if update {
-			writeMutationType(b, object, row, patch, true, mutationColumns)
+			writeMutationType(b, object, omissions, row, patch, true, mutationColumns)
 			b.WriteString("func (t ")
 			b.WriteString(accessor)
 			b.WriteString("Table) Patch() ")
@@ -1007,7 +978,7 @@ func writeCompactDeleteBuilder(b *bytes.Buffer, object CompactObject, accessor, 
 	b.WriteString("\treturn rasql.Exec(ctx, executor, plan)\n}\n\n")
 }
 
-func writeMutationType(b *bytes.Buffer, object CompactObject, row, name string, patch bool, mutationColumns string) {
+func writeMutationType(b *bytes.Buffer, object CompactObject, omissions compactOmissions, row, name string, patch bool, mutationColumns string) {
 	b.WriteString("type ")
 	b.WriteString(name)
 	b.WriteString(" struct {\n\ttable  rasql.Table[")
@@ -1029,26 +1000,21 @@ func writeMutationType(b *bytes.Buffer, object CompactObject, row, name string, 
 			if !ok {
 				continue
 			}
-			method := exportedCompact(field.Name)
-			b.WriteString("func (v ")
-			b.WriteString(name)
-			b.WriteString(") ")
-			b.WriteString(method)
-			b.WriteString("(value ")
-			b.WriteString(compactColumnValueType(object, column))
-			b.WriteString(") ")
-			b.WriteString(name)
-			b.WriteString(" { v.fields = rasqlgenAppendMutationField(v.fields, ")
-			if column.Nullable {
-				b.WriteString("rasql.SetNullableField(")
-			} else {
-				b.WriteString("rasql.SetField(")
+			// A setter is left out where its name is this builder's own
+			// terminal, or where an earlier column's Clear or Default setter
+			// took it. The column is still read and still written, through
+			// rasql.SetField against the column field on the table.
+			skipSetter := omissions.SkipsCreateSetter(field.Name)
+			if patch {
+				skipSetter = omissions.SkipsPatchSetter(field.Name)
 			}
-			b.WriteString(mutationColumns)
-			b.WriteByte('.')
-			b.WriteString(method)
-			b.WriteString(", value)); return v }\n")
-			if column.Nullable {
+			method := exportedCompact(field.Name)
+			if skipSetter {
+				writeMutationSetterNote(b, name, method, field.Name)
+			} else {
+				writeMutationSetter(b, object, column, name, method, mutationColumns)
+			}
+			if column.Nullable && !omissions.SkipsClearSetter(field.Name) {
 				b.WriteString("func (v ")
 				b.WriteString(name)
 				b.WriteString(") Clear")
@@ -1061,7 +1027,7 @@ func writeMutationType(b *bytes.Buffer, object CompactObject, row, name string, 
 				b.WriteString(method)
 				b.WriteString(")); return v }\n")
 			}
-			if columnHasDefault(object.Table, field.Name) {
+			if columnHasDefault(object.Table, field.Name) && !omissions.SkipsDefaultSetter(field.Name) {
 				b.WriteString("func (v ")
 				b.WriteString(name)
 				b.WriteString(") Default")
@@ -1234,4 +1200,40 @@ func compactSchemaType(table schema.TableDef, name string) string {
 	column, _ := table.Column(name)
 	writeColumnTypeLiteral(&b, column.Type)
 	return b.String()
+}
+
+// writeMutationSetter writes one builder setter for one column.
+func writeMutationSetter(b *bytes.Buffer, object CompactObject, column compilerir.GoColumn, name, method, mutationColumns string) {
+	b.WriteString("func (v ")
+	b.WriteString(name)
+	b.WriteString(") ")
+	b.WriteString(method)
+	b.WriteString("(value ")
+	b.WriteString(compactColumnValueType(object, column))
+	b.WriteString(") ")
+	b.WriteString(name)
+	b.WriteString(" { v.fields = rasqlgenAppendMutationField(v.fields, ")
+	if column.Nullable {
+		b.WriteString("rasql.SetNullableField(")
+	} else {
+		b.WriteString("rasql.SetField(")
+	}
+	b.WriteString(mutationColumns)
+	b.WriteByte('.')
+	b.WriteString(method)
+	b.WriteString(", value)); return v }\n")
+}
+
+// writeMutationSetterNote writes, in place of a setter this builder cannot
+// have, the comment telling a reader where the column went and how to write it.
+func writeMutationSetterNote(b *bytes.Buffer, name, method, physical string) {
+	b.WriteString("\n// ")
+	b.WriteString(name)
+	b.WriteString(" has no ")
+	b.WriteString(method)
+	b.WriteString(" setter: that name is already this builder's own. Write the\n")
+	b.WriteString("// ")
+	b.WriteString(strconv.Quote(physical))
+	b.WriteString(" column with rasql.SetField against the column field on the table,\n")
+	b.WriteString("// which rasql.NewCreatePlan and rasql.NewPatchPlan both take.\n\n")
 }

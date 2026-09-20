@@ -61,7 +61,7 @@ func newLiveWorkflowFixture(t *testing.T) liveWorkflowFixture {
 
 func (f liveWorkflowFixture) command(t *testing.T, output, diagnostics *bytes.Buffer) *command {
 	t.Helper()
-	return &command{program: "rasql", output: output, diagnostics: diagnostics, ctx: t.Context()}
+	return &command{program: "rasql", output: output, diagnostics: diagnostics, warnings: diagnostics, ctx: t.Context()}
 }
 
 func (f liveWorkflowFixture) generatedFiles(t *testing.T) map[string][]byte {
@@ -271,4 +271,41 @@ func TestGenerateRefusesPendingMigrationOnSQLiteNonScratch(t *testing.T) {
 	require.Contains(t, err.Error(), "002_orders")
 	require.Contains(t, err.Error(), "rasql migrate apply -dir migrations")
 	require.NoDirExists(t, filepath.Join(fixture.root, "internal", "store"))
+}
+
+// TestGenerateScratchReportsWhatAColumnNameCost runs the real generate path over
+// a migration whose column names collide with names the generated package
+// already uses, and holds the command to reporting what each one cost rather
+// than failing. The store still lands on disk, and the table still has every
+// column.
+//
+// "ref" costs nothing, so the command says nothing about it. "plan" loses one
+// builder setter and "scan_row" takes the row field rasql would have used for
+// its own method, so both are reported.
+func TestGenerateScratchReportsWhatAColumnNameCost(t *testing.T) {
+	fixture := newLiveWorkflowFixture(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(fixture.root, "migrations", "003_reserved"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(fixture.root, "migrations", "003_reserved", "1.up.sql"),
+		[]byte("CREATE TABLE widgets (id INTEGER PRIMARY KEY, ref TEXT NOT NULL, plan TEXT NOT NULL, scan_row TEXT NOT NULL);\n"), 0o600))
+
+	var output, diagnostics bytes.Buffer
+	command := fixture.command(t, &output, &diagnostics)
+	require.NoError(t, command.run([]string{"generate", "-config", fixture.configPath, "-scratch"}), diagnostics.String())
+
+	reported := diagnostics.String()
+	require.Contains(t, reported, "warning: widgets.plan:")
+	require.Contains(t, reported, "rasql.SetField")
+	require.Contains(t, reported, "warning: widgets.scan_row:")
+	require.NotContains(t, reported, "widgets.ref", "a column that cost nothing is not reported")
+	require.Contains(t, output.String(), "generated internal/store")
+
+	files := fixture.generatedFiles(t)
+	require.Contains(t, files, "widgets_gen.go")
+	widgets := string(files["widgets_gen.go"])
+	require.Contains(t, widgets, `rasqlgenColumn(source, "ref"`, "every column is still bound as a field")
+	require.Contains(t, widgets, `rasqlgenColumn(source, "plan"`)
+	require.Contains(t, widgets, `rasqlgenColumn(source, "scan_row"`)
+	require.Contains(t, widgets, "has no Plan setter", "the generated file says where the setter went")
+	require.NotContains(t, widgets, "func (row *WidgetsRow) ScanRow(", "rasql's own method gives way to the column")
+	require.Contains(t, widgets, "func WidgetsHandle(", "the handle the SetField escape needs is generated")
 }

@@ -57,6 +57,12 @@ func (t OrdersTable) InSchema(namespace string) (OrdersTable, error) {
 	return newOrdersTable(moved), nil
 }
 
+// OrdersHandle returns the typed table inside t, which the constructors in
+// the rasql package take: rasql.NewCreatePlan, rasql.NewPatchPlan and
+// rasql.NewDeletePlan. Reach for it to write a column whose builder setter
+// this package could not generate.
+func OrdersHandle(t OrdersTable) rasql.Table[OrdersRow] { return t.ordersTableHandle }
+
 type OrdersExpressions struct {
 	ID, UserID, Total rasql.Column[OrdersRow, int64]
 }
@@ -128,9 +134,9 @@ func (ordersOptionalDecoder) DecodeRow(source rasql.ScanSource, row *OrdersRow) 
 
 func OrdersProjection(source OrdersTable) (rasql.Projection[OrdersRow], error) {
 	items := []rasql.ProjectionItem{
-		rasql.Item("id", source.ID.Expr(), schema.IntegerType{}, ""),
-		rasql.Item("user_id", source.UserID.Expr(), schema.IntegerType{}, ""),
-		rasql.Item("total", source.Total.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("id", source.OrdersExpressions.ID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("user_id", source.OrdersExpressions.UserID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("total", source.OrdersExpressions.Total.Expr(), schema.IntegerType{}, ""),
 	}
 	return rasql.NewProjection(items, ordersDecoder{})
 }
@@ -145,19 +151,19 @@ func OptionalOrdersProjection(source OptionalOrdersExpressions) (rasql.Projectio
 }
 
 func OrdersGraphKey(source OrdersTable) (rasql.GraphKey[OrdersRow], error) {
-	return rasql.NewGraphKey[OrdersRow](rasql.KeyPart[OrdersRow, int64](source.ID, func(row OrdersRow) int64 { return row.ID }))
+	return rasql.NewGraphKey[OrdersRow](rasql.KeyPart[OrdersRow, int64](source.OrdersExpressions.ID, func(row OrdersRow) int64 { return row.ID }))
 }
 
 func OrdersIDPageKey(source OrdersTable, direction rasql.PageDirection) (rasql.PageKey[OrdersRow], error) {
-	return rasqlgenPageKey(direction, source.ID.Expr(), func(row OrdersRow) int64 { return row.ID })
+	return rasqlgenPageKey(direction, source.OrdersExpressions.ID.Expr(), func(row OrdersRow) int64 { return row.ID })
 }
 
 func OrdersUserIDPageKey(source OrdersTable, direction rasql.PageDirection) (rasql.PageKey[OrdersRow], error) {
-	return rasqlgenPageKey(direction, source.UserID.Expr(), func(row OrdersRow) int64 { return row.UserID })
+	return rasqlgenPageKey(direction, source.OrdersExpressions.UserID.Expr(), func(row OrdersRow) int64 { return row.UserID })
 }
 
 func OrdersTotalPageKey(source OrdersTable, direction rasql.PageDirection) (rasql.PageKey[OrdersRow], error) {
-	return rasqlgenPageKey(direction, source.Total.Expr(), func(row OrdersRow) int64 { return row.Total })
+	return rasqlgenPageKey(direction, source.OrdersExpressions.Total.Expr(), func(row OrdersRow) int64 { return row.Total })
 }
 
 var ordersMutationColumns = bindOrdersExpressions(ordersTable)

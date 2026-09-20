@@ -1,0 +1,6 @@
+CREATE TABLE "reserved" (
+	"id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+	"ref" TEXT NOT NULL,
+	"scan_row" TEXT NOT NULL,
+	"plan" TEXT NOT NULL
+);

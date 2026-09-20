@@ -1,6 +1,6 @@
 // Package schemagen holds the pieces of Go-source generation the compact
 // emitter (compact.go) shares with the rest of the package: resolving a
-// package's final names (names.go), resolving a column's Go binding
+// package's final column names (names.go), resolving a column's Go binding
 // (binding.go), and rendering a schema.TableDef as the Go literal
 // compact.go's schema_gen.go embeds (TableDefinitionLiteral, in this file).
 // This file also holds relationshipSpecs, which computes the relationship
@@ -37,9 +37,9 @@ func DescriptorVarName(tableName string) string {
 }
 
 // descriptorName returns the unexported variable name backing an accessor.
-// Distinctness across accessors is enforced by ResolvedNames.validateCollisions
-// (names.go), which includes descriptor names in its collision set, not by
-// any property of this lowering.
+// Distinctness across accessors is enforced by RenderCompact, which refuses a
+// package whose files or declarations collide, not by any property of this
+// lowering. names.go resolves the other direction, a column's own Go name.
 func descriptorName(tableName string) string {
 	accessor := variableName(tableName)
 	if accessor == "" {
