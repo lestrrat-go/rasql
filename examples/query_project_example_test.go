@@ -12,9 +12,8 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
-// Example_projectTypedResult changes a rasql.Query[store.UsersRow] into a
-// rasql.Query[string]. The new query selects only the email column and keeps
-// the original WHERE clause.
+// Example_projectTypedResult changes what a query returns without rebuilding
+// its source and filters.
 func Example_projectTypedResult() {
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
@@ -50,6 +49,8 @@ func Example_projectTypedResult() {
 		fmt.Printf("failed to build users projection: %s\n", err)
 		return
 	}
+	// filteredUsers returns complete UsersRow values. The next operation needs
+	// the same filtered records, but only their email addresses.
 	filteredUsers := rasql.Select(users, usersProjection).
 		Where(rasql.EqualValue(users.ID.Expr(), int64(7)))
 
@@ -58,8 +59,9 @@ func Example_projectTypedResult() {
 		fmt.Printf("failed to build email projection: %s\n", err)
 		return
 	}
-	// Project keeps FROM users WHERE users.id = 7 from filteredUsers and uses
-	// emailProjection for the selected column and result type.
+	// Building another Select would require repeating the source and WHERE
+	// clause. Project reuses them and changes the result type from UsersRow to
+	// string.
 	emailQuery := rasql.Project(filteredUsers.Plan(), emailProjection)
 
 	statement, err := rasql.Render(emailQuery, dialect.SQLite())
