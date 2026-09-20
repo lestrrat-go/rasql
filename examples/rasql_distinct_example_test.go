@@ -28,9 +28,11 @@ func (d orderingUserDecoder) DecodeRow(src rasql.ScanSource, row *orderingUser) 
 	return src.Scan(&row.UserID)
 }
 
+// Example_rasql_distinct solves the duplicate user IDs produced when one user
+// has several orders. It projects only user_id before applying DISTINCT, then
+// decodes that narrow result into a type that cannot imply other fields were
+// selected.
 func Example_rasql_distinct() {
-	// This example lists the users who have placed at least one order,
-	// without repeating a user who placed more than one.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -62,6 +64,8 @@ func Example_rasql_distinct() {
 		}
 	}
 
+	// The result schema and decoder must agree on the one projected column and
+	// its position.
 	result, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "user_id", Type: schema.IntegerType{}})
 	if err != nil {
 		fmt.Printf("failed to build result schema: %s\n", err)

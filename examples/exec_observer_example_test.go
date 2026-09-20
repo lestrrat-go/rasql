@@ -12,8 +12,9 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// Example_rasql_observer keeps a successful write result available while
-// reporting an exporter failure through the configured extension handler.
+// Example_rasql_observer solves the case where telemetry fails after a database
+// operation succeeds. The observer error goes to the extension error handler,
+// while the caller still receives the successful write outcome.
 func Example_rasql_observer() {
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
@@ -24,12 +25,16 @@ func Example_rasql_observer() {
 	defer func() { _ = database.Close() }()
 	database.SetMaxOpenConns(1)
 
+	// Capture extension failures separately from operation failures so the
+	// successful insert is not reported as failed.
 	var reported error
 	db, err := rasql.Open(ctx, database, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to create rasql db: %s\n", err)
 		return
 	}
+	// Install a failing observer and a handler that records its error. The
+	// executor keeps both policies attached to subsequent operations.
 	executor, err := db.WithObservers(rasql.ExtensionErrorHandlerFunc(func(_ context.Context, extensionErr rasql.ExtensionError) {
 		reported = extensionErr.Errors[0]
 	}), rasql.ObserverFunc(func(context.Context, rasql.Operation, error) error {
@@ -44,6 +49,8 @@ func Example_rasql_observer() {
 		fmt.Printf("failed to create users table: %s\n", err)
 		return
 	}
+	// Execute through the decorated executor so the observer runs after the
+	// database reports the insert result.
 	outcome, err := store.Users().Create().ID(1).Email("ada@example.com").Status("active").FirstName("First").LastName("Last").Exec(ctx, executor)
 	if err != nil {
 		fmt.Printf("insert failed: %s\n", err)

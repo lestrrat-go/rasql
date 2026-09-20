@@ -732,6 +732,8 @@ batch must own rollback or savepoint cleanup.
 
 <!-- INCLUDE(examples/mutation_batch_example_test.go#mutationBatch) -->
 ```go
+// Plan stops before execution, which gives ExecBatch the mutation shapes it
+// needs to check and combine.
 first, err := store.Users().Create().Email("ada@example.com").FirstName("Ada").LastName("Lovelace").Plan()
 if err != nil {
 	fmt.Println(err)
@@ -742,6 +744,7 @@ if err != nil {
 	fmt.Println(err)
 	return
 }
+// MaxRows bounds the number of input rows rasql may place in one statement.
 outcome, err := rasql.ExecBatch(context.Background(), executor,
 	[]rasql.MutationPlan{first, second}, rasql.BulkOptions{MaxRows: 100})
 if err != nil {

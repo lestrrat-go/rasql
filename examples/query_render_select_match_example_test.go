@@ -9,6 +9,10 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 )
 
+// Example_query_render_select_match solves a SQLite full-text search that
+// needs both a MATCH predicate and a relevance score. Typed helpers preserve
+// the table identifier, bind the search term and weights, and reject a dialect
+// that cannot express this operation.
 func Example_query_render_select_match() {
 	// query.TableRef carries no Go row type here, exactly as in
 	// query_render_select_example_test.go, so every column is still named

@@ -11,11 +11,11 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
+// Example_rasql_table_in_schema solves the need to reuse one generated table
+// type in another runtime namespace. InSchema returns a qualified copy, so its
+// creates, writes, and reads target the tenant table while the original value
+// still targets the connection's default namespace.
 func Example_rasql_table_in_schema() {
-	// This example moves a generated table to a second namespace at run
-	// time, through the generated wrapper's own InSchema method, and shows
-	// that a row written through the moved wrapper lands there rather than
-	// in the namespace the connection is already sitting in.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {

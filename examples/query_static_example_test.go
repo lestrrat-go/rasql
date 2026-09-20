@@ -7,8 +7,11 @@ import (
 	"github.com/lestrrat-go/rasql/namedsql"
 )
 
+// Example_query_static solves the need to keep a handwritten SQL statement
+// while binding runtime values without string construction. The restricted
+// template compiler turns named bind actions into dialect placeholders, then
+// Bind supplies exactly one value for each name.
 func Example_query_static() {
-	// This example compiles a named static query and binds one value to it.
 	// Templates accept SQL text and only {{bind "name"}} actions. Values cannot
 	// become SQL text because every action becomes a dialect placeholder.
 	parsed, err := namedsql.Parse("user_by_email", "SELECT id FROM users WHERE email = {{bind \"email\"}}")

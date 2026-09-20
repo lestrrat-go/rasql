@@ -13,9 +13,11 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
+// Example_rasql_delete solves two deletion cases without letting an omitted
+// predicate silently erase a table. Generated builders require a typed
+// predicate, while the lower-level statement requires an explicit AllowAll
+// call for an unconditional delete.
 func Example_rasql_delete() {
-	// This example deletes rows by a typed predicate, then shows the rule that
-	// keeps a dropped predicate from becoming a full-table delete by accident.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {

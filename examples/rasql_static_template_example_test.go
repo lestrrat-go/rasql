@@ -14,8 +14,11 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
+// Example_rasql_static_template solves the need to execute reviewed SQL with a
+// runtime value while keeping that value out of the SQL text. namedsql parses
+// and compiles a restricted template, Bind supplies its argument, and
+// QueryRendered returns database/sql rows for manual scanning.
 func Example_rasql_static_template() {
-	// This example binds a static template and executes it through rasql.DB.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {

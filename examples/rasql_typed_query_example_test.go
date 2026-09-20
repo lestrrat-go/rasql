@@ -11,9 +11,11 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
+// Example_rasql_typed_query solves a paginated read without manual row
+// scanning. Generated columns build the order, a generated projection decodes
+// store.UsersRow values, and Rows reports execution or scan errors in the same
+// iteration that yields results.
 func Example_rasql_typed_query() {
-	// This example pages through several users and decodes them as
-	// store.UsersRow values.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -57,6 +59,7 @@ func Example_rasql_typed_query() {
 		return
 	}
 	base := rasql.Select(users, projection)
+	// Order before applying offset and limit so page membership is stable.
 	q := base.OrderBy(rasql.AscExpr(users.Email.Expr()))
 	q, err = q.Offset(1)
 	if err != nil {

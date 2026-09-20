@@ -16,9 +16,15 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// Example_schemaEvolution solves a SQLite migration that adds a required
+// column to a table which already contains rows. The analyzer compares the live
+// table with the target DDL, pauses for application-specific backfill SQL, then
+// writes an executable rebuild migration after that decision is resolved.
 func Example_schemaEvolution() {
 	// BEGIN(schemaEvolution)
 	ctx := context.Background()
+	// Use a file-backed database because the migration writer and live catalog
+	// inspection need one stable database while the example creates temp files.
 	if err := os.MkdirAll(".tmp", 0o700); err != nil {
 		fmt.Println(err)
 		return
@@ -35,6 +41,8 @@ func Example_schemaEvolution() {
 		return
 	}
 	defer func() { _ = database.Close() }()
+	// Seed the old schema with a row so the new NOT NULL email column cannot be
+	// added correctly until the application supplies a value for existing data.
 	if _, err := database.ExecContext(ctx, "CREATE TABLE members (id INTEGER PRIMARY KEY, name TEXT NOT NULL)"); err != nil {
 		fmt.Println(err)
 		return
@@ -43,6 +51,8 @@ func Example_schemaEvolution() {
 		fmt.Println(err)
 		return
 	}
+	// Retain one connection because inspection reads SQLite connection-local
+	// catalog state throughout the baseline build.
 	connection, err := database.Conn(ctx)
 	if err != nil {
 		fmt.Println(err)
@@ -55,6 +65,8 @@ func Example_schemaEvolution() {
 		fmt.Println(err)
 		return
 	}
+	// Convert the inspected table into parser input so the live and target
+	// schemas pass through the same analyzer representation.
 	table, err := inspector.Table(ctx, "members")
 	if err != nil {
 		fmt.Println(err)
@@ -70,6 +82,8 @@ func Example_schemaEvolution() {
 		fmt.Println(err)
 		return
 	}
+	// Attach catalog facts that CREATE TABLE text alone cannot preserve, such
+	// as SQLite details needed to plan a faithful rebuild.
 	facts, err := sqlite.InspectLiveCatalog(ctx, connection, "members")
 	if err != nil {
 		fmt.Println(err)
@@ -80,6 +94,8 @@ func Example_schemaEvolution() {
 		fmt.Println(err)
 		return
 	}
+	// The target adds email as required. Existing rows make its value an
+	// application decision rather than something the analyzer can invent.
 	target, err := analyzer.Parse([]diff.Source{{Path: "schema.sql", SQL: sqltext.Text("CREATE TABLE members (id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL)")}})
 	if err != nil {
 		fmt.Println(err)
@@ -101,11 +117,15 @@ func Example_schemaEvolution() {
 		fmt.Printf("expected one decision, got %d\n", len(plan.Decisions))
 		return
 	}
+	// Resolve the reported decision with reviewed SQL that fills every existing
+	// row before the rebuild makes email NOT NULL.
 	resolved, err := plan.Resolve(diff.Resolution{DecisionID: plan.Decisions[0].ID, BackfillSQL: "UPDATE members SET email = name || '@example.test' WHERE email IS NULL;"})
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
+	// Only the resolved plan is executable, so write it and load it through the
+	// same migration reader an application uses.
 	if err := diff.WriteMigration(filepath.Join(root, "migrations", "001_schema_evolution"), resolved); err != nil {
 		fmt.Println(err)
 		return

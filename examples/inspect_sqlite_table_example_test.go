@@ -11,8 +11,11 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
+// Example_inspect_sqlite_table solves the ambiguity created when SQLite's
+// main, temp, and attached databases contain the same table name. An
+// unqualified lookup reports every match, while TableIn selects one database
+// explicitly.
 func Example_inspect_sqlite_table() {
-	// This example reads SQLite tables from main, temp, and an attached database.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -59,6 +62,8 @@ func Example_inspect_sqlite_table() {
 	}
 	fmt.Printf("ambiguous %s: %d databases\n", ambiguous.Table, len(ambiguous.Databases))
 
+	// Qualify each lookup after the ambiguous result because the database name
+	// is the information needed to choose the intended table.
 	for _, databaseName := range []string{"main", "temp", "aux"} {
 		table, err := inspector.TableIn(ctx, databaseName, "users")
 		if err != nil {

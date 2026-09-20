@@ -28,9 +28,12 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 )
 
+// Example_schema_table_definition solves the need for one reusable schema
+// description that can drive validation, SQL rendering, and code generation.
+// Table options declare columns, constraints, indexes, and the generated row
+// name without embedding any dialect-specific SQL.
 func Example_schema_table_definition() {
-	// This example defines two reusable table descriptors in Go code, built
-	// with schema.MustTableDef. A column constructor such as schema.Integer and
+	// A column constructor such as schema.Integer and
 	// a constraint constructor such as schema.PrimaryKey each return a
 	// schema.TableOption, so they may appear in any order: PrimaryKey names
 	// "id" below before Integer declares it, and the assembled descriptor is
@@ -272,14 +275,14 @@ func (d eventDecoder) DecodeRow(src rasql.ScanSource, row *EventRow) error {
 	return src.Scan(&row.ID, &row.Action)
 }
 
+// Example_schema_qualified_table solves the case where a descriptor must
+// always address a table outside the default namespace. InSchema records the
+// namespace once, and every generated DDL, mutation, and query qualifies both
+// identifiers from that descriptor.
 func Example_schema_qualified_table() {
-	// This example creates and queries a table through a schema-qualified
-	// descriptor. Schema names a PostgreSQL schema, a MySQL database, or, as
-	// here, a SQLite attached-database name. rasql never creates the
-	// namespace itself, so the ATTACH DATABASE below stands in for a
-	// reviewed native migration, which is the only way rasql creates a
-	// namespace in production; rasql.CreateTable then renders CREATE TABLE
-	// "audit"."events" into the namespace that migration already created.
+	// Schema names a PostgreSQL schema, a MySQL database, or, as here, a
+	// SQLite attached-database name. rasql never creates the namespace itself,
+	// so ATTACH stands in for a reviewed native migration.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -315,6 +318,8 @@ func Example_schema_qualified_table() {
 		return
 	}
 
+	// Bind descriptor columns to Go field types once, then reuse those bindings
+	// in both the mutation and projection below.
 	id, err := rasql.BindColumn[EventRow, int64](events, "id", "")
 	if err != nil {
 		fmt.Printf("failed to bind id column: %s\n", err)
@@ -340,6 +345,8 @@ func Example_schema_qualified_table() {
 		return
 	}
 
+	// Match the result schema and decoder to projection order because scanning
+	// is positional even though each SQL expression is typed.
 	result, err := rasql.NewResultSchema(
 		rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}},
 		rasql.ResultColumn{Name: "action", Type: schema.TextType{}},
@@ -484,9 +491,11 @@ func (d invoiceDecoder) DecodeRow(src rasql.ScanSource, row *InvoiceRow) error {
 	return src.Scan(&row.ID, &row.Amount)
 }
 
+// Example_schema_decimal_column solves exact decimal storage without routing
+// the value through binary floating point. The descriptor declares precision
+// and scale, SQLite renders the column as TEXT, and a string value round-trips
+// through typed create and query plans.
 func Example_schema_decimal_column() {
-	// This example declares a schema.DecimalType column, creates its table in
-	// SQLite, and shows that the inserted string round-trips unchanged there.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -521,6 +530,8 @@ func Example_schema_decimal_column() {
 		return
 	}
 
+	// Bind each descriptor column to its Go field type so typed plans can reject
+	// values of the wrong Go type before rendering SQL.
 	id, err := rasql.BindColumn[InvoiceRow, int64](invoices, "id", "")
 	if err != nil {
 		fmt.Printf("failed to bind id column: %s\n", err)
@@ -546,6 +557,8 @@ func Example_schema_decimal_column() {
 		return
 	}
 
+	// Describe and decode both selected columns in projection order so the
+	// result reconstructs an InvoiceRow.
 	result, err := rasql.NewResultSchema(
 		rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}},
 		rasql.ResultColumn{Name: "amount", Type: schema.TextType{}},
@@ -632,10 +645,11 @@ import (
 	"github.com/lestrrat-go/rasql/schema"
 )
 
+// Example_schema_unsigned_column solves the portability check for a uint64
+// column before DDL reaches a database. MySQL renders an unsigned integer,
+// while PostgreSQL and SQLite return an error because their signed storage
+// would narrow the descriptor's allowed values.
 func Example_schema_unsigned_column() {
-	// This example declares an unsigned integer column and renders its DDL for
-	// each dialect. MySQL is the only supported engine with an unsigned
-	// integer type, so it is the only one that renders the table.
 	events := schema.MustTableDef("events",
 		// An unsigned column reaches 18446744073709551615, where a signed one
 		// stops at 9223372036854775807. rasqlgen generates a uint64 field for
@@ -791,8 +805,11 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
+// Example_inspect_sqlite_table solves the ambiguity created when SQLite's
+// main, temp, and attached databases contain the same table name. An
+// unqualified lookup reports every match, while TableIn selects one database
+// explicitly.
 func Example_inspect_sqlite_table() {
-	// This example reads SQLite tables from main, temp, and an attached database.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -839,6 +856,8 @@ func Example_inspect_sqlite_table() {
 	}
 	fmt.Printf("ambiguous %s: %d databases\n", ambiguous.Table, len(ambiguous.Databases))
 
+	// Qualify each lookup after the ambiguous result because the database name
+	// is the information needed to choose the intended table.
 	for _, databaseName := range []string{"main", "temp", "aux"} {
 		table, err := inspector.TableIn(ctx, databaseName, "users")
 		if err != nil {
@@ -876,9 +895,11 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
+// Example_inspect_sqlite_table_names solves the case where listing bare table
+// names would collapse identical names from different SQLite databases. It
+// retains one connection, enumerates every base table, and prints each result
+// with its database name.
 func Example_inspect_sqlite_table_names() {
-	// This example enumerates the base tables across main and an attached
-	// database, including a table name that exists in both.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -892,6 +913,8 @@ func Example_inspect_sqlite_table_names() {
 		return
 	}
 	defer func() { _ = connection.Close() }()
+	// Attached databases belong to a SQLite connection, so inspection must use
+	// the same retained connection that performs the attachment.
 	if _, err := connection.ExecContext(ctx, "ATTACH DATABASE ':memory:' AS tenant"); err != nil {
 		fmt.Printf("failed to attach tenant database: %s\n", err)
 		return

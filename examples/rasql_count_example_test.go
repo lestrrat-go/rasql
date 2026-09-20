@@ -12,9 +12,10 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
+// Example_rasql_count solves the need to count all or filtered rows without
+// loading those rows into Go. A scalar COUNT(*) projection changes the query's
+// result type to one integer, and the same base query accepts an added filter.
 func Example_rasql_count() {
-	// This example counts rows matched by a query, without decoding any of
-	// them, using a COUNT(*) projection.
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -49,6 +50,8 @@ func Example_rasql_count() {
 		}
 	}
 
+	// Scalar describes the one aggregate column and decodes it directly as an
+	// int64 instead of constructing a store.UsersRow.
 	countProjection, err := rasql.Scalar("count", rasql.CountRows(), schema.IntegerType{}, "")
 	if err != nil {
 		fmt.Printf("failed to build count projection: %s\n", err)
@@ -66,6 +69,8 @@ func Example_rasql_count() {
 	fmt.Println("total:", total)
 
 	// SQL: SELECT COUNT(*) AS count FROM users WHERE users.id = ? (argument: 2)
+	// Query builders return a copy, so adding this predicate does not change the
+	// unfiltered base used for the first count.
 	filtered, err := rasql.One(ctx, db, base.Where(rasql.EqualValue(users.ID.Expr(), int64(2))))
 	if err != nil {
 		fmt.Printf("failed to count filtered users: %s\n", err)

@@ -23,10 +23,14 @@ func (d userIDDecoder) DecodeRow(src rasql.ScanSource, row *int64) error {
 	return src.Scan(row)
 }
 
-// Example_rasql_lifecycle_observer reports execution and row consumption as
-// separate events, so a successful query does not imply successful scanning.
+// Example_rasql_lifecycle_observer solves the need to measure database
+// execution separately from row scanning. An invocation observer returns a
+// completion callback that receives one event after execution and another
+// after the caller consumes the result.
 func Example_rasql_lifecycle_observer() {
 	ctx := context.Background()
+	// Keep one SQLite connection so table creation and the observed query share
+	// the same in-memory database.
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		fmt.Println("open error")
@@ -45,8 +49,12 @@ func Example_rasql_lifecycle_observer() {
 		fmt.Println("table error")
 		return
 	}
+	// Record only phase and rows read because those values demonstrate the two
+	// lifecycle boundaries without depending on timing.
 	events := make([]string, 0, 2)
 	executor, err := db.WithInvocationObservers(rasql.ExtensionErrorHandlerFunc(func(context.Context, rasql.ExtensionError) {}), rasql.InvocationObserverFunc(func(ctx context.Context, operation rasql.Operation) (context.Context, rasql.CompletionObserver) {
+		// The callback returned here belongs to this invocation, so it receives
+		// both completion events for the same query.
 		return ctx, rasql.CompletionObserverFunc(func(_ context.Context, completion rasql.Completion) error {
 			switch completion.Phase {
 			case rasql.ExecutionPhase:
@@ -62,6 +70,8 @@ func Example_rasql_lifecycle_observer() {
 		return
 	}
 
+	// A one-column native projection keeps the query small while still forcing
+	// the normal typed row-consumption path.
 	result, err := rasql.NewResultSchema(rasql.ResultColumn{Name: "id", Type: schema.IntegerType{}})
 	if err != nil {
 		fmt.Println("schema error")
@@ -78,6 +88,8 @@ func Example_rasql_lifecycle_observer() {
 		return
 	}
 
+	// Rows starts execution, while ranging the sequence completes consumption.
+	// The empty table makes the second event report zero rows.
 	rows, err := rasql.Rows(ctx, executor, q)
 	if err != nil {
 		fmt.Println("query error")

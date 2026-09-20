@@ -11,6 +11,10 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
+// Example_rasql_named_scope solves the need to reuse named filters and
+// orderings without mutating a shared base query. Small functions transform
+// immutable rasql.Query values, so callers can compose only the scopes each
+// request needs.
 func Example_rasql_named_scope() {
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
