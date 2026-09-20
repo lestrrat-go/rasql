@@ -42,6 +42,16 @@ Name a column in an example as a field of the generated table, as `users := stor
 
 The string form stays where a column field cannot reach, and each example says in its own prose why it is there. `examples/rasqlgen_column_fields_example_test.go` is the escape-hatch example, and exists to show what the string costs and when a caller has no choice. An example that builds its statement with the `query` package passes a `query.ColumnRef`, which the generated table's column fields do not produce, so `examples/query_render_select_example_test.go`, `examples/query_render_write_example_test.go`, `examples/rasql_returning_example_test.go` and the other `query`-layer examples call `Table.Ref().Column`. Every `rasql/dynamic` example names columns as strings, since the builder takes nothing else.
 
+### A column named like the generated package's own members
+
+The generator spends a few Go names on its own machinery, and a column wanting one of them is handled by `resolveCompactColumns` in `internal/schemagen/names.go`. The rule it keeps is that rasql's conveniences give way to the caller's columns, and that no column is ever given a name the database does not mention.
+
+Three outcomes are possible, and `generate/compact_test.go` pins each one. A column matching one of the generated table's own methods (`ref`, `as`, `in_schema`, `optional`, `create`, `patch`, `delete`) costs nothing at all: the field is legal Go, and every generated reference spells it through the embedded expressions struct so the promoted method does not win. A column named `scan_row` takes the row type's field and the generated `ScanRow` method is not written, which nothing inside rasql needs. A column matching a builder terminal (`plan`, `exec`, `where`) loses that one setter, and `<Table>Handle` plus `rasql.SetField` writes it.
+
+Only two columns lowering to one Go name costs a column its place in the package, because neither has a second name to move to. `TestCompactAwkwardColumnNamesCompile` in `generate/compact_compile_test.go` compiles a caller against a table holding every one of these shapes, which is the check that keeps the escape paths real rather than merely described.
+
+Adding a reserved name means adding it to `compactReservedNames` or `compactBuilderTerminals`, adding a case to those tests, and updating the section `docs/orm/02-generated-store.md` owns. `TestDocsNameGeneratedColumnMembers` fails when that section stops naming one of them or starts saying the generator refuses the run.
+
 New generator examples should use `rasql codegen generate`, which reads the database and writes the package in one command, and `rasql codegen check`, which reports drift without writing. Settings other than the DSN belong in that project's `rasql.json`, including a Go-side row name or a static query.
 
 The same flag rewrites the doc pages that quote the checked-in generated files. Every `_gen.go` file under `examples/store`, one per table plus `schema_gen.go`, `schema_gen_test.go`, the compiled queries, and `rasql.sum` beside them, is written by `rasql codegen generate`. Never edit one by hand:

@@ -60,6 +60,12 @@ func (t TasksTable) InSchema(namespace string) (TasksTable, error) {
 	return newTasksTable(moved), nil
 }
 
+// TasksHandle returns the typed table inside t, which the constructors in
+// the rasql package take: rasql.NewCreatePlan, rasql.NewPatchPlan and
+// rasql.NewDeletePlan. Reach for it to write a column whose builder setter
+// this package could not generate.
+func TasksHandle(t TasksTable) rasql.Table[TasksRow] { return t.tasksTableHandle }
+
 type TasksExpressions struct {
 	ID            rasql.Column[TasksRow, int64]
 	Title, Status rasql.Column[TasksRow, string]
@@ -139,10 +145,10 @@ func (tasksOptionalDecoder) DecodeRow(source rasql.ScanSource, row *TasksRow) er
 
 func TasksProjection(source TasksTable) (rasql.Projection[TasksRow], error) {
 	items := []rasql.ProjectionItem{
-		rasql.Item("id", source.ID.Expr(), schema.IntegerType{}, ""),
-		rasql.Item("title", source.Title.Expr(), schema.TextType{}, ""),
-		rasql.Item("status", source.Status.Expr(), schema.TextType{}, ""),
-		rasql.NullItem("assignee_id", source.AssigneeID.NullExpr(), schema.IntegerType{}, ""),
+		rasql.Item("id", source.TasksExpressions.ID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("title", source.TasksExpressions.Title.Expr(), schema.TextType{}, ""),
+		rasql.Item("status", source.TasksExpressions.Status.Expr(), schema.TextType{}, ""),
+		rasql.NullItem("assignee_id", source.TasksExpressions.AssigneeID.NullExpr(), schema.IntegerType{}, ""),
 	}
 	return rasql.NewProjection(items, tasksDecoder{})
 }
@@ -158,23 +164,23 @@ func OptionalTasksProjection(source OptionalTasksExpressions) (rasql.Projection[
 }
 
 func TasksGraphKey(source TasksTable) (rasql.GraphKey[TasksRow], error) {
-	return rasql.NewGraphKey[TasksRow](rasql.KeyPart[TasksRow, int64](source.ID, func(row TasksRow) int64 { return row.ID }))
+	return rasql.NewGraphKey[TasksRow](rasql.KeyPart[TasksRow, int64](source.TasksExpressions.ID, func(row TasksRow) int64 { return row.ID }))
 }
 
 func TasksIDPageKey(source TasksTable, direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
-	return rasqlgenPageKey(direction, source.ID.Expr(), func(row TasksRow) int64 { return row.ID })
+	return rasqlgenPageKey(direction, source.TasksExpressions.ID.Expr(), func(row TasksRow) int64 { return row.ID })
 }
 
 func TasksTitlePageKey(source TasksTable, direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
-	return rasqlgenPageKey(direction, source.Title.Expr(), func(row TasksRow) string { return row.Title })
+	return rasqlgenPageKey(direction, source.TasksExpressions.Title.Expr(), func(row TasksRow) string { return row.Title })
 }
 
 func TasksStatusPageKey(source TasksTable, direction rasql.PageDirection) (rasql.PageKey[TasksRow], error) {
-	return rasqlgenPageKey(direction, source.Status.Expr(), func(row TasksRow) string { return row.Status })
+	return rasqlgenPageKey(direction, source.TasksExpressions.Status.Expr(), func(row TasksRow) string { return row.Status })
 }
 
 func TasksAssigneeIDPageKey(source TasksTable, direction rasql.PageDirection, nulls rasql.NullOrder) (rasql.PageKey[TasksRow], error) {
-	return rasqlgenNullablePageKey(direction, source.AssigneeID.NullExpr(), func(row TasksRow) rasql.Nullable[int64] { return row.AssigneeID }, nulls)
+	return rasqlgenNullablePageKey(direction, source.TasksExpressions.AssigneeID.NullExpr(), func(row TasksRow) rasql.Nullable[int64] { return row.AssigneeID }, nulls)
 }
 
 var tasksMutationColumns = bindTasksExpressions(tasksTable)

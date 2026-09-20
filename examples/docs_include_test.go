@@ -781,11 +781,6 @@ var inlineCode = regexp.MustCompile("`[^`]*`")
 // compileOutcome matches prose stating whether something reaches a build.
 var compileOutcome = regexp.MustCompile(`(?i)\bcompiles?\b|\bcompiling\b|\bcompile-time\b`)
 
-// structField matches the word this documentation uses for a member of the
-// generated table and of the row struct, which is the member kind the
-// compact emitter produces for a column.
-var structField = regexp.MustCompile(`(?i)\bfields?\b`)
-
 // accessorClaim matches the wording that makes a column a method of its own.
 // The removed legacy emitter wrote one such method per column; the compact
 // emitter writes none, so this wording describes generated code that no longer
@@ -809,69 +804,87 @@ func boundColumnCompileProblem(sentence string) string {
 	return ""
 }
 
-// rowSideReserved lists the reserved generated names that collide as a FIELD on
-// the row type, which declares each of them as a method of its own.
-var rowSideReserved = []string{"ScanRow"}
+// reservedGeneratedNames lists every identifier the compact emitter spends on
+// something other than a column, which is therefore a name a column cannot
+// take. It mirrors compactReservedNames in internal/schemagen/names.go, minus
+// the per-table expressions struct, whose name depends on the table.
+var reservedGeneratedNames = []string{
+	"Ref", "As", "InSchema", "Optional", "Create", "Patch", "Delete",
+	"ScanRow", "Plan", "Exec", "Where",
+}
 
-// builderSideReserved lists the reserved generated names that collide as a
-// METHOD on a generated mutation builder, each of which is that builder's own
-// terminal method.
-var builderSideReserved = []string{"Plan", "Where"}
+// readableClaim matches the wording that says the column is still usable.
+var readableClaim = regexp.MustCompile(`(?i)still (a field|carries|read|readable|generated|reaches|returns)|read and written|readable and writable`)
 
-// reservedNamesProblem reports why a passage misstates the reserved generated
-// name rule, or the empty string when it states it correctly. One derived
-// identifier names two different generated members, so the passage has to name
-// all three reserved names, blame the row-side group on the row type field, and
-// blame the builder-side group on the builder's own method. A passage that
-// calls the whole set one kind of member is wrong about one group whichever
-// kind it picks.
+// setFieldClaim matches the escape the docs must name for a column whose
+// builder setter could not be generated.
+var setFieldClaim = regexp.MustCompile(`rasql\.SetField`)
+
+// failureClaim matches the wording that says the generator gives up instead,
+// which stopped being true once renaming landed: a collision now costs the
+// column its plain name and nothing else.
+var failureClaim = regexp.MustCompile(`(?i)a column (also )?fails|fails when its generated name|refuses the (run|package)`)
+
+// reservedNamesProblem reports why a passage misstates what the generator does
+// with a column whose Go name is already spent, or the empty string when it
+// states it correctly. The generator renames such a column and warns, so the
+// passage has to name every reserved identifier and say the column is renamed,
+// and must not tell a reader the run fails over one.
 func reservedNamesProblem(passage string) string {
-	spans := make(map[string][2]int, len(rowSideReserved)+len(builderSideReserved))
-	for _, name := range append(append([]string{}, rowSideReserved...), builderSideReserved...) {
-		token := "`" + name + "`"
-		start := strings.Index(passage, token)
-		if start < 0 {
+	for _, name := range reservedGeneratedNames {
+		// The section may name either the Go identifier that collides or
+		// the database column name it is lowered from, since a reader
+		// arrives holding the second and meets the first.
+		if !strings.Contains(passage, "`"+name+"`") && !strings.Contains(passage, "`"+databaseSpelling(name)+"`") {
 			return fmt.Sprintf("omits the reserved generated name %q", name)
 		}
-		spans[name] = [2]int{start, strings.LastIndex(passage, token) + len(token)}
 	}
-
-	rowStart, rowEnd := groupBounds(spans, rowSideReserved)
-	builderStart, builderEnd := groupBounds(spans, builderSideReserved)
-	if rowStart > builderStart {
-		return "names the builder-side reserved names before the row-side one, so neither reason can be read against its group"
+	prose := inlineCode.ReplaceAllString(passage, "")
+	if accessorClaim.MatchString(prose) {
+		return "calls the generated member an accessor, which the compact emitter never writes"
 	}
-	if accessorClaim.MatchString(inlineCode.ReplaceAllString(passage[:rowStart], "")) {
-		return "calls the generated name an accessor before listing any reserved name, which the compact emitter never writes"
+	if failureClaim.MatchString(prose) {
+		return "says the generator fails over a reserved name, where it keeps generating and reports what the column cost"
 	}
-	rowReason := inlineCode.ReplaceAllString(passage[rowEnd:builderStart], "")
-	if !structField.MatchString(rowReason) {
-		return "does not say the row-side reserved name collides as a field on the row type"
+	if !readableClaim.MatchString(prose) {
+		return "does not say the column is still read and written"
 	}
-	if !generatedMethodClaim.MatchString(inlineCode.ReplaceAllString(passage[builderEnd:], "")) {
-		return "does not say the builder-side reserved names collide with the builder's own method"
+	if !setFieldClaim.MatchString(passage) {
+		return "does not name rasql.SetField, which is how a column without a setter is written"
 	}
 	return ""
 }
 
-// generatedMethodClaim matches the wording that attributes a collision to a
-// method the generator already writes on the receiver.
-var generatedMethodClaim = regexp.MustCompile(`(?i)method`)
+// reservedNamesSection returns the prose of the section that owns the reserved
+// generated name rule, fences removed.
+func reservedNamesSection(t *testing.T) string {
+	t.Helper()
 
-// groupBounds reports where a group of reserved names starts and where its last
-// mention ends, so the reason stated for that group can be read on its own.
-func groupBounds(spans map[string][2]int, group []string) (int, int) {
-	start, end := spans[group[0]][0], spans[group[0]][1]
-	for _, name := range group[1:] {
-		if spans[name][0] < start {
-			start = spans[name][0]
-		}
-		if spans[name][1] > end {
-			end = spans[name][1]
-		}
-	}
-	return start, end
+	contents, err := os.ReadFile(filepath.Join(repositoryRoot, "docs", "orm", "02-generated-store.md"))
+	require.NoError(t, err)
+
+	_, after, found := strings.Cut(string(contents), reservedNamesSectionHeading+"\n")
+	require.True(t, found, "docs/orm/02-generated-store.md no longer has the %q section; move these checks to its new heading", reservedNamesSectionHeading)
+
+	body, _, _ := strings.Cut(after, "\n## ")
+	return fencedBlock.ReplaceAllString(body, "")
 }
+
+// databaseSpelling lowers a generated Go name back to the column name it would
+// come from, so the rule accepts a section written in the reader's terms.
+func databaseSpelling(name string) string {
+	var b strings.Builder
+	for i, r := range name {
+		if i > 0 && r >= 'A' && r <= 'Z' {
+			b.WriteByte('_')
+		}
+		b.WriteRune(r)
+	}
+	return strings.ToLower(b.String())
+}
+
+// reservedNamesSectionHeading names that section.
+const reservedNamesSectionHeading = "### Columns whose names the generated package already uses"
 
 // boundColumnCompileFixtures pin boundColumnCompileProblem to concrete prose.
 // The entries marked historical are wording this pull request replaced, quoted
@@ -927,28 +940,28 @@ var reservedNamesFixtures = []struct {
 	reject  bool
 }{
 	{
-		name:    "historical passage names the removed legacy emitter's reserved set",
-		passage: "A column also fails when its generated name would be `Table`, `As`, `Ref`, `Column`, or `tableRow`, because its column accessor method would collide with the embedded `rasql.Table` and its methods, or `ScanRow` or `ScanDestinations`, because its row type field would collide with the row type's own scan methods.",
+		name:    "historical passage says the generator fails",
+		passage: "A column also fails when its generated name would be `ref`, `as`, `in_schema`, `optional`, `create`, `patch`, `delete`, `scan_row`, `plan`, `exec` and `where`. Use rasql.SetField instead; the column is still read and written.",
 		reject:  true,
 	},
 	{
-		name:    "invented passage calls every reserved name an accessor",
-		passage: "A column also fails when its accessor would be named `ScanRow`, because its row type field would collide with the row type's own scan method, or `Plan` or `Where`, because each builder's terminal method already carries that name.",
-		reject:  true,
-	},
-	{
-		name:    "invented passage blames the row-side name on a method",
-		passage: "A column also fails when its generated name would be `ScanRow`, because its generated method would collide with the row type's own scan method, or `Plan` or `Where`.",
+		name:    "invented passage calls the member an accessor",
+		passage: "A column whose accessor is named `ref`, `as`, `in_schema`, `optional`, `create`, `patch`, `delete`, `scan_row`, `plan`, `exec` and `where` keeps its value: it is still read and written, and rasql.SetField writes it.",
 		reject:  true,
 	},
 	{
 		name:    "invented passage drops a reserved name",
-		passage: "A column also fails when its generated name would be `ScanRow`, because its row type field would collide with the row type's own scan method, or `Where`, because the patch builder's terminal method already carries that name.",
+		passage: "A column named `ref`, `as`, `in_schema`, `optional`, `create`, `patch`, `scan_row`, `plan` or `exec` is still read and written with rasql.SetField.",
 		reject:  true,
 	},
 	{
-		name:    "invented passage splits the two groups by member kind",
-		passage: "A column also fails when its generated name would be `ScanRow`, because its row type field would collide with the row type's own scan method, or when a create builder's setter would be named `Plan` or a patch builder's setter would be named `Where`, because each builder's terminal method already carries that name.",
+		name:    "invented passage omits the escape",
+		passage: "A column named `ref`, `as`, `in_schema`, `optional`, `create`, `patch`, `delete`, `scan_row`, `plan`, `exec` and `where` is still read and written by the generated package.",
+		reject:  true,
+	},
+	{
+		name:    "invented passage names them all and says what still works",
+		passage: "A column named `ref`, `as`, `in_schema`, `optional`, `create`, `patch`, `delete`, `scan_row`, `plan`, `exec` and `where` is still a field and still read; where a builder setter cannot be generated, rasql.SetField writes it.",
 		reject:  false,
 	},
 }
@@ -996,24 +1009,8 @@ func TestDocsNameGeneratedColumnMembers(t *testing.T) {
 	})
 
 	t.Run("reserved names", func(t *testing.T) {
-		owners := 0
-		for _, page := range documentationPages(t) {
-			contents, err := os.ReadFile(page)
-			require.NoError(t, err)
-
-			prose := fencedBlock.ReplaceAllString(string(contents), "")
-			for _, paragraph := range strings.Split(prose, "\n\n") {
-				if !strings.Contains(paragraph, "`ScanRow`") || !strings.Contains(paragraph, "`Plan`") {
-					continue
-				}
-				owners++
-				problem := reservedNamesProblem(paragraph)
-				require.Empty(t, problem,
-					"%s %s:\n%s",
-					page, problem, strings.TrimSpace(paragraph))
-			}
-		}
-		require.Equal(t, 1, owners, "the reserved generated name rule must have exactly one owning passage in the documentation")
+		problem := reservedNamesProblem(reservedNamesSection(t))
+		require.Empty(t, problem, "docs/orm/02-generated-store.md %s", problem)
 	})
 }
 

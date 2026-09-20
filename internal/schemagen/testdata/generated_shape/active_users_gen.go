@@ -56,6 +56,14 @@ func (t ActiveUsersTable) InSchema(namespace string) (ActiveUsersTable, error) {
 	return newActiveUsersTable(moved), nil
 }
 
+// ActiveUsersHandle returns the typed table inside t, which the constructors in
+// the rasql package take: rasql.NewCreatePlan, rasql.NewPatchPlan and
+// rasql.NewDeletePlan. Reach for it to write a column whose builder setter
+// this package could not generate.
+func ActiveUsersHandle(t ActiveUsersTable) rasql.Table[ActiveUsersRow] {
+	return t.activeUsersTableHandle
+}
+
 type ActiveUsersExpressions struct {
 	ID    rasql.Column[ActiveUsersRow, int64]
 	Email rasql.Column[ActiveUsersRow, string]
@@ -103,16 +111,16 @@ func (row *ActiveUsersRow) ScanRow(source rasql.ScanSource) error {
 
 func ActiveUsersProjection(source ActiveUsersTable) (rasql.Projection[ActiveUsersRow], error) {
 	items := []rasql.ProjectionItem{
-		rasql.Item("id", source.ID.Expr(), schema.IntegerType{}, ""),
-		rasql.Item("email", source.Email.Expr(), schema.TextType{}, ""),
+		rasql.Item("id", source.ActiveUsersExpressions.ID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("email", source.ActiveUsersExpressions.Email.Expr(), schema.TextType{}, ""),
 	}
 	return rasql.NewProjection(items, activeUsersDecoder{})
 }
 
 func ActiveUsersIDPageKey(source ActiveUsersTable, direction rasql.PageDirection) (rasql.PageKey[ActiveUsersRow], error) {
-	return rasqlgenPageKey(direction, source.ID.Expr(), func(row ActiveUsersRow) int64 { return row.ID })
+	return rasqlgenPageKey(direction, source.ActiveUsersExpressions.ID.Expr(), func(row ActiveUsersRow) int64 { return row.ID })
 }
 
 func ActiveUsersEmailPageKey(source ActiveUsersTable, direction rasql.PageDirection) (rasql.PageKey[ActiveUsersRow], error) {
-	return rasqlgenPageKey(direction, source.Email.Expr(), func(row ActiveUsersRow) string { return row.Email })
+	return rasqlgenPageKey(direction, source.ActiveUsersExpressions.Email.Expr(), func(row ActiveUsersRow) string { return row.Email })
 }

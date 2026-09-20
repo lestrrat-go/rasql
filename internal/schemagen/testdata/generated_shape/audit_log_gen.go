@@ -58,6 +58,12 @@ func (t AuditLogTable) InSchema(namespace string) (AuditLogTable, error) {
 	return newAuditLogTable(moved), nil
 }
 
+// AuditLogHandle returns the typed table inside t, which the constructors in
+// the rasql package take: rasql.NewCreatePlan, rasql.NewPatchPlan and
+// rasql.NewDeletePlan. Reach for it to write a column whose builder setter
+// this package could not generate.
+func AuditLogHandle(t AuditLogTable) rasql.Table[AuditLogRow] { return t.auditLogTableHandle }
+
 type AuditLogExpressions struct {
 	ID     rasql.Column[AuditLogRow, int64]
 	Action rasql.Column[AuditLogRow, string]
@@ -128,8 +134,8 @@ func (auditLogOptionalDecoder) DecodeRow(source rasql.ScanSource, row *AuditLogR
 
 func AuditLogProjection(source AuditLogTable) (rasql.Projection[AuditLogRow], error) {
 	items := []rasql.ProjectionItem{
-		rasql.Item("id", source.ID.Expr(), schema.IntegerType{}, ""),
-		rasql.Item("action", source.Action.Expr(), schema.TextType{}, ""),
+		rasql.Item("id", source.AuditLogExpressions.ID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("action", source.AuditLogExpressions.Action.Expr(), schema.TextType{}, ""),
 	}
 	return rasql.NewProjection(items, auditLogDecoder{})
 }
@@ -143,15 +149,15 @@ func OptionalAuditLogProjection(source OptionalAuditLogExpressions) (rasql.Proje
 }
 
 func AuditLogGraphKey(source AuditLogTable) (rasql.GraphKey[AuditLogRow], error) {
-	return rasql.NewGraphKey[AuditLogRow](rasql.KeyPart[AuditLogRow, int64](source.ID, func(row AuditLogRow) int64 { return row.ID }))
+	return rasql.NewGraphKey[AuditLogRow](rasql.KeyPart[AuditLogRow, int64](source.AuditLogExpressions.ID, func(row AuditLogRow) int64 { return row.ID }))
 }
 
 func AuditLogIDPageKey(source AuditLogTable, direction rasql.PageDirection) (rasql.PageKey[AuditLogRow], error) {
-	return rasqlgenPageKey(direction, source.ID.Expr(), func(row AuditLogRow) int64 { return row.ID })
+	return rasqlgenPageKey(direction, source.AuditLogExpressions.ID.Expr(), func(row AuditLogRow) int64 { return row.ID })
 }
 
 func AuditLogActionPageKey(source AuditLogTable, direction rasql.PageDirection) (rasql.PageKey[AuditLogRow], error) {
-	return rasqlgenPageKey(direction, source.Action.Expr(), func(row AuditLogRow) string { return row.Action })
+	return rasqlgenPageKey(direction, source.AuditLogExpressions.Action.Expr(), func(row AuditLogRow) string { return row.Action })
 }
 
 var auditLogMutationColumns = bindAuditLogExpressions(auditLogTable)

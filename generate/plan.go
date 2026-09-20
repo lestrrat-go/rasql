@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"github.com/lestrrat-go/rasql/internal/compilerir"
 	"go/build"
 	"go/parser"
 	"go/token"
@@ -116,6 +117,11 @@ func resolveDestinationInDirectory(path string) (string, fs.FileInfo, error) {
 type Plan struct {
 	files   []File
 	orphans []string
+	// warnings are what the generator changed on its own for the package to
+	// compile, chiefly a column whose Go name collided with another name the
+	// package already spends. A warning never stops a run, so the plan
+	// carries them to whatever writes it. See Plan.Warnings.
+	warnings []compilerir.Diagnostic
 	// dir is the store's resolved output directory: the directory every
 	// File.Path is a direct child of. It is empty only for the zero Plan,
 	// which is what Commit checks to tell the two apart.
@@ -201,6 +207,20 @@ func (p Plan) Files() []File {
 // planned file rather than a leftover.
 func (p Plan) Orphans() []string {
 	return append([]string(nil), p.orphans...)
+}
+
+// Warnings returns what the generator changed on its own to keep the generated
+// package compiling, in the order it decided them. Today that is one entry per
+// column whose Go name collided with another name the package spends, giving
+// the column, the name it would have taken, what holds that name, and the name
+// it took instead.
+//
+// A warning is not a failure. Commit writes the same files whether or not the
+// plan carries any, and a caller that ignores them gets a package that builds
+// and runs. They are worth printing because the renamed column is reached by
+// its new name in Go, which nothing in the database schema predicts.
+func (p Plan) Warnings() []compilerir.Diagnostic {
+	return append([]compilerir.Diagnostic(nil), p.warnings...)
 }
 
 // Commit writes every file in the plan and deletes every path Orphans

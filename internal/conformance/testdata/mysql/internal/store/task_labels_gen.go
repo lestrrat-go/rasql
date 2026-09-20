@@ -60,6 +60,14 @@ func (t Task_labelsTable) InSchema(namespace string) (Task_labelsTable, error) {
 	return newTask_labelsTable(moved), nil
 }
 
+// Task_labelsHandle returns the typed table inside t, which the constructors in
+// the rasql package take: rasql.NewCreatePlan, rasql.NewPatchPlan and
+// rasql.NewDeletePlan. Reach for it to write a column whose builder setter
+// this package could not generate.
+func Task_labelsHandle(t Task_labelsTable) rasql.Table[Task_labelsRow] {
+	return t.task_labelsTableHandle
+}
+
 type Task_labelsExpressions struct {
 	TaskID rasql.Column[Task_labelsRow, int64]
 	Label  rasql.Column[Task_labelsRow, string]
@@ -132,8 +140,8 @@ func (task_labelsOptionalDecoder) DecodeRow(source rasql.ScanSource, row *Task_l
 
 func Task_labelsProjection(source Task_labelsTable) (rasql.Projection[Task_labelsRow], error) {
 	items := []rasql.ProjectionItem{
-		rasql.Item("task_id", source.TaskID.Expr(), schema.IntegerType{}, ""),
-		rasql.Item("label", source.Label.Expr(), schema.TextType{Width: schema.NewTextWidth(32)}, ""),
+		rasql.Item("task_id", source.Task_labelsExpressions.TaskID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("label", source.Task_labelsExpressions.Label.Expr(), schema.TextType{Width: schema.NewTextWidth(32)}, ""),
 	}
 	return rasql.NewProjection(items, task_labelsDecoder{})
 }
@@ -147,23 +155,23 @@ func OptionalTask_labelsProjection(source OptionalTask_labelsExpressions) (rasql
 }
 
 func Task_labelsGraphKey(source Task_labelsTable) (rasql.GraphKey[Task_labelsRow], error) {
-	return rasql.NewGraphKey[Task_labelsRow](rasql.KeyPart[Task_labelsRow, int64](source.TaskID, func(row Task_labelsRow) int64 { return row.TaskID }), rasql.KeyPart[Task_labelsRow, string](source.Label, func(row Task_labelsRow) string { return row.Label }))
+	return rasql.NewGraphKey[Task_labelsRow](rasql.KeyPart[Task_labelsRow, int64](source.Task_labelsExpressions.TaskID, func(row Task_labelsRow) int64 { return row.TaskID }), rasql.KeyPart[Task_labelsRow, string](source.Task_labelsExpressions.Label, func(row Task_labelsRow) string { return row.Label }))
 }
 
 func Task_labelsTaskIDPageKey(source Task_labelsTable, direction rasql.PageDirection) (rasql.PageKey[Task_labelsRow], error) {
-	return rasqlgenPageKey(direction, source.TaskID.Expr(), func(row Task_labelsRow) int64 { return row.TaskID })
+	return rasqlgenPageKey(direction, source.Task_labelsExpressions.TaskID.Expr(), func(row Task_labelsRow) int64 { return row.TaskID })
 }
 
 func Task_labelsLabelPageKey(source Task_labelsTable, direction rasql.PageDirection) (rasql.PageKey[Task_labelsRow], error) {
-	return rasqlgenPageKey(direction, source.Label.Expr(), func(row Task_labelsRow) string { return row.Label })
+	return rasqlgenPageKey(direction, source.Task_labelsExpressions.Label.Expr(), func(row Task_labelsRow) string { return row.Label })
 }
 
 func Task_labelsTaskEdge[G, CG any](parentSource Task_labelsTable, childSource TasksTable, children rasql.GraphPlan[TasksRow, CG], options rasql.EdgeOptions, attach func(*G, rasql.LoadedOne[CG])) (rasql.GraphEdge[Task_labelsRow, G], error) {
-	parent, err := rasql.NewGraphKey[Task_labelsRow](rasql.KeyPart[Task_labelsRow, int64](parentSource.TaskID, func(row Task_labelsRow) int64 { return row.TaskID }))
+	parent, err := rasql.NewGraphKey[Task_labelsRow](rasql.KeyPart[Task_labelsRow, int64](parentSource.Task_labelsExpressions.TaskID, func(row Task_labelsRow) int64 { return row.TaskID }))
 	if err != nil {
 		return nil, err
 	}
-	child, err := rasql.NewGraphKey[TasksRow](rasql.KeyPart[TasksRow, int64](childSource.ID, func(row TasksRow) int64 { return row.ID }))
+	child, err := rasql.NewGraphKey[TasksRow](rasql.KeyPart[TasksRow, int64](childSource.TasksExpressions.ID, func(row TasksRow) int64 { return row.ID }))
 	if err != nil {
 		return nil, err
 	}

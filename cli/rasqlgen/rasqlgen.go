@@ -55,6 +55,7 @@ func RunContext(ctx context.Context, args []string, output, diagnostics io.Write
 		flagSetPrefix: "rasql codegen ",
 		output:        output,
 		diagnostics:   &flagPrinted,
+		warnings:      diagnostics,
 		ctx:           ctx,
 	}.run(args)
 	if flagPrinted.Len() > 0 {
@@ -81,6 +82,7 @@ func RunLegacy(args []string, writer io.Writer) error {
 		flagSetPrefix: "",
 		output:        writer,
 		diagnostics:   writer,
+		warnings:      writer,
 		ctx:           context.Background(),
 	}.run(args)
 }
@@ -105,7 +107,13 @@ type command struct {
 	// printed is only known once it returns, so whoever built the command
 	// sorts them: this writer is the single writer under the standalone
 	// binary, and a buffer Run routes by the returned error.
-	diagnostics        io.Writer
+	diagnostics io.Writer
+	// warnings receives what a successful run changed on its own, which
+	// today is a generated column renamed because its Go name collided.
+	// It is separate from diagnostics because diagnostics is a buffer the
+	// unified command routes by the returned error, and a warning belongs
+	// on the error stream whether or not the run succeeded.
+	warnings           io.Writer
 	ctx                context.Context
 	schemaDependencies func() schemasource.Dependencies
 	beforePublication  func()

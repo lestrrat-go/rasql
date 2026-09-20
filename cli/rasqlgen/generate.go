@@ -94,6 +94,7 @@ func (c command) runGenerateFromDatabase(configPath string, cfg config, dsn stri
 	if err := lg.plan.CommitPublication(ctx, publication); err != nil {
 		return err
 	}
+	c.printPlanWarnings(lg.plan)
 	_, _ = fmt.Fprintf(c.output, "generated %s\n", cfg.Output)
 	return nil
 }
@@ -689,4 +690,18 @@ func lowerTypedSQL(source, name, engine string) (string, []string, error) {
 	}
 	definition := compiled.QueryDef()
 	return definition.SQL, definition.Parameters, nil
+}
+
+// printPlanWarnings reports what the generator changed on its own, one line per
+// entry, before the command says what it wrote. A run with nothing to report
+// prints nothing. The lines go to the warning stream rather than to output, so
+// a caller reading the command's output for the path it generated is not handed
+// these as well.
+func (c command) printPlanWarnings(plan generate.Plan) {
+	if c.warnings == nil {
+		return
+	}
+	for _, warning := range plan.Warnings() {
+		_, _ = fmt.Fprintf(c.warnings, "warning: %s: %s\n", warning.Path, warning.Message)
+	}
 }

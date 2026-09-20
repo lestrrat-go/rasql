@@ -119,3 +119,132 @@ func richCompactInputWithGeneratedColumn(t *testing.T) generate.EmitterInput {
 	require.NoError(t, err)
 	return result
 }
+
+// TestCompactAwkwardColumnNamesCompile builds a package whose table holds every
+// shape of awkward column name at once and compiles a caller against it. The
+// unit tests beside this one check what the generator kept; this one checks the
+// thing that decides whether any of it was worth doing, which is that a caller
+// can read and write every one of those columns.
+func TestCompactAwkwardColumnNamesCompile(t *testing.T) {
+	catalog := compilerir.PhysicalCatalog{
+		Engine: compilerir.EngineIdentity{Dialect: "sqlite", Version: "3"},
+		Objects: []compilerir.PhysicalObject{{
+			ID: "widgets", Kind: "table", Name: "widgets",
+			Columns: []compilerir.PhysicalColumn{
+				{Name: "id", LogicalKind: "integer"},
+				{Name: "ref", Ordinal: 1, LogicalKind: "text"},
+				{Name: "as", Ordinal: 2, LogicalKind: "text"},
+				{Name: "create", Ordinal: 3, LogicalKind: "text"},
+				{Name: "scan_row", Ordinal: 4, LogicalKind: "text"},
+				{Name: "plan", Ordinal: 5, LogicalKind: "text"},
+				{Name: "where", Ordinal: 6, LogicalKind: "text"},
+				{Name: "user_id", Ordinal: 7, LogicalKind: "integer"},
+				{Name: "user__id", Ordinal: 8, LogicalKind: "integer"},
+			},
+			Constraints: []compilerir.PhysicalConstraint{{Kind: "primary_key", Columns: []string{"id"}}},
+		}},
+	}
+	config := compilerir.GoConfig{Package: "store", Output: "generated", Emitter: "compact", Objects: []compilerir.ObjectGoName{{ID: "widgets", File: "widgets_gen.go"}}}
+	input, err := generate.NewEmitterInput(catalog, compilerir.MappingConfig{}, config)
+	require.NoError(t, err)
+
+	root := t.TempDir()
+	store, err := generate.RenderCompact(input)
+	require.NoError(t, err)
+	store.Root, store.Dir = root, "generated"
+	plan, err := store.Plan()
+	require.NoError(t, err)
+	require.NoError(t, plan.Commit())
+
+	file, err := scratchmod.ForModule(repoRoot(t), "example.com/awkward")
+	require.NoError(t, err)
+	data, err := scratchmod.Format(file)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), data, 0o600))
+	require.NoError(t, scratchmod.WriteGoSum(root, repoRoot(t)))
+
+	caller := `package main
+
+import (
+	"context"
+
+	"github.com/lestrrat-go/rasql"
+	generated "example.com/awkward/generated"
+)
+
+func read(ctx context.Context, db rasql.Executor) error {
+	widgets := generated.Widgets()
+	projection, err := generated.WidgetsProjection(widgets)
+	if err != nil {
+		return err
+	}
+	rows, err := rasql.All(ctx, db, rasql.Select(widgets, projection))
+	if err != nil {
+		return err
+	}
+	// Every awkward column comes back in the row, including the one named
+	// after the row type's own scan method.
+	for _, row := range rows {
+		_, _, _, _, _, _ = row.Ref, row.As, row.Create, row.ScanRow, row.Plan, row.Where
+	}
+	return nil
+}
+
+func write(ctx context.Context, db rasql.Executor) error {
+	widgets := generated.Widgets()
+
+	// A column named like one of the table's own methods has an ordinary
+	// setter; naming the embedded struct reaches its column for a predicate.
+	_, err := widgets.Create().
+		Ref("r").
+		As("a").
+		Create("c").
+		ScanRow("s").
+		Exec(ctx, db)
+	if err != nil {
+		return err
+	}
+
+	// A column named like a builder terminal has no setter, so the column
+	// field on the table goes to rasql.SetField, which is what the setter
+	// would have called anyway.
+	create, err := rasql.NewCreatePlan(generated.WidgetsHandle(widgets),
+		rasql.SetField(widgets.WidgetsExpressions.Plan, "p"),
+		rasql.SetField(widgets.WidgetsExpressions.Where, "w"),
+	)
+	if err != nil {
+		return err
+	}
+	if _, err := rasql.Exec(ctx, db, create); err != nil {
+		return err
+	}
+
+	patch, err := rasql.NewPatchPlan(generated.WidgetsHandle(widgets),
+		rasql.EqualValue(widgets.WidgetsExpressions.Ref.Expr(), "r"),
+		rasql.SetField(widgets.WidgetsExpressions.Plan, "p2"),
+	)
+	if err != nil {
+		return err
+	}
+	_, err = rasql.Exec(ctx, db, patch)
+	return err
+}
+
+func leftOut() error {
+	// user__id has no Go name of its own, because user_id took it. The
+	// descriptor still declares it, so it is named by string.
+	return generated.Widgets().Ref().Column("user__id").Validate()
+}
+
+func main() {
+	_, _, _ = read, write, leftOut
+}
+`
+	dir := filepath.Join(root, "caller")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte(caller), 0o600))
+	command := exec.Command("go", "build", "-mod=mod", "-buildvcs=false", "./...")
+	command.Dir = root
+	output, err := command.CombinedOutput()
+	require.NoError(t, err, "the package and its caller must compile:\n%s", output)
+}

@@ -91,6 +91,12 @@ func (t UsersTable) InSchema(namespace string) (UsersTable, error) {
 	return newUsersTable(moved), nil
 }
 
+// UsersHandle returns the typed table inside t, which the constructors in
+// the rasql package take: rasql.NewCreatePlan, rasql.NewPatchPlan and
+// rasql.NewDeletePlan. Reach for it to write a column whose builder setter
+// this package could not generate.
+func UsersHandle(t UsersTable) rasql.Table[UsersRow] { return t.usersTableHandle }
+
 type UsersExpressions struct {
 	ID                          rasql.Column[UsersRow, int64]
 	Email                       rasql.Column[UsersRow, string]
@@ -178,12 +184,12 @@ func (usersOptionalDecoder) DecodeRow(source rasql.ScanSource, row *UsersRow) er
 
 func UsersProjection(source UsersTable) (rasql.Projection[UsersRow], error) {
 	items := []rasql.ProjectionItem{
-		rasql.Item("id", source.ID.Expr(), schema.IntegerType{}, ""),
-		rasql.Item("email", source.Email.Expr(), schema.TextType{}, ""),
-		rasql.NullItem("nickname", source.Nickname.NullExpr(), schema.TextType{}, ""),
-		rasql.Item("status", source.Status.Expr(), schema.TextType{}, ""),
-		rasql.Item("first_name", source.FirstName.Expr(), schema.TextType{}, ""),
-		rasql.Item("last_name", source.LastName.Expr(), schema.TextType{}, ""),
+		rasql.Item("id", source.UsersExpressions.ID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("email", source.UsersExpressions.Email.Expr(), schema.TextType{}, ""),
+		rasql.NullItem("nickname", source.UsersExpressions.Nickname.NullExpr(), schema.TextType{}, ""),
+		rasql.Item("status", source.UsersExpressions.Status.Expr(), schema.TextType{}, ""),
+		rasql.Item("first_name", source.UsersExpressions.FirstName.Expr(), schema.TextType{}, ""),
+		rasql.Item("last_name", source.UsersExpressions.LastName.Expr(), schema.TextType{}, ""),
 	}
 	return rasql.NewProjection(items, usersDecoder{})
 }
@@ -201,31 +207,31 @@ func OptionalUsersProjection(source OptionalUsersExpressions) (rasql.Projection[
 }
 
 func UsersGraphKey(source UsersTable) (rasql.GraphKey[UsersRow], error) {
-	return rasql.NewGraphKey[UsersRow](rasql.KeyPart[UsersRow, int64](source.ID, func(row UsersRow) int64 { return row.ID }))
+	return rasql.NewGraphKey[UsersRow](rasql.KeyPart[UsersRow, int64](source.UsersExpressions.ID, func(row UsersRow) int64 { return row.ID }))
 }
 
 func UsersIDPageKey(source UsersTable, direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
-	return rasqlgenPageKey(direction, source.ID.Expr(), func(row UsersRow) int64 { return row.ID })
+	return rasqlgenPageKey(direction, source.UsersExpressions.ID.Expr(), func(row UsersRow) int64 { return row.ID })
 }
 
 func UsersEmailPageKey(source UsersTable, direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
-	return rasqlgenPageKey(direction, source.Email.Expr(), func(row UsersRow) string { return row.Email })
+	return rasqlgenPageKey(direction, source.UsersExpressions.Email.Expr(), func(row UsersRow) string { return row.Email })
 }
 
 func UsersNicknamePageKey(source UsersTable, direction rasql.PageDirection, nulls rasql.NullOrder) (rasql.PageKey[UsersRow], error) {
-	return rasqlgenNullablePageKey(direction, source.Nickname.NullExpr(), func(row UsersRow) rasql.Nullable[string] { return row.Nickname }, nulls)
+	return rasqlgenNullablePageKey(direction, source.UsersExpressions.Nickname.NullExpr(), func(row UsersRow) rasql.Nullable[string] { return row.Nickname }, nulls)
 }
 
 func UsersStatusPageKey(source UsersTable, direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
-	return rasqlgenPageKey(direction, source.Status.Expr(), func(row UsersRow) string { return row.Status })
+	return rasqlgenPageKey(direction, source.UsersExpressions.Status.Expr(), func(row UsersRow) string { return row.Status })
 }
 
 func UsersFirstNamePageKey(source UsersTable, direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
-	return rasqlgenPageKey(direction, source.FirstName.Expr(), func(row UsersRow) string { return row.FirstName })
+	return rasqlgenPageKey(direction, source.UsersExpressions.FirstName.Expr(), func(row UsersRow) string { return row.FirstName })
 }
 
 func UsersLastNamePageKey(source UsersTable, direction rasql.PageDirection) (rasql.PageKey[UsersRow], error) {
-	return rasqlgenPageKey(direction, source.LastName.Expr(), func(row UsersRow) string { return row.LastName })
+	return rasqlgenPageKey(direction, source.UsersExpressions.LastName.Expr(), func(row UsersRow) string { return row.LastName })
 }
 
 var usersMutationColumns = bindUsersExpressions(usersTable)
@@ -538,15 +544,139 @@ where the generated field exists costs the compiler's check and buys nothing
 back. That is why the rest of these pages name every column as a field of the
 generated table.
 
-The generator fails rather than emitting doubtful code when a table or column
-name cannot become a Go identifier, or when two of one table's columns produce
-the same Go name. A column also fails when its generated name would be
-`ScanRow`, because its row type field would collide with the row type's own
-scan method, or when a create builder's setter would be named `Plan` or a
-patch builder's setter would be named `Where`, because each builder's terminal
-method already carries that name. A nullable column reserves `Clear` plus its
-name, and a column with a default reserves `Default` plus its name, on the
-same builders.
+### Columns whose names the generated package already uses
+
+A generated table file spends a handful of Go names on its own machinery. When
+one of your columns wants a name that is already spent, the generator does not
+refuse the run and does not invent a different name for the column. It gives up
+its own convenience where it can, leaves out the one member it cannot keep where
+it cannot, and prints a line saying so.
+
+Every column stays readable and writable in all but one case. What changes is
+how you spell it.
+
+#### Names that cost nothing
+
+A column called `ref`, `as`, `in_schema`, `optional`, `create`, `patch` or
+`delete` matches one of the generated table's own methods. The column field is
+still generated, the row type still carries it, both builders still set it, and
+nothing is reported.
+
+The one difference is that `reserved.Ref` means the table's `Ref` method, not
+your column, because a method one level up wins over an embedded field. Name the
+embedded expressions struct to reach the column:
+
+```go
+reserved.ReservedExpressions.Ref.Expr()
+```
+
+`reserved.Ref().Column("ref")` reaches the same column the untyped way.
+
+#### A column called `scan_row`
+
+Go allows a type one member of a given name, and the generated row type would
+otherwise have both a `ScanRow` field for your column and a `ScanRow` method of
+rasql's own. The column wins. The row type carries your column and the method is
+not generated, which costs nothing inside rasql: the decoder that does the work
+is a separate type, and nothing in the library reaches it through the row.
+
+You lose only the ability to call `row.ScanRow(source)` yourself on that one row
+type.
+
+#### A column called `plan`, `exec` or `where`
+
+These match a mutation builder's terminal methods, the ones that finish the
+builder and run the statement. The terminal cannot move aside, so the column
+loses its setter on that builder and keeps everything else: it is a field, it is
+in the projection, and `rasql.All` returns it.
+
+Write it with `rasql.SetField`, which is what the setter would have called.
+`rasql.NewCreatePlan` and `rasql.NewPatchPlan` take the typed table, and the
+generated `<Table>Handle` function hands it over:
+
+<!-- INCLUDE(examples/rasqlgen_reserved_column_names_example_test.go#reserved_write) -->
+```go
+// "plan" has no setter on the create builder, because the builder's own
+// Plan method already has that name. rasql.SetField writes it instead,
+// against the same column field the setter would have used, and
+// ReservedHandle hands the typed table to the constructor.
+//
+// reserved.Ref is the table's own Ref method, so the column behind it is
+// named through the embedded ReservedExpressions struct. ScanRow and Plan
+// are not methods of the table, so those need no such qualifying.
+create, err := rasql.NewCreatePlan(store.ReservedHandle(reserved),
+	rasql.SetField(reserved.ReservedExpressions.Ref, "first"),
+	rasql.SetField(reserved.ScanRow, "scanned"),
+	rasql.SetField(reserved.Plan, "annual"),
+)
+if err != nil {
+	fmt.Printf("failed to build the insert: %s\n", err)
+	return
+}
+if _, err := rasql.Exec(ctx, db, create); err != nil {
+	fmt.Printf("failed to insert the row: %s\n", err)
+	return
+}
+```
+source: [examples/rasqlgen_reserved_column_names_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasqlgen_reserved_column_names_example_test.go)
+<!-- END INCLUDE -->
+
+Reading needs nothing special:
+
+<!-- INCLUDE(examples/rasqlgen_reserved_column_names_example_test.go#reserved_read) -->
+```go
+// Reading is unaffected. Every column is a field of the row type, so the
+// generated projection selects all three and rasql.All returns them.
+//
+// A predicate needs the column rather than the value, and naming the
+// embedded ReservedExpressions struct is what reaches it: reserved.Ref on
+// its own would be the table's own Ref method.
+projection, err := store.ReservedProjection(reserved)
+if err != nil {
+	fmt.Printf("failed to build the projection: %s\n", err)
+	return
+}
+// SQL: SELECT reserved.id, reserved.ref, reserved.scan_row, reserved.plan FROM reserved WHERE reserved.ref = ? (argument: "first")
+rows, err := rasql.All(ctx, db, rasql.Select(reserved, projection).
+	Where(rasql.EqualValue(reserved.ReservedExpressions.Ref.Expr(), "first")))
+if err != nil {
+	fmt.Printf("failed to query the reserved table: %s\n", err)
+	return
+}
+for _, row := range rows {
+	fmt.Printf("ref=%s scan_row=%s plan=%s\n", row.Ref, row.ScanRow, row.Plan)
+}
+```
+source: [examples/rasqlgen_reserved_column_names_example_test.go](https://github.com/lestrrat-go/rasql/blob/main/examples/rasqlgen_reserved_column_names_example_test.go)
+<!-- END INCLUDE -->
+
+#### Two columns with one Go name
+
+This is the only case that costs a column its place in the generated package. If
+`user_id` and `user__id` are both columns of one table, they both want `UserID`,
+and there is no second name either of them has a claim to. The column the table
+declares first keeps it and the other is left out of the generated surface
+entirely.
+
+The descriptor still declares it, so `rasql.CreateTable` still creates the
+column and `widgets.Ref().Column("user__id")` still reaches it. Renaming one of
+the two columns in the database is the fix worth making.
+
+#### What the command prints
+
+`rasql codegen generate` writes one line per column that cost something, on its
+error stream, before it reports what it wrote:
+
+```
+warning: reserved.scan_row: column "scan_row" is named ScanRow in Go, so the generated row type carries the column and not rasql's own ScanRow method; the column is read and written as usual
+warning: reserved.plan: column "plan" would give its builder a Plan method, which is already the builder's own Plan method; the setter is left out and rasql.SetField(reserved.Plan, value) writes the column instead
+```
+
+A column that cost nothing is not reported. `generate.Plan.Warnings` carries the
+same lines to a caller driving the generator in Go.
+
+The generator does still fail when a table or column name cannot become a Go
+identifier at all, since there is nothing to rename it to.
 
 ## Static query functions
 

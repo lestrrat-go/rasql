@@ -25,6 +25,10 @@ type compactFile struct {
 
 type compactStoreInput struct {
 	files []compactFile
+	// warnings are the renames the emitter had to make for the package to
+	// compile, carried through to Plan.Warnings so the command that writes
+	// the package can print them.
+	warnings []compilerir.Diagnostic
 }
 
 // RenderCompact renders canonical compiler input into a Store using the
@@ -50,10 +54,15 @@ func RenderCompact(in EmitterInput) (Store, error) {
 		}
 	}
 	tables, diagnostics := compilerir.TableDefsFromPhysical(copy.catalog)
+	// An error stops the run. A warning from the catalog reaches the caller
+	// beside the emitter's own renames, since both describe something the
+	// generated package carries that the database did not ask for.
+	var warnings []compilerir.Diagnostic
 	for _, diagnostic := range diagnostics {
 		if diagnostic.Level == compilerir.DiagnosticError {
 			return Store{}, fmt.Errorf("generate: compact: %s", diagnostic.Message)
 		}
+		warnings = append(warnings, diagnostic)
 	}
 	byID := make(map[compilerir.ObjectID]compilerir.PhysicalObject, len(copy.catalog.Objects))
 	for _, object := range copy.catalog.Objects {
@@ -101,7 +110,7 @@ func RenderCompact(in EmitterInput) (Store, error) {
 		if !ok {
 			return Store{}, fmt.Errorf("generate: compact object %q has no descriptor", object.ID)
 		}
-		source, err := schemagen.CompactObjectSource(copy.generation.Package, schemagen.CompactObject{
+		source, objectWarnings, err := schemagen.CompactObjectSource(copy.generation.Package, schemagen.CompactObject{
 			Catalog: object, Semantic: semantic[object.ID], Go: goObjects[object.ID],
 			Generation: config, Table: table, Mappings: copy.generation.Scalars,
 			ColumnBindings: columnBindings[object.ID], Targets: targets,
@@ -109,6 +118,7 @@ func RenderCompact(in EmitterInput) (Store, error) {
 		if err != nil {
 			return Store{}, err
 		}
+		warnings = append(warnings, objectWarnings...)
 		name := config.File
 		if owner, exists := seenFiles[strings.ToLower(name)]; exists {
 			return Store{}, fmt.Errorf("generate: compact file %q collides with %s", name, owner)
@@ -148,7 +158,7 @@ func RenderCompact(in EmitterInput) (Store, error) {
 		// RenderCompact owns schema declarations from EmitterInput. PlanContext
 		// appends configured SQL from Store.TypedQueries and checks it with the
 		// same file and identifier ledgers.
-		compact: &compactStoreInput{files: cloneCompactFiles(files)},
+		compact: &compactStoreInput{files: cloneCompactFiles(files), warnings: warnings},
 	}, nil
 }
 
@@ -350,10 +360,10 @@ func (s Store) planCompactContext(ctx context.Context) (Plan, error) {
 		files = append(files, file)
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
-	return finishRenderedPlan(ctx, root, checkRoot, dir, s.Package, s.Prune, files)
+	return finishRenderedPlan(ctx, root, checkRoot, dir, s.Package, s.Prune, files, s.compactWarnings())
 }
 
-func finishRenderedPlan(ctx context.Context, root, checkRoot, dir, packageName string, prune bool, files []File) (Plan, error) {
+func finishRenderedPlan(ctx context.Context, root, checkRoot, dir, packageName string, prune bool, files []File, warnings []compilerir.Diagnostic) (Plan, error) {
 	if err := contextError(ctx); err != nil {
 		return Plan{}, err
 	}
@@ -385,5 +395,14 @@ func finishRenderedPlan(ctx context.Context, root, checkRoot, dir, packageName s
 			return Plan{}, fmt.Errorf("generate: find an existing directory above %s: %w", dir, err)
 		}
 	}
-	return Plan{files: files, orphans: orphans, dir: dir, prune: prune, packageName: packageName, root: checkRoot, anchor: anchor, anchorInfo: anchorInfo}, nil
+	return Plan{files: files, orphans: orphans, warnings: warnings, dir: dir, prune: prune, packageName: packageName, root: checkRoot, anchor: anchor, anchorInfo: anchorInfo}, nil
+}
+
+// compactWarnings returns what RenderCompact recorded for this store, or
+// nothing for a store built some other way.
+func (s Store) compactWarnings() []compilerir.Diagnostic {
+	if s.compact == nil {
+		return nil
+	}
+	return s.compact.warnings
 }

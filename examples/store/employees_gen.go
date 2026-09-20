@@ -59,6 +59,12 @@ func (t EmployeesTable) InSchema(namespace string) (EmployeesTable, error) {
 	return newEmployeesTable(moved), nil
 }
 
+// EmployeesHandle returns the typed table inside t, which the constructors in
+// the rasql package take: rasql.NewCreatePlan, rasql.NewPatchPlan and
+// rasql.NewDeletePlan. Reach for it to write a column whose builder setter
+// this package could not generate.
+func EmployeesHandle(t EmployeesTable) rasql.Table[EmployeesRow] { return t.employeesTableHandle }
+
 type EmployeesExpressions struct {
 	ID        rasql.Column[EmployeesRow, int64]
 	Name      rasql.Column[EmployeesRow, string]
@@ -136,9 +142,9 @@ func (employeesOptionalDecoder) DecodeRow(source rasql.ScanSource, row *Employee
 
 func EmployeesProjection(source EmployeesTable) (rasql.Projection[EmployeesRow], error) {
 	items := []rasql.ProjectionItem{
-		rasql.Item("id", source.ID.Expr(), schema.IntegerType{}, ""),
-		rasql.Item("name", source.Name.Expr(), schema.TextType{}, ""),
-		rasql.NullItem("manager_id", source.ManagerID.NullExpr(), schema.IntegerType{}, ""),
+		rasql.Item("id", source.EmployeesExpressions.ID.Expr(), schema.IntegerType{}, ""),
+		rasql.Item("name", source.EmployeesExpressions.Name.Expr(), schema.TextType{}, ""),
+		rasql.NullItem("manager_id", source.EmployeesExpressions.ManagerID.NullExpr(), schema.IntegerType{}, ""),
 	}
 	return rasql.NewProjection(items, employeesDecoder{})
 }
@@ -153,19 +159,19 @@ func OptionalEmployeesProjection(source OptionalEmployeesExpressions) (rasql.Pro
 }
 
 func EmployeesGraphKey(source EmployeesTable) (rasql.GraphKey[EmployeesRow], error) {
-	return rasql.NewGraphKey[EmployeesRow](rasql.KeyPart[EmployeesRow, int64](source.ID, func(row EmployeesRow) int64 { return row.ID }))
+	return rasql.NewGraphKey[EmployeesRow](rasql.KeyPart[EmployeesRow, int64](source.EmployeesExpressions.ID, func(row EmployeesRow) int64 { return row.ID }))
 }
 
 func EmployeesIDPageKey(source EmployeesTable, direction rasql.PageDirection) (rasql.PageKey[EmployeesRow], error) {
-	return rasqlgenPageKey(direction, source.ID.Expr(), func(row EmployeesRow) int64 { return row.ID })
+	return rasqlgenPageKey(direction, source.EmployeesExpressions.ID.Expr(), func(row EmployeesRow) int64 { return row.ID })
 }
 
 func EmployeesNamePageKey(source EmployeesTable, direction rasql.PageDirection) (rasql.PageKey[EmployeesRow], error) {
-	return rasqlgenPageKey(direction, source.Name.Expr(), func(row EmployeesRow) string { return row.Name })
+	return rasqlgenPageKey(direction, source.EmployeesExpressions.Name.Expr(), func(row EmployeesRow) string { return row.Name })
 }
 
 func EmployeesManagerIDPageKey(source EmployeesTable, direction rasql.PageDirection, nulls rasql.NullOrder) (rasql.PageKey[EmployeesRow], error) {
-	return rasqlgenNullablePageKey(direction, source.ManagerID.NullExpr(), func(row EmployeesRow) rasql.Nullable[int64] { return row.ManagerID }, nulls)
+	return rasqlgenNullablePageKey(direction, source.EmployeesExpressions.ManagerID.NullExpr(), func(row EmployeesRow) rasql.Nullable[int64] { return row.ManagerID }, nulls)
 }
 
 var employeesMutationColumns = bindEmployeesExpressions(employeesTable)
