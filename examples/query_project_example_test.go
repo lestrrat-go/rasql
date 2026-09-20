@@ -12,13 +12,9 @@ import (
 	_ "modernc.org/sqlite" // Registers the database/sql "sqlite" driver for this example.
 )
 
-// Example_rebindTypedResult builds a query, then reprojects it to a narrower
-// result type while keeping its WHERE. Project takes an existing query's
-// QueryPlan and a new Projection, so the base query's predicate carries over
-// unchanged and only the projected shape changes: running the reprojected
-// query against a row planted at a different id proves the WHERE survived,
-// since only the row whose id matches the base predicate can come back.
-func Example_rebindTypedResult() {
+// Example_projectTypedResult changes what a query returns without rebuilding
+// its source and filters.
+func Example_projectTypedResult() {
 	ctx := context.Background()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -39,8 +35,8 @@ func Example_rebindTypedResult() {
 		return
 	}
 	for _, user := range []store.UsersRow{
-		{ID: 3, Email: "wrong@example.com"},
-		{ID: 7, Email: "rebind@example.com"},
+		{ID: 3, Email: "other@example.com"},
+		{ID: 7, Email: "ada@example.com"},
 	} {
 		if _, err := store.Users().Create().ID(user.ID).Email(user.Email).FirstName("First").LastName("Last").Exec(ctx, db); err != nil {
 			fmt.Printf("failed to insert user: %s\n", err)
@@ -48,40 +44,40 @@ func Example_rebindTypedResult() {
 		}
 	}
 
-	idProjection, err := rasql.Scalar("id", users.ID.Expr(), schema.IntegerType{}, "")
+	usersProjection, err := store.UsersProjection(users)
 	if err != nil {
-		fmt.Printf("failed to build id projection: %s\n", err)
+		fmt.Printf("failed to build users projection: %s\n", err)
 		return
 	}
-	// base projects id and filters to one row. A caller who only needed the
-	// filter, not this particular projected shape, still built it this way to
-	// reuse the WHERE.
-	base := rasql.Select(users, idProjection).Where(rasql.EqualValue(users.ID.Expr(), int64(7)))
+	// filteredUsers returns complete UsersRow values. The next operation needs
+	// the same filtered records, but only their email addresses.
+	filteredUsers := rasql.Select(users, usersProjection).
+		Where(rasql.EqualValue(users.ID.Expr(), int64(7)))
 
 	emailProjection, err := rasql.Scalar("email", users.Email.Expr(), schema.TextType{}, "")
 	if err != nil {
 		fmt.Printf("failed to build email projection: %s\n", err)
 		return
 	}
-	// dto keeps base's WHERE and reprojects to email instead of id.
-	dto := rasql.Project(base.Plan(), emailProjection)
+	// Building another Select would require repeating the source and WHERE
+	// clause. Project reuses them and changes the result type from UsersRow to
+	// string.
+	emailQuery := rasql.Project(filteredUsers.Plan(), emailProjection)
 
-	// Render proves the WHERE really carried over into the reprojected query,
-	// rather than just trusting Project to have kept it.
-	statement, err := rasql.Render(dto, dialect.PostgreSQL())
+	statement, err := rasql.Render(emailQuery, dialect.SQLite())
 	if err != nil {
 		fmt.Printf("failed to render statement: %s\n", err)
 		return
 	}
 	fmt.Println(statement.SQL())
 
-	found, err := rasql.One(ctx, db, dto)
+	email, err := rasql.One(ctx, db, emailQuery)
 	if err != nil {
 		fmt.Printf("failed to query user: %s\n", err)
 		return
 	}
-	fmt.Println(found)
+	fmt.Println(email)
 	// Output:
-	// SELECT "users"."email" AS "email" FROM "users" WHERE ("users"."id" = $1)
-	// rebind@example.com
+	// SELECT "users"."email" AS "email" FROM "users" WHERE ("users"."id" = ?)
+	// ada@example.com
 }
