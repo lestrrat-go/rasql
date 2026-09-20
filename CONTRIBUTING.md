@@ -50,7 +50,7 @@ Three outcomes are possible, and `generate/compact_test.go` pins each one. A col
 
 Only two columns lowering to one Go name costs a column its place in the package, because neither has a second name to move to. `TestCompactAwkwardColumnNamesCompile` in `generate/compact_compile_test.go` compiles a caller against a table holding every one of these shapes, which is the check that keeps the escape paths real rather than merely described.
 
-Adding a reserved name means adding it to `compactReservedNames` or `compactBuilderTerminals`, adding a case to those tests, and updating the section `docs/orm/02-generated-store.md` owns. `TestDocsNameGeneratedColumnMembers` fails when that section stops naming one of them or starts saying the generator refuses the run.
+Adding a reserved name means adding it to `compactReservedNames` or `compactBuilderTerminals`, adding a case to those tests, and updating the section `docs/orm/02-generated-store.md` owns. `TestDocsNameGeneratedColumnMembers` fails when that section stops naming one of them or starts saying the generator refuses the run. The worked example behind it reads the `widgets` table, whose only purpose is to carry those column names.
 
 New generator examples should use `rasql codegen generate`, which reads the database and writes the package in one command, and `rasql codegen check`, which reports drift without writing. Settings other than the DSN belong in that project's `rasql.json`, including a Go-side row name or a static query.
 
